@@ -45,6 +45,7 @@
       <a href="#s14">14. 真实世界与长期运行（阶段 C）</a>
       <a href="#s15">15. GNSS / 动态环境 / 线特征与神经隐式（阶段 C 收尾）</a>
       <a href="#s16">16. 激光 SLAM 全家桶（阶段 D）</a>
+      <a href="#s17">17. 多传感器融合（阶段 E）</a>
     </div>
   </header>
 
@@ -467,9 +468,35 @@
       </table>
     </section>
 
+    <section class="term-group" id="s17">
+      <h2>17. 多传感器融合（阶段 E）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">激光-惯性-视觉里程计</td><td class="en">LIVO</td><td>三种传感器一起估计位姿的系统统称。本季的主角——第三季的 VIO（视觉＋惯性）与第四季的 LIO（激光＋惯性）各只用了两条腿，LIVO 把第三条接上</td><td>0095–0100</td></tr>
+          <tr><td class="term">融合的两种哲学</td><td class="en">two fusion philosophies</td><td>本季最重要的一组对照：一种是把几何与纹理拆成两条流水线、末端合流（R³LIVE 一系）；另一种是共享同一份地图与同一个滤波器、测量一个一个灌进去（FAST-LIVO 一系）</td><td>0095 / 0096 / 0100</td></tr>
+          <tr><td class="term">两条流水线并行</td><td class="en">parallel LIO + VIO pipelines</td><td>激光惯性那一路负责点、平面与位姿，视觉惯性那一路负责颜色与亮度，最后合成一张着色点云。注意：位姿只有一份，两边共享</td><td>0096</td></tr>
+          <tr><td class="term">RGB 着色点云</td><td class="en">RGB-colored point cloud</td><td>把每个激光点的三维坐标投到相机图像上取出那个像素的颜色，多帧看到同一个点时再按置信度加权融合。它不是简单地把最后一帧的颜色贴上去</td><td>0096</td></tr>
+          <tr><td class="term">辐射重建</td><td class="en">radiance reconstruction</td><td>不止记录「当时看到的亮度」，而是把它折算成与曝光无关的表面辐射量。这样同一面墙在晴天阴天、不同曝光下都能还原出同一个颜色</td><td>0097</td></tr>
+          <tr><td class="term">在线曝光估计</td><td class="en">online exposure estimation</td><td>让系统自己估出每一帧的曝光值。否则相机调暗一档，系统会误以为「墙面真的变黑了」——这是给地图上色时特有的坑</td><td>0097</td></tr>
+          <tr><td class="term">可渲染地图</td><td class="en">renderable map</td><td>地图本身就能被画出来，不必先提取表面再渲染。比如直接把融合结果存成一组带颜色与透明度的椭球高斯</td><td>0098</td></tr>
+          <tr><td class="term">视觉复用地图几何</td><td class="en">visual reuse of map geometry</td><td>视觉不再自己三角化每个像素的深度，而是直接问激光建好的地图：「我这个像素对应的表面在哪？」深度因此变成白送的——这是 LIVO 快的根源之一</td><td>0099 / 0100</td></tr>
+          <tr><td class="term">统一体素地图</td><td class="en">unified voxel map</td><td>激光与视觉共用同一份体素地图。关键在每格里存的<b>不是点，而是一块拟合出来的平面</b>，于是视觉拿来就能当几何约束用</td><td>0100</td></tr>
+          <tr><td class="term">体素内的平面参数</td><td class="en">plane parameterization in a voxel</td><td>体素里那块平面用「中心点 ＋ 法向 ＋ 若干统计量」表示。相比存一堆散点，这样查询更快、也更抗噪声</td><td>0100 / 0079</td></tr>
+          <tr><td class="term">误差状态迭代卡尔曼滤波</td><td class="en">ESIKF (error-state iterated Kalman filter)</td><td>在误差状态上做迭代卡尔曼滤波：每次迭代都在<b>最新的估计</b>处重新线性化，直到收敛。它比普通 EKF 更准，比批处理优化更省</td><td>0100 / 0083</td></tr>
+          <tr><td class="term">序贯更新</td><td class="en">sequential update</td><td>一帧里的多个测量（多个平面、多个图像块）不攒在一起批处理，而是一个一个地去更新同一个状态，每更新一次就重新线性化一次</td><td>0100</td></tr>
+          <tr><td class="term">多模态地点识别</td><td class="en">multimodal place recognition</td><td>用视觉与激光一起判断「我是不是来过这儿」。它服务的是回环检测与重定位，而不是估计位姿本身——不是所有融合都为了里程计</td><td>0102</td></tr>
+          <tr><td class="term">自适应权重</td><td class="en">adaptive weights</td><td>融合权重不是事先设死的，而是按输入内容动态决定：白天视觉好就把权重给视觉，黑夜里视觉没用就压给激光</td><td>0102</td></tr>
+          <tr><td class="term">在线外参标定</td><td class="en">online extrinsic calibration</td><td>把传感器之间的相对位姿当成一个<b>待估变量</b>，一边跑一边估，不依赖标定板。因为出厂标定会被震动、温度与安装误差慢慢带偏</td><td>0103</td></tr>
+          <tr><td class="term">外参可观性</td><td class="en">extrinsic observability</td><td>为什么车必须动起来、尤其要转弯，外参才标得准：静止时「外参错了」与「机器人位置猜错了」在数据上无法区分，这就是不可观</td><td>0103</td></tr>
+          <tr><td class="term">硬件触发同步</td><td class="en">hardware trigger sync</td><td>让多个传感器由同一根触发线在同一时刻曝光或采样。它是融合系统最底层的一环——比任何算法都靠前，也最容易被忽略</td><td>0102 / 0103</td></tr>
+        </tbody>
+      </table>
+    </section>
+
     <div class="paper-divider"></div>
     <p class="note">
-      几点说明：① 本表术语顺序不等于课程顺序，按主题分组便于查阅；② 每一条都可以在对应课次里找到更详细的解释与原文出处；③ 第 9–11 组是第二季（阶段 B 打地基）新增的，第 12–15 组是第三季（阶段 C 视觉主干）新增的，<b>第 16 组是第四季（阶段 D 激光主干）新增的</b>；随着后续阶段（E 多传感器融合……）的课程加入，本表会继续增补；
+      几点说明：① 本表术语顺序不等于课程顺序，按主题分组便于查阅；② 每一条都可以在对应课次里找到更详细的解释与原文出处；③ 第 9–11 组是第二季（阶段 B 打地基）新增的，第 12–15 组是第三季（阶段 C 视觉主干）新增的，<b>第 16 组是第四季（阶段 D 激光主干）新增的，第 17 组是第五季（阶段 E 多传感器融合）新增的</b>；随着后续阶段（F 前沿：神经隐式与 3D 高斯……）的课程加入，本表会继续增补；
       ④ 若你在某节课里发现术语用法与这里不一致，以该节课引用的论文正文为准。
     </p>
   </main>

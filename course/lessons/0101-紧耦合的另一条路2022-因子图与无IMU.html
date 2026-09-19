@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>紧耦合的另一条路（2022）：因子图，但没有 IMU — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0101</div>
+      <h1>紧耦合的另一条路（2022）：因子图，但没有 IMU</h1>
+      <p class="subtitle">它不是 LIVO，而是「因子图 BA 后端」这条紧耦合路线的对照样本 🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：因子图 BA 紧耦合 · GLF 残差压缩 · 无 IMU</span>
+        <span>👥 作者：Chih-Chung Chou、Cheng-Fu Chou（台大）</span>
+        <span>📅 2022 · <i>Efficient and Accurate Tightly-Coupled Visual-Lidar SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#position">先讲清它的定位</a>
+        <a href="#where">紧耦合体现在哪</a>
+        <a href="#parts">视觉与激光两部分</a>
+        <a href="#glf">关键设计：GLF 压缩</a>
+        <a href="#why">为什么不是实时</a>
+        <a href="#compare">滤波器 vs 优化</a>
+        <a href="#result">实验数字与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="position">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：明确 TVL-SLAM 不属于 LIVO（无 IMU、特征法、非实时）；说清它的紧耦合体现在因子图后端；讲清 GLF 把海量激光残差压成 6 维；并把本季五篇放进「滤波 vs 优化」坐标。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第四季 <b>0078</b> LIO-SAM（因子图四类因子）；接第三季 <b>0043</b>–<b>0045</b> ORB-SLAM2（其视觉前端）；接第二季 <b>0018</b>–<b>0019</b> BA/舒尔补（GLF≈边缘化）；回链第一季 <b>0006</b>（滤波 vs 优化）与第二季 <b>0003</b>（演进主线）。</p>
+        </div>
+      </div>
+
+      <h2>1. 先讲清它的定位（本节开头必须先说）</h2>
+
+      <div class="callout">
+        <h4>★ 定位澄清（务必先读）</h4>
+        <p>这一篇是<b>视觉 + 激光的紧耦合</b>，但<b>不含 IMU</b>；视觉走<b>特征法</b>（直接套 ORB-SLAM2），而且<b>不是实时</b>里程计。所以它<b>不属于 LIVO 家族</b>——FAST-LIVO / FAST-LIVO2 是「滤波(ESIKF) + 直接法 + 实时 + 含 IMU + 视觉复用激光深度」，TVL-SLAM 是「优化(因子图 BA) + 特征法 + 非实时 + 无 IMU + 视觉自己三角化深度」。</p>
+        <p>它的价值在于：提供了<b>另一条紧耦合路线（因子图 BA 后端）的对照样本</b>，让我们看清「紧耦合」不等于「必须用因子图」。</p>
+      </div>
+
+      <p>原文摘要的原话是：tightly-coupled visual-lidar SLAM (TVL-SLAM)，其中视觉与激光<b>前端独立运行</b>，但<b>后端优化把所有视觉与激光测量联合进来</b>。也就是「前端独立、后端因子图联合优化」。下面 Fig.1 就是这套架构。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Efficient_and_Accurate_Tightly-Coupled_Visual-Lidar_SLAM/1eabc0ccc773466334eac6b162863ace6dbe5ed2ad3a306fb8286477bd826fb6.jpg" alt="TVL-SLAM Fig.1 Proposed visual-lidar odometry system">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Proposed visual-lidar odometry system.<br>
+          <b>怎么看这张图：</b>① 双前端：左上是 ORB-SLAM2（视觉），右上是激光里程计——各自独立跑；② 后端是 BA / 回环，把两路测量<b>联合</b>优化；③ 这正是「前端独立、后端紧耦合」的形状，和 FAST-LIVO 系「数据入口就共享地图」完全相反。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="where">
+      <h2>2. 它的紧耦合体现在哪</h2>
+
+      <p>「紧耦合」在这里体现在<b>后端</b>：视觉与激光的测量被塞进<b>同一个因子图</b>，共享同一组状态变量一起优化。原文 §IV-A 的因子图含四类因子：</p>
+      <ul>
+        <li><b>视觉因子</b> $f_V$：3D 点投影残差；</li>
+        <li><b>激光因子</b> $f_L$：GLF（下面讲，6 维）；</li>
+        <li><b>Compose 因子</b>：$T_L^W=T_C^W T_L^C$，把相机位姿与激光位姿用外参锁在一起；</li>
+        <li><b>视觉-激光因子</b> $f_{VL}$（VPLP）：仅在标定任务时激活，把视觉地图点「吸」到激光平面上。</li>
+      </ul>
+
+      <p>紧耦合 BA（Eq.4）把这几类残差一起最小化，状态里含 $T_{M_i}^W$（激光位姿）、$T_{C_j}^W$（相机位姿）、$T_L^C$（外参）、$p_k^W$（视觉地图点）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\arg\min\Big(\alpha_1\!\sum\|f_V\|^2+\alpha_2\!\sum\|f_L\|^2+\alpha_3\!\sum\|f_{VL}\|^2\Big)$$</div>
+      </div>
+
+      <p>开关 $\alpha_1,\alpha_2,\alpha_3$ 配置四种任务（单帧 / 局部 BA / 全局 BA / 带标定 BA）。注意：<b>视觉深度 $p_k^W$ 是 BA 自己从 ORB 三角化出来的，激光并不以「深度」形式喂给视觉</b>——这点和 FAST-LIVO 系根本不同。下面 Fig.3 就是这张因子图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Efficient_and_Accurate_Tightly-Coupled_Visual-Lidar_SLAM/f712689eaa625b6dd1b7de4ac0379cfb11b4c28f674f700f3b1dd0cba662e6f3.jpg" alt="TVL-SLAM Fig.3 Factor graph representation">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Factor graph representation of TVL-SLAM.<br>
+          <b>怎么看这张图：</b>① 节点是状态变量（相机位姿、激光位姿、外参、地图点），因子是四类残差；② 视觉因子、激光因子、Compose 因子、VL 因子<b>共享同一批节点</b>——这就是「紧耦合」在图上的样子；③ 回链第四季 <b>0078</b> LIO-SAM 的因子图：同族思路，但 TVL 无 IMU、且把视觉因子也并了进来。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="parts">
+      <h2>3. 视觉部分（特征法）与激光部分（残差）</h2>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>视觉：特征法（ORB-SLAM2）</b>
+          <p>直接套用 ORB-SLAM2 的三线程 + BoW，提 ORB 特征、做匹配、三角化出 3D 点。这是<b>特征法</b>，不是 FAST-LIVO 系的直接法。深度靠视觉自己三角化，<b>不来自激光地图</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>激光：点-线 / 点-面残差</b>
+          <p>体素内用协方差特征值判线/面（大特征值→线，小特征值→面），残差（Eq.2–3）：</p>
+          <p style="text-align:center;font-family:var(--font-serif)">$r_{pl}=\vec n\times(T_L^M p^L-p^M)$<br>$r_{pp}=\vec n\cdot(T_L^M p^L-p^M)$</p>
+        </div>
+      </div>
+
+      <p>两者在后端汇合。关键点：激光的残差维度极高（每帧成千上万个点-线/点-面残差），直接塞进 BA 会爆。于是有了下面的 GLF 压缩——这是本篇最该讲清的设计。</p>
+    </section>
+
+    <section class="section-card" id="glf">
+      <h2>4. 关键设计：GLF 把海量激光残差压成 6 维</h2>
+
+      <p>GLF = Globally/Locally (压缩的) Factor。思路：对一次激光扫描配准得到的 Hessian $\mathbf H=\sum\mathbf J^T\mathbf J$ 和残差向量 $\mathbf r=\sum\mathbf J^T\mathbf r_{pl/pp}$ 做 <b>Cholesky 分解</b> $\mathbf A^T\mathbf A=\mathbf H,\ \mathbf A^T\mathbf b=\mathbf r$，于是得到一个<b>单个 6 维残差</b>：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f_L(T_L^M)=\mathbf A\big(\tilde T_L^M\ominus T_L^M\big)+\mathbf b$$</div>
+      </div>
+
+      <p>直觉：成千上万条红/蓝残差箭头，经过一个「Cholesky 压缩机」，在因子图里只剩一个 6 维小方块 $(\mathbf A,\mathbf b)$。<b>信息没丢，维度塌成 6</b>。</p>
+
+      <div class="callout">
+        <h4>GLF 到底约等于什么</h4>
+        <p>原文 §IV-B 自认它「part of the well-known marginalization technique」——即<b>边缘化 / 信息压缩</b>，和第二季 <b>0018</b>–<b>0019</b> BA 的舒尔补同源。它还证明 GLF 与 MSCKF 的 QR 压缩数学等价，但激光配准残差维 $m\gg$ 状态维 $n=6$ 时 Cholesky 更快（Table I：n=6 时 Cholesky 96 ms vs QR 264 ms）。</p>
+      </div>
+
+      <p>下面 Fig.6 直接给出 GLF 的性价比证据：每次配准从 20–50 ms 降到 < 10 ms。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Efficient_and_Accurate_Tightly-Coupled_Visual-Lidar_SLAM/4c7de2d9dbda9d9e803117ee38dea762fbb7da3f7eeb164020166c1579a4ec4e.jpg" alt="TVL-SLAM Fig.6 computation vs accuracy with and without GLF">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Computation cost vs. accuracy with and without GLF compression. Upper: computation time of each lidar registration. Lower: relative translation error on KITTI training sequences.<br>
+          <b>怎么看这张图：</b>① 上图：开 GLF 后每次激光配准从 20–50 ms 掉到 < 10 ms；② 下图：精度基本不掉；③ 结论：GLF 是「把海量激光残差塞进 BA」的关键使能件——没有它，因子图后端跑不动大规模 BA。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">同样是紧耦合，后端可以有两种</text>
+          <!-- 三传感器输入 -->
+          <g fill="#5a8fc7">
+            <rect x="60" y="56" width="86" height="30" rx="6" fill="#e7edf2" stroke="#9fb3c4" stroke-width="1.2"/>
+            <text x="103" y="76" text-anchor="middle" font-size="11" fill="#3b4a5e">激光</text>
+            <rect x="170" y="56" width="86" height="30" rx="6" fill="#fdf0ec" stroke="#e0b3a3" stroke-width="1.2"/>
+            <text x="213" y="76" text-anchor="middle" font-size="11" fill="#a8563a">视觉</text>
+            <rect x="280" y="56" width="86" height="30" rx="6" fill="#f3f1ec" stroke="#cabfaf" stroke-width="1.2"/>
+            <text x="323" y="76" text-anchor="middle" font-size="11" fill="#7a6a5f">IMU（无）</text>
+          </g>
+          <!-- 左：滤波器后端 -->
+          <rect x="60" y="120" width="360" height="170" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="240" y="146" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">滤波器后端</text>
+          <text x="240" y="174" text-anchor="middle" font-size="11" fill="#3b4a5e">在线、一步一更新</text>
+          <text x="240" y="194" text-anchor="middle" font-size="11" fill="#3b4a5e">状态只保留当前</text>
+          <rect x="110" y="214" width="260" height="46" rx="8" fill="#e7f3ec" stroke="#2e9e6b" stroke-width="1.4"/>
+          <text x="240" y="242" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6d51">紧耦合标记</text>
+          <!-- 右：因子图后端 -->
+          <rect x="480" y="120" width="360" height="170" rx="10" fill="#eef2f8" stroke="#9fb3c4" stroke-width="1.4"/>
+          <text x="660" y="146" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">因子图后端</text>
+          <text x="660" y="174" text-anchor="middle" font-size="11" fill="#3b4a5e">所有约束画成一张图一起解</text>
+          <text x="660" y="194" text-anchor="middle" font-size="11" fill="#3b4a5e">可反复迭代（BA）</text>
+          <rect x="530" y="214" width="260" height="46" rx="8" fill="#e3eaf3" stroke="#4a6fa5" stroke-width="1.4"/>
+          <text x="660" y="242" text-anchor="middle" font-size="12" font-weight="700" fill="#3b4a5e">紧耦合标记</text>
+          <!-- 标记两枚 -->
+          <circle cx="240" cy="290" r="3" fill="#2e9e6b"/><circle cx="660" cy="290" r="3" fill="#4a6fa5"/>
+          <text x="450" y="320" text-anchor="middle" font-size="12" font-weight="700" fill="#5a4a42">同一枚「紧耦合」印章</text>
+          <text x="450" y="342" text-anchor="middle" font-size="11" fill="#7a6a5f">紧耦合 ≠ 因子图；滤波器后端也能紧耦合</text>
+          <!-- 箭头 -->
+          <path d="M146 86 L150 120" stroke="#9fb3c4" stroke-width="1.4" fill="none"/>
+          <path d="M213 86 L240 120" stroke="#e0b3a3" stroke-width="1.4" fill="none"/>
+          <path d="M566 86 L570 120" stroke="#9fb3c4" stroke-width="1.4" fill="none"/>
+          <path d="M633 86 L660 120" stroke="#e0b3a3" stroke-width="1.4" fill="none"/>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同样的激光 + 视觉输入，后面接两种并列的后端盒子——左边「滤波器」、右边「因子图」，两个都盖了「紧耦合」印章。
+          <br><b>怎么看这张图：</b>① 左边滤波器后端：在线、一步一更新、状态只留当前（FAST-LIO / FAST-LIVO 系）；② 右边因子图后端：把所有约束画成一张图一起解、可反复迭代（TVL-SLAM / LIO-SAM）；③ 底部那句话是关键：<b>紧耦合 ≠ 因子图</b>。
+          <br><b>要记住的一句话：</b>「紧耦合」描述的是「测量是否在同一个优化里一起解」，不绑定某种后端；滤波器与因子图都能紧耦合。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="why">
+      <h2>5. 为什么它不是实时</h2>
+
+      <p>算力瓶颈在<b>后端 BA</b>。即使有 GLF 把每次激光配准压到 < 10 ms，整条管线仍是「前端独立 + 后端联合 BA + 回环」的<b>非实时里程计</b>：</p>
+      <ul>
+        <li>视觉前端跑 ORB-SLAM2 三线程（特征提取、局部 BA、回环），本身是重活；</li>
+        <li>后端还要做<b>局部 / 全局 BA</b>，解一张大因子图，且可反复迭代；</li>
+        <li>KAIST 这类长轨迹（达 11 km）是<b>离线式 / 近离线式优化</b>，不是边走边出的 10 Hz 里程计。</li>
+      </ul>
+      <p>原文没有给「实时」声称——它定位是「高效且准确的紧耦合视觉-激光 SLAM」，效率主要来自 GLF 压缩，但不是实时性。对照 FAST-LIVO2 桌面 30 ms/帧、ARM 78 ms/帧的硬实时指标，这是两条路线在「能不能上机载」上的根本差异。</p>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>6. 一个必须讲清的对照：滤波器路线 vs 优化路线</h2>
+
+      <p>把本季前几篇并列在「滤波 vs 优化」坐标里，就明白「紧耦合」其实有两种做法。下面这张图把五篇按「后端类型 × 有无 IMU」排进二维小格。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">本季五篇：滤波 vs 优化 × 有无 IMU</text>
+          <!-- 列头 -->
+          <text x="300" y="64" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">滤波器后端</text>
+          <text x="640" y="64" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">因子图后端</text>
+          <!-- 行头 -->
+          <text x="40" y="170" font-size="13" font-weight="700" fill="#5a4a42" transform="rotate(-90 40 170)">含 IMU</text>
+          <text x="40" y="320" font-size="13" font-weight="700" fill="#5a4a42" transform="rotate(-90 40 320)">不含 IMU</text>
+          <!-- 网格 -->
+          <rect x="120" y="90" width="360" height="150" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.2"/>
+          <rect x="460" y="90" width="360" height="150" rx="8" fill="#eef2f8" stroke="#9fb3c4" stroke-width="1.2"/>
+          <rect x="120" y="240" width="360" height="150" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.2"/>
+          <rect x="460" y="240" width="360" height="150" rx="8" fill="#eef2f8" stroke="#9fb3c4" stroke-width="1.2"/>
+          <!-- 卡片 滤波+含IMU -->
+          <rect x="140" y="110" width="100" height="50" rx="7" fill="#e7f3ec" stroke="#2e9e6b" stroke-width="1.2"/>
+          <text x="190" y="132" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6d51">FAST-LIO</text>
+          <text x="190" y="150" text-anchor="middle" font-size="9.5" fill="#7a8a99">0083 实时</text>
+          <rect x="256" y="110" width="104" height="50" rx="7" fill="#e7f3ec" stroke="#2e9e6b" stroke-width="1.2"/>
+          <text x="308" y="132" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6d51">FAST-LIVO</text>
+          <text x="308" y="150" text-anchor="middle" font-size="9.5" fill="#7a8a99">0099 实时</text>
+          <rect x="376" y="110" width="104" height="50" rx="7" fill="#e7f3ec" stroke="#2e9e6b" stroke-width="1.2"/>
+          <text x="428" y="132" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6d51">FAST-LIVO2</text>
+          <text x="428" y="150" text-anchor="middle" font-size="9.5" fill="#7a8a99">0100 实时</text>
+          <!-- 卡片 因子图+含IMU -->
+          <rect x="480" y="110" width="110" height="50" rx="7" fill="#e3eaf3" stroke="#4a6fa5" stroke-width="1.2"/>
+          <text x="535" y="132" text-anchor="middle" font-size="11" font-weight="700" fill="#3b4a5e">LIO-SAM</text>
+          <text x="535" y="150" text-anchor="middle" font-size="9.5" fill="#7a8a99">0078 实时</text>
+          <!-- 卡片 因子图+不含IMU -->
+          <rect x="480" y="260" width="120" height="50" rx="7" fill="#e3eaf3" stroke="#4a6fa5" stroke-width="1.4"/>
+          <text x="540" y="282" text-anchor="middle" font-size="11" font-weight="700" fill="#3b4a5e">TVL-SLAM</text>
+          <text x="540" y="300" text-anchor="middle" font-size="9.5" fill="#a8563a">0101 非实时</text>
+          <!-- 空单元格 -->
+          <text x="300" y="320" text-anchor="middle" font-size="11" fill="#9aa7b3">（无系统）</text>
+          <text x="640" y="320" text-anchor="middle" font-size="11" fill="#9aa7b3">（无系统）</text>
+          <text x="450" y="384" text-anchor="middle" font-size="11.5" fill="#5a4a42">紧耦合横跨两种后端；本篇 TVL-SLAM 是唯一「因子图 + 无 IMU + 非实时」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>本季五篇在「后端类型（滤波 / 因子图）× 有无 IMU」二维格子里的落点。
+          <br><b>怎么看这张图：</b>① 左下大格（滤波器 + 含 IMU）塞了 FAST-LIO / FAST-LIVO / FAST-LIVO2 三兄弟——本组主线；② 右上是 LIO-SAM（因子图 + 含 IMU，实时，第四季已讲）；③ 右下是我们这课 TVL-SLAM（因子图 + 无 IMU，非实时）；④ 左上空着——说明「无 IMU 的滤波器紧耦合」在本季没有代表。
+          <br><b>要记住的一句话：</b>「紧耦合」不绑定后端；滤波器与因子图都能紧耦合。回链第一季 <b>0006</b>（滤波 vs 优化）与第二季 <b>0003</b>（演进主线）。
+        </figcaption>
+      </figure>
+
+      <p>补充一句跨李代数适配（Eq.16）：激光侧用右乘指数图、ORB-SLAM2 侧用左乘指数图，论文用一个「翻译矩阵」$\mathbf J_{12}$ 把一种雅可比翻成另一种，<b>不改底层源码就能融合两套 SLAM</b>。这是工程上的巧思，但不影响本课主线，提一句即可。</p>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>7. 实验数字与局限</h2>
+
+      <p>数据集：KITTI odometry（城市 / 乡村 / 高速）+ KAIST urban（拥挤城市、16 线双激光、无相机-激光视场重叠、长达 11 km）。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">数值</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>KITTI 漂移</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">训练集 0.52% / 测试集 0.56%</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">KITTI 竞赛 2021-08 全 SLAM 第 1（含回环）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>KAIST RMSE</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">多在 8–30 m</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">远优于单模态（lidar SLAM 达 377 m、ORB-SLAM2 达 120 m）</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>速度（GLF 后）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">每次配准 < 10 ms</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">无 GLF 时 20–50 ms；单线程 3.5 GHz</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>对比对象</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">LOAM / IMLS / SOFT / ORB / LIMO / V-LOAM 等</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">在单模态皆败处仍成立</td></tr>
+        </tbody>
+      </table>
+
+      <p>下面 Fig.9 展示「单模态在拥挤城市失效」的失败案例，正是论文要论证「为何要紧耦合」的动机。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Efficient_and_Accurate_Tightly-Coupled_Visual-Lidar_SLAM/835a0e9965edab96dbc1ea7206b2a78d19c83a590628ed7c1118922eddfcdbb1.jpg" alt="TVL-SLAM Fig.9 failure cases of ORB-SLAM2 and lidar SLAM">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Failure cases of ORB-SLAM2 and lidar SLAM on KAIST.<br>
+          <b>怎么看这张图：</b>① 它画的是「视觉单模态」和「激光单模态」各自在拥挤城市的失败；② 论文借此说明：当任一单模态失效时，紧耦合（把两路测量放同一 BA）仍能撑住；③ 这也是对照 FAST-LIVO 系「互补」的另一种呈现——一个用滤波器、一个用因子图，但都靠多模态互补。
+        </figcaption>
+      </figure>
+
+      <h3>原文承认的局限（逐条，§VI）</h3>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 不含惯性测量</b>
+          <p>§I 明言「TVL-SLAM does not incorporate inertial measurements」——所以它不是 LIVO，高速机动/无纹理处缺惯性兜底。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 拥挤高速场景未解</b>
+          <p>少形状特征 + 多运动物体（unaddressed corner cases）仍会失败。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 部分外参不可观</b>
+          <p>单调运动下部分外参不可观，需 VPLP 约束（Fig.4）才收敛。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ VPLP 不适合短序列</b>
+          <p>VPLP 需较好的视觉地图点初值，短序列里用不上。</p>
+        </div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>TVL-SLAM 含 IMU 吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文 §I 明文「TVL-SLAM does not incorporate inertial measurements」。这正是它不属于 LIVO 家族的根本原因——FAST-LIVO/FAST-LIVO2 都含 IMU。" onclick="lessonKit.answer(this,'q0101a')">不含 IMU</button>
+          <button data-correct="no" data-explanation="错。它只有视觉 + 激光，没有惯性。含 IMU 的是 FAST-LIVO / FAST-LIVO2（以及 LIO-SAM）。别把本篇误归进 LIVO。" onclick="lessonKit.answer(this,'q0101a')">含 IMU</button>
+        </div>
+        <div class="quiz-feedback" id="q0101a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>TVL-SLAM 的视觉深度从哪来？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。它的视觉前端直接套 ORB-SLAM2，深度靠三角化自己估；激光只以残差形式进 BA，并不给视觉提供深度。这点和 FAST-LIVO 系「深度由激光地图直接给」正好相反。" onclick="lessonKit.answer(this,'q0101b')">视觉自己三角化</button>
+          <button data-correct="no" data-explanation="错。「视觉深度由激光地图直接给」仅对 FAST-LIVO / FAST-LIVO2 成立。TVL-SLAM 的激光与视觉各自独立前端，深度不共享。" onclick="lessonKit.answer(this,'q0101b')">激光地图给</button>
+        </div>
+        <div class="quiz-feedback" id="q0101b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么说 TVL-SLAM 不属于 LIVO 家族？列出至少三个区别。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>① <b>无 IMU</b>：原文 §I 明文不集成惯性；② <b>特征法</b>：视觉前端直接套 ORB-SLAM2，不是 FAST-LIVO 系的直接法；③ <b>非实时</b>：后端是因子图 BA + 回环，不是在线 10 Hz 里程计；④ <b>深度不共享</b>：视觉深度自己三角化，不来自激光地图。</p>
+            <p>它的价值是「因子图 BA 后端」这条紧耦合路线的对照样本。</p>
+          </div></details>
+        </li>
+        <li>GLF 把海量激光残差压成 6 维，它本质上约等于什么成熟技术？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>原文 §IV-B 自认它是「marginalization technique（边缘化）」的一部分——即和第二季 <b>0018</b>–<b>0019</b> BA 的<b>舒尔补</b>同源的信息压缩。它还对激光配准的 Hessian 做 Cholesky 分解，得到单个 6 维残差 $f_L=\mathbf A(\tilde T_L^M\ominus T_L^M)+\mathbf b$。</p>
+            <p>论文证明它与 MSCKF 的 QR 压缩数学等价，但当残差维 $m\gg$ 状态维 $n=6$ 时 Cholesky 更快（Table I：96 ms vs 264 ms）。</p>
+          </div></details>
+        </li>
+        <li>「紧耦合 ≠ 因子图」这句话在 TVL-SLAM 与 FAST-LIVO 系的对照里怎么体现？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>两者都是紧耦合（测量在同一优化里一起解），但后端不同：TVL-SLAM 用<b>因子图 BA</b>，FAST-LIVO 系用<b>滤波器 ESIKF</b>。所以「紧耦合」描述的是「测量是否联合优化」，不绑定某种后端架构。</p>
+            <p>回链第一季 <b>0006</b>（滤波 vs 优化）与第二季 <b>0003</b> 演进主线。</p>
+          </div></details>
+        </li>
+        <li>为什么 TVL-SLAM 不是实时？瓶颈在哪？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>瓶颈在<b>后端 BA</b>：视觉跑 ORB-SLAM2 三线程，后端还要做局部/全局 BA 解大因子图且可反复迭代；KAIST 长轨迹是近离线式优化。即便 GLF 把每次激光配准压到 < 10 ms，整条管线仍不是边走边出的 10 Hz 里程计。对比 FAST-LIVO2 桌面 30 ms/帧的硬实时指标，这是两条路线在「能否上机载」上的根本差异。</p>
+          </div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0100-FAST-LIVO2-2025-统一体素地图与序贯更新.html">← FAST-LIVO2（2025）：统一体素地图与序贯更新</a>
+        <a class="next" href="0102-平台与评测2022-自适应权重与多传感器基准.html">平台与评测（2022）：自适应权重与多传感器基准 →</a>
+      </div>
+      <p class="foot-note">看清「紧耦合 ≠ 因子图」，本组三条技术路线就齐了。下一课进入平台与评测 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

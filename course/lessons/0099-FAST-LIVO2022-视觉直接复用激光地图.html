@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAST-LIVO（2022）：视觉直接复用激光地图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0099</div>
+      <h1>FAST-LIVO（2022）：视觉直接复用激光地图</h1>
+      <p class="subtitle">视觉不提特征、不三角化，直接把激光已经建好的地图当成自己的地图用 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：紧耦合 LIVO · 视觉直接复用激光点云地图</span>
+        <span>👥 作者：HKU-MARS 组（张富康等）</span>
+        <span>📅 2022 · <i>Fast and Tightly-coupled Sparse-Direct LiDAR-Inertial-Visual Odometry</i>（IROS）</span>
+      </div>
+      <div class="toc">
+        <a href="#why">松耦合为什么不够</a>
+        <a href="#reuse">视觉怎么复用激光地图</a>
+        <a href="#smart">为什么这很聪明</a>
+        <a href="#twomaps">一份滤波器管两份地图</a>
+        <a href="#state">状态向量与滤波器</a>
+        <a href="#feature">用了视觉特征吗</a>
+        <a href="#result">实验数字与局限</a>
+        <a href="#bridge">本课落点：三大不足</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清已有松/半松耦合方案被批评在哪；解释「视觉复用激光地图」到底复用的是什么；讲清 v1 是异步更新、维护两份地图；并知道它留下的三个短板如何引出 v2。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第四季 <b>0084</b> 课（FAST-LIO2：ikd-Tree 点云 + ESIKF）——v1 的 LIO 直接改自它；接第三季 <b>0046</b>–<b>0050</b> 课（DTAM/DSO/SVO 直接法：自己估逆深度）——本课最关键差别就是「深度由激光白送」。先回链第一季 <b>0006</b> 课的「松紧耦合」。</p>
+        </div>
+      </div>
+
+      <h2>1. 它要解决什么：已有松耦合方案为什么不够</h2>
+
+      <p>先定位。FAST-LIVO 是 HKU-MARS 组在 2022 年（IROS）发表的 LIVO 系统，摘要里说它「建立在两个紧耦合的直接法里程计子系统之上：一个 VIO 子系统和一个 LIO 子系统」，两者在一个 ESIKF 里联合融合。它是本组（紧耦合 LIVO）的<b>地基篇</b>。</p>
+
+      <p>它要解决的第一个问题，是对<b>已有方案的批评</b>。原文在引言里点名了当时一类「联合 LIVO」做法（它举了 R2LIVE、LVI-SAM）：它们「虽然联合融合了状态向量，却各自处理每种数据、没有考虑测量层级的耦合」，而且特征提取加滑动窗口优化很费算力。翻译成人话就是——</p>
+
+      <div class="callout">
+        <h4>原文批评的核心</h4>
+        <p>很多「紧耦合」其实只在<b>状态层</b>耦合：激光和视觉各自跑完自己的前端、各自算出一堆残差，最后才在一个滤波器/优化器里把状态凑到一起。但<b>测量层</b>没有耦合——激光不知道视觉在测什么，视觉也不知道激光已经量好了哪些几何。这种「各跑各的、末端才融合」的做法，在弱结构、弱纹理环境里特征变少，而且工程上要做大量适配。原文想用「直接法 + frame-to-map」把这件事做轻、做紧。</p>
+      </div>
+
+      <p>注意这里的措辞：<b>「末端融合」不等于「真紧耦合」</b>。第一季 <b>0006</b> 课就区分过松耦合（各算各的再投票）和紧耦合（同一份优化里一起解）。FAST-LIVO 的目标，是把视觉和激光真正塞进<b>同一个误差态迭代卡尔曼滤波器</b>，而且视觉侧走<b>直接法</b>（不提特征）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIVO/25317b1e4b3d590837261364eadb292cfc1018f17febbb21cb6162c2141e616c.jpg" alt="FAST-LIVO Fig.1 System overview of FAST-LIVO">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>System overview of FAST-LIVO.<br>
+          <b>怎么看这张图：</b>① 蓝色那条是 LIO 子系统、红色那条是 VIO 子系统，两者汇入中间的 ESIKF——这就是「两个子系统、一个滤波器」；② 注意图上 LiDAR 全局地图（ikd-Tree）和 visual 全局地图（体素哈希）是<b>两块分开的结构</b>，这点下一节会展开；③ 这是全篇骨架图，先记住「蓝红两条线进同一个圆」的形状。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="reuse">
+      <h2>2. 核心机制：视觉怎么复用激光的地图（本课灵魂）</h2>
+
+      <p>下面这段话是整节课的命根子，请盯紧。</p>
+
+      <p>激光雷达已经在它的体素/点云地图里存了<b>「点」和「点拟合出的平面」</b>。当一帧图像来的时候，FAST-LIVO 的视觉侧<b>不必自己去做三角化、不必自己估计每个像素的深度</b>，而是把图像上的像素（更准确地说是图像块 patch）直接<b>投影到激光地图里已经有的几何表面上</b>，然后去算<b>光度误差</b>——也就是「地图给的参考块亮度」和「当前帧对应位置亮度」差多少。</p>
+
+      <p>原文对视觉地图点的原话（贡献 2）是：地图里的点被贴上了图像块（image patches），新图像到来时，把这些点直接投影到新图像上比较亮度。也就是说，<b>视觉地图点就是激光地图点</b>——激光量到「这里有个表面」，视觉就复用这个表面，只负责把图案对齐。</p>
+
+      <div class="formula-box">
+        <p style="margin:0 0 .5rem"><b>视觉稀疏直接光度残差</b>（Eq.9，符号稍作说明——${}^G\mathbf p_i$ 是体素地图中第 $i$ 个点的全局坐标）：</p>
+        <div class="flow-formula">$$\mathbf 0=\mathbf I_k\!\left(\pi\big({}^I\mathbf T_C^{-1}\,{}^G\mathbf T_{I_k}^{-1}\,{}^G\mathbf p_i\big)\right)-\mathbf A_i\,\mathbf Q_i$$</div>
+      </div>
+
+      <p>别被符号吓到，它的意思非常朴素：</p>
+      <ul>
+        <li>${}^G\mathbf p_i$ 是<b>激光地图里的一个 3D 点</b>（深度由激光直接给，不估）；</li>
+        <li>中间那串变换把它从全局坐标搬到「当前相机图像上的像素位置」；</li>
+        <li>$\pi(\cdot)$ 是投影到图像平面；</li>
+        <li>$\mathbf I_k(\cdot)$ 是「这个像素在当前图像里的亮度」；</li>
+        <li>右边 $\mathbf Q_i$ 是贴在地图点上的<b>参考块亮度</b>，$\mathbf A_i$ 是参考块到当前块的仿射变形；</li>
+        <li>整个表达式说：<b>让「当前图像该处的亮度」尽量等于「地图参考块的亮度」</b>。这就是光度误差。</li>
+      </ul>
+
+      <p>关键是：这个残差里<b>没有逆深度、没有三角化项</b>。深度就是 ${}^G\mathbf p_i$ 这个激光点本身。这就是「复用」二字的含义。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">视觉复用激光地图：深度由激光白送，视觉只负责把图案对齐</text>
+          <line x1="450" y1="44" x2="450" y2="372" stroke="#c9bfb2" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+          <!-- 左半：激光已铺好的地图 -->
+          <rect x="24" y="48" width="392" height="318" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="220" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">① 激光已经铺好的地图</text>
+          <text x="220" y="90" text-anchor="middle" font-size="11" fill="#7a8a99">一面带画框的墙</text>
+          <!-- 墙 -->
+          <rect x="60" y="108" width="320" height="180" fill="#e7edf2" stroke="#9fb3c4" stroke-width="1.2"/>
+          <rect x="120" y="138" width="64" height="48" fill="none" stroke="#b08968" stroke-width="2"/>
+          <rect x="250" y="180" width="56" height="52" fill="none" stroke="#b08968" stroke-width="2"/>
+          <text x="152" y="134" text-anchor="middle" font-size="10" fill="#b08968">画框</text>
+          <text x="278" y="176" text-anchor="middle" font-size="10" fill="#b08968">画框</text>
+          <!-- 散点（激光点） -->
+          <g fill="#5a8fc7">
+            <circle cx="80" cy="130" r="3"/><circle cx="110" cy="170" r="3"/><circle cx="140" cy="220" r="3"/>
+            <circle cx="180" cy="150" r="3"/><circle cx="210" cy="200" r="3"/><circle cx="240" cy="160" r="3"/>
+            <circle cx="270" cy="230" r="3"/><circle cx="300" cy="190" r="3"/><circle cx="330" cy="250" r="3"/>
+            <circle cx="95" cy="250" r="3"/><circle cx="160" cy="270" r="3"/><circle cx="220" cy="255" r="3"/>
+            <circle cx="290" cy="150" r="3"/><circle cx="350" cy="200" r="3"/><circle cx="130" cy="200" r="3"/>
+          </g>
+          <!-- 拟合平面（一条带法向的线） -->
+          <line x1="64" y1="290" x2="376" y2="290" stroke="#2e9e6b" stroke-width="2.4"/>
+          <path d="M300 290 L290 282 L290 298 Z" fill="#2e9e6b"/>
+          <text x="60" y="312" font-size="11" fill="#2e9e6b">这些点已被拟合成一块平面</text>
+          <text x="220" y="352" text-anchor="middle" font-size="11.5" fill="#3b4a5e">墙面上密布小点 = 激光地图点</text>
+
+          <!-- 右半：相机把像素贴到平面 -->
+          <rect x="484" y="48" width="392" height="318" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="680" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">② 相机把像素「贴」到平面上</text>
+          <!-- 相机 -->
+          <rect x="500" y="100" width="40" height="26" rx="5" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <circle cx="520" cy="113" r="7" fill="#222"/>
+          <text x="520" y="146" text-anchor="middle" font-size="10" fill="#555">相机</text>
+          <!-- 图像帧 -->
+          <rect x="620" y="90" width="120" height="80" fill="#fff" stroke="#a8846f" stroke-width="1.4"/>
+          <rect x="650" y="112" width="22" height="22" fill="#c0392b" opacity="0.75"/>
+          <text x="680" y="194" text-anchor="middle" font-size="10" fill="#a8846f">图像块 patch</text>
+          <!-- 虚线连到墙（用左半墙的投影感） -->
+          <line x1="540" y1="113" x2="700" y2="250" stroke="#a8563a" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <line x1="661" y1="123" x2="520" y2="270" stroke="#a8563a" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <line x1="672" y1="123" x2="640" y2="285" stroke="#a8563a" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <!-- 右侧那块平面示意 -->
+          <line x1="520" y1="290" x2="832" y2="290" stroke="#2e9e6b" stroke-width="2.4"/>
+          <path d="M756 290 L746 282 L746 298 Z" fill="#2e9e6b"/>
+          <circle cx="520" cy="270" r="3.5" fill="#5a8fc7"/><circle cx="640" cy="285" r="3.5" fill="#5a8fc7"/><circle cx="700" cy="250" r="3.5" fill="#5a8fc7"/>
+          <text x="676" y="312" font-size="11" fill="#2e9e6b">视觉投到地图里已有的平面</text>
+          <text x="680" y="352" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8563a">视觉不去自己算深度，它直接问地图：</text>
+          <text x="680" y="370" text-anchor="middle" font-size="11" fill="#a8563a">「我这个像素对应的表面在哪？」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一面前有画框的墙，左半画「激光已经把墙面建成带点、带平面的地图」，右半画「相机来了一帧图像，把图像块沿虚线投到地图上的平面」。
+          <br><b>怎么看这张图：</b>① 左半那一面墙上的小蓝点就是激光点云，绿线是被拟合出的平面（带一个法向箭头）；② 右半红色方块是当前帧里的一个图像块，三条虚线把它的像素连到地图上对应的表面点；③ 右下角那句话是灵魂：<b>视觉不自己估深度，深度是激光点云直接给的</b>。
+          <br><b>要记住的一句话：</b>深度由激光白送，视觉只负责把图案对齐——所以视觉侧省掉了最贵的一步（深度估计）。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="smart">
+      <h2>3. 为什么这很聪明：经典直接法最怕的就是自己估深度</h2>
+
+      <p>为什么说「省掉深度估计」是大事？因为第三季 <b>0046</b>–<b>0050</b> 课讲过的<b>经典稀疏直接法</b>（DTAM / DSO / SVO）最头疼的，恰恰就是这件事。</p>
+
+      <p>直接法的思路是：拿当前帧的亮度和参考帧的亮度做差（光度误差），靠这个差去优化位姿。但有个前提问题——<b>「当前帧这个像素对应的 3D 点在哪？」也就是它的深度是多少？</b>经典直接法手里没有激光，它只能靠<b>逆深度</b>（inverse depth）去猜：先给每个像素一个深度初值，再在后端反复迭代、滤波，慢慢把深度估准。这个「估深度」既费算力，又容易在弱纹理处塌掉。</p>
+
+      <p>FAST-LIVO 的聪明之处，就是<b>把「估深度」这件事整体外包给激光</b>。激光天生就量到了深度（每个点都有精确距离），而且已经把这些点存进了地图。视觉一来，深度已经是现成的，它只需要做「亮度对齐」。</p>
+
+      <div class="callout">
+        <h4>一句话对照</h4>
+        <p>经典直接法（DSO / SVO）：位姿 + 每个像素的深度 <b>都要一起估</b>。<br>
+        FAST-LIVO 的视觉：位姿要估，<b>深度直接从激光地图拿</b>——深度不再是待优化变量。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">同一个光度误差，一边要额外估深度，一边不用</text>
+          <line x1="450" y1="44" x2="450" y2="372" stroke="#c9bfb2" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+          <!-- 左：经典直接法 -->
+          <rect x="24" y="48" width="392" height="318" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="220" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 经典直接法（如 DSO）</text>
+          <!-- 相机 -->
+          <rect x="60" y="110" width="34" height="22" rx="4" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <circle cx="77" cy="121" r="6" fill="#222"/>
+          <text x="77" y="150" text-anchor="middle" font-size="10" fill="#555">相机</text>
+          <!-- 射线 + 深度候选 -->
+          <line x1="94" y1="121" x2="320" y2="121" stroke="#a8563a" stroke-width="1.6"/>
+          <g fill="#a8563a">
+            <circle cx="140" cy="121" r="4"/><circle cx="185" cy="121" r="4"/><circle cx="230" cy="121" r="4"/><circle cx="275" cy="121" r="4"/>
+          </g>
+          <path d="M320 121 L312 116 L312 126 Z" fill="#a8563a"/>
+          <!-- 墙面 -->
+          <rect x="320" y="64" width="78" height="220" fill="#e7edf2" stroke="#9fb3c4" stroke-width="1.2"/>
+          <text x="359" y="306" text-anchor="middle" font-size="10" fill="#3b4a5e">真实墙面</text>
+          <text x="220" y="200" text-anchor="middle" font-size="11" fill="#a8563a">深度是未知量</text>
+          <text x="220" y="218" text-anchor="middle" font-size="11" fill="#a8563a">要迭代地猜</text>
+          <text x="220" y="352" text-anchor="middle" font-size="11.5" fill="#a8563a">射线穿过一串候选深度</text>
+
+          <!-- 右：LIVO -->
+          <rect x="484" y="48" width="392" height="318" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="680" y="72" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② LIVO</text>
+          <rect x="520" y="110" width="34" height="22" rx="4" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <circle cx="537" cy="121" r="6" fill="#222"/>
+          <text x="537" y="150" text-anchor="middle" font-size="10" fill="#555">相机</text>
+          <line x1="554" y1="121" x2="660" y2="121" stroke="#2f6d51" stroke-width="1.6"/>
+          <path d="M660 121 L652 116 L652 126 Z" fill="#2f6d51"/>
+          <!-- 地图里的平面（射线被打断） -->
+          <rect x="660" y="64" width="78" height="220" fill="#e7edf2" stroke="#9fb3c4" stroke-width="1.2"/>
+          <line x1="660" y1="121" x2="738" y2="121" stroke="#2e9e6b" stroke-width="2.4"/>
+          <path d="M700 121 L692 116 L692 126 Z" fill="#2e9e6b"/>
+          <circle cx="660" cy="121" r="4.5" fill="#5a8fc7"/>
+          <text x="699" y="148" text-anchor="middle" font-size="10" fill="#2e9e6b">地图里的平面</text>
+          <text x="680" y="200" text-anchor="middle" font-size="11" fill="#2f6d51">不用猜</text>
+          <text x="680" y="218" text-anchor="middle" font-size="11" fill="#2f6d51">地图已告诉你它停在哪</text>
+          <text x="680" y="352" text-anchor="middle" font-size="11.5" fill="#2f6d51">射线打到地图上已有平面即停</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一条从相机射向墙面的射线，在两种系统里不同的「深度处理」。
+          <br><b>怎么看这张图：</b>① 左联（经典直接法）：射线一路穿过一排「待估的深度候选」小点，深度是未知量，要反复迭代去猜；② 右联（LIVO）：射线射出去，撞到激光地图里已经存在的平面就停住了，那个停点就是深度，不用猜；③ 注意右联那个蓝点就是激光地图点，绿线是地图拟合平面。
+          <br><b>要记住的一句话：</b>同一个光度误差，一边要额外估深度、一边不用——这就是 LIVO 快的根源之一。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="twomaps">
+      <h2>4. 一份滤波器管两份地图（注意：不是「一份地图」）</h2>
+
+      <p>这里有一条<b>务必纠正的常见误传</b>：很多人以为「FAST-LIVO = 同一份地图、同一个滤波器」。这句话<b>只对 FAST-LIVO2 成立，对 v1 不成立</b>。</p>
+
+      <div class="callout">
+        <h4>★ 重要澄清（按原文如实写）</h4>
+        <p>FAST-LIVO（v1）是<b>「两个地图、一个滤波器」</b>：激光全局地图（ikd-Tree 点云）和视觉全局地图（体素哈希 + 贴 patch）是<b>两份分开的结构</b>，但它们共用<b>同一个 ESIKF</b> 来融合。视觉侧复用的「激光地图点」，是激光那张点云地图里的点——所以两者在地图内容上有重叠，但在<b>存储结构上是两套</b>。真正「同一份体素地图」是 FAST-LIVO2（下一课）才做到的。</p>
+      </div>
+
+      <p>更要紧的是<b>更新方式</b>。FAST-LIVO（v1）用的是<b>异步更新</b>，不是下一课的「序贯更新」。原文的异步最大后验估计（Eq.11）写的是：如果时刻 $t_k$ 收到激光，就只融合激光残差 $r_l$（图像项权重 $m_c=0$）；如果收到图像，就只融合图像残差 $r_c$（激光项权重 $m_l=0$）。也就是说——</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\min\ \big\|\mathbf x_k\boxminus\hat{\mathbf x}_k\big\|^2+\sum\|r_l\|^2+\sum\|r_c\|^2$$</div>
+      </div>
+
+      <p>「收到激光只融 $r_l$，收到图像只融 $r_c$」——激光帧和图像帧是<b>交错到达、各自触发一次 ESIKF 更新</b>的，不是在同一帧里把两者一起灌进去。这跟 FAST-LIVO2 的「序贯更新」（同一帧内多个测量一个一个地更新同一个状态）是两回事。</p>
+
+      <p>下面这张图把「异步」画出来：时间轴上蓝色（激光）和橙色（图像）更新交替出现。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">一份 ESIKF，但管着两份地图（异步更新）</text>
+          <rect x="40" y="60" width="820" height="120" rx="10" fill="#f3f1ec" stroke="#cabfaf" stroke-width="1.2"/>
+          <text x="450" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#5a4a42">ESIKF（误差态迭代卡尔曼滤波器）</text>
+          <text x="450" y="124" text-anchor="middle" font-size="11.5" fill="#7a6a5f">同一个滤波器，状态只保留当前时刻</text>
+          <!-- 两个地图块 -->
+          <rect x="70" y="220" width="320" height="80" rx="9" fill="#eef4fa" stroke="#9fb3c4" stroke-width="1.4"/>
+          <text x="230" y="250" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">LiDAR 地图 = ikd-Tree 点云</text>
+          <text x="230" y="272" text-anchor="middle" font-size="10.5" fill="#7a8a99">激光打的离散点 + 拟合平面</text>
+          <rect x="510" y="220" width="320" height="80" rx="9" fill="#fdf0ec" stroke="#e0b3a3" stroke-width="1.4"/>
+          <text x="670" y="250" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a8563a">视觉地图 = 体素哈希 + 贴 patch</text>
+          <text x="670" y="272" text-anchor="middle" font-size="10.5" fill="#a8846f">每个点贴一张参考图像块</text>
+          <!-- 箭头 -->
+          <path d="M230 220 L450 180" stroke="#5a8fc7" stroke-width="1.6" fill="none"/>
+          <path d="M670 220 L450 180" stroke="#a8563a" stroke-width="1.6" fill="none"/>
+          <circle cx="340" cy="200" r="3.5" fill="#5a8fc7"/><circle cx="560" cy="200" r="3.5" fill="#a8563a"/>
+          <!-- 时间轴 -->
+          <line x1="60" y1="330" x2="840" y2="330" stroke="#90a4ae" stroke-width="1.4"/>
+          <text x="850" y="334" font-size="11" fill="#5a4a42">时间</text>
+          <g fill="#5a8fc7"><circle cx="120" cy="330" r="5"/><circle cx="240" cy="330" r="5"/><circle cx="360" cy="330" r="5"/><circle cx="540" cy="330" r="5"/><circle cx="660" cy="330" r="5"/><circle cx="780" cy="330" r="5"/></g>
+          <g fill="#a8563a"><circle cx="180" cy="330" r="5"/><circle cx="300" cy="330" r="5"/><circle cx="420" cy="330" r="5"/><circle cx="600" cy="330" r="5"/><circle cx="720" cy="330" r="5"/></g>
+          <text x="150" y="312" text-anchor="middle" font-size="10" fill="#5a8fc7">激光更新</text>
+          <text x="300" y="312" text-anchor="middle" font-size="10" fill="#a8563a">图像更新</text>
+          <text x="450" y="348" text-anchor="middle" font-size="11" fill="#5a4a42">蓝橙交替 = 异步：谁先到谁先触发一次更新</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个 ESIKF 圆，被两块地图（蓝色激光、橙色视觉）喂数据，时间轴上两种更新交替发生。
+          <br><b>怎么看这张图：</b>① 上方大框是「一个滤波器」，不是两个；② 下方左右两块是<b>两份不同的地图结构</b>，别误画成一块；③ 底部时间轴：蓝点和橙点交错，每到一个就触发一次更新——这就是「异步」。
+          <br><b>要记住的一句话：</b>v1 是「两份地图、一个滤波器、异步更新」；「同一份地图 + 序贯更新」是 v2 才有的。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="state">
+      <h2>5. 状态向量与滤波器</h2>
+
+      <p>FAST-LIVO 用的是什么滤波器？原文全称是 <b>ESIKF = Error-State Iterated Kalman Filter（误差态迭代卡尔曼滤波器）</b>。它和第四季 <b>0083</b> 课 FAST-LIO 的 ESIKF 是同源思路（状态是「误差态」，迭代地线性化）。</p>
+
+      <p>状态流形与状态向量（Eq.2–3）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal M=SO(3)\times\mathbb R^{15},\quad \dim(\mathcal M)=18$$</div>
+        <div class="flow-formula">$$\mathbf x=\big[\,{}^G\mathbf R_I^T\ \ {}^G\mathbf p_I^T\ \ {}^G\mathbf v^T\ \ \mathbf b_g^T\ \ \mathbf b_a^T\ \ {}^G\mathbf g^T\big]^T$$</div>
+      </div>
+
+      <p>逐个说：</p>
+      <ul>
+        <li>${}^G\mathbf R_I,\,{}^G\mathbf p_I$：IMU 帧相对于全局帧的<b>旋转</b>与<b>位置</b>；</li>
+        <li>${}^G\mathbf v$：IMU 帧的速度；</li>
+        <li>$\mathbf b_g,\,\mathbf b_a$：陀螺仪与加速度计的<b>零偏</b>（随时间随机游走，要估）；</li>
+        <li>${}^G\mathbf g$：全局重力向量；</li>
+      </ul>
+      <p>注意：<b>v1 的状态是 18 维，没有逆曝光时间 $\tau$</b>。$\tau$ 是 FAST-LIVO2 才多加的一维（v2 是 19 维）。这是区分两代的一个小但确切的标志。</p>
+
+      <p>激光那一路的残差（Eq.8）是经典的<b>点-面残差</b>，平面由最近 5 个点拟合（查 ikd-Tree 邻域）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf 0=\mathbf u_j^T\big({}^G\mathbf T_{I_k}\,{}^I\mathbf T_L\,{}^L\mathbf p_j-\mathbf q_j\big)$$</div>
+      </div>
+
+      <p>其中 $\mathbf u_j$ 是拟合平面的法向、$\mathbf q_j$ 是平面中心——这两者都来自激光地图。视觉那一路就是上节的 Eq.9 光度残差。两者都进同一个 ESIKF。</p>
+    </section>
+
+    <section class="section-card" id="feature">
+      <h2>6. 它有没有用视觉特征？直接法还是特征法</h2>
+
+      <p>这里要正面回答：<b>FAST-LIVO 的视觉侧走的是直接法，不是特征法。</b>原文明言它不提取、不三角化、不优化任何视觉特征——它用的是「稀疏直接法」（sparse-direct），和 SVO 一类同源，靠图像块（patch）的光度误差来对齐。</p>
+
+      <div class="callout">
+        <h4>直接法 vs 特征法（回链第三季）</h4>
+        <p>特征法（ORB-SLAM 那一支，见第三季 <b>0043</b>–<b>0045</b>）：先提角点/FAST 特征，做描述子匹配，再算几何。<br>
+        直接法（DSO/SVO，见第三季 <b>0046</b>–<b>0050</b>）：不提特征，直接拿像素亮度做光度误差。<br>
+        <b>FAST-LIVO 选直接法</b>——所以它没有 ORB/FAST 那套，也不需要特征匹配；代价是它依赖「地图给深度」，这正是上一节讲的。</p>
+      </div>
+
+      <p>为了让你直观看到「调位姿让块对齐」这件事，下面是原文 Fig.2——它画的就是直接法核心：转动当前帧，让参考块和当前块的亮度差最小。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIVO/f41c4faf31a335253f202a3977fd06e24959cef12af0c68c47fa5abcbb6a00bb.jpg" alt="FAST-LIVO Fig.2 Changing the pose to minimize photometric errors">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Changing the pose of current frame in the global frame to minimize the photometric errors between the reference image patches in the visual global map and the corresponding patch in the current frame.<br>
+          <b>怎么看这张图：</b>① 它画的是「直接法怎么干活」——系统不断微调当前帧的位姿，让地图里的参考块和当前帧里对应块亮度尽量一致；② 这正好对应第三季 <b>0046</b>–<b>0050</b> 讲的光度误差最小化；③ 区别在：这里块对应的 3D 点深度来自激光地图，而非自己估。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>7. 实验数字与局限</h2>
+
+      <p>数据集：公开 NTU-VIRAL 9 个序列 + 自采私有集（Livox Avia + 工业相机 + DJI manifold-2c，硬件同步 10 Hz）。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">数值</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">对比 / 说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>精度（NTU-VIRAL）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">eee_01 0.19 / nya_01 0.12 / sbs_01 0.25 m（RMSE）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">整体最优，除 sbs_01（见下）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>单墙退化端到端漂移</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.05 m</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">靠视觉纹理，纯激光 FAST-LIO2 会沿墙漂</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>视觉挑战（79.52 m 路径）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.04 m</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">弱纹理白墙、室内外、大光变下仍存活</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>速度（Intel i7）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">36.75 ms/帧（VIO 10.23 + LIO 26.52）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">实时；ARM(RB5) 也实时</td></tr>
+        </tbody>
+      </table>
+
+      <p>下面两张原图分别展示「激光退化」和「视觉挑战」两类场景，证明 v1 确实能在单模态失效处活下来。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIVO/44f34ea8b4237279809708717148a3100467153098845eb51aec3e22e80b39bd.jpg" alt="FAST-LIVO Fig.5 LiDAR degeneration scene">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>The performance of FAST-LIVO, FAST-LIO2, and SVO2.0 in a LiDAR degeneration scene. The point cloud is colored by LiDAR intensity.<br>
+          <b>怎么看这张图：</b>① 这是「激光只看到一面 30 m 长墙」的退化场景——纯几何约束不足；② 纯激光 FAST-LIO2 在沿墙方向约束不够会漂，FAST-LIVO 因为复用了视觉纹理而不漂；③ 点云按激光强度着色，颜色越杂说明视觉纹理参与进了地图。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIVO/89560704a19a191558845a64747b1ed0066edf882fc8b6abe93081661fa0fcd3.jpg" alt="FAST-LIVO Fig.6 visual challenging scene RGB point cloud">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>The RGB-colored point cloud of the visual challenging scene containing aggressive motions, indoor-to-outdoor and outdoor-to-indoor movements, and a visual texture-less wall. The green path is the computed trajectory.<br>
+          <b>怎么看这张图：</b>① 绿线是算出的轨迹，79.52 m 路径端到端误差仅 0.04 m；② 场景包含了激进运动、室内外切换、无纹理白墙——都是单模态的噩梦；③ 这说明「激光给几何、视觉给纹理」的互补在极端条件下真顶用。
+        </figcaption>
+      </figure>
+
+      <h3>原文承认的局限（逐条）</h3>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 图像极糊时不增益</b>
+          <p>sbs_01 因无人机快速转动导致图像糊，原文明说「融合这些低质量图像没有帮助」。</p>
+        </div>
+        <div class="mini-card">
+          <b>② patch 内「同深度」假设太野</b>
+          <p>v1 假设一个 patch 内所有像素同深度——在斜平面上不准。这恰恰是 FAST-LIVO2 明文批判、并用法向精化解决的。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 没有在线曝光估计</b>
+          <p>v1 没有估计逆曝光时间 $\tau$，光照变化时光度误差不可比；也没有按需光线投射、没有回环。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 两份地图、异步更新</b>
+          <p>地图结构不统一、更新非序贯，是下一课要升级的两个点。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="bridge">
+      <h2>8. 本课落点：v1 的三大不足，引出 v2</h2>
+
+      <p>把这一课收一下。FAST-LIVO（v1）证明了三件事：</p>
+      <ul>
+        <li>视觉可以<b>直接复用激光地图</b>，不提特征、不三角化，深度由激光白送；</li>
+        <li>激光 + 视觉 + IMU 可以塞进<b>同一个 ESIKF</b> 联合融合；</li>
+        <li>在退化/弱纹理处，这种互补确实比纯激光或纯视觉稳。</li>
+      </ul>
+      <p>但它留了三个明确的坑（也是下一课 FAST-LIVO2 的贡献）：</p>
+      <div class="callout">
+        <h4>v1 → v2 的三级跳</h4>
+        <p>① <b>两份地图 → 一份统一体素地图</b>（v2 把激光点云和视觉点存进同一个自适应体素）；<br>
+        ② <b>异步更新 → 序贯更新</b>（v2 在同一帧内一个一个测量地更新同一个状态）；<br>
+        ③ <b>无曝光估计 / 同深度假设 → 在线曝光 $\tau$ + 平面法向精化</b>（v2 让斜平面上的块对齐更准）。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 FAST-LIVO（v1）的地图，下列说法哪句是对的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。v1 维护的是两份地图结构：激光全局地图（ikd-Tree 点云）和视觉全局地图（体素哈希 + 贴 patch）。「同一份体素地图」是 FAST-LIVO2（下一课）才做到的。" onclick="lessonKit.answer(this,'q0099a')">v1 用同一份体素地图</button>
+          <button data-correct="yes" data-explanation="对。原文 §V 明说 LiDAR 地图（ikd-Tree 点云）与 visual 地图（体素哈希）是两份结构，但共用同一个 ESIKF 融合。" onclick="lessonKit.answer(this,'q0099a')">v1 是两份地图一滤波器</button>
+        </div>
+        <div class="quiz-feedback" id="q0099a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>FAST-LIVO（v1）的视觉深度从哪里来？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。视觉直接复用激光地图点作为自己的视觉地图点，深度就是激光点位置，不三角化、不估逆深度。这正是它比经典直接法（DSO/SVO）省力的根源。" onclick="lessonKit.answer(this,'q0099b')">由激光地图点直接给</button>
+          <button data-correct="no" data-explanation="错。那是经典视觉 SLAM（如 ORB-SLAM 三角化）或第三季直接法（DSO/SVO 估逆深度）的做法。FAST-LIVO 的视觉是直接法，但深度来源是激光，不是自己三角化。" onclick="lessonKit.answer(this,'q0099b')">视觉自己三角化估计</button>
+        </div>
+        <div class="quiz-feedback" id="q0099b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>原文批评已有 LIVO 方案「只在状态层耦合、测量层没耦合」。请用自己的话解释这句话，并说明 FAST-LIVO 怎么回应它。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>状态层耦合：激光和视觉各自跑完前端、各自算出残差，最后只在滤波器/优化器里把状态凑一起。测量层没耦合：激光不知道视觉在测什么，视觉也不知道激光量到的几何。</p>
+            <p>FAST-LIVO 的回应是<b>直接法 + frame-to-map</b>：视觉不再自己提特征、自己三角化，而是把像素直接投到激光已建好的地图几何上算光度误差——这样视觉的测量（亮度对齐）直接「长」在激光的测量（点-面几何）之上，测量层就耦合了。同时两者进同一个 ESIKF。</p>
+          </div></details>
+        </li>
+        <li>为什么说「视觉复用激光地图」省掉了经典直接法最贵的一步？请回链第三季直接法课程。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>第三季 <b>0046</b>–<b>0050</b> 讲的直接法（DTAM/DSO/SVO），位姿和每个像素的深度要一起估，深度常用逆深度在后端迭代/滤波慢慢收敛，既费算力又容易在弱纹理处塌掉。</p>
+            <p>FAST-LIVO 的视觉深度直接取自激光地图点 ${}^G\mathbf p_i$——激光天生量到了精确距离，且已存进地图。于是深度不再是待优化变量，视觉只剩「亮度对齐」一件事。这就是它快、且在弱纹理处仍稳的根源。</p>
+          </div></details>
+        </li>
+        <li>「FAST-LIVO 是同一份地图、同一个滤波器」这句话对 v1 成立吗？请结合原文说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p><b>不成立。</b>这句话只对 FAST-LIVO2 成立。v1 是<b>两个地图、一个滤波器</b>：激光全局地图（ikd-Tree 点云）与视觉全局地图（体素哈希 + 贴 patch）是两份结构，共用同一个 ESIKF。真正「同一份体素地图」是 v2 才统一掉的。</p>
+          </div></details>
+        </li>
+        <li>v1 的「异步更新」与下一课 v2 的「序贯更新」有什么不同？请用 Eq.11 的 m_l / m_c 说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>v1 异步（Eq.11）：收到激光只融 $r_l$（图像权重 $m_c=0$），收到图像只融 $r_c$（激光权重 $m_l=0$）。激光帧和图像帧<b>交错到达、各自触发一次更新</b>，不是同帧一起进。</p>
+            <p>v2 序贯：在<b>同一帧内</b>，多个测量（激光平面残差、图像块光度残差……）一个一个地更新<b>同一个状态</b>，每更新一次就重新线性化。下一课会展开。</p>
+          </div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0098-LIV-GaussMap2024-地图本身就是一组高斯.html">← LIV-GaussMap（2024）：地图本身就是一组高斯</a>
+        <a class="next" href="0100-FAST-LIVO2-2025-统一体素地图与序贯更新.html">FAST-LIVO2（2025）：统一体素地图与序贯更新 →</a>
+      </div>
+      <p class="foot-note">v1 证明了「复用」可行，v2 把它做成了集大成。下一课是全季顶点 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

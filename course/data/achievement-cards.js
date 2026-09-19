@@ -199,6 +199,54 @@ window.ACHIEVEMENT_CARDS = {
         "<text x='200' y='291' font-size='15' text-anchor='middle' fill='rgba(216,255,240,0.78)' font-family='Helvetica, Arial, sans-serif'>阶段 D · 32 篇 · 激光主干 · 8 模块</text>" +
         "</svg>",
       card_file: "reference/成就卡-第四季.html"
+    },
+    {
+      id: "ach-stage-e",
+      title: "融合掌舵者",
+      icon: "🎛️",
+      paper: "阶段 E · 多传感器融合",
+      date: "2026-09-19",
+      rarity: "legendary",
+      thumb_b64:
+        "data:image/svg+xml;utf8," +
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'>" +
+        "<defs>" +
+        "<linearGradient id='bge' x1='0' y1='0' x2='1' y2='1'>" +
+        "<stop offset='0%' stop-color='#10333d'/>" +
+        "<stop offset='58%' stop-color='#20596a'/>" +
+        "<stop offset='100%' stop-color='#0c262e'/>" +
+        "</linearGradient>" +
+        "<radialGradient id='glowe' cx='50%' cy='40%' r='58%'>" +
+        "<stop offset='0%' stop-color='rgba(140,225,240,0.32)'/>" +
+        "<stop offset='100%' stop-color='rgba(140,225,240,0)'/>" +
+        "</radialGradient>" +
+        "</defs>" +
+        "<rect width='400' height='300' fill='url(#bge)'/>" +
+        "<rect width='400' height='300' fill='url(#glowe)'/>" +
+        "<g fill='none' stroke-width='3'>" +
+        "<circle cx='152' cy='100' r='48' stroke='#7fd4e4' stroke-opacity='0.9'/>" +
+        "<circle cx='248' cy='100' r='48' stroke='#9db8ee' stroke-opacity='0.9'/>" +
+        "<circle cx='200' cy='156' r='48' stroke='#c0a6e8' stroke-opacity='0.9'/>" +
+        "</g>" +
+        "<g stroke-width='1.4' stroke-opacity='0.4' fill='none'>" +
+        "<line x1='200' y1='119' x2='152' y2='100' stroke='#7fd4e4'/>" +
+        "<line x1='200' y1='119' x2='248' y2='100' stroke='#9db8ee'/>" +
+        "<line x1='200' y1='119' x2='200' y2='156' stroke='#c0a6e8'/>" +
+        "</g>" +
+        "<circle cx='200' cy='119' r='8' fill='#eafbff'/>" +
+        "<circle cx='200' cy='119' r='16' fill='none' stroke='#eafbff' stroke-opacity='0.4' stroke-width='1.5'/>" +
+        "<g fill='#eafbff'>" +
+        "<circle cx='152' cy='100' r='3.6'/>" +
+        "<circle cx='248' cy='100' r='3.6'/>" +
+        "<circle cx='200' cy='156' r='3.6'/>" +
+        "</g>" +
+        "<text x='88' y='104' font-size='13' text-anchor='middle' fill='#9fe4ef' font-family='Helvetica, Arial, sans-serif'>激光</text>" +
+        "<text x='312' y='104' font-size='13' text-anchor='middle' fill='#b6caf5' font-family='Helvetica, Arial, sans-serif'>视觉</text>" +
+        "<text x='200' y='226' font-size='13' text-anchor='middle' fill='#d2bdf0' font-family='Helvetica, Arial, sans-serif'>IMU</text>" +
+        "<text x='200' y='258' font-size='19' font-weight='700' text-anchor='middle' fill='#eafbff' font-family='Helvetica, Arial, sans-serif'>融合掌舵者</text>" +
+        "<text x='200' y='282' font-size='12' text-anchor='middle' fill='rgba(234,251,255,0.72)' font-family='Helvetica, Arial, sans-serif'>阶段 E · 9 篇 · 多传感器融合</text>" +
+        "</svg>",
+      card_file: "reference/成就卡-第五季.html"
     }
   ]
 };

@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAST-LIVO2（2025）：统一体素地图与序贯更新 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0100</div>
+      <h1>FAST-LIVO2（2025）：统一体素地图与序贯更新</h1>
+      <p class="subtitle">同一份体素地图 + 同一个 ESIKF + 序贯更新，把激光几何与视觉纹理融进一条流水线 🧠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：统一体素地图 · ESIKF 序贯更新 · 平面先验</span>
+        <span>👥 作者：HKU-MARS 组</span>
+        <span>📅 2025 · <i>Fast, Direct LiDAR-Inertial-Visual Odometry</i>（IEEE T-RO）</span>
+      </div>
+      <div class="toc">
+        <a href="#contrib">几条贡献</a>
+        <a href="#voxel">体素里存什么</a>
+        <a href="#lineage">地图里存什么的谱系</a>
+        <a href="#sequential">ESIKF 序贯更新</a>
+        <a href="#visual">视觉那一路的残差</a>
+        <a href="#degrade">传感器退化与互补</a>
+        <a href="#exp">实验数字</a>
+        <a href="#limit">局限</a>
+        <a href="#bridge">本课落点</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="contrib">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：逐条列出 FAST-LIVO2 的贡献；说清体素里存的是「平面」而非「点」、以及为什么更好；讲清 ESIKF 序贯更新与批处理、与 v1 异步的区别；并能对照 R3LIVE 和 v1。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第四季 <b>0083</b> FAST-LIO（ESIKF 增益公式 / 误差态框架）与 <b>0084</b> FAST-LIO2（ikd-Tree 点云地图）；接第三季 <b>0046</b>–<b>0050</b>（直接法深度来源）；接第五季 R3LIVE（两条线并行 vs 统一地图）。本季技术最高点。</p>
+        </div>
+      </div>
+
+      <h2>1. 它的几条贡献（逐条按原文抄）</h2>
+
+      <p>FAST-LIVO2 是 HKU-MARS 组 2025 年发表在 IEEE T-RO 上的方法/系统论文，摘要明言它是「一个快速的直接法激光-惯性-视觉里程计框架」，用 ESIKF 紧耦合 IMU + LiDAR + 图像，统一体素地图，视觉最小化光度误差。它是本组（紧耦合 LIVO）的<b>集大成与全季顶点</b>。</p>
+
+      <p>原文（§I 贡献段与 §II-B）自陈的贡献，逐条如下：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>贡献 1：序贯更新（sequential update）</b>
+          <p>把一帧内的激光与图像测量<b>分先后、一个一个</b>地更新同一个状态，每更新一次重新线性化。原文明确说这是为「改善用异步更新的 FAST-LIVO 的鲁棒性」。<b>注意：序贯更新是本篇贡献，不是 v1 的。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>贡献 2：统一体素地图存平面</b>
+          <p>把激光点云和视觉点存进<b>同一个自适应体素地图</b>，每个体素拟合出平面（中心 + 法向 + 协方差），并复用平面先验加速视觉对齐。直接解决了 v1「同深度假设」在斜平面不准的问题。</p>
+        </div>
+        <div class="mini-card">
+          <b>贡献 3：在线曝光估计 $\tau$</b>
+          <p>状态里多了一维逆曝光时间 $\tau$（随机游走），把当前帧亮度缩放到参考帧尺度，使光度误差在光照变化时可比。v1 没有。</p>
+        </div>
+        <div class="mini-card">
+          <b>贡献 4：按需体素光线投射</b>
+          <p>图像格在激光近距盲区/超出激光视场时，沿射线回溯采样体素来召回视觉地图点，提升鲁棒性。v1 没有。</p>
+        </div>
+      </div>
+
+      <p>论文还在 §II-B 给出了一个自己的「紧耦合两视角分类」：按<b>状态估计层</b>（某传感器估计是否作为另一传感器模型的优化目标）和<b>原始测量层</b>（原始数据是否结合）来分松/紧耦合；并把本系统与 R3LIVE 区分开——R3LIVE 的 VIO 用<b>逐像素</b>直接法（贵、依赖光流初值），本系统用<b>图像块级</b>稀疏直接法，一步 frame-to-map 对齐，且复用统一地图的平面先验。</p>
+    </section>
+
+    <section class="section-card" id="voxel">
+      <h2>2. 体素地图里到底存什么（本节灵魂）</h2>
+
+      <p>这是全课最该讲清的一点。<b>每个体素里存的不是一堆离散点，而是一块被拟合出来的平面。</b></p>
+
+      <p>具体说，一个体素（voxel）里保存：</p>
+      <ul>
+        <li><b>平面参数</b>：平面<b>中心</b> $\mathbf q_j$（一个点）和<b>法向</b> $\mathbf n_j$，以及描述不确定性的<b>协方差/统计量</b>；</li>
+        <li><b>原始激光点</b>：拟合平面用到的那批离散点也留着（用于后续精化/回退）；</li>
+        <li><b>贴在平面上的参考图像块（patch）</b>：视觉复用时直接拿来比亮度。</li>
+      </ul>
+
+      <p>激光那一路的点-面残差（Eq.18–19）直接用这个拟合平面：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf 0=(\mathbf n_j\boxplus\delta\mathbf n_j)^T\Big({}^G\mathbf T_I\,{}^I\mathbf T_L\big({}^L\mathbf p_j-\delta{}^L\mathbf p_j\big)-\big(\mathbf q_j-\delta\mathbf q_j\big)\Big)$$</div>
+      </div>
+
+      <p>其中 $(\mathbf n_j,\mathbf q_j)$ 就是体素内拟合平面的法向和中心——<b>不用再去邻域里现找 5 个点拟合</b>。</p>
+
+      <div class="callout">
+        <h4>为什么「存平面」比「存点」更好</h4>
+        <p>① <b>查询快</b>：视觉来一个像素，直接读体素里的平面参数（中心 + 法向）就能算投影，不必在成千上万近邻点里挨个比距离；② <b>抗噪</b>：平面是多点拟合出来的，单个点的噪声被平均掉了，比「记住每个原始点」稳；③ <b>直接给视觉法向</b>：光度对齐时做仿射变形需要表面法向，平面先验直接提供，省掉 v1 的「同深度」野假设。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">体素里存的是平面，不是一堆散点</text>
+          <line x1="450" y1="44" x2="450" y2="404" stroke="#c9bfb2" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+          <!-- 左：存点 -->
+          <rect x="24" y="50" width="392" height="330" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="220" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 存点（旧思路）</text>
+          <!-- 立方体框 -->
+          <rect x="70" y="96" width="200" height="170" fill="#eef2f6" stroke="#9fb3c4" stroke-width="1.4"/>
+          <path d="M270 96 L300 70 L300 240 L270 266 Z" fill="#e3eaf1" stroke="#9fb3c4" stroke-width="1.2"/>
+          <path d="M70 266 L100 240 L300 240 L270 266 Z" fill="#dde6ee" stroke="#9fb3c4" stroke-width="1.2"/>
+          <!-- 散点 -->
+          <g fill="#5a8fc7">
+            <circle cx="100" cy="130" r="3"/><circle cx="130" cy="160" r="3"/><circle cx="160" cy="120" r="3"/><circle cx="190" cy="180" r="3"/>
+            <circle cx="220" cy="140" r="3"/><circle cx="150" cy="200" r="3"/><circle cx="180" cy="220" r="3"/><circle cx="120" cy="190" r="3"/>
+            <circle cx="240" cy="170" r="3"/><circle cx="210" cy="210" r="3"/><circle cx="140" cy="240" r="3"/><circle cx="250" cy="220" r="3"/>
+            <circle cx="95" cy="170" r="3"/><circle cx="170" cy="155" r="3"/><circle cx="230" cy="130" r="3"/>
+          </g>
+          <text x="220" y="300" text-anchor="middle" font-size="11" fill="#a8563a">查询要挨个比近邻点</text>
+          <text x="220" y="318" text-anchor="middle" font-size="11" fill="#a8563a">慢、且易噪</text>
+          <!-- 杂乱连线 -->
+          <g stroke="#bbb" stroke-width="0.9">
+            <line x1="100" y1="130" x2="160" y2="120"/><line x1="130" y1="160" x2="190" y2="180"/><line x1="220" y1="140" x2="240" y2="170"/><line x1="150" y1="200" x2="180" y2="220"/>
+          </g>
+
+          <!-- 右：存平面 -->
+          <rect x="484" y="50" width="392" height="330" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="680" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 存平面（v2）</text>
+          <rect x="530" y="96" width="200" height="170" fill="#eef2f6" stroke="#9fb3c4" stroke-width="1.4"/>
+          <path d="M730 96 L760 70 L760 240 L730 266 Z" fill="#e3eaf1" stroke="#9fb3c4" stroke-width="1.2"/>
+          <path d="M530 266 L560 240 L760 240 L730 266 Z" fill="#dde6ee" stroke="#9fb3c4" stroke-width="1.2"/>
+          <!-- 拟合平面（斜放小矩形 + 法向） -->
+          <polygon points="560,180 700,150 720,200 580,230" fill="#bfe6cf" stroke="#2e9e6b" stroke-width="2"/>
+          <line x1="640" y1="190" x2="690" y2="140" stroke="#2e9e6b" stroke-width="2"/>
+          <path d="M690 140 L682 146 L686 152 Z" fill="#2e9e6b"/>
+          <text x="700" y="132" font-size="11" fill="#2e9e6b">法向 n</text>
+          <circle cx="640" cy="190" r="3.5" fill="#2f6d51"/>
+          <text x="640" y="208" font-size="10.5" fill="#2f6d51">中心 q</text>
+          <!-- 一个贴 patch 的点 -->
+          <rect x="595" y="198" width="16" height="16" fill="#c0392b" opacity="0.7"/>
+          <text x="603" y="232" text-anchor="middle" font-size="9.5" fill="#a8563a">贴 patch</text>
+          <text x="680" y="300" text-anchor="middle" font-size="11" fill="#2f6d51">查询直接读参数</text>
+          <text x="680" y="318" text-anchor="middle" font-size="11" fill="#2f6d51">快、且抗噪</text>
+          <!-- 干净箭头 -->
+          <line x1="640" y1="190" x2="640" y2="270" stroke="#2e9e6b" stroke-width="2" stroke-dasharray="5 3"/>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个体素（一格空间），左半「存一堆散点」、右半「存一块拟合平面」。
+          <br><b>怎么看这张图：</b>① 左半蓝色小点是原始激光点，查询时要画一堆杂乱连线去挨个比近邻，慢且受单点噪声影响；② 右半绿斜边是被拟合出的平面，带法向 $\mathbf n$（箭头）和中心 $\mathbf q$（点），其中一个红块是贴在表面上的参考 patch；③ 右半底部一条干净虚线表示「直接读平面参数就能算出投影」，不必翻点云。
+          <br><b>要记住的一句话：</b>对<b>速度</b>（不用遍历点云）与<b>抗噪</b>（平面被多点平均）都更好——这就是 v2 把地图「升级」成平面的意义。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="lineage">
+      <h2>3. 回链「地图里存什么」的谱系</h2>
+
+      <p>「地图里到底存什么」是本专案最长的一条线索。FAST-LIVO2 把体素地图升级成「存平面」，正好接上前面几季：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">课</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">系统</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">地图里存什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>第二季 0033</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">TSDF（KinectFusion 系）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">每个格存一个<b>标量距离</b></td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>第二季 0034</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">Voxel Hashing</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">体素<b>块</b> + 哈希表</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>第四季 0084</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">ikd-Tree（FAST-LIO2）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">存<b>离散点</b>，但可增量增删</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>本节 0100</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">FAST-LIVO2 体素地图</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">存<b>拟合平面</b>（中心 + 法向 + 协方差）+ 原始点 + patch</td></tr>
+        </tbody>
+      </table>
+
+      <p>注意一条工程事实：FAST-LIVO2 的 LiDAR 模块<b>不是</b>沿用 FAST-LIO2 的 ikd-Tree，而是改自 <b>VoxelMap</b>（自适应体素地图：哈希表 + 每个入口一棵八叉树）。所以准确地说是——<b>增益公式/ESIKF 框架从 FAST-LIO 继承，地图表示从 ikd-Tree 的「点云」升级成「自适应体素（存平面）」</b>。这一点务必如实写，不要张冠李戴。</p>
+    </section>
+
+    <section class="section-card" id="sequential">
+      <h2>4. ESIKF 的序贯更新（本节灵魂）</h2>
+
+      <p>「序贯（sequential）」到底指什么？一句话：<b>在一帧之内，多个测量不是一次性打包进滤波器，而是一个一个地、按顺序去更新同一个状态；每更新完一个，就重新线性化一次。</b></p>
+
+      <p>原文用贝叶斯分解（Eq.5–7）表达这一点——先由激光测度得到 $p(\mathbf x|\mathbf y_l)$，再由它结合图像测度得到 $p(\mathbf x|\mathbf y_l,\mathbf y_c)$：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$p(\mathbf x|\mathbf y_l,\mathbf y_c)\propto p(\mathbf y_c|\mathbf x)\,p(\mathbf y_l|\mathbf x)\,p(\mathbf x)$$</div>
+      </div>
+
+      <p>单步 ESIKF 更新（Eq.11）的形式，从 FAST-LIO 的误差态迭代卡尔曼继承（增益公式的 $(I-KH)P$ 形式、状态仅 19 维）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf K=\big((\mathbf H^\kappa)^T\mathbf R^{-1}\mathbf H^\kappa+\hat{\mathbf P}^{-1}\big)^{-1}(\mathbf H^\kappa)^T\mathbf R^{-1}$$</div>
+        <div class="flow-formula">$$\hat{\mathbf x}^{\kappa+1}=\hat{\mathbf x}^\kappa\boxplus\Big(-\mathbf K\mathbf z^\kappa-(\mathbf I-\mathbf K\mathbf H^\kappa)(\hat{\mathbf x}^\kappa\boxminus\hat{\mathbf x})\Big)$$</div>
+      </div>
+
+      <p>关键区别要讲清：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>序贯更新（v2，本篇）</b>
+          <p>同一帧内：激光平面残差先更新状态 → <b>重新线性化</b> → 图像块光度残差再更新 → 可能还有平面测量再更新。每个测量单独进、单独重线性化。对应原文「improving the robustness of FAST-LIVO that uses asynchronous updates」。</p>
+        </div>
+        <div class="mini-card">
+          <b>批处理式更新（对照）</b>
+          <p>把这一帧所有测量<b>攒在一起</b>，拼成一个大雅可比、一次性解。优点是一次成型，缺点是某个坏测量会污染全体，且一次线性化后不再回头看当前估计。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>★ 务必纠正的误传</h4>
+        <p><b>「序贯更新」是 FAST-LIVO2 的贡献，不是 v1 的。</b>FAST-LIVO（v1）是<b>异步更新</b>——激光帧、图像帧交错到达，各自触发一次更新（Eq.11 注明 $m_c=0$ 或 $m_l=0$）。v2 才做到「同一帧内、一个一个测量地序贯更新」。两者都叫 ESIKF，但更新节奏不同。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">ESIKF 序贯更新：同一帧内，测量一个一个来</text>
+          <!-- 坐标轴 -->
+          <line x1="70" y1="350" x2="840" y2="350" stroke="#90a4ae" stroke-width="1.4"/>
+          <text x="852" y="354" font-size="11" fill="#5a4a42">帧内时间</text>
+          <line x1="70" y1="350" x2="70" y2="90" stroke="#90a4ae" stroke-width="1.4"/>
+          <text x="58" y="96" font-size="11" fill="#5a4a42" transform="rotate(-90 58 96)">估计误差</text>
+          <!-- 真值虚线 -->
+          <line x1="70" y1="130" x2="840" y2="130" stroke="#2f6d51" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <text x="820" y="124" text-anchor="end" font-size="11" fill="#2f6d51">真值</text>
+          <!-- 先验大高斯 -->
+          <circle cx="120" cy="320" r="42" fill="#9fb3c4" opacity="0.35" stroke="#6b8299" stroke-width="1.4"/>
+          <text x="120" y="372" text-anchor="middle" font-size="10.5" fill="#6b8299">IMU 先验（宽）</text>
+          <!-- 激光更新 ① -->
+          <path d="M120 320 L300 250" stroke="#2f6d51" stroke-width="2.2" fill="none"/>
+          <path d="M300 250 L292 256 L296 263 Z" fill="#2f6d51"/>
+          <circle cx="300" cy="250" r="28" fill="#4a9c76" opacity="0.35" stroke="#2f6d51" stroke-width="1.4"/>
+          <text x="250" y="300" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6d51">激光更新 ①</text>
+          <!-- 图像更新 ② -->
+          <path d="M300 250 L520 185" stroke="#e08a3c" stroke-width="2.2" fill="none"/>
+          <path d="M520 185 L512 191 L516 198 Z" fill="#e08a3c"/>
+          <circle cx="520" cy="185" r="18" fill="#f0b27a" opacity="0.4" stroke="#e08a3c" stroke-width="1.4"/>
+          <text x="430" y="222" text-anchor="middle" font-size="11" font-weight="700" fill="#e08a3c">图像更新 ②</text>
+          <!-- 平面测量 ③ -->
+          <path d="M520 185 L740 142" stroke="#7a5cc0" stroke-width="2.2" fill="none"/>
+          <path d="M740 142 L732 148 L736 155 Z" fill="#7a5cc0"/>
+          <circle cx="740" cy="142" r="12" fill="#b6a3e0" opacity="0.45" stroke="#7a5cc0" stroke-width="1.4"/>
+          <text x="650" y="170" text-anchor="middle" font-size="11" font-weight="700" fill="#7a5cc0">平面测量 ③</text>
+          <!-- 侧边对照：批处理 -->
+          <rect x="640" y="250" width="200" height="92" rx="9" fill="#f4f1ec" stroke="#cabfaf" stroke-width="1.4"/>
+          <text x="740" y="272" text-anchor="middle" font-size="11.5" font-weight="700" fill="#5a4a42">批处理对照</text>
+          <text x="740" y="294" text-anchor="middle" font-size="10.5" fill="#7a6a5f">一帧所有测量</text>
+          <text x="740" y="310" text-anchor="middle" font-size="10.5" fill="#7a6a5f">攒在一起一次性解</text>
+          <text x="740" y="328" text-anchor="middle" font-size="10.5" fill="#7a6a5f">（一个大方块包住）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一帧之内，状态估计的「不确定度高斯」被测量一步步压窄，最后贴近真值虚线。
+          <br><b>怎么看这张图：</b>① 最左大灰圆是 IMU 先验（最不确定）；② <b>绿色箭头 ①</b>是激光平面残差先把状态拉窄一点，<b>重新线性化</b>；③ <b>橙色箭头 ②</b>是图像块光度残差再拉一点；④ <b>紫色箭头 ③</b>是平面测量继续拉；⑤ 右下角小框是「批处理」——把三个测量一次性包成一个大块解，与序贯对照。
+          <br><b>要记住的一句话：</b>序贯 = 一个一个来，每来一个就重新看一次当前的估计；这比「攒一起一次性解」更稳，尤其某一测量退化时。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="visual">
+      <h2>5. 视觉那一路的残差：光度误差怎么算</h2>
+
+      <p>视觉侧同样是<b>稀疏直接法（patch 级光度误差）</b>，而且深度<b>直接由统一地图给</b>（就是上一节那个体素平面中心 $\mathbf q_j$）。残差（Eq.21–22）把当前帧和参考帧的亮度拉到同一曝光尺度后做差：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf 0=\tau_k\mathbf I_k\!\Big(\pi\big({}^C\mathbf T_I({}^G\mathbf T_{I_k})^{-1}{}^G\mathbf p_i\big)+\Delta\mathbf u\Big)-\tau_r\mathbf I_r\!\Big(\pi\big({}^{C_r}\mathbf T_G\,{}^G\mathbf p_i\big)+\mathbf A_i^r\Delta\mathbf u\Big)$$</div>
+      </div>
+
+      <p>逐项说：</p>
+      <ul>
+        <li>$\tau_k,\tau_r$：当前帧与参考帧的<b>逆曝光时间</b>（v2 新增，在线估计），把亮度缩放可比；</li>
+        <li>${}^G\mathbf p_i$：地图里那个点（深度由地图给，不估）；</li>
+        <li>$\Delta\mathbf u$：patch 内像素的相对坐标（一个小窗口，如 8×8）；</li>
+        <li>$\mathbf A_i^r$：参考块到当前块的<b>仿射变形矩阵</b>，它用到平面法向 ${}^{I_r}\mathbf n$ 和平面点 ${}^{I_r}\mathbf p$——正是「存平面」给的红利，让斜平面上的块对齐更准；</li>
+        <li>$\mathbf I_k,\mathbf I_r$：当前帧 / 参考帧的亮度。</li>
+      </ul>
+
+      <p>参考帧怎么选？原文用参考块评分（Eq.12）在若干候选块里挑 NCC（归一化互相关）最高、且含一定纹理的作参考帧。这样视觉对齐既有几何（地图深度）又有纹理（光度），分工清晰。</p>
+
+      <p>下面这张 Fig.5 是本课灵魂图之一——它展示平面法向如何把「同深度」升级为「按斜平面各自偏移」，是 v2 比 v1 精度跃升的几何来源。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_FAST-LIVO2/6d7e4a9034a88183998d3fba97f6b95471474f6128bbcf7c6db0b8ae1ee10e50.jpg" alt="FAST-LIVO2 Fig.5 affine warping and normal sphere parameterization">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>(a) Affine warping between reference patches and target patches. (b) Any normal on the unit sphere is first projected into a point on the plane, then projected to a point on the image.<br>
+          <b>怎么看这张图：</b>① (a) 画「参考块 ↔ 目标块」的仿射变形——这是视觉对齐的核心操作；② (b) 画法向在单位球上扰动、再映射到图像平面，说明法向是可以被精化的连续变量；③ 配合本课的「存平面」，法向 ${}^G\mathbf n$ 直接来自地图，省掉 v1 的「patch 内同深度」野假设。
+        </figcaption>
+      </figure>
+
+      <p>下面 Fig.1 证明系统能机载实时出彩色点云——呼应「统一地图」卖点。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_FAST-LIVO2/b2ed93686771b3e0f126287815ce48c8bc1d18e4a528456c418b4e51a8bd0e9d.jpg" alt="FAST-LIVO2 Fig.1 real-time mapping results">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>FAST-LIVO2 mapping results generated in real time. (a)–(c) airborne, (d) retail street handheld, (e) UAV fully onboard.<br>
+          <b>怎么看这张图：</b>① 这是「实时生成的彩色点云地图」——激光给几何、视觉给颜色，统一在一张图上；② (a)–(c) 机载、(d) 手持、(e) 无人机全板载，说明整套流水线能在嵌入式平台跑；③ 它直观回答了「为什么需要统一地图」：几何与纹理必须落在同一坐标系。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_FAST-LIVO2/a5531ca487b39f03115cab3a7f611b8072810cd808258f1a9038538d0f44de32.jpg" alt="FAST-LIVO2 Fig.2 System overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System overview of FAST-LIVO2.<br>
+          <b>怎么看这张图：</b>① 四部分：ESIKF、局部建图、激光模型、视觉模型；② 它一图看清「扫描重组 → ESIKF 序贯更新 → 统一体素地图」整条链路；③ 这是本课骨架图，建议和 0099 的 Fig.1（v1 两子系统两地图）并排看，体会「两份地图 → 一份地图」的升级。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="degrade">
+      <h2>6. 怎么处理「某一传感器退化」：互补性</h2>
+
+      <p>三传感器融合最大的卖点，就是<b>互补</b>。原文在实验里专门讨论了视觉与激光的互补性：当激光在几何退化处（比如只看到一面长墙，点云无颜色、约束不足）失效时，视觉的纹理仍能撑住；反之当视觉遇到极暗、极糊、弱纹理时，激光的精确深度仍能保底。</p>
+
+      <p>原文 Fig.10 直接展示了这种互补：在「亮屏墙 / 黑屏墙 / HIT 涂鸦墙」等激光退化场景，对比 FAST-LIVO2、FAST-LIVO、R3LIVE 三系统——激光几何退化时，靠视觉纹理仍能不漂、出清晰彩色图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_FAST-LIVO2/38ae7530d3152ac2b526acedf6503472dc5dfaa9c1391951e50b7d30ba2784e7.jpg" alt="FAST-LIVO2 Fig.10 LiDAR degenerated scenes mapping comparison">
+        <figcaption>
+          <b>原图注（Fig. 10）：</b>Mapping results generated in real time in LiDAR degenerated scenes. The point clouds correspond to Bright Screen Wall, Black Screen Wall, HIT Graffiti Wall, Banner Wall, HKU Lecture Center, comparing FAST-LIVO2, FAST-LIVO, or R3LIVE.<br>
+          <b>怎么看这张图：</b>① 这是「激光几何退化」（只看到一面墙）的对照；② FAST-LIVO2 在单墙长距退化下仍出清晰彩色图，说明视觉纹理补上了激光缺失的约束；③ 回链第四季 <b>0084</b> 课的退化场景（开阔海面、单面墙）——三传感器互补正是为这类情况准备的。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>和 R3LIVE 的融合哲学对照</h4>
+        <p>R3LIVE：LIO 与 VIO 是<b>两条并行子系统</b>，各自估计后再联合，VIO 用<b>逐像素</b>直接法。<br>
+        FAST-LIVO2：<b>同一份体素地图 + 同一个 ESIKF + 序贯更新</b>，视觉用<b>图像块级</b>直接法，且复用统一地图的平面先验。两者都紧耦合，但「融合发生的位置」不同——R3LIVE 在子系统末端，FAST-LIVO2 在数据入口处就共享地图。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>7. 实验数字（这是本节说服力的来源）</h2>
+
+      <p>数据集：公开 NTU-VIRAL + Hilti'22 + Hilti'23（共 <b>25 个序列</b>；任务书里写的「23 个公开数据集」是原文笔误，应为 Hilti'23）+ 自采 FAST-LIVO2 私有集（20 序列 / 66.9 分钟）+ MARS-LVIG（机载）。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">数值</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">对比</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>平均精度（25 序列 RMSE）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.044 m</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">第二名 FAST-LIVO(0.137 m) 约 3 倍优</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>速度（桌面 i7-10700K）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">30.03 ms/帧（激光 17.13 + 图像 12.90）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">满足 10 Hz 实时</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>速度（ARM RB5）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">78.44 ms/帧</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">仍实时</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>例：Hilti Construction Ground（Table III）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">36.52 ms（20.44/15.05）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">R3LIVE 105.03、FAST-LIVO 52.33</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>机载 MARS-LVIG</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">APE 0.64/0.27 m；25.2/21.8 ms</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">R3LIVE 2.76/0.52 m；110.5/100.2 ms</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>全板载无人机</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">总均时 80.4 ms（含 MPC 100 Hz + 规划 10 Hz）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">定位约 53.47 ms，满足实时</td></tr>
+        </tbody>
+      </table>
+
+      <p>模块增益（关掉某项看误差涨多少）：关曝光估计平均误差 +6 mm；关参考块更新 +44 mm；开法向精化在简单场景约 −1 mm（仅稳定正收益）。对比对象含 R3LIVE、FAST-LIO2、SDV-LOAM、LVI-SAM、FAST-LIVO 等。仅在「Outside Building」「Large Room (dark)」两序列略逊于纯激光 FAST-LIO2（因图极暗模糊、融图无益）。</p>
+
+      <p><b>内存与场景规模</b>：局部地图用「滑动窗口 + 环形缓冲 + 哈希表 + 八叉树」实现<b>定长内存</b>（对应原文 Fig.4 的 local map slide——传感器移动时旧内存被重置，从而能无限长时间运行而不必随场景增大而变慢）；数据集规模达 25 个公开序列 + 自采 20 序列 / 66.9 分钟 + 机载 MARS-LVIG，证明它能在较大场景里长时间实时跑。</p>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>8. 局限（逐条，按原文 §XI）</h2>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 长距离有漂移（无回环）</b>
+          <p>原文明言「作为里程计，FAST-LIVO2 长距离可能有漂移」——未含回环。未来工作要把回环 + 滑动窗口优化加回来。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 法向精化仅限简单场景</b>
+          <p>法向精化只在结构简单、图像观测好时正收益；NTU-VIRAL 的 eee/nya 极暗模糊序列甚至负优化。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 图极暗时融图不增益</b>
+          <p>Outside Building、Large Room (dark) 等场景结构丰富但图极暗，纯激光 FAST-LIO2 反更好。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 需预标定外参与时间同步</b>
+          <p>§IV-A 假设外参、时间同步已知，没有在线标定这部分。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="bridge">
+      <h2>9. 本课落点</h2>
+
+      <p>FAST-LIVO2 把 LIVO 做到这一季的技术顶点：<b>同一份体素地图（存平面）+ 同一个 ESIKF + 序贯更新 + 在线曝光 + 按需光线投射</b>。它相对 v1 的三级跳（两份地图→一份地图、异步→序贯、无曝光→有曝光）正是紧耦合 LIVO 这条线的集大成。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 FAST-LIVO2 的地图，下列哪句对？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。v2 把激光点云和视觉点存进同一个自适应体素地图，每个体素拟合出平面（中心+法向+协方差）+原始点+贴 patch。这才是「同一份地图」。" onclick="lessonKit.answer(this,'q0100a')">同一份体素地图存平面</button>
+          <button data-correct="no" data-explanation="错。那是 v1（FAST-LIVO 2022）的结构：LiDAR 地图（ikd-Tree 点云）与 visual 地图（体素哈希）是两份。别把两代混为一谈。" onclick="lessonKit.answer(this,'q0100a')">两份地图一滤波器</button>
+        </div>
+        <div class="quiz-feedback" id="q0100a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>「ESIKF 序贯更新」是谁的贡献？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文贡献 1 明说序贯更新是为改善「用异步更新的 FAST-LIVO」的鲁棒性而引入——所以序贯是 v2 的贡献，v1 是异步更新。" onclick="lessonKit.answer(this,'q0100b')">FAST-LIVO2 才引入</button>
+          <button data-correct="no" data-explanation="错。v1 用的是异步更新（激光/图像帧各自触发一次更新，Eq.11 注明 m_c=0 或 m_l=0）。序贯是 v2 在同一帧内一个一个测量地更新。" onclick="lessonKit.answer(this,'q0100b')">FAST-LIVO v1 就用</button>
+        </div>
+        <div class="quiz-feedback" id="q0100b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>FAST-LIVO2 的体素里存的到底是什么？为什么说「存平面」比「存点」更快、更抗噪？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>每个体素存：<b>拟合平面</b>（中心 $\mathbf q_j$ + 法向 $\mathbf n_j$ + 协方差/统计量）+ 原始激光点 + 贴在表面上的参考图像块 patch。</p>
+            <p>更快：视觉来一个像素，直接读体素里的平面参数就能算投影，不必在近邻点云里挨个比距离。更抗噪：平面是多点拟合出来的，单点噪声被平均掉，比「记住每个原始点」稳。另外平面直接给视觉法向，省掉「同深度」野假设。</p>
+          </div></details>
+        </li>
+        <li>用一句话 + 一个公式说明「序贯更新」与「批处理更新」的区别。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>序贯：同一帧内多个测量<b>一个一个</b>地更新同一个状态，每更新一次重新线性化（贝叶斯分解 $p(\mathbf x|\mathbf y_l,\mathbf y_c)\propto p(\mathbf y_c|\mathbf x)\,p(\mathbf y_l|\mathbf x)\,p(\mathbf x)$）。</p>
+            <p>批处理：把这帧所有测量<b>攒成一个大雅可比</b>一次性解。区别在于「是否每来一个测量就回头重看当前估计」——序贯会，批处理不会。</p>
+          </div></details>
+        </li>
+        <li>FAST-LIVO2 的视觉残差里，深度从哪里来？$\tau_k,\tau_r$ 是干什么的？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>深度来自<b>统一体素地图里的点</b> ${}^G\mathbf p_i$（即平面中心），不是视觉自己估的——和 v1 一样复用激光地图。</p>
+            <p>$\tau_k,\tau_r$ 是当前帧与参考帧的<b>逆曝光时间</b>（v2 新增、在线估计的状态维度）。它们把两帧亮度缩放到同一尺度，使光度误差在光照变化时仍可比。这是 v1 没有的模块。</p>
+          </div></details>
+        </li>
+        <li>为什么说「序贯更新是 FAST-LIVO2 的贡献，不是 v1 的」？请结合原文给出依据。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>原文贡献 1 表述为「improving the robustness of FAST-LIVO that uses asynchronous updates」——即序贯是为改善「用异步更新的 FAST-LIVO」而引入的，说明异步是 v1、序贯是 v2。</p>
+            <p>v1 的 Eq.11 注明：收到激光只融 $r_l$（$m_c=0$）、收到图像只融 $r_c$（$m_l=0$），即激光/图像帧交错触发更新，是异步。两者都叫 ESIKF，但更新节奏不同。</p>
+          </div></details>
+        </li>
+        <li>把 FAST-LIVO2 与 R3LIVE 的融合哲学对照一下（回链第五季 R3LIVE）。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>R3LIVE：LIO 与 VIO 是<b>两条并行子系统</b>，各自估计后再联合，VIO 用<b>逐像素</b>直接法（贵、依赖光流初值）。</p>
+            <p>FAST-LIVO2：<b>同一份体素地图 + 同一个 ESIKF + 序贯更新</b>，视觉用<b>图像块级</b>直接法，且复用统一地图的平面先验。融合发生的位置不同——R3LIVE 在子系统末端，FAST-LIVO2 在数据入口就共享地图。</p>
+          </div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0099-FAST-LIVO2022-视觉直接复用激光地图.html">← FAST-LIVO（2022）：视觉直接复用激光地图</a>
+        <a class="next" href="0101-紧耦合的另一条路2022-因子图与无IMU.html">紧耦合的另一条路（2022）：因子图，但没有 IMU →</a>
+      </div>
+      <p class="foot-note">全季技术最高点到此。下一课我们用一篇「非 LIVO」的对照样本，看清紧耦合还有另一种做法 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

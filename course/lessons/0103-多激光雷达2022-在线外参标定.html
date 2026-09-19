@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多激光雷达（2022）：一边跑一边把外参标定出来 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0103</div>
+      <h1>多激光雷达（2022）：一边跑一边把外参标定出来</h1>
+      <p class="subtitle">装机器的多台激光雷达，开机即不依赖标定板，自己把外参标出来🔧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多激光雷达在线外参标定 + 里程计与建图</span>
+        <span>👥 论文：M-LOAM（IEEE T-RO / RA-L 长文，2022）</span>
+        <span>📅 2022 · Robust Odometry and Mapping for Multi-LiDAR Systems</span>
+      </div>
+      <div class="toc">
+        <a href="#what">先澄清定位</a>
+        <a href="#contrib">外参怎么在线估</a>
+        <a href="#chicken">鸡生蛋怎么解</a>
+        <a href="#fov">视场不重叠</a>
+        <a href="#graph">因子图结构</a>
+        <a href="#exp">实验数字</a>
+        <a href="#limit">局限</a>
+        <a href="#finale">第五季收官</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="what">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 M-LOAM 处理的是「多台同质激光雷达」而非异源融合；讲出手眼标定 AX=XB 与可观性条件；解释「为什么车要动起来才标得准」；并复述它对「视场不重叠」的诚实处理。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它把「外参当状态在线估」的思路，与第三季 <b>0057</b>（VINS-Mono 在线时偏 td）、第二季 <b>0031/0032</b>（时间偏移可联合优化）同源；紧耦合与退化因子呼应第一季 <b>0006</b>、第四季 <b>0076</b>；滑动窗口 MAP + Huber 核则是第二季 <b>0018/0019</b>、<b>0021</b> 的激光版。</p>
+        </div>
+      </div>
+
+      <h2>1. 先澄清：这是「多台同种雷达」的标定，不是异源融合</h2>
+
+      <p>本节是第五季收官，但首先要挡住一个容易掉进去的坑。</p>
+
+      <div class="callout">
+        <h4>本季隐藏主题的一句点题</h4>
+        <p>M-LOAM 处理的是<b>多台同质激光雷达</b>（multi-LiDAR，原文称 unimodel）之间的<b>在线外参标定 + 里程计 + 建图</b>。<b>它不是「激光+视觉+惯性」的异源融合。</b>原文 §II 明确把「多激光雷达融合（unimodel）」与「视觉/惯性多传感器融合（multimodal）」分开，并称前者「仍是开放问题」。</p>
+      </div>
+
+      <p>那为什么要把它放进「多传感器融合」这一季的最后？因为<b>它揭示了一个贯穿全季的隐藏主题：融合系统真正的难点不在「怎么把数据合起来」，而在「先把传感器之间的关系弄清楚」。</b> 异源融合要标的是「激光↔相机↔IMU」的相对位姿与时间差；M-LOAM 要标的是「雷达↔雷达」的相对位姿——<b>底层数学是同一类：都把「传感器之间的未知关系」当成待估变量一起解。</b>只不过未知数从 Δt（时间偏移）换成了 SE(3) 外参。</p>
+
+      <p>所以请记住它的真实身份：<b>它解决的是「同类多传感器外参怎么在线标」</b>，与本季前几节的异源融合目标不同，但方法论同宗。接第三季 <b>0057</b> 的话术是——「VINS-Mono 把相机-IMU 时间差 td 当变量在线估，M-LOAM 把这套『在线标定』搬到多雷达外参上，连收敛判据（λ）都给了」。</p>
+    </section>
+
+    <section class="section-card" id="contrib">
+      <h2>2. 核心贡献：外参怎么在线估，为什么车必须动起来</h2>
+
+      <p>它想解决的问题很朴素：单台激光雷达有稀疏 + 垂直 FOV 有限的先天缺陷，在走廊、楼梯等无结构处会退化。多装几台能提升覆盖与密度，但<b>多台之间的外参（相对位姿）怎么来？</b> 传统做法要人工、要对标定物。M-LOAM 要的是<b>开机即不依赖标定板，自己边跑边标</b>。</p>
+
+      <h3>手眼标定：AX = XB</h3>
+      <p>两台雷达各自记录自己的历史相对位姿（A、B），它们之间的外参 X 满足经典的<b>手眼方程</b>：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf R_{l_k^i}^{l_{k-1}^i}\,\mathbf R_{l^i}^b=\mathbf R_{l^i}^b\,\mathbf R_{b_k}^{b_{k-1}},\quad (\mathbf R_{l_k^i}^{l_{k-1}^i}-\mathbf I_3)\mathbf t_{l^i}^b=\mathbf R_{l^i}^b\mathbf t_{b_k}^{b_{k-1}}-\mathbf t_{l_k^i}^{l_{k-1}^i}$$</div>
+      </div>
+
+      <p>A、B 是两雷达各自走过的相对位姿，X（即外参 $R_{l^i}^b, t_{l^i}^b$）是待求量。这就是「鸡生蛋」的初始化来源——它<b>不需要标定板</b>，靠共同看到的同一物体 + 各自的运动轨迹反推。</p>
+
+      <h3>可观性条件：为什么车要动、要转弯</h3>
+      <p>旋转初始化把多时段堆叠成线性系统 $Q_K q_{l^i}^b=0$，其<b>可观性判据</b>是：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$Q_K\text{ 的零空间秩一 }\iff \sigma_{\min2}>\sigma_R$$</div>
+      </div>
+
+      <p>其中 $\sigma_R=0.25$（论文表 II 阈值）。翻译成人话：<b>只有当机器人的运动足够丰富（尤其有旋转、有上下起伏）时，外参才是可被唯一确定的</b>；若只在水平面上直滑，某些自由度（如平移 z）就「不可观」——你分不清「外参错了」还是「机器人位置猜错了」。原文假设 2 明确要求「平台在校准初始化期需充分旋转 + 平移」；平移初始化还因「平面运动下 z 平移不可观」而先设 $t_z=0$，留待精化阶段恢复。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">两个雷达的外参，从数据里「长」出来</text>
+
+          <!-- 地面 -->
+          <line x1="60" y1="330" x2="840" y2="330" stroke="#90a4ae" stroke-width="1.6"/>
+          <!-- 车 -->
+          <rect x="360" y="262" width="200" height="58" rx="10" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.6"/>
+          <circle cx="388" cy="324" r="6" fill="#37474f"/><circle cx="532" cy="324" r="6" fill="#37474f"/>
+          <circle cx="388" cy="262" r="14" fill="#2c5f8a" stroke="#fff" stroke-width="2"/>
+          <circle cx="532" cy="262" r="14" fill="#2c5f8a" stroke="#fff" stroke-width="2"/>
+          <text x="388" y="266" text-anchor="middle" font-size="10" fill="#fff">L1</text>
+          <text x="532" y="266" text-anchor="middle" font-size="10" fill="#fff">L2</text>
+          <text x="460" y="354" text-anchor="middle" font-size="11" fill="#2c5f8a">车顶前(L1)、后(L2)各一台激光雷达</text>
+
+          <!-- 电线杆（参考位置，灰虚线） -->
+          <line x1="700" y1="150" x2="700" y2="330" stroke="#9aa6b0" stroke-width="3" stroke-dasharray="6 4"/>
+          <text x="710" y="170" font-size="11" fill="#7a8a99">真值电线杆</text>
+
+          <!-- 前雷达看到的点云（蓝），向左偏 -->
+          <g fill="#5a8fc7">
+            <circle cx="650" cy="200" r="4"/><circle cx="652" cy="215" r="4"/><circle cx="649" cy="230" r="4"/>
+            <circle cx="654" cy="245" r="4"/><circle cx="651" cy="260" r="4"/><circle cx="653" cy="275" r="4"/>
+          </g>
+          <text x="650" y="300" text-anchor="middle" font-size="11" fill="#2c5f8a">L1 点云（偏左）</text>
+
+          <!-- 后雷达看到的点云（粉），向右偏 -->
+          <g fill="#e08fb0">
+            <circle cx="748" cy="200" r="4"/><circle cx="746" cy="215" r="4"/><circle cx="749" cy="230" r="4"/>
+            <circle cx="745" cy="245" r="4"/><circle cx="747" cy="260" r="4"/><circle cx="744" cy="275" r="4"/>
+          </g>
+          <text x="748" y="300" text-anchor="middle" font-size="11" fill="#b0567f">L2 点云（偏右）</text>
+
+          <!-- 错位双向箭头 -->
+          <line x1="668" y1="240" x2="732" y2="240" stroke="#c0392b" stroke-width="2"/>
+          <path d="M668 240 L678 235 L678 245 Z" fill="#c0392b"/>
+          <path d="M732 240 L722 235 L722 245 Z" fill="#c0392b"/>
+          <text x="700" y="228" text-anchor="middle" font-size="11" font-weight="700" fill="#c0392b">错位（外参不准）</text>
+
+          <!-- 修平箭头 -->
+          <path d="M760 150 C 820 120, 820 110, 770 100" fill="none" stroke="#2e9e6b" stroke-width="2.2" stroke-dasharray="6 4"/>
+          <path d="M770 100 L778 110 L766 110 Z" fill="#2e9e6b"/>
+          <text x="845" y="120" text-anchor="end" font-size="11" font-weight="700" fill="#2e9e6b">系统一边跑</text>
+          <text x="845" y="136" text-anchor="end" font-size="11" font-weight="700" fill="#2e9e6b">一边修平</text>
+
+          <text x="450" y="378" text-anchor="middle" font-size="13" font-weight="700" fill="#2e9e6b">标定不是量好的一次性动作，而是被当成优化里的一个未知量（X）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>车顶前后两台雷达各自扫到同一根电线杆，但因为外参不准，两坨点云错开了一点；系统边跑边把这个错位拧平。<br>
+          <b>怎么看这张图：</b>① 灰色虚线是电线杆的<b>真实位置</b>；② 蓝色是前面雷达眼中的杆（偏左）、粉色是后面雷达眼中的杆（偏右），两者偏差就是外参误差；③ 红色双向箭头标出「错位」；④ 绿色虚线箭头表示系统<b>把它当成未知量 X，随运动逐步优化掉</b>。<br>
+          <b>要记住的一句话：</b>「没有标定板，靠共同看到的同一根杆 + 各自轨迹反推外参」——这正是手眼方程 AX=XB 的几何直觉。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">为什么车必须动：不动就不可观</text>
+
+          <!-- 左格：静止 -->
+          <rect x="40" y="44" width="380" height="262" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="68" text-anchor="middle" font-size="14" font-weight="700" fill="#a8563a">① 车静止</text>
+          <!-- 机器人 -->
+          <rect x="210" y="150" width="40" height="26" rx="5" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="222" cy="176" r="4" fill="#37474f"/><circle cx="238" cy="176" r="4" fill="#37474f"/>
+          <circle cx="200" cy="163" r="9" fill="#2c5f8a"/><circle cx="260" cy="163" r="9" fill="#2c5f8a"/>
+          <text x="230" y="146" text-anchor="middle" font-size="10" fill="#2c5f8a">L1</text>
+          <text x="280" y="146" text-anchor="middle" font-size="10" fill="#2c5f8a">L2</text>
+          <!-- 同一批静止点 -->
+          <g fill="#7a8a99">
+            <circle cx="150" cy="220" r="4"/><circle cx="180" cy="230" r="4"/><circle cx="210" cy="225" r="4"/>
+            <circle cx="240" cy="235" r="4"/><circle cx="270" cy="222" r="4"/><circle cx="300" cy="232" r="4"/>
+          </g>
+          <!-- 灰锁 -->
+          <rect x="150" y="262" width="160" height="26" rx="6" fill="#9aa6b0" opacity="0.25"/>
+          <text x="230" y="280" text-anchor="middle" font-size="12" font-weight="700" fill="#7a8a99">无法区分「外参错了」</text>
+          <text x="230" y="298" text-anchor="middle" font-size="12" font-weight="700" fill="#7a8a99">还是「位置猜错了」→ 不可观</text>
+
+          <!-- 右格：动并转弯 -->
+          <rect x="480" y="44" width="380" height="262" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="68" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6d51">② 车在动并转弯</text>
+          <!-- 两条不同旋转中心的轨迹 -->
+          <path d="M500 250 Q 600 230 700 200 Q 760 182 800 220" fill="none" stroke="#5a8fc7" stroke-width="2.4"/>
+          <path d="M520 270 Q 610 250 710 222 Q 770 206 805 242" fill="none" stroke="#e08fb0" stroke-width="2.4"/>
+          <circle cx="500" cy="250" r="5" fill="#2c5f8a"/><circle cx="800" cy="220" r="5" fill="#2c5f8a"/>
+          <circle cx="520" cy="270" r="5" fill="#b0567f"/><circle cx="805" cy="242" r="5" fill="#b0567f"/>
+          <text x="500" y="196" font-size="11" fill="#2c5f8a">L1 轨迹（旋转中心 1）</text>
+          <text x="580" y="300" font-size="11" fill="#b0567f">L2 轨迹（旋转中心2）</text>
+          <text x="670" y="150" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6d51">两轨迹错开 → 外参错</text>
+          <text x="670" y="168" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6d51">就会矛盾 → 可观</text>
+          <text x="670" y="320" text-anchor="middle" font-size="11.5" fill="#2f6d51">运动把这个错误暴露出来了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一台机器人，静止 vs 运动转弯时，「外参是否可估」为什么天差地别。<br>
+          <b>怎么看这张图：</b>① 左格——车不动，两台雷达看的是同一批静止点，不管外参怎么猜，画面看起来都差不多，所以「外参错了」和「机器人位置猜错了」无法区分，这就是<b>不可观</b>；② 右格——车转弯时，两台雷达的<b>运动轨迹旋转中心不同</b>，于是外参一旦错了，两条轨迹就会矛盾，错误被暴露，于是<b>可观</b>。<br>
+          <b>要记住的一句话：</b>「动得越丰富（尤其转弯、上下），外参才估得全」——这是 M-LOAM 要求充分旋转+平移的数学本质（σ_min2 &gt; σ_R）。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="chicken">
+      <h2>3. 标定与里程计的鸡生蛋问题怎么解</h2>
+
+      <p>「外参要靠运动估，但估运动（里程计）又需要先用外参把各雷达数据配到同一系」——这是典型的鸡生蛋。</p>
+
+      <p>M-LOAM 的解法是<b>先初始化、再联合/交替优化</b>，并按标定是否收敛切换两种模式：</p>
+
+      <ul>
+        <li><b>阶段 1 初始化</b>：用手眼方程 AX=XB 给外参一个粗值（旋转用四元数线性系统 + SVD，平移最小二乘）；</li>
+        <li><b>阶段 2 非线性精化</b>：把外参放进滑动窗口，与位姿一起被联合优化，用退化因子 λ 判收敛；</li>
+        <li><b>阶段 3 纯里程计/建图</b>：标定收敛后，外参被「锁死」成固定量，不再参与优化。</li>
+      </ul>
+
+      <p>正文 Fig. 2 的框图把这条路径画得很清楚：预处理 → 初始化 → 带标定精化的滑动窗口多雷达里程计；按标定收敛分「在线标定 / 纯里程计」两路。这是「标定与里程计互相依赖」问题的工程化回答。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Robust_Odometry_and_Mapping_for_Multi-LiDAR_Systems_With/1bc4e32b786f60d3e5d2482fbd4230b884f8fd3c03f68f338d28c6a0a807c8a2.jpg" alt="M-LOAM Fig.2 block diagram">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Block diagram illustrating the full pipeline of the proposed M-LOAM system... According to the convergence of calibration, the optimization is divided [into online calibration / pure odometry].<br>
+          <b>怎么看这张图：</b>① 从预处理 → 初始化 → 带标定精化的滑动窗口里程计，是一条主链；② 关键分叉在「标定是否收敛」——收敛前外参是变量，收敛后外参固定；③ 这正对应上面说的「鸡生蛋」解决路径：先粗标定，再联合精化，最后锁死。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="fov">
+      <h2>4. 视场不重叠的多雷达怎么处理（诚实说明）</h2>
+
+      <p>这是个容易被误读的点，必须如实写。</p>
+
+      <div class="callout">
+        <h4>原文假设 3 的真相</h4>
+        <p>正文假设 3（p.144）<b>明确要求「主雷达的局部地图应与辅助雷达共享重叠 FOV」，以便精化阶段特征匹配、缩短标定时间</b>。也就是说：<b>M-LOAM 在标定精化阶段依赖主-辅雷达 FOV 有重叠</b>；它并没有提出一套「非重叠 FOV 专用标定法」。</p>
+      </div>
+
+      <p>但在<b>纯里程计 / 建图阶段</b>（公式 20、21），各雷达特征分别匹配到全局/局部地图，因此<b>多雷达互补覆盖（消除车身盲区）仍直接提升位姿精度</b>。论文的 RV 平台（车顶/前/左/右各一台 RS-16）就是「非重叠互补」的实例（Fig. 7）。</p>
+
+      <p>结论要分两句说，不能混：<b>标定需要一定的 FOV 重叠来启动；运行阶段则受益于互补覆盖。</b> 不加区分地说「它支持完全无重叠的多雷达」是夸大了。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Robust_Odometry_and_Mapping_for_Multi-LiDAR_Systems_With/0c32c7e507fc111046a24904ef7baeff359527cee304b9c4c8f1cc2b32dd9c33.jpg" alt="M-LOAM Fig.7 RV four LiDAR">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>(a) RV for large-scale, outdoor tests. Four RS-16 s are mounted at the top, front, left, and right positions. (b) Calibrated point cloud consists of points from the top (red), front (green), left (blue), and right (pink) LiDARs.<br>
+          <b>怎么看这张图：</b>① 四台雷达装在车四周，正是为了消除车身盲区（互补覆盖）；② (b) 是标定后四雷达点云拼成的一张干净地图；③ 这正是「运行阶段受益于互补覆盖」的实例，但别忘了<b>标定精化本身仍要求主-辅 FOV 有重叠</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="graph">
+      <h2>5. 因子图与优化结构</h2>
+
+      <p>M-LOAM 把整个问题做成滑动窗口的最大后验估计（MAP）。总目标：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\hat{\mathcal X}=\arg\min\big(\|\mathbf r_{\mathrm{pri}}(\mathcal X)\|^2+f_{\mathcal M}(\mathcal X)\big),\quad \mathcal X=[\mathcal X_f,\mathcal X_v,\mathcal X_e]$$</div>
+      </div>
+
+      <p>$\mathcal X$ 含固定态、变量态、外参三部分；外参随标定收敛与否在「在线标定」与「纯里程计」两子任务间切换。残差主要有两类（LOAM 系核心）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">残差</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">表达式要点</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">含义</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>点-面</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">$a=\mathbf w^{\top}(\mathbf R_k\mathbf p+\mathbf t_k)+d$</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点到平面的欧氏距离（[w,d] 平面系数）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>点-边</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">两个互相垂直的面残差组合</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">比 LOAM 标量残差信息更全（可乘 3×3 协方差）</td></tr>
+        </tbody>
+      </table>
+
+      <p>此外还有鲁棒核（Huber $\rho$）、外参相关的手眼残差，以及边缘化（Schur 补）——这正是第二季 <b>0018/0019</b>（BA、Schur、鲁棒核）与 <b>0021</b>（g2o）在激光侧的落地。Fig. 4 把滑动窗口图模型画得很清楚：左侧「在线标定」外参是变量、右侧「纯里程计」外参固定。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Robust_Odometry_and_Mapping_for_Multi-LiDAR_Systems_With/1889664664e6f345a64fda194750f5b7c2ba144c1f0dfb6783bc0f493644eea0.jpg" alt="M-LOAM Fig.4 graphical model">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Illustration of a graphical model for a sliding-window estimator (p=3, N=6) with online calibration (left) and pure odometry (right). Extrinsics optimized in calibration, fixed in pure odometry.<br>
+          <b>怎么看这张图：</b>① 左图外参是变量（被优化），右图外参固定（锁死）；② 枢纽帧 p 是局部地图原点，窗口内变量态 + 外参一起优化；③ 这就是「标定收敛后关掉标定」的因子图表达。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同质融合 vs 异源融合：要标的东西差在哪</text>
+
+          <!-- 左：同质 -->
+          <rect x="40" y="48" width="380" height="250" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="230" y="72" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6d51">同类传感器（两台激光雷达）</text>
+          <circle cx="120" cy="140" r="20" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <text x="120" y="145" text-anchor="middle" font-size="11" fill="#fff">L1</text>
+          <circle cx="340" cy="140" r="20" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <text x="340" y="145" text-anchor="middle" font-size="11" fill="#fff">L2</text>
+          <path d="M142 140 L318 140" stroke="#c0392b" stroke-width="2.2" stroke-dasharray="6 4"/>
+          <path d="M318 140 L308 135 L308 145 Z" fill="#c0392b"/>
+          <path d="M142 140 L152 135 L152 145 Z" fill="#c0392b"/>
+          <text x="230" y="108" text-anchor="middle" font-size="11" font-weight="700" fill="#c0392b">标相对位置 X</text>
+          <text x="230" y="180" text-anchor="middle" font-size="11" fill="#2f6d51">同种数据 → 只需对齐空间位姿</text>
+          <text x="230" y="200" text-anchor="middle" font-size="11" fill="#2f6d51">（SE(3) 外参）</text>
+          <text x="230" y="270" text-anchor="middle" font-size="11" fill="#5a4a42">M-LOAM 落在这一类</text>
+
+          <!-- 右：异源 -->
+          <rect x="480" y="48" width="380" height="250" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="670" y="72" text-anchor="middle" font-size="14" font-weight="700" fill="#a8563a">异源传感器（激光+相机+IMU）</text>
+          <circle cx="560" cy="140" r="18" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <text x="560" y="144" text-anchor="middle" font-size="10" fill="#fff">Li</text>
+          <rect x="648" y="124" width="34" height="26" rx="4" fill="#cc785c" stroke="#8f4a33" stroke-width="1.4"/>
+          <text x="665" y="142" text-anchor="middle" font-size="10" fill="#fff">Cam</text>
+          <rect x="600" y="180" width="36" height="26" rx="4" fill="#2e9e6b" stroke="#1f6e49" stroke-width="1.4"/>
+          <text x="618" y="198" text-anchor="middle" font-size="10" fill="#fff">IMU</text>
+          <text x="670" y="108" text-anchor="middle" font-size="11" font-weight="700" fill="#c0392b">标相对位置 X</text>
+          <text x="670" y="250" text-anchor="middle" font-size="11" fill="#a8563a">还要额外对齐「时间」Δt（时偏）</text>
+          <text x="670" y="270" text-anchor="middle" font-size="11" fill="#5a4a42">本季前几节的异源融合落在这里</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把「同类多传感器」与「异源多传感器」要标定的东西并排放，看清差别。<br>
+          <b>怎么看这张图：</b>① 左图两类激光雷达之间，只需要标定一个相对位姿 X（SE(3) 外参），因为数据同构；② 右图激光/相机/IMU 之间，除了相对位置，<b>还要额外对齐时间差 Δt（时偏）</b>——这正是第三季 <b>0057</b> 在线估 td 的那一类；③ M-LOAM 落在左边，本季前几节异源融合落在右边，但<b>「把未知关系当状态一起估」是同一思路</b>。<br>
+          <b>要记住的一句话：</b>融合的「地基」工作量，随传感器种类增多而变重——不仅标位置，还要标时间。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>6. 实验数字（逐条抄准）</h2>
+
+      <p>把关键数字如实列出（§IX–XI）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">项目</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">数值 / 结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>平台与雷达</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">仿真 2×16 线；手持 RHD 2×<b>VLP-16</b>（2 m/s）；车 RV 4×<b>RS-16</b>（3 m/s）。总计 <b>10 序列、4.60 km</b></td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>外参标定误差</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">Proposed(Ini.+Ref.) 在 RHD 上 EGT_R <b>&lt; 3°</b>、EGT_t <b>&lt; 0.07 m</b>，与靶标法 PS-Calib 相当；Auto-Calib 误差大得多（EGT_R 达 33°–35°）</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>标定收敛所需运动</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">初始化期需充分旋转+平移；σ_min2 &gt; σ_R(=0.25)；平面运动下平移 z 不可观（先设 t_z=0）。<b>未给单一「多少秒收敛」数字</b></td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>里程计/建图精度</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">仿真 ATE RMSE &lt;0.05 m / &lt;1°；手持相对漂移 0.003%–0.07%（远优于 A-LO 的 14%–34%）；RV 上 RPE 中位数 (6.45°, 2.14%)，优于 A-LOAM (15.36°, 2.80%)</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>速度</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">里程计 27±5 ms(1雷达)→73±9 ms(4雷达)；建图 78±11→126±15 ms；里程计 10 Hz、建图 5 Hz</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>多雷达增益</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">3 m/s 下 1→4 雷达里程计 RPE 从 (56.53°,20.19%) 降到 (42.96°,15.73%)</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Robust_Odometry_and_Mapping_for_Multi-LiDAR_Systems_With/fae2d860dd1bd70fa14c0cc67516c64b54d9f8c96484cb948f5c4c0de1767acd.jpg" alt="M-LOAM Fig.1 immediate results">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We visualize the immediate results of M-LOAM. The raw point clouds ... edge (blue) and planar (red) features ... online calibration gets extrinsics ... odometry and mapping use these features ... mapping trajectory (green) more accurate than odometry (red).<br>
+          <b>怎么看这张图：</b>① 这是全流程一图概览：去噪提边(蓝)/面(红)特征 → 在线标定得外参 → 里程计与建图用特征估位姿；② 注意建图轨迹(绿)比里程计(红)更准——和 LOAM 的「两步分工」直觉一致；③ 它直观展示了「标定→里程计→建图」三者的上下游关系。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>M-LOAM 的外参标定，为什么要求机器人在初始化期「充分旋转 + 平移」？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不是为了让点云更密。点云密度由雷达本身决定，与机器人怎么动无关。运动的作用是让外参「可被唯一确定」。" onclick="lessonKit.answer(this,'q0103a')">为了让点云更密集</button>
+          <button data-correct="yes" data-explanation="对。可观性判据要求 σ_min2 > σ_R（=0.25）。若只在水平面直滑，某些自由度（如平移 z）不可观——分不清「外参错了」与「位置猜错了」。充分旋转+平移（尤其转弯、上下）才能把外参估全。" onclick="lessonKit.answer(this,'q0103a')">为了外参可唯一确定</button>
+          <button data-correct="no" data-explanation="不是耗电问题。这是数学上的可观性要求，与功耗无关。" onclick="lessonKit.answer(this,'q0103a')">为了让电池更耐用</button>
+        </div>
+        <div class="quiz-feedback" id="q0103a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>7. 原文承认的局限</h2>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 标定用实验预设阈值</b>
+          <p>对高精地图（&lt;0.01 m, 1°）不够完美；标定误差会比例传播到地图，即使建模了外参扰动也难完全消除。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 非凸配准 + 雷达低频</b>
+          <p>高频转弯/运动时难以跟踪位姿；线性插值位姿无法表达平滑/快速运动，作者建议用 B-spline。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 只用边/面几何特征</b>
+          <p>长隧道（所有平面近平行）会失败；且这类特征缺乏识别力，不足以做地点识别/重定位（不与 AdaFusion 打通）。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 标定精化要求 FOV 重叠</b>
+          <p>假设 3 要求主-辅雷达 FOV 有重叠以缩短标定；完全非重叠的极端布局未专门处理（运行阶段才靠互补覆盖受益）。</p>
+        </div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于「视场不重叠的多雷达」，下面哪句才是 M-LOAM 的诚实立场？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。原文假设 3 明确要求主-辅雷达 FOV 有重叠才能启动标定精化，并未提出一套「完全无重叠专用标定法」。" onclick="lessonKit.answer(this,'q0103b')">它支持完全无重叠的标定</button>
+          <button data-correct="yes" data-explanation="对。标定精化阶段依赖主-辅 FOV 重叠来启动；但运行阶段各雷达特征分别匹配地图，互补覆盖仍直接提升精度（RV 四雷达即实例）。两句要分开说，不能夸大。" onclick="lessonKit.answer(this,'q0103b')">标定需重叠启动，运行受益互补</button>
+          <button data-correct="no" data-explanation="不对。RV 平台四面雷达在纯里程计/建图阶段正是靠互补覆盖消除盲区，运行精度确实受益。" onclick="lessonKit.answer(this,'q0103b')">不重叠时运行也无收益</button>
+        </div>
+        <div class="quiz-feedback" id="q0103b"></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Robust_Odometry_and_Mapping_for_Multi-LiDAR_Systems_With/69e58aac23557d756e31a94e388fd6938d98c4ba6563774592548692ed65ca8b.jpg" alt="M-LOAM Fig.6 handheld device calibrated cloud">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>(a) Real handheld device for indoor tests. Two VLP-16 s are mounted at the left and right sides. (b) Calibrated point cloud consists of points from the left (red) and right (pink) LiDARs.<br>
+          <b>怎么看这张图：</b>① (a) 是真实手持设备，左右各一台 VLP-16；② (b) 是左右雷达标定后合成的点云，干净对齐——这是「外参标对了」的肉眼证据；③ 注意左右雷达本就有重叠 FOV，符合假设 3 的标定启动条件。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="finale">
+      <h2>8. 收官：第五季主线一览</h2>
+
+      <p>第九节课，把整季的主线收一下。本季「多传感器融合」其实一直在回答一个问题：<b>激光 + 视觉 + 惯性，到底怎么合成一台机器？</b> 四条主线贯穿始终：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>主线一：融合的两种哲学</b>
+          <p><b>两条线并行、末端合流</b>（0096 R³LIVE：激光惯性出几何、视觉出纹理，最后由渲染拼到一起）vs <b>统一状态、统一地图</b>（0099/0100 FAST-LIVO 系：同一份状态、同一个地图，视觉直接复用激光的几何）。</p>
+        </div>
+        <div class="mini-card">
+          <b>主线二：地图里存什么</b>
+          <p>点云 → TSDF → 体素块 → 增量 k-d 树 → <b>平面</b>（0100）→ <b>高斯</b>（0098）。这是本项目最长的一条线索，本季把它推到了「地图本身就是一串可渲染的高斯」。</p>
+        </div>
+        <div class="mini-card">
+          <b>主线三：建图与渲染的合流</b>
+          <p>0097 辐射重建、0098 可渲染地图——「融合出来的地图」第一次能直接渲染出新视角下的图像，把建图与渲染合成一件事。</p>
+        </div>
+        <div class="mini-card">
+          <b>主线四：看不见的地基</b>
+          <p>时间同步、外参标定、退化应对（0102/0103）。本季最后两节揭示：<b>融合真正的难点不在「怎么把数据合起来」，而在「先把传感器之间的关系弄清楚」。</b></p>
+        </div>
+      </div>
+
+      <h3>本季 9 节对照表</h3>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.86rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">课号</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">系统</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">传感器组合</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">融合方式</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">输出</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">实时</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0095</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">第五季开场（导览）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">全季总览</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">—</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">主线概览</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">否（导览）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0096</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">R³LIVE</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">激光+视觉+惯性</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">松（两线并行，末端渲染合流）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">着色点云</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0097</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">辐射重建</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">激光+视觉</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">（见原课）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">可渲染辐射场</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0098</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">LIV-GaussMap</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">激光+视觉</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">紧耦合</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">高斯地图（可直接渲染）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0099/0100</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">FAST-LIVO 系</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">激光+视觉</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">紧耦合（统一状态/地图）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">体素平面/点云</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0101</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">紧耦合的另一条路</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">激光+视觉（无 IMU）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">紧耦合（因子图）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">（见原课）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0102</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">平台与评测（本课）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">识别 + 基准</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">非里程计 / 基准</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">描述子 / ATE 表</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">否（评测）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">0103</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">多激光雷达 M-LOAM（本课）</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">多同质激光</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">紧耦合</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">点云地图</td><td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时</td></tr>
+        </tbody>
+      </table>
+
+      <p style="font-size:.85rem;color:#7a6a5f">注：0099 与 0100 同属 FAST-LIVO 系，合并为一行；0095 为第五季开场导览课，未列具体传感器组合。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么说 M-LOAM「不是异源融合」？它和本季前几节的融合系统，底层又有什么相同之处？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文 §II 把「多激光雷达融合（unimodel）」与「视觉/惯性多传感器融合（multimodal）」分开，称前者仍是开放问题——M-LOAM 落在前者，处理的是<b>多台同质激光雷达</b>的外参标定+里程计+建图，不是「激光+视觉+惯性」。<b>相同之处</b>在于：它和异源融合都把「传感器之间的未知关系」当成待估变量一起解——异源融合估时间差 Δt 与跨模态外参，M-LOAM 估雷达间 SE(3) 外参，方法论同宗。</p>
+            </div></details>
+          </li>
+          <li>写出手眼方程 AX=XB 的含义，并解释为什么「机器人只在水平面直滑」会让外参不可观。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>A、B 是两雷达各自走过的相对位姿，X 是它们之间的外参（旋转+平移）。方程意思是「先转外参再走相对位姿」与「先走相对位姿再转外参」应一致。若只在水平面直滑，平移的 z 分量没有激励，信息矩阵对应自由度接近零——此时「外参的 z 错了」与「机器人高度猜错了」在观测上无法区分，即<b>不可观</b>。可观性判据要求 σ_min2 &gt; σ_R(=0.25)，需要充分旋转+平移（尤其转弯、上下）。</p>
+            </div></details>
+          </li>
+          <li>M-LOAM 怎么解决「标定与里程计互相依赖」的鸡生蛋问题？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>分三阶段：① <b>初始化</b>用手眼方程给外参粗值（旋转 SVD、平移最小二乘）；② <b>非线性精化</b>把外参放进滑动窗口与位姿联合优化，用退化因子 λ 判收敛；③ <b>纯里程计/建图</b>——标定收敛后外参锁死成固定量。即「先粗标定 → 联合精化 → 锁死」，而不是一步到位。</p>
+            </div></details>
+          </li>
+          <li>关于「视场不重叠的多雷达」，M-LOAM 的诚实立场是什么？请分两句说。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>第一句：<b>标定精化阶段依赖主-辅雷达 FOV 有重叠</b>（假设 3），它没提出一套完全无重叠的专用标定法；第二句：<b>运行阶段</b>各雷达特征分别匹配地图，多雷达互补覆盖（消除车身盲区）仍直接提升位姿精度——RV 四雷达就是实例。两句不能混为一谈，否则就是夸大。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0102-平台与评测2022-自适应权重与多传感器基准.html">← 平台与评测（2022）：自适应权重与多传感器基准</a>
+        <a class="next" href="../index.html">第五季完 · 返回课程馆 →</a>
+      </div>
+      <p class="foot-note">第五季（阶段 E 多传感器融合）到此结束——下一步进入阶段 F：前沿，神经隐式与 3D 高斯 🚀</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

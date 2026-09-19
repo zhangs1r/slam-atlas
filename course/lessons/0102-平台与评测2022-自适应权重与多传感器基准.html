@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>平台与评测（2022）：自适应权重与多传感器基准 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0102</div>
+      <h1>平台与评测（2022）：自适应权重与多传感器基准</h1>
+      <p class="subtitle">算法只是融合系统的一部分——怎么用多模态「认地方」，怎么客观地「量准不准」🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：地点识别的自适应权重 · 多传感器评测基准</span>
+        <span>👥 两篇：AdaFusion 与 FusionPortable（IEEE RA-L 2022）</span>
+        <span>📅 2022 · Visual-LiDAR Fusion / FusionPortable</span>
+      </div>
+      <div class="toc">
+        <a href="#frame">先把框架立起来</a>
+        <a href="#adafusion-what">AdaFusion 是地点识别</a>
+        <a href="#adafusion-weight">自适应权重怎么来</a>
+        <a href="#adafusion-exp">网络与实验数字</a>
+        <a href="#fusion-what">FusionPortable 基准</a>
+        <a href="#fusion-why">为什么要读数据集</a>
+        <a href="#together">这两篇为何同节</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="frame">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 AdaFusion 的真实任务（地点识别而非里程计）；讲出「自适应权重」为什么比固定权重更稳；背出 FusionPortable 的传感器型号、频率与真值来源；并理解「为什么融合课程要读数据集论文」。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>AdaFusion 是「多模态地点识别」，直接接第一季 <b>0013</b>（视觉场景识别评测协议）与 <b>0014</b>（回环检测综述）；它的描述子正是回环/重定位的候选生成器，呼应第三季 <b>0043</b>（ORB-SLAM 的 DBoW 位置识别）。FusionPortable 接第一季 <b>0009</b>（DARPA SubT 评测）与第四季 <b>0076</b>（退化场景）。</p>
+        </div>
+      </div>
+
+      <h2>1. 先把框架立起来：算法只是融合系统的一部分</h2>
+
+      <p>本季前几节都在讲「算法」——怎么把激光、视觉、惯性三种数据塞进同一个状态里。但一个能落地的融合系统，远不止算法这一块。</p>
+
+      <p>今天这两篇，讲的是融合系统的两个「外围但必需」的环节：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 识别（找地方）</b>
+          <p>AdaFusion 研究的是：<b>同一处场景，用视觉还是用激光更靠谱，能不能让系统自己判断？</b>这是「认出我在哪儿」这一步，是回环检测与重定位的前置。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 评测（量得准不准）</b>
+          <p>FusionPortable 研究的是：<b>给你一整套多传感器数据与真值，怎么客观地给一个融合系统打分？</b>没有它，我们连「谁更好」都说不清。</p>
+        </div>
+      </div>
+
+      <p>一句话点题：<b>「识别」决定系统能不能找到回环、「评测」决定我们能不能相信一个算法的数字。</b>这两件事做不好，再漂亮的融合算法也落不了地。所以把它们放在同一节，是因为它们回答的是同一类问题——<b>「融合系统凭什么可靠」</b>。</p>
+
+      <div class="callout">
+        <h4>一个诚实的预告</h4>
+        <p>精读材料建议：课时紧时 FusionPortable 可以「一句话带过」。但本节既然独立成课，就给它应有的篇幅——因为它恰恰揭示了融合系统最容易被忽视的真相：<b>融合的失败往往来自时间同步、标定、退化，而这些只有靠带真值的多传感器数据才能客观暴露。</b></p>
+      </div>
+    </main>
+
+    <section class="section-card" id="adafusion-what">
+      <h2>2. AdaFusion 到底在做什么：它是「地点识别」，不是里程计</h2>
+
+      <p>先纠正一个最常见的误解。AdaFusion 的标题里写的是 <i>Visual-LiDAR Fusion With Adaptive Weights for Place Recognition</i>——关键词是 <b>Place Recognition（地点识别）</b>。</p>
+
+      <p>它做的不是「估出我精确的 x、y、yaw」（那是里程计/定位），而是更轻的一步：<b>给它一张图和一个点云，它回答「这地方我以前是不是来过」。</b>原文摘要原话说它「retrieves the most similar places（检索最相似的地点）」，§III 末尾用最近邻检索（NN search）去数据库里找匹配。它<b>不是里程计、不是建图、也不是位姿估计</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_AdaFusion__Visual-LiDAR_Fusion_With_Adaptive_Weights_for/379c3170b640be318f72d4ad4d98da084bf9699a620f33c6003151c8c4113712.jpg" alt="AdaFusion Fig.1 place recognition with adaptive weights">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Place recognition with adaptive weights: Visual and LiDAR features are extracted and weighted so that distinctive modality contributes more in the combined descriptor. The query and the true match have similar adaptive weights, both of which emphasize less on image features for their poor quality for recognition, while the wrong match has lower weight in LiDAR for the featureless corridor.<br>
+          <b>怎么看这张图：</b>① 这是全文动机的具象版——<b>同一个场景，真匹配对的视觉权重都被压低</b>（因为图质量差）；② 错匹配处在「无结构走廊」，激光也没特征，于是被区分开；③ 看这张图时记住：它的目标是「区分是不是同一个地方」，不是「算出我在哪」。<b>这是 AdaFusion 真实用途的铁证——它在做识别，不是里程计。</b>
+        </figcaption>
+      </figure>
+
+      <h3>它和 SLAM 里的「回环检测 / 重定位」是什么关系</h3>
+
+      <p>地点识别在 SLAM 里是个老角色，只是这次换了多模态的皮：</p>
+
+      <ul>
+        <li><b>回环检测</b>：机器人走了一圈回到老地方，需要认出来「这我见过」，从而把累积的漂移拉回去。第一季 <b>0014</b> 课专门讲过回环检测的「假阳性铁律」——认错地方比认不出来更糟。</li>
+        <li><b>重定位</b>：系统跟丢了，需要靠一张图/一个点云在已有地图里重新找到自己。</li>
+        <li><b>描述子 + 检索</b>：做法是把每个地点压成一个「描述子向量」，新来一张查询，就到数据库里量距离、取最近的 top-N。这正是第三季 <b>0043</b> 课里 ORB-SLAM 用 DBoW（词袋）做位置识别的那套思路——只是 AdaFusion 把「视觉词袋」升级成了「视觉+激光加权描述子」。</li>
+      </ul>
+
+      <div class="callout">
+        <h4>为什么路线图名字不精确</h4>
+        <p>路线图把 AdaFusion 标成「注意力式融合网络」，那是在说它的<b>方法形态</b>。但从任务层看，它解决的是「地点识别」而非「多传感器里程计融合」。<b>判断依据就是标题、Index Terms 的 place recognition，以及摘要的 retrieves the most similar places。</b>所以本节如实地把它放在「识别」这一格，而不是「融合里程计」那一格。</p>
+      </div>
+
+      <p>顺带接第一季 <b>0013</b>：那节课教你「怎么公正地量一个识别系统」（GT 软标签、recall@N、R@100P 的坑）。AdaFusion 就是把那套评测协议搬到了多模态——同一套 AR@N、地理不相交，只是描述子由单模态升级成加权双模态。</p>
+    </section>
+
+    <section class="section-card" id="adafusion-weight">
+      <h2>3. 自适应权重怎么来的：权重是网络按场景内容自己定的</h2>
+
+      <p>核心问题：视觉和激光，谁在描述子里贡献更大？AdaFusion 的答案是——<b>不让人事先定死，让网络根据「此刻这张图、这个点云」自己决定。</b></p>
+
+      <h3>为什么固定权重不行</h3>
+
+      <p>原文论证得很实在。现有「简单拼接」融合把两模态当作「每时每地同等重要」，但：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>视觉的软肋</b>
+          <p>怕光照、季节、天气变化（§I）。<b>夜里、雨雾天</b>，图像几乎没判别力。</p>
+        </div>
+        <div class="mini-card">
+          <b>激光的软肋</b>
+          <p>在走廊、隧道等<b>退化场景</b>里点云没特征（§I）。一片空墙，激光也抓不住东西。</p>
+        </div>
+      </div>
+
+      <p>原文的关键原话（§I p.15）：<b>「feature from less distinctive modality may worsen the performance（判别力弱的那个模态的特征，反而会拉低整体表现）」</b>。也就是说，某个传感器在当前环境失效时，若还给它固定高权重，它就是在拖后腿。</p>
+
+      <h3>机制：两路分支，权重单独生成</h3>
+
+      <p>网络是两条并行的线（Fig. 2）：</p>
+
+      <ul>
+        <li><b>特征提取分支</b>：图像走 2D 卷积、点云走 3D 卷积，各自吐出视觉特征 $f_{\mathrm I}$、激光特征 $f_{\mathrm P}$。</li>
+        <li><b>权重生成分支</b>：先做同模态内的多尺度注意力（intra-modality），再做跨模态注意力（inter-modality），最后用一个全连接层吐出两个权重 $\alpha_{\mathrm I},\alpha_{\mathrm P}\in[0,1]$。</li>
+      </ul>
+
+      <p>再用全局平均池化（GAP）把注意力压成向量，过几层全连接 + Sigmoid，得到权重：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\boldsymbol\alpha=\mathrm{FC}\big([\,\boldsymbol a_{\mathrm I}^{\top},\boldsymbol a_{\mathrm P}^{\top}\,]^{\top}\big),\qquad \boldsymbol\alpha=[\alpha_{\mathrm I},\alpha_{\mathrm P}]^{\top}$$</div>
+      </div>
+
+      <p>最后把两路特征按权重拼成<b>加权全局描述子</b>，拿去做最近邻检索：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\boldsymbol f'=[\alpha_{\mathrm I}\,\boldsymbol f_{\mathrm I}^{\top},\;\alpha_{\mathrm P}\,\boldsymbol f_{\mathrm P}^{\top}]^{\top}$$</div>
+      </div>
+
+      <p>注意：这是<b>描述子级 / 特征级融合</b>——两路特征先各自独立提取，最后才加权拼接，不是把原始数据早早混在一起（早融合）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一路口，白天 vs 夜晚：权重自己变</text>
+
+          <!-- 左格：白天 -->
+          <rect x="40" y="44" width="370" height="252" rx="10" fill="#f3f9ff" stroke="#bcd3e6" stroke-width="1.4"/>
+          <text x="225" y="68" text-anchor="middle" font-size="14" font-weight="700" fill="#2c5f8a">① 白天</text>
+          <rect x="70" y="84" width="310" height="86" fill="#cfe8ff"/>
+          <circle cx="110" cy="112" r="14" fill="#ffd34d" stroke="#e0a800" stroke-width="1.2"/>
+          <rect x="180" y="92" width="42" height="66" fill="#7fb069"/>
+          <rect x="240" y="100" width="42" height="58" fill="#e07a5f"/>
+          <rect x="300" y="96" width="42" height="62" fill="#8d99ae"/>
+          <text x="225" y="186" text-anchor="middle" font-size="11" fill="#2c5f8a">画面清晰、色彩丰富</text>
+          <!-- 权重条 -->
+          <text x="70" y="224" font-size="12" fill="#2b2b2b">视觉</text>
+          <rect x="116" y="212" width="240" height="15" rx="3" fill="#e4ecf2"/>
+          <rect x="116" y="212" width="192" height="15" rx="3" fill="#5a8fc7"/>
+          <text x="362" y="224" font-size="11" fill="#2c5f8a">长（示意）</text>
+          <text x="70" y="252" font-size="12" fill="#2b2b2b">激光</text>
+          <rect x="116" y="240" width="240" height="15" rx="3" fill="#e4ecf2"/>
+          <rect x="116" y="240" width="48" height="15" rx="3" fill="#cc785c"/>
+          <text x="362" y="252" font-size="11" fill="#cc785c">短</text>
+
+          <!-- 右格：夜晚 -->
+          <rect x="490" y="44" width="370" height="252" rx="10" fill="#2b2f3a" stroke="#4a5163" stroke-width="1.4"/>
+          <text x="675" y="68" text-anchor="middle" font-size="14" font-weight="700" fill="#e8edf5">② 夜晚</text>
+          <rect x="520" y="84" width="310" height="86" fill="#11151d"/>
+          <circle cx="640" cy="112" r="6" fill="#ffd34d"/>
+          <rect x="180" y="92" width="42" height="66" fill="#2c333f" transform="translate(340,0)"/>
+          <rect x="240" y="100" width="42" height="58" fill="#2c333f" transform="translate(280,0)"/>
+          <text x="675" y="186" text-anchor="middle" font-size="11" fill="#aeb8c8">视觉那格几乎全黑</text>
+          <!-- 权重条 -->
+          <text x="520" y="224" font-size="12" fill="#e8edf5">视觉</text>
+          <rect x="566" y="212" width="240" height="15" rx="3" fill="#3a4150"/>
+          <rect x="566" y="212" width="48" height="15" rx="3" fill="#5a8fc7"/>
+          <text x="812" y="224" font-size="11" fill="#7f9ec0">短</text>
+          <text x="520" y="252" font-size="12" fill="#e8edf5">激光</text>
+          <rect x="566" y="240" width="240" height="15" rx="3" fill="#3a4150"/>
+          <rect x="566" y="240" width="192" height="15" rx="3" fill="#cc785c"/>
+          <text x="812" y="252" font-size="11" fill="#e0a07f">长（示意）</text>
+
+          <text x="450" y="330" text-anchor="middle" font-size="13" font-weight="700" fill="#cc785c">网络自己按场景内容调权重，不是人事先设好的一组固定值</text>
+          <text x="450" y="356" text-anchor="middle" font-size="11.5" fill="#5a4a42">（条长仅作示意；数据集平均权重约 视觉0.4 / 激光0.6，但昼夜会显著偏离此值）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个校园路口，在白天和夜晚两种光照下，视觉与激光的「贡献权重」怎么变。<br>
+          <b>怎么看这张图：</b>① 左格白天——图像清晰、色彩丰富，视觉权重条长、激光权重条短；② 右格夜晚——图像几乎全黑（只剩路灯），权重条直接翻过来，视觉短、激光长；③ 中间那行红字是核心：<b>这组权重是网络根据输入内容自己输出的，不是工程师提前写死的</b>。<br>
+          <b>要记住的一句话：</b>「此刻谁更靠谱，就让谁多说话」——这就是自适应权重的全部智慧。条长只是示意，真实数值随场景波动，数据集平均约为视觉 0.4、激光 0.6（Fig. 7）。
+        </figcaption>
+      </figure>
+
+      <p>为什么这是「自适应」而非「自学习固定偏好」？因为权重是<b>每帧根据当时内容重算</b>的。Fig. 7 给出的最直观证据：连续帧里，进走廊激光权重下降、出走廊又回升——它确实在随场景走。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_AdaFusion__Visual-LiDAR_Fusion_With_Adaptive_Weights_for/5b32e29fc0dfb7368fc845447d0ecd543a13d9adab1444bf2e3c08626ed9db2e.jpg" alt="AdaFusion Fig.2 network structure">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The network structure of AdaFusion: Our network is mainly composed of two branches. The feature extraction branch separately deals with images and point clouds to extract visual and LiDAR features with convolution. The weight generation branch firstly performs intra-modality fusion of the multi-scale attention, and then learns the adaptive weights with inter-modality fusion.<br>
+          <b>怎么看这张图：</b>① 看它确实是<b>两条独立分支</b>——特征提取（上）和权重生成（下）分开走；② 权重分支先「模态内」多尺度注意力，再「跨模态」融合，最后才输出 $\alpha_{\mathrm I},\alpha_{\mathrm P}$；③ 记住融合发生在<b>描述子层面</b>（加权拼接），不是把原始图和点云早早就混在一起。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="adafusion-exp">
+      <h2>4. 网络结构与实验数字</h2>
+
+      <p>把机制落地的关键数字，逐条给你（都在正文 §IV–V）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">项目</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">数值 / 结论</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>数据集</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Oxford RobotCar（长期多光照/天气）+ NCLT（15 个月、27 序列、含室内外）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>评测指标</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">recall@N / AR@1 / AR@1%（top-N 里至少命中一个真匹配的比例）</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Oxford AR@1 / AR@1%</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">AdaFusion <b>98.18% / 99.21%</b>；比基线高约 0.1%~0.18%</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>NCLT AR@1</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">AdaFusion <b>95.65%</b>；单视觉支仅 79.34%、单激光支 92.23%</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>速度</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">约 <b>5.33 ms/帧</b>（NCLT，实时）；注意力分支带来约 2.9 ms 额外开销</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>平均权重</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">数据集平均约 视觉 0.4 / 激光 0.6（相对比率，非绝对值）</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_AdaFusion__Visual-LiDAR_Fusion_With_Adaptive_Weights_for/a4309eef514d31077a1ef239d9a5f0c38ef2dc4960d78d2aa58115fd11955699.jpg" alt="AdaFusion Fig.7 adaptive weights of different places">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Adaptive weights of different places: There are consecutive frames in each sequence. The weights are converted to relative ratios compared to the average visual and LiDAR weights for better illustration. A value higher than 100% means the corresponding modality contributes more in this place than the average contribution of all places.<br>
+          <b>怎么看这张图：</b>① 这是「为什么需要自适应」最直接的可视化——Seq1 从暗到亮，图像权重上升；Seq2 进走廊，激光权重下降；② 注意纵轴是<b>相对平均权重的比率</b>（&gt;100% 表示比平均多贡献），<b>不是权重绝对值</b>；③ 别把 &gt;100% 误读成「权重大于 1」。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>诚实说明：它没有光照/天气的量化分组表</h4>
+        <p>原文<b>没有给出</b>「白天/夜晚/晴天/雨雾」的精确分组 ATE 数字。它对不同光照天气的展示，是靠 <b>Seq1–5 的连续场景变化</b>做<b>定性</b>说明（暗→亮、走廊、室内、室外、双差）。这与 FusionPortable 那种给 night/day ATE 的做法不同。<b>本节不对它编任何量化天气数字</b>——这是原文自承的弱项。</p>
+      </div>
+
+      <p>另一个要如实写的局限：提升绝对值很小（0.1%~0.18%），因为对比方法已在饱和高位；且在<b>两模态都差的场景</b>（比如又黑又无特征的 Seq5），权重被迫接近均等，自适应没收益。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>AdaFusion 在「又黑又无特征」的场景（视觉和激光都难用）下，自适应权重会怎样？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不会自动偏向视觉。夜里视觉本身就没判别力，网络恰恰会压低视觉权重，不会反而去信它。" onclick="lessonKit.answer(this,'q0102a')">自动偏向视觉权重</button>
+          <button data-correct="yes" data-explanation="对。原文明确说在双差场景（Seq5），两个模态都不可靠，权重被迫接近均等，自适应拿不到额外收益。这正是它诚实承认的边界。" onclick="lessonKit.answer(this,'q0102a')">权重接近均等无收益</button>
+          <button data-correct="no" data-explanation="不会报错。它照样输出一组接近 0.5/0.5 的权重并继续检索，只是识别率没有因自适应而提升。" onclick="lessonKit.answer(this,'q0102a')">程序直接报错退出</button>
+        </div>
+        <div class="quiz-feedback" id="q0102a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="fusion-what">
+      <h2>5. FusionPortable：一个能客观「量」融合系统的基准</h2>
+
+      <p>如果说 AdaFusion 是「融合系统的一个零件」，FusionPortable 就是「给整个融合系统体检的仪器」——一篇<b>数据集 / 基准论文</b>，含硬件设备、数据采集、真值、和多算法基线评测。</p>
+
+      <h3>① 硬件平台（型号与频率，抄全）</h3>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">传感器</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">型号</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">频率</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">要点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>3D 激光</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">Ouster OS1-128（128 线）</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">10 Hz</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">120 m 测程；另出深度/信号/环境图 1028×128</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>立体帧相机</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">2× FLIR BFS-U3-31S4C</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">20 Hz</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">1024×768；外触发同步，时间戳差 &lt;1 ms</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>立体事件相机</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">2× DAVIS346</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">高动态</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">346×260；主从触发，各含 MPU6050 IMU</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>IMU</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">STIM300（战术级）</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">200 Hz</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">零偏不稳定 0.3°/h，作 body 系</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>GPS</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">ZED-F9P RTK-GPS</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">10 Hz</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">4 频；L1/L2/L5 RTK</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>主机</b></td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">Intel NUC</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">—</td><td style="border:1px solid #e0d5c8;padding:.45rem .6rem">i7 / 1 TB SSD / 64 GB，跑驱动+时间戳+ROS bag</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">多传感器平台俯视图：一台车上塞了什么</text>
+
+          <!-- 车体 -->
+          <rect x="250" y="120" width="400" height="170" rx="22" fill="#eef2f6" stroke="#9fb3c4" stroke-width="1.6"/>
+          <text x="450" y="312" text-anchor="middle" font-size="12" fill="#5a4a42">刚性铝件把全部传感器装在同一刚体上（俯视）</text>
+
+          <!-- 前雷达 -->
+          <circle cx="305" cy="158" r="22" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <text x="305" y="163" text-anchor="middle" font-size="11" fill="#fff">LiDAR</text>
+          <text x="305" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#2c5f8a">Ouster OS1-128</text>
+          <text x="305" y="116" text-anchor="middle" font-size="11" fill="#2c5f8a">10 Hz（前）</text>
+
+          <!-- 中相机 -->
+          <rect x="424" y="142" width="52" height="34" rx="5" fill="#cc785c" stroke="#8f4a33" stroke-width="1.4"/>
+          <text x="450" y="163" text-anchor="middle" font-size="11" fill="#fff">CAM</text>
+          <text x="450" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#8f4a33">FLIR 立体相机</text>
+          <text x="450" y="116" text-anchor="middle" font-size="11" fill="#8f4a33">20 Hz（中）</text>
+
+          <!-- 后雷达 -->
+          <circle cx="595" cy="158" r="22" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <text x="595" y="163" text-anchor="middle" font-size="11" fill="#fff">LiDAR</text>
+          <text x="595" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#2c5f8a">Ouster OS1-128</text>
+          <text x="595" y="116" text-anchor="middle" font-size="11" fill="#2c5f8a">10 Hz（后）</text>
+
+          <!-- IMU -->
+          <rect x="424" y="210" width="52" height="30" rx="5" fill="#2e9e6b" stroke="#1f6e49" stroke-width="1.4"/>
+          <text x="450" y="230" text-anchor="middle" font-size="11" fill="#fff">IMU</text>
+          <text x="450" y="262" text-anchor="middle" font-size="11" font-weight="700" fill="#1f6e49">STIM300 · 200 Hz</text>
+
+          <!-- GNSS -->
+          <circle cx="640" cy="225" r="16" fill="#e0a800" stroke="#a87f00" stroke-width="1.4"/>
+          <text x="640" y="229" text-anchor="middle" font-size="13" fill="#fff">G</text>
+          <text x="640" y="262" text-anchor="middle" font-size="11" font-weight="700" fill="#a87f00">ZED-F9P · 10 Hz</text>
+
+          <!-- 事件相机标注 -->
+          <text x="305" y="290" text-anchor="middle" font-size="10.5" fill="#7a8a99">另含 2× DAVIS346 事件相机（346×260）</text>
+          <text x="595" y="290" text-anchor="middle" font-size="10.5" fill="#7a8a99">（车辆/四足/手持三平台共用）</text>
+
+          <text x="450" y="372" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">真值来自 OptiTrack 120 Hz（室内）/ RTK-GPS+LIO-SAM（室外）</text>
+          <text x="450" y="398" text-anchor="middle" font-size="12" fill="#5a4a42">所以每个算法跑出的轨迹，都能被客观打分（ATE）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>论文那套「自包含、即插即用」的多传感器硬件架，俯视长什么样、各传感器型号与频率。<br>
+          <b>怎么看这张图：</b>① 车顶前、后各一台 Ouster OS1-128 激光（10 Hz），中间一台 FLIR 立体相机（20 Hz）；② 车体上标了 IMU（STIM300，200 Hz）与 GNSS 天线（ZED-F9P，10 Hz）；③ 所有传感器刚性装在同一铝件上，自带时钟同步单元；④ 最下面那行是重点——<b>因为有真值，每个算法的轨迹才能量出 ATE</b>。<br>
+          <b>要记住的一句话：</b>「可复现的基准」靠的是「统一硬件 + 统一真值」，而不是某个聪明算法。
+        </figcaption>
+      </figure>
+
+      <h3>② 「Diverse Platforms」指什么</h3>
+      <p>原文把同一套传感器架装进三种运动特性完全不同的载体：<b>手持 + 云台稳定器</b>（6-DoF 但稳）、<b>四足机器人</b>（主要平面但颠簸）、<b>Apollo 自动驾驶车</b>（平面匀速）。为什么「跨平台」对评测重要？因为不同载体的<b>运动模式</b>会挑战不同算法的假设——手持抖动、四足颠簸、车速匀速，单平台数据集会让算法过拟合。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FusionPortable__A_Multi-Sensor_Campus-Scene_Dataset_for_/4564e9758b2319c2834ddedb88cb2c321bd795dfd0e64bad924d1e9862433177.jpg" alt="FusionPortable Fig.1 multi-sensor device and platforms">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The multi-sensor device and data collection platform: (a) CAD model of the sensor rig. The rig is rigidly mounted on (b) a gimbal stabilizer, (c) a quadruped robot, and (d) an apollo autonomous vehicle.<br>
+          <b>怎么看这张图：</b>① (a) 是传感器架 CAD，坐标轴红绿蓝配色；② (b)(c)(d) 就是「跨平台」的具象——同一套架子塞进云台、四足、自动驾驶车；③ 这正是「为什么一个算法不能只在一个载体上测」的物理基础。
+        </figcaption>
+      </figure>
+
+      <h3>③ 真值怎么来</h3>
+      <ul>
+        <li><b>地图真值</b>：Leica BLK360 激光扫描仪，毫米级彩色稠密地图；</li>
+        <li><b>位姿真值（室内）</b>：OptiTrack 动捕，120 Hz，毫米级；</li>
+        <li><b>位姿真值（中尺度）</b>：NDT 6-DoF 定位在先验地图上求轨迹；</li>
+        <li><b>位姿真值（室外）</b>：RTK-GPS + LiDAR-惯性（LIO-SAM）融合。</li>
+      </ul>
+
+      <h3>④ 它评测什么、多少 baseline</h3>
+      <p>算<b>定位 ATE</b>（全序列）与<b>建图点云平均距离</b>（corridor_day、garden_day）；对比 <b>6 个 SOTA</b>：VINS-Fusion、ESVO、A-LOAM、LIO-Mapping、LIO-SAM、FAST-LIO2。</p>
+
+      <h3>⑤ 场景与规模</h3>
+      <p><b>17 条序列</b>，HKUST 校园，含实验室/花园/食堂/走廊/扶梯/室外道路；退化场景明确包含 corridor_day（对所有方法都难，ATE 最高 <b>1.807 m</b>）、escalator_day、night 序列、室内外切换。论文<b>未给单一总里程汇总数字</b>，而是逐序列列出。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FusionPortable__A_Multi-Sensor_Campus-Scene_Dataset_for_/1b421080670fdcadabf97299b5664d34cd5f9aa75a1f50458cde64c7ce31c10a.jpg" alt="FusionPortable Fig.5 trajectories vs ground truth">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Trajectories of the algorithms on four sequences: MCR fast 00, campus road day, garden day, escalator day w.r.t. ground truth.<br>
+          <b>怎么看这张图：</b>① 每条彩色线是某个算法跑出的轨迹，黑色/灰色是<b>真值</b>；② 轨迹偏离真值曲线越远，ATE 越大；③ 可直观看出谁飘了——这正是 ATE 这个指标的来源。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>关键 ATE 数字（节选）</h4>
+        <p>building_day 上 LIO-SAM 0.222 m、FAST-LIO2 0.146 m，而 VINS-Fusion 12.861 m（崩溃级）；corridor_day 几乎所有方法 &gt;1 m（A-LOAM 0.416、LIO-SAM 0.594、FAST-LIO2 1.563）；四足 MCR_fast_01 上 A-LOAM 8.264 m（纯激光扛不住抖动），LIO-SAM 0.066 m。建图：corridor_day 0.938 m、garden_day 0.597 m。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="fusion-why">
+      <h2>6. 为什么融合课程要专门读数据集论文</h2>
+
+      <p>回到本季主线。我们前面读的都是「算法」，但 FusionPortable 告诉我们一件扎心的事：</p>
+
+      <p><b>融合系统的失败，往往不是算法不够聪明，而是时间同步没对齐、标定有偏差、或者撞上退化场景。</b>而这些「脏活」，只有靠<b>带真值的多传感器数据</b>才能客观暴露。第一季 <b>0009</b> 课（DARPA SubT）就说过：真实环境会让系统各种崩；FusionPortable 把这种「崩」量化成了 ATE 表——你看 corridor_day 上几乎所有方法都 &gt;1 m，这就是退化场景的客观证据。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">时间同步：融合的隐形地基</text>
+
+          <!-- 时间轴 -->
+          <line x1="120" y1="330" x2="820" y2="330" stroke="#90a4ae" stroke-width="1.6"/>
+          <path d="M820 330 L810 325 L810 335 Z" fill="#90a4ae"/>
+          <text x="838" y="334" font-size="12" fill="#5a4a42">时间</text>
+
+          <!-- IMU 200Hz 密集 -->
+          <text x="100" y="92" font-size="12" font-weight="700" fill="#2e9e6b">IMU 200 Hz</text>
+          <g fill="#2e9e6b">
+            <line x1="150" y1="78" x2="150" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="170" y1="78" x2="170" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="190" y1="78" x2="190" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="210" y1="78" x2="210" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="230" y1="78" x2="230" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="250" y1="78" x2="250" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="270" y1="78" x2="270" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="290" y1="78" x2="290" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="310" y1="78" x2="310" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="330" y1="78" x2="330" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="350" y1="78" x2="350" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="370" y1="78" x2="370" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="390" y1="78" x2="390" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="410" y1="78" x2="410" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="430" y1="78" x2="430" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="450" y1="78" x2="450" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="470" y1="78" x2="470" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="490" y1="78" x2="490" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="510" y1="78" x2="510" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="530" y1="78" x2="530" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="550" y1="78" x2="550" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="570" y1="78" x2="570" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="590" y1="78" x2="590" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="610" y1="78" x2="610" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="630" y1="78" x2="630" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="650" y1="78" x2="650" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="670" y1="78" x2="670" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="690" y1="78" x2="690" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="710" y1="78" x2="710" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="730" y1="78" x2="730" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="750" y1="78" x2="750" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="770" y1="78" x2="770" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+            <line x1="790" y1="78" x2="790" y2="106" stroke="#2e9e6b" stroke-width="2"/>
+          </g>
+
+          <!-- 相机 20Hz 中等 -->
+          <text x="100" y="162" font-size="12" font-weight="700" fill="#cc785c">相机 20 Hz</text>
+          <g stroke="#cc785c" stroke-width="3">
+            <line x1="150" y1="146" x2="150" y2="174"/>
+            <line x1="210" y1="146" x2="210" y2="174"/>
+            <line x1="270" y1="146" x2="270" y2="174"/>
+            <line x1="330" y1="146" x2="330" y2="174"/>
+            <line x1="390" y1="146" x2="390" y2="174"/>
+            <line x1="450" y1="146" x2="450" y2="174"/>
+            <line x1="510" y1="146" x2="510" y2="174"/>
+            <line x1="570" y1="146" x2="570" y2="174"/>
+            <line x1="630" y1="146" x2="630" y2="174"/>
+            <line x1="690" y1="146" x2="690" y2="174"/>
+            <line x1="750" y1="146" x2="750" y2="174"/>
+            <line x1="790" y1="146" x2="790" y2="174"/>
+          </g>
+
+          <!-- 激光 10Hz 稀疏 -->
+          <text x="100" y="242" font-size="12" font-weight="700" fill="#5a8fc7">激光 10 Hz</text>
+          <g stroke="#5a8fc7" stroke-width="3">
+            <line x1="150" y1="226" x2="150" y2="254"/>
+            <line x1="270" y1="226" x2="270" y2="254"/>
+            <line x1="390" y1="226" x2="390" y2="254"/>
+            <line x1="510" y1="226" x2="510" y2="254"/>
+            <line x1="630" y1="226" x2="630" y2="254"/>
+            <line x1="750" y1="226" x2="750" y2="254"/>
+          </g>
+
+          <!-- 错位高亮 -->
+          <rect x="206" y="140" width="16" height="118" fill="#c0392b" opacity="0.16"/>
+          <text x="214" y="288" text-anchor="middle" font-size="11" font-weight="700" fill="#c0392b">若对不齐</text>
+          <text x="214" y="304" text-anchor="middle" font-size="11" fill="#c0392b">同一次运动</text>
+          <text x="214" y="318" text-anchor="middle" font-size="11" fill="#c0392b">被记两次/漏掉</text>
+
+          <text x="450" y="358" text-anchor="middle" font-size="12.5" fill="#5a4a42">三路采样节拍不同——对齐了才谈得上「融合」，否则数据本身就在互相打架</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三种传感器的采样时刻，画在同一条时间轴上——IMU 最密（200 Hz）、相机中等（20 Hz）、激光最疏（10 Hz）。<br>
+          <b>怎么看这张图：</b>① 三排竖线密度明显不同，说明它们<b>天然不在同一节拍上</b>；② 中间红色块标出「若对不齐会发生什么」——同一次运动可能被记成两次、或漏掉一段；③ FusionPortable 用 FPGA 接收 GPS 的 PPS（每秒脉冲），向 IMU/相机/激光分别输出 200/20/10 Hz 触发，把所有传感器锁在同一节拍上。<br>
+          <b>要记住的一句话：</b>「时间同步、外参标定、退化应对」是融合的隐形地基——地基没打好，再好的算法也跑不正。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="together">
+      <h2>7. 诚实收尾：这两篇为什么能放在同一节</h2>
+
+      <p>回到开头的框架。AdaFusion 与 FusionPortable 看似不搭——一个提了个网络、一个发了个数据集。但它们共享一个身份：<b>都是「融合系统的外围支撑」</b>，而不是融合算法本身。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>AdaFusion（识别侧）</b>
+          <p>解决「多模态特征怎么在识别里动态加权」。它是本季「融合」这条主线最直观的加权实例：<b>白天信视觉、夜晚信激光</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>FusionPortable（评测侧）</b>
+          <p>解决「融合系统怎么客观量」。它是本季「标定/同步/退化」这条隐形地基的实证平台。</p>
+        </div>
+      </div>
+
+      <p>精读材料说「课时紧时 FusionPortable 可一句话带过」——但本节既然独立成课，就让它把「为什么融合课程要读数据集论文」这件事讲透。因为<b>下一节（0103）我们要讲 M-LOAM，它正是把「外参标定」当成一个待估变量在线去解</b>——而能验证它标得准不准的，恰恰就是 FusionPortable 这类带真值的基准。</p>
+
+      <div class="callout">
+        <h4>我们的判断（非原文自评）</h4>
+        <p>AdaFusion 的新颖性在「把自适应权重搬进多模态地点识别」，但增益绝对值很小、且缺量化天气分组；FusionPortable 的价值不在算法，而在<b>它让「退化场景会毁掉单传感器」这件事有了可复现的数字证据</b>。两者都是「让融合系统可信」的必要拼图。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>AdaFusion 明明用了「视觉+激光融合」，为什么说它不是「多传感器融合里程计」？请给判断依据。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>依据在任务层，而非方法层：标题与 Index Terms 明确写 place recognition；摘要说它 retrieves the most similar places；§III 用 NN 检索去数据库找匹配。它<b>只回答「这地方我来过没」，不输出精确位姿</b>。路线图称它「注意力式融合网络」是在说方法形态，但用途是识别，不是里程计。所以判断它是「识别」而非「融合里程计」。</p>
+            </div></details>
+          </li>
+          <li>为什么「固定权重拼接」在走廊/夜晚场景会出问题？请引用原文逻辑。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文 §I 指出：视觉怕光照/天气、激光在走廊隧道等退化场景点云没特征。若把两模态<b>固定成同等重要</b>，当某个传感器在该环境失效时，弱模态的特征会拉低整体——原话是「feature from less distinctive modality may worsen the performance」。自适应权重的动机，就是让「此刻更有判别力的模态」贡献更大。</p>
+            </div></details>
+          </li>
+          <li>FusionPortable 的硬件平台里，IMU、相机、激光的频率分别是多少？谁负责给它们「对表」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>IMU（STIM300）<b>200 Hz</b>、立体帧相机（FLIR）<b>20 Hz</b>、3D 激光（Ouster OS1-128）<b>10 Hz</b>。对表由<b>FPGA 接收 GPS 的 PPS（每秒脉冲）</b>完成，它向三路分别输出 200/20/10 Hz 触发；GPS 拒止时切内部时钟。这正是「时间同步是融合隐形地基」的具象。</p>
+            </div></details>
+          </li>
+          <li>FusionPortable 的「真值」有哪几种来源？为什么说室外真值并「不是金标准」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>三类：地图真值用 Leica BLK360 扫描（毫米级）；室内位姿真值用 OptiTrack 动捕（120 Hz，毫米级）；中尺度用 NDT 6-DoF 定位；室外用 RTK-GPS + LIO-SAM 融合。原文自承：室外真值依赖 RTK-GPS（建筑遮挡会不稳）与 LIO-SAM（本身有误差），所以<b>并非无误差的金标准</b>——评测数字要带着这个前提去看。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0101-紧耦合的另一条路2022-因子图与无IMU.html">← 紧耦合的另一条路（2022）：因子图，但没有 IMU</a>
+        <a class="next" href="0103-多激光雷达2022-在线外参标定.html">多激光雷达（2022）：一边跑一边把外参标定出来 →</a>
+      </div>
+      <p class="foot-note">识别与评测，是算法之外决定融合系统能否落地的两只手 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>
