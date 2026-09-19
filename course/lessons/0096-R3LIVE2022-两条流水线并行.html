@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>R³LIVE（2022）：两条流水线并行 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0096</div>
+      <h1>R³LIVE（2022）：两条流水线并行</h1>
+      <p class="subtitle">一台车上的激光管几何、相机管颜色，最后拼成一张会发色的点云 🎨</p>
+      <div class="hero-meta">
+        <span>🎯 主题：紧耦合双流水线 · RGB 着色点云 · 直接法 VIO</span>
+        <span>👥 作者：Jiarong Lin、Fu Zhang（香港大学）</span>
+        <span>📅 2022 · ICRA · <i>R³LIVE: A Robust, Real-time, RGB-colored, LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">一个名字的小插曲</a>
+        <a href="#b">它要解决什么</a>
+        <a href="#c">两条并行流水线</a>
+        <a href="#d">RGB 着色点云怎么来</a>
+        <a href="#e">视觉那一路：直接法</a>
+        <a href="#f">与 FAST-LIO 系的关系</a>
+        <a href="#g">实验数字</a>
+        <a href="#h">边界与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 R³LIVE 的两条并行流水线各管什么、共用什么；解释一个激光点怎样被赋上颜色；讲明视觉那一路为什么「不提特征、不维护逆深度」；并指出它的 LIO 内核与第四季 FAST-LIO 系的关系。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它的 LIO 内核直接承自第四季 <b>0083</b>/<b>0084</b> FAST-LIO2（紧耦合 ESIKF + 直接配准、不提特征）；IMU 部分靠第二季 <b>0029/0030</b> 预积分；视觉那一路是第三季 <b>0046–0050</b> 直接法（DSO / SVO 的光度误差）在三传感器上的升级，而 <b>0057</b> VINS-Mono 是「视觉 + 惯性」双传感器前驱。</p>
+        </div>
+      </div>
+
+      <h2>1. 一个名字的小插曲（先澄清排版）</h2>
+
+      <p>先说一个你读原始 md 文件时会撞见的怪事：论文标题和正文里到处是 <b>R&lt;sup&gt;3&lt;/sup&gt;LIVE</b> 这种写法，那是把上标 ³ 误写成了 HTML 标签残留。论文的真名是 <b>R³LIVE</b>（R 立方 LIVE，³ 表示 LiDAR-Inertial-Visual 三件套），不是「R 小于 sup 3 大于 LIVE」。同样，它的前身 <b>R²LIVE</b> 里的 ² 也被同样污染过。</p>
+
+      <p>这条信息看起来是小事，但它提醒我们：<b>读论文原文件时，OCR 和排版残留会骗你</b>。本季每一篇都带着这类残留，下面凡出现上标的数字（³、²、°），我们都按「真实上标」来读，不再照搬那串标签。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它要解决什么</h2>
+
+      <p>R³LIVE 想解决的问题很朴素：<b>让一台同时背着激光雷达、相机、IMU 的小车，一边走一边实时造出一张「带真实颜色」的三维点云地图。</b></p>
+
+      <p>为什么这件事难，要三样传感器一起上？原文给了三个动机：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 纯激光在退化处会垮</b>
+          <p>当几何特征不够（比如小视场角的固态雷达、单面墙的长走廊），激光 SLAM 很容易失败——这正是第四季 <b>0084</b> 课讲过的「开阔墙面 / 天空」退化。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 纯视觉缺深度、低纹理也垮</b>
+          <p>相机没有深度，遇到白墙这种「没有纹理」的场景，特征法直接没东西可跟踪。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 旧的多传感器框架要么松、要么只定位</b>
+          <p>已有的 LiDAR-Visual 系统大多是<b>松耦合</b>，而且只做定位、不重建彩色地图。R³LIVE 要的是「紧耦合 + 同时定位 + 建图 + 给点云上色」一条龙。</p>
+        </div>
+      </div>
+
+      <p>所以它的定位一句话就能说清：<b>用「激光建几何 + 相机给颜色」两条并行流水线，实时产出密集 RGB 着色点云的紧耦合 SLAM 系统。</b>注意这里「着色」是把原始像素颜色贴上去，<b>还不是</b>下一篇要讲的「辐射重建」——这点差别我们留到 0097 课再展开，现在先吃透「两条线并行」。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 两条并行流水线：几何与纹理各走一路</h2>
+
+      <p>这是本课的主干。R³LIVE 的摘要里原话是：<b>「R³LIVE 由两个子系统组成，激光惯性里程计（LIO）和视觉惯性里程计（VIO）。」</b> 这两个子系统不是各算各的，而是<b>跑在同一个状态向量 x 上</b>——也就是紧耦合。</p>
+
+      <div class="callout">
+        <h4>一个关键澄清</h4>
+        <p>初学者最容易在这里想错：以为 LIO 和 VIO 是<b>两套独立估计</b>，位姿各估各的。原文不是这样。整个系统只维护<b>一个状态向量 x</b>（含位姿、速度、陀螺 / 加计偏置、重力、相机外参、IMU-相机时差、相机内参），LIO 用激光把几何与位姿推进去，VIO 用视觉光度残差在同一份 x 上继续修正。所以结论是：<b>几何与纹理各走一路，但位姿只有一个。</b></p>
+      </div>
+
+      <p>把状态向量写出来（原文式 1），你能看清它管了哪些量：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathbf{x}=[\,{}^G\mathbf{R}_I,\ {}^G\mathbf{p}_I,\ {}^G\mathbf{v},\ \mathbf{b}_g,\ \mathbf{b}_a,\ {}^G\mathbf{g},\ {}^I\mathbf{R}_C,\ {}^I\mathbf{p}_C,\ {}^I t_C,\ \boldsymbol{\phi}\,]^T $$</div>
+      </div>
+
+      <p>${}^G\mathbf{R}_I,{}^G\mathbf{p}_I$ 是车体位姿；${}^G\mathbf{v}$ 是速度；$\mathbf{b}_g,\mathbf{b}_a$ 是陀螺和加计偏置；${}^G\mathbf{g}$ 是重力；${}^I\mathbf{R}_C,{}^I\mathbf{p}_C$ 是相机相对 IMU 的外参；${}^I t_C$ 是相机相对 IMU 的时间差；$\boldsymbol{\phi}$ 是相机内参。<b>LIO 与 VIO 共用这一整个 x。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">两条流水线并行：几何与纹理各走一路，但位姿只有一个</text>
+
+          <!-- 共享状态框 -->
+          <rect x="55" y="180" width="150" height="64" rx="10" fill="#fdf3e7" stroke="#cc9a55" stroke-width="1.6"/>
+          <text x="130" y="208" text-anchor="middle" font-size="13" font-weight="700" fill="#8a5a1e">同一次状态估计</text>
+          <text x="130" y="228" text-anchor="middle" font-size="11.5" fill="#8a5a1e">状态 x（位姿·速度·偏置·相机内外参）</text>
+
+          <!-- 上路 LIO -->
+          <rect x="225" y="118" width="400" height="46" rx="9" fill="#eef7f0" stroke="#4a9c76" stroke-width="1.6"/>
+          <text x="425" y="146" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2f6d51">激光惯性里程计 LIO —— 管几何：点 · 平面 · 位姿</text>
+
+          <!-- 下路 VIO -->
+          <rect x="225" y="260" width="400" height="46" rx="9" fill="#eef2fb" stroke="#5a7fc7" stroke-width="1.6"/>
+          <text x="425" y="288" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2c4f8a">视觉惯性里程计 VIO —— 管纹理：颜色 · 亮度</text>
+
+          <!-- 终点框 -->
+          <rect x="655" y="180" width="215" height="64" rx="10" fill="#fdeef0" stroke="#cc785c" stroke-width="1.6"/>
+          <text x="762" y="208" text-anchor="middle" font-size="13.5" font-weight="700" fill="#a8432a">RGB 着色点云</text>
+          <text x="762" y="228" text-anchor="middle" font-size="11.5" fill="#a8432a">几何 + 颜色 汇合</text>
+
+          <!-- 连接线 -->
+          <path d="M205 195 L225 141" stroke="#6b6b6b" stroke-width="1.8" fill="none"/>
+          <path d="M225 141 L216 150" fill="#6b6b6b"/>
+          <path d="M205 229 L225 287" stroke="#6b6b6b" stroke-width="1.8" fill="none"/>
+          <path d="M225 287 L216 280" fill="#6b6b6b"/>
+          <path d="M625 141 L655 198" stroke="#6b6b6b" stroke-width="1.8" fill="none"/>
+          <path d="M655 198 L646 191" fill="#6b6b6b"/>
+          <path d="M625 287 L655 222" stroke="#6b6b6b" stroke-width="1.8" fill="none"/>
+          <path d="M655 222 L646 229" fill="#6b6b6b"/>
+
+          <!-- 底部标注 -->
+          <text x="450" y="392" text-anchor="middle" font-size="12.5" fill="#5a4a42">两条线从「同一次状态估计」出发，末端汇入同一个着色点云</text>
+          <text x="450" y="412" text-anchor="middle" font-size="12.5" fill="#5a4a42">位姿只有一个，几何与纹理只是它的两种「产出」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一台车里的两套子系统——上面 LIO 负责把几何（点的位置、平面、位姿）估出来，下面 VIO 负责把颜色（纹理）估出来，它们都从「同一个状态估计 x」出发，最后在右侧汇合成一张 RGB 着色点云。<br>
+          <b>怎么看这张图：</b>① 中间左边那个橙色框是<b>共享的状态 x</b>，两条线都从它分出来；② 上路绿色框写的是「点 · 平面 · 位姿」，下路蓝色框写的是「颜色 · 亮度」；③ 右边红色框是汇合点——<b>几何与纹理在这里合体</b>；④ 注意不是「两个位姿框」，而是「一个位姿、两种产出」。<br>
+          <b>要记住的一句话：</b>几何和纹理各走一路，但<b>位姿只有一个</b>——这是紧耦合和「两套独立估计」最根本的区别。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_R3LIVE/3f76a6ecd7e05c1f702729f899d19f17a9170849419f454a98009fd2582ad016.jpg" alt="R3LIVE Fig.2 system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The overview of our proposed system.（我们提出的系统总览。）<br>
+          <b>怎么看这张图：</b>这是论文自己的系统图，正是上面那张自绘图的「原始版」。请盯住它上下两块的划分——<b>上块是 LIO（建几何），下块是 VIO（上色）</b>，中间是共用的状态估计。它和我们的自绘图一一对应，只是论文图里还画了 IMU 预积分、ESIKF 更新等内部箭头。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 R³LIVE 里 LIO 与 VIO 的关系，下面哪句是对的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文全系统只维护一个状态向量 x，LIO 用激光点-面残差、VIO 用视觉光度残差，都在同一份 x 上做 ESIKF 更新。所以位姿是「一个」，几何与纹理只是它的两种产出。" onclick="lessonKit.answer(this,'q0096a')">两路共用同一个位姿</button>
+          <button data-correct="no" data-explanation="错。如果是两套独立估计，位姿会各估各的、容易打架；原文明确是紧耦合、共用同一个状态 x，不是各算各的。" onclick="lessonKit.answer(this,'q0096a')">两套独立估位姿</button>
+        </div>
+        <div class="quiz-feedback" id="q0096a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ RGB-colored 点云是怎么来的</h2>
+
+      <p>「给点云上色」说起来就一句话，做起来是两步：<b>先把每个激光点的三维坐标投到相机图像上、取那个像素的颜色；再用多帧观测加权融合。</b></p>
+
+      <p>地图里每个点存的是 $\mathbf{P}=[^G\mathbf{p}^T,\mathbf{c}^T]^T\in\mathbb{R}^6$——前 3 个量是它在世界坐标系下的位置，后 3 个量是它的 RGB。<b>注意：这里存的是「颜色」，不是「逆深度」</b>，这点下一节还要强调。上色的具体动作是：把这个 3D 点用当前位姿和相机内参投影到图像平面，取它落到的那个像素的 RGB，作为这次观测色 $\boldsymbol{\gamma}_s$。</p>
+
+      <p>同一面墙会被车经过好几次，每次取到的颜色略有差异（光照、噪声、曝光不同）。R³LIVE 不是「简单取最后一次」，而是用<b>贝叶斯逆协方差加权</b>把历史色和新观测融合起来（原文式 32–34）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ \Sigma_{\mathbf{n}\tilde{\mathbf{c}}_s}=\big((\Sigma_{\mathbf{n}\mathbf{c}_s}+\sigma_s^2\Delta t_{\mathbf{c}_s})^{-1}+\Sigma_{\mathbf{n}\boldsymbol{\gamma}_s}^{-1}\big)^{-1} $$</div>
+        <div class="flow-formula">$$ \tilde{\mathbf{c}}_s=\big((\Sigma_{\mathbf{n}\mathbf{c}_s}+\sigma_s^2\Delta t_{\mathbf{c}_s})^{-1}\mathbf{c}_s+\Sigma_{\mathbf{n}\boldsymbol{\gamma}_s}^{-1}\boldsymbol{\gamma}_s\big)\Sigma_{\mathbf{n}\tilde{\mathbf{c}}_s} $$</div>
+      </div>
+
+      <p>人话翻译：<b>颜色不是「最新的覆盖旧的」，而是「谁的观测更可信（协方差小）谁权重更大」地加权平均</b>。$\Sigma_{\mathbf{n}\boldsymbol{\gamma}_s}^{-1}$ 是这次观测的置信度，$\sigma_s^2\Delta t_{\mathbf{c}_s}$ 表示历史色会随时间缓慢漂移（随机游走噪声），融合后同时更新颜色 $\tilde{\mathbf{c}}_s$ 和它的不确定度 $\Sigma_{\mathbf{n}\tilde{\mathbf{c}}_s}$。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">一个激光点怎么被赋上颜色</text>
+
+          <!-- 左：车 + 墙 -->
+          <rect x="28" y="250" width="74" height="40" rx="6" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="44" cy="298" r="5" fill="#37474f"/><circle cx="86" cy="298" r="5" fill="#37474f"/>
+          <rect x="52" y="232" width="26" height="20" rx="3" fill="#90a4ae" stroke="#2c5f8a" stroke-width="1.2"/>
+          <text x="65" y="222" text-anchor="middle" font-size="10" fill="#2c5f8a">激光雷达</text>
+          <circle cx="104" cy="262" r="6" fill="#37474f" stroke="#2c5f8a" stroke-width="1.2"/>
+          <text x="118" y="266" font-size="10" fill="#2c5f8a">相机</text>
+          <!-- 墙 -->
+          <rect x="300" y="120" width="170" height="170" fill="#d9b8a6" stroke="#a98269" stroke-width="1.4"/>
+          <g stroke="#a98269" stroke-width="1" opacity="0.6">
+            <line x1="300" y1="170" x2="470" y2="170"/><line x1="300" y1="220" x2="470" y2="220"/>
+            <line x1="360" y1="120" x2="360" y2="290"/><line x1="410" y1="120" x2="410" y2="290"/>
+          </g>
+          <text x="385" y="112" text-anchor="middle" font-size="11" fill="#7a5a44">砖墙</text>
+          <!-- 激光点 -->
+          <circle cx="345" cy="180" r="5" fill="#c0392b"/>
+          <text x="345" y="200" text-anchor="middle" font-size="10" fill="#c0392b">激光点</text>
+
+          <!-- 投影虚线到图像 -->
+          <path d="M349 178 L560 150" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="6 4" fill="none"/>
+          <path d="M560 150 L552 156" fill="#c0392b"/>
+          <!-- 相机图像框 -->
+          <rect x="560" y="100" width="190" height="120" rx="6" fill="#f4f4f4" stroke="#555" stroke-width="1.4"/>
+          <rect x="600" y="135" width="40" height="34" fill="#b5512f"/>
+          <text x="655" y="92" text-anchor="middle" font-size="11" fill="#444">相机拍到的画面</text>
+          <text x="620" y="188" font-size="10" fill="#b5512f">落在这里的像素</text>
+          <!-- 放大镜 -->
+          <circle cx="620" cy="152" r="34" fill="none" stroke="#333" stroke-width="2"/>
+          <circle cx="620" cy="152" r="34" fill="#b5512f" opacity="0.25"/>
+          <text x="620" y="232" text-anchor="middle" font-size="11" fill="#b5512f">放大：这个像素是砖红色</text>
+
+          <!-- 右：多帧融合 -->
+          <rect x="480" y="300" width="400" height="92" rx="9" fill="#fbf6ef" stroke="#cc9a55" stroke-width="1.4"/>
+          <text x="680" y="322" text-anchor="middle" font-size="12.5" font-weight="700" fill="#8a5a1e">车往前开：同一面墙被多帧看到</text>
+          <circle cx="540" cy="352" r="13" fill="#c97a5a"/><text x="540" y="386" text-anchor="middle" font-size="10" fill="#7a5a44">帧1 偏暗</text>
+          <circle cx="610" cy="352" r="13" fill="#b5512f"/><text x="610" y="386" text-anchor="middle" font-size="10" fill="#7a5a44">帧2 正常</text>
+          <circle cx="680" cy="352" r="13" fill="#d98c6a"/><text x="680" y="386" text-anchor="middle" font-size="10" fill="#7a5a44">帧3 偏亮</text>
+          <path d="M553 352 L597 352 M623 352 L667 352" stroke="#6b6b6b" stroke-width="1.4" fill="none"/>
+          <rect x="730" y="338" width="120" height="30" rx="7" fill="#fff" stroke="#cc785c" stroke-width="1.4"/>
+          <text x="790" y="358" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432a">加权融合</text>
+          <path d="M693 352 L730 352" stroke="#6b6b6b" stroke-width="1.4" fill="none"/>
+          <text x="680" y="392" text-anchor="middle" font-size="10.5" fill="#5a4a42">不是取最后一次，而是按置信度加权</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边演示「一个激光点如何拿到颜色」——把墙上的那个红点投影到相机画面里它落到的像素，颜色就从那个像素取；右边演示「同一面墙被多帧看到时，颜色不是最后覆盖前面，而是加权融合」。<br>
+          <b>怎么看这张图：</b>① 红色虚线从墙上的激光点连到相机画面里的砖红像素，这一下就是「投影取色」；② 放大镜强调「颜色就来自这个像素」；③ 右下方三个不同深浅的圆代表三次观测到的颜色，汇入「加权融合」框——<b>越清晰的观测权重越大</b>。<br>
+          <b>要记住的一句话：</b>点云的颜色 = 把 3D 点投到图像取像素 + 多帧按置信度融合，<b>不是简单地把最后一帧看到的颜色贴上去</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_R3LIVE/6403b8214d743eab25039459053a29f2bdf3b9105edc74b9310cc1184f3a9707.jpg" alt="R3LIVE Fig.1 real-time RGB-colored point cloud">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Our developed R³LIVE is able to reconstruct a dense, 3D, RGB-colored point cloud of the traveled environment in real-time. The white path is our traveling trajectory for collecting the data.（我们开发的 R³LIVE 能实时重建所经环境的密集三维 RGB 着色点云，白色路径是采集数据时的行进轨迹。）<br>
+          <b>怎么看这张图：</b>这是论文的主打产出。(a) 是实时重建的密集彩色点云加白色轨迹；(b)(c) 是把点云离线网格化并贴上纹理后的结果。请盯住 (a)——<b>它就是上面那套「激光建几何 + 相机给颜色」拼出来的东西</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_R3LIVE/ed7bbcf2edcec9420a1f68e20c3e4c8cda1ef04761be17d76366308968c4aa57.jpg" alt="R3LIVE Fig.5 Bayesian color update">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>We render the color of the point via Bayesian update.（我们通过贝叶斯更新来渲染点的颜色。）<br>
+          <b>怎么看这张图：</b>这张图对应我们上面的贝叶斯融合公式。它直观展示了「同一个点在不同帧被观测到、颜色略有不同」时，系统怎么把它们融成最终那个颜色。和自绘图右下半区是同一件事。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 视觉那一路：直接法、不提特征、不维护逆深度</h2>
+
+      <p>视觉 SLAM 的常识是「提角点 → 三角化 → 估每像素逆深度」。R³LIVE 的 VIO <b>完全不按这个剧本走</b>。这是零基础读者最该被纠正的一点。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>它是直接法，不是特征法</b>
+          <p>VIO 不找角点、不找线，而是直接用<b>光度误差</b>：把地图里一个已知 3D 位置和已知颜色的点，投影到当前帧，比「地图里存的红」和「照片该像素的红」差多少，差多少就用来调位姿。这正是第三季 <b>0046–0050</b> 直接法（DSO / SVO）的思路在三传感器上的版本。</p>
+        </div>
+        <div class="mini-card">
+          <b>它不维护逆深度</b>
+          <p>普通直接法（如 DSO）会在照片里给每个像素估一个逆深度。R³LIVE 不这么做——它维护的是<b>地图里已知 3D 位置和颜色的点集 $\mathcal{P}$</b>。深度由激光给，视觉只管「颜色对不对」。</p>
+        </div>
+      </div>
+
+      <p>VIO 内部其实分两步（原文）：先 <b>frame-to-frame</b>（用 Lucas–Kanade 光流跟踪地图点，再用 PnP 重投影误差做 ESIKF 更新），再 <b>frame-to-map</b>（最小化光度误差做 ESIKF 更新）。其中 frame-to-map 的光度残差写法是（原文式 19）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathbf{o}(\check{\mathbf{x}}_k,\,^G\mathbf{p}_s,\,\mathbf{c}_s)=\mathbf{c}_s-\boldsymbol{\gamma}_s $$</div>
+      </div>
+
+      <p>$\mathbf{c}_s$ 是地图里这个点存的颜色，$\boldsymbol{\gamma}_s$ 是当前图像里该点邻域双线性插值得到的观测色。<b>误差 = 地图色 − 观测色</b>。注意它参考的是<b>地图里 3D 点的颜色</b>，而不是逆深度——这正是和「特征法靠重投影、直接法靠逆深度」最大的不同。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_R3LIVE/a50f5fcc6a1065fd10de5b9f4b01bd2e6a3f51c8258be72a905a278aa09e8a67.jpg" alt="R3LIVE Fig.4 frame-to-map photometric error">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Our frame-to-map ESIKF VIO update the system state by minimizing the photometric error between the map point color and its measured color in the current image.（我们的 frame-to-map ESIKF VIO 通过最小化地图点颜色与当前图像中观测色之间的光度误差来更新系统状态。）<br>
+          <b>怎么看这张图：</b>它把「直接法光度误差」画得很直白——不是去找角点重投影，而是拿地图里点的颜色去和照片里看到的颜色比。这就是 VIO 不提特征、不估逆深度的可视化证据。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>R³LIVE 的 VIO 靠什么来修正位姿？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。VIO 不提角点、也不维护每像素逆深度；它把地图里已知点（已知 3D 位置、已知颜色）投到当前帧，比「地图存的红」和「照片看到的红」的光度误差来修正位姿。" onclick="lessonKit.answer(this,'q0096b')">地图点的光度误差</button>
+          <button data-correct="no" data-explanation="错。那是特征法的做法（找角点做重投影）。R³LIVE 的 VIO 是直接法，不提角点；也不是靠估逆深度——深度由激光给。" onclick="lessonKit.answer(this,'q0096b')">角点重投影误差</button>
+        </div>
+        <div class="quiz-feedback" id="q0096b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ 与第四季 FAST-LIO 系的关系</h2>
+
+      <p>你一定会问：<b>「LIO 那一路的内核到底是什么？」</b> 原文写得很清楚——它的 LIO 内部就是 <b>FAST-LIO 一系</b>：紧耦合的 ESIKF（误差状态迭代卡尔曼滤波）、直接拿点云配准、<b>不提特征</b>。这条线你已经在第四季见过：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">系统</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">本季位置</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">与 R³LIVE 的关系</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>FAST-LIO</b>（0083）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">紧耦合 ESIKF 增益公式</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">R³LIVE 的 LIO 内核直接承自这一支</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>FAST-LIO2</b>（0084）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ikd-Tree + 直接配准</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「不提特征、直接配准」一侧；R³LIVE++ 更明确写「基于 FAST-LIO2」</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>LOAM</b>（0074）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">提特征两步优化</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">对照侧：R³LIVE 的 LIO 属「不提特征直接法」，区别于它</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>LIO 的几何残差用的是点-面距离（原文引用 FAST-LIO / R²LIVE）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathbf{r}_l=\mathbf{u}_s^T(\,{}^G\mathbf{p}_s-\mathbf{q}_s) $$</div>
+      </div>
+
+      <p>$\mathbf{u}_s$ 是平面法向，${}^G\mathbf{p}_s$ 是地图点，$\mathbf{q}_s$ 是平面上一点——<b>点到平面的垂直距离</b>。这正是第二季 <b>0022</b> 课（点云 BA 点到面残差）同宗的式子。所以 R³LIVE 的 LIO 一路，本质是「第四季 FAST-LIO 直接配准 + 第二季预积分 + 第二季点到面残差」的复用，真正的新意在<b>上面那条 VIO 流水线</b>。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字：精度、速度、点云规模</h2>
+
+      <p>原文的实验相当扎实，照正文抄关键数字：</p>
+
+      <ul>
+        <li><b>平台</b>：手持设备 = DJI Manifold-2C（Intel i7-8550U, 8GB）+ FLIR Blackfly 全局快门相机 + Livox Avia 激光；对比台式 i7-9700K / 32GB。</li>
+        <li><b>Experiment-1（激光退化 + 无纹理）</b>：用 ArUco 板测终点漂移 <b>1.62° 旋转 / 4.57 cm 平移</b>。</li>
+        <li><b>Experiment-2（HKUST 四趟）</b>：长度 1317 / 1524 / 1372 / 1191 m；平移漂移 0.093 / 0.154 / 0.164 / 0.102 m，旋转漂移 2.140 / 0.285 / 2.342 / 3.925°；<b>无回环处理即自发闭环</b>。</li>
+        <li><b>Experiment-3（Belcher Bay 海港，D-GPS RTK 真值）</b>：R3LIVE-HiRES 在 300 m 子段 RRE 0.21° / RTE 0.17%；对照 VINS-Mono（纯视觉）50 m 已达 3.03° / 10.41%，LVI-SAM 300 m 为 0.43° / 2.40%。</li>
+        <li><b>速度（表 IV）</b>：台式 VIO 每帧 320×256 → 7.01 ms、1280×1024 → 13.63 ms；LIO 每帧 18.40 ms。机载：VIO 320×256 → 15.0 ms、1280×1024 → 33.4 ms；LIO 39.56 ms。</li>
+        <li><b>地图规模</b>：体素 0.1 m³，点分辨率约 1 cm，是密集点云。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_R3LIVE/f48a59523f8e069dcced5d67685d9f4f9c1faefbe0249415098b73b2f5f68caa.jpg" alt="R3LIVE Fig.9 dense RGB maps Experiment-2">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>We show the dense 3D RGB-colored maps reconstructed in real-time in Experiment-2. In (a), we merge our maps with the Google Earth satellite image and find them aligned well. Details of the map are selectively shown in (b), (c), and (d). In (e), we show that our algorithm can close the loop itself without any additional processing.（我们展示 Experiment-2 中实时重建的密集三维 RGB 着色地图。(a) 把地图与 Google Earth 卫星图合并且对得很准；(b)(c)(d) 是地图细节；(e) 显示算法无需额外处理就能自己闭合回环。）<br>
+          <b>怎么看这张图：</b>这是大尺度实时建图的证明。(a) 里地图和卫星图对齐，说明漂移很小；(e) 显示它<b>没有跑回环检测模块</b>却自己把路闭环了——这是密集彩色点云低漂移的直接证据。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 原文的边界与局限</h2>
+
+      <p>论文自己承认的短板，逐条记下（这些正是下一篇 R³LIVE++ 的动机）：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 没有回环校正模块</b>
+          <p>长程靠「自发闭环」消除一部分漂移，但累积漂移没有被显式消除。这一条在 R³LIVE++ 才被明确列为未来工作。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 未做曝光 / 光度标定</b>
+          <p>它只存原始像素 RGB，<b>不能按任意曝光重渲染</b>。换一帧曝光、换个光照，颜色就失真。这正是 0097 课 R³LIVE++ 要解决的。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 视觉依赖激光给的几何</b>
+          <p>VIO 跟踪的是「被激光几何支撑的地图点」——如果几何缺失（激光退化），VIO 就没点可跟踪。反过来，三传感器互补恰好弥补单传感器退化。</p>
+        </div>
+      </div>
+
+      <p>所以 R³LIVE 的价值和边界都很清楚：<b>它第一次把「激光几何 + 相机颜色」在紧耦合框架里实时拼成一张彩色点云</b>，但颜色只是「贴上去的原始像素」，还不是物理量。下一篇我们就看它怎么把颜色升级成「与曝光无关的辐射量」。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么 R³LIVE 说「几何与纹理各走一路，但位姿只有一个」？请结合状态向量 x 说明。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为全系统只维护<b>一个状态向量 x</b>，里面同时装着位姿、速度、偏置、重力、相机内外参。LIO 用激光点-面残差、VIO 用视觉光度残差，都在同一份 x 上做 ESIKF 更新。</p>
+              <p>所以「几何」（点的位置、平面）和「纹理」（点的颜色）是<b>同一个位姿估计的两种产出</b>，而不是两套独立的位姿估计。这正是紧耦合和「两套独立估计」的根本区别。</p>
+            </div></details>
+          </li>
+          <li>请用自己的话解释：一个激光点被赋上 RGB，需要经过哪两个动作？为什么不是「取最后一次看到的颜色」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>两个动作：① <b>投影取色</b>——把点的三维坐标用当前位姿和相机内参投到图像，取落到的那个像素的 RGB，作为这次观测色；② <b>多帧加权融合</b>——同一面墙被车经过多次，每次观测色略有不同，系统用贝叶斯逆协方差加权融合，越可信的观测权重越大。</p>
+              <p>不是「取最后一次」的原因：单次观测受光照、噪声、曝光影响会有偏差，加权融合能把偏差平均掉、得到更稳的颜色。这正是式 32–34 在做的事。</p>
+            </div></details>
+          </li>
+          <li>R³LIVE 的 VIO 和传统特征法视觉 SLAM（如 ORB-SLAM）有什么不同？请至少指出两点。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① <b>不提特征</b>：VIO 不找角点 / 线，而是直接用法度误差；② <b>不维护逆深度</b>：它维护的是地图里已知 3D 位置和颜色的点集，深度由激光给，视觉只管颜色对不对。对照之下，特征法靠角点重投影、靠三角化估逆深度。</p>
+              <p>这也解释了为什么 R³LIVE 在「无纹理环境」（白墙）更鲁棒——它不依赖照片里有角点可提。</p>
+            </div></details>
+          </li>
+          <li>R³LIVE 的 LIO 内核来自哪一系？它的几何残差是什么形式？这和我们前面哪节课同宗？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>来自 <b>FAST-LIO 一系</b>（第四季 0083 / 0084）：紧耦合 ESIKF + 直接点云配准、不提特征。几何残差是<b>点-面距离</b> $\mathbf{r}_l=\mathbf{u}_s^T({}^G\mathbf{p}_s-\mathbf{q}_s)$，和第二季 <b>0022</b> 课（点云 BA 点到面残差）同宗，也和第四季 FAST-LIO / LOAM 的几何约束一脉相承。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0095-导览-第五季开场-三传感器怎么合成一台机器.html">← 第五季开场：三种传感器怎么合成一台机器</a>
+        <a class="next" href="0097-R3LIVE-plus-2024-从着色到辐射重建.html">R³LIVE++（2024）：从「着色」到「辐射重建」 →</a>
+      </div>
+      <p class="foot-note">这一篇把「几何 + 纹理并行」的骨架立住了，下一篇我们让颜色变成物理量 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

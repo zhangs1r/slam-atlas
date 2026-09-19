@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>R³LIVE++（2024）：从「着色」到「辐射重建」 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 E · 多传感器融合 / Lesson 0097</div>
+      <h1>R³LIVE++（2024）：从「着色」到「辐射重建」</h1>
+      <p class="subtitle">同一面墙，晴天阴天该是同一个颜色——这一步让点云存的是物理量 💡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：在线光度标定 · 曝光估计 · 辐射重建 · HDR</span>
+        <span>👥 作者：Jiarong Lin、Fu Zhang（香港大学）</span>
+        <span>📅 2024 · IEEE 期刊 · <i>R³LIVE++: A Robust, Real-Time, Radiance Reconstruction Package With a Tightly-Coupled LiDAR-Inertial-Visual State Estimator</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">相对 R³LIVE 多了什么</a>
+        <a href="#b">着色 vs 辐射重建</a>
+        <a href="#c">为什么必须光度标定</a>
+        <a href="#d">曝光估计在解决什么</a>
+        <a href="#e">估计器结构</a>
+        <a href="#f">实验数字</a>
+        <a href="#g">边界与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 R³LIVE++ 相对上一代的三处增量；用大白话解释「着色」和「辐射重建」的本质差别；并诚实指出——它存的辐射量仍是各向同性常量，<b>还不是</b>视角相关的反射。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它的 LIO 内核仍是第四季 <b>0083/0084</b> FAST-LIO2；它的<b>在线曝光估计 / 光度标定</b>正是第三季 <b>0048</b> DSO 做过的事——只是 DSO 发生在「估计自身位姿」上，这里发生在「给地图上色」上。整体结构承接 0096 课的「两条流水线」。</p>
+        </div>
+      </div>
+
+      <h2>1. 它相对 R³LIVE 多了什么</h2>
+
+      <p>R³LIVE++ 是 R³LIVE 的扩展版，流水线骨架没变（还是 LIO 建几何、VIO 上色，共用一个状态 x），增量集中在这三件事：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 在线光度标定</b>
+          <p>把相机的<b>非线性响应曲线（CRF）</b>和<b>渐晕（vignetting）</b>建模进去，并在线估计。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 曝光时间在线估计</b>
+          <p>状态向量里多了一项 $\epsilon=1/\tau$（曝光倒数），系统自己估「这一帧曝光了多少」。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 辐射重建</b>
+          <p>不再存「原始像素 RGB」，而是存<b>与曝光 / 相机姿态无关的真实辐射量</b>，可任意曝光重渲染（含 HDR）。</p>
+        </div>
+      </div>
+
+      <p>一句话定位：在 R³LIVE 的「几何 + 颜色」之上，进一步做<b>在线光度标定 + 曝光估计</b>，把每个点存成「与相机姿态 / 时间无关的真实辐射量」——仍是点云地图，但能重渲染了。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 着色 vs 辐射重建：最难懂的一步</h2>
+
+      <p>这是零基础读者最该慢下来的一步。<b>「着色」和「辐射重建」差在哪？</b> 用一个生活类比就能讲透：</p>
+
+      <div class="callout">
+        <h4>大白话类比</h4>
+        <p>想象你给一面红墙拍照。阴天拍，照片里红得很暗；晴天拍，红得很亮。<b>着色</b>的做法是「把这一帧看到的颜色直接贴到点上」——于是这点一会儿是暗红、一会儿是亮红，明明是同一面墙。<b>辐射重建</b>的做法是「先把这一帧的观测折算成<b>和曝光无关的辐射量</b>」——也就是问「这面墙本身到底反射了多少光」，得到一个唯一的物理量；以后要出图，再按任意曝光把它渲染出来。所以阴天晴天都指向<b>同一个辐射值</b>，颜色就一致了。</p>
+      </div>
+
+      <p>这里有个必须诚实指出的纠正，很多读者会在这里想错：<b>R³LIVE++ 的辐射量，是「每通道一个单值常量」（在 Lambertian 假设、固定光照下不随相机姿态和时间变），它是各向同性、与视角无关的。</b> 它<b>没有</b>建模「视角相关的反射」（比如从正面看和斜着看亮度不同）。视角相关的反射，是下一篇 <b>0098</b> LIV-GaussMap 用<b>球谐</b>才做的事。别把两篇张冠李戴。</p>
+
+      <p>把折算写成公式（原文式 4），就是这一步的核心：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ \gamma_i=\frac{\mathbf{f}_i^{-1}(\mathbf{I}_i(\boldsymbol{\rho}))}{\tau\,V(\boldsymbol{\rho})} $$</div>
+      </div>
+
+      <p>$\mathbf{I}_i$ 是照片像素值，$\mathbf{f}_i^{-1}$ 是相机响应曲线的反函数（去掉非线性），$\tau$ 是曝光时间，$V(\boldsymbol{\rho})$ 是渐晕（边缘比中心暗）。<b>把曝光和渐晕都除掉</b>，得到 $\gamma_i$——一个不随相机姿态和时间变的真实辐射量。原文在第 119 行的备注明确说：在恒定光源 + Lambertian 下，辐射就是常量。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">着色 vs 辐射重建：你把「看见的亮度」当答案，还是当一次带误差的观测</text>
+
+          <!-- 左：着色 -->
+          <rect x="28" y="56" width="410" height="180" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.5"/>
+          <text x="233" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#a8563a">R³LIVE：着色（直接取色）</text>
+          <!-- 同一面墙两张曝光 -->
+          <rect x="60" y="100" width="150" height="110" rx="6" fill="#7a3b2a"/>
+          <text x="135" y="226" text-anchor="middle" font-size="11" fill="#a8563a">阴天拍：暗红</text>
+          <rect x="256" y="100" width="150" height="110" rx="6" fill="#e8743f"/>
+          <text x="331" y="226" text-anchor="middle" font-size="11" fill="#a8563a">晴天拍：亮红</text>
+          <!-- 贴到同一个点 -->
+          <circle cx="455" cy="155" r="10" fill="#5a2a1e"/>
+          <path d="M210 155 L445 155 M406 155 L445 155" stroke="#a8563a" stroke-width="1.4" stroke-dasharray="5 4" fill="none"/>
+          <text x="455" y="186" text-anchor="middle" font-size="10.5" fill="#a8563a">同一点</text>
+          <text x="455" y="205" text-anchor="middle" font-size="10.5" fill="#a8563a">两套深浅</text>
+
+          <!-- 右：辐射重建 -->
+          <rect x="462" y="56" width="410" height="180" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.5"/>
+          <text x="667" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#2f6d51">R³LIVE++：辐射重建（折算）</text>
+          <!-- 观测 -->
+          <rect x="494" y="100" width="120" height="110" rx="6" fill="#9c5a3e"/>
+          <text x="554" y="226" text-anchor="middle" font-size="11" fill="#2f6d51">观测亮度</text>
+          <!-- 折算盒子 -->
+          <rect x="636" y="128" width="70" height="54" rx="8" fill="#fff" stroke="#2f6d6d" stroke-width="1.6"/>
+          <text x="671" y="150" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6d6d">除曝光</text>
+          <text x="671" y="166" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6d6d">除渐晕</text>
+          <path d="M614 155 L636 155" stroke="#2f6d51" stroke-width="1.5" fill="none"/>
+          <!-- 唯一颜色 -->
+          <rect x="726" y="100" width="120" height="110" rx="6" fill="#b5512f"/>
+          <text x="786" y="226" text-anchor="middle" font-size="11" fill="#2f6d51">唯一辐射值</text>
+          <path d="M706 155 L726 155" stroke="#2f6d51" stroke-width="1.5" fill="none"/>
+          <text x="786" y="205" text-anchor="middle" font-size="10.5" fill="#2f6d51">任意曝光可重渲染</text>
+
+          <!-- 底部两句话 -->
+          <text x="233" y="285" text-anchor="middle" font-size="12.5" fill="#a8563a">一会儿深一会儿浅，还是同一面墙吗？</text>
+          <text x="667" y="285" text-anchor="middle" font-size="12.5" fill="#2f6d51">同一个辐射值，阴天晴天都指向它</text>
+          <text x="450" y="372" text-anchor="middle" font-size="12.5" fill="#5a4a42">差别关键：你把「看见的亮度」当答案，还是把它当「对真实辐射的一次带误差的观测」</text>
+          <text x="450" y="398" text-anchor="middle" font-size="11.5" fill="#8a786f">诚实提醒：这里的辐射仍是各向同性常量，视角相关反射是 0098 用球谐才做的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左联是 R³LIVE 的「着色」——同一面墙在两张不同曝光的照片里被贴成两套深浅不同的颜色；右联是 R³LIVE++ 的「辐射重建」——先把观测亮度除以曝光和渐晕，折成一个唯一的辐射值，再按任意曝光出图。<br>
+          <b>怎么看这张图：</b>① 左联两张照片明显一深一浅，却贴到「同一点」上，所以图注问「还是同一面墙吗」；② 右联的白色小盒子里写的是「除曝光 / 除渐晕」，这就是公式 $\gamma_i=\mathbf{f}_i^{-1}(I_i)/(\tau V)$ 的具象；③ 右联最右是一个<b>唯一</b>的辐射色块，标注「任意曝光可重渲染」。<br>
+          <b>要记住的一句话：</b>差别的关键，在于你把「看见的亮度」当<b>答案</b>，还是当「对真实辐射的一次<b>带误差的观测</b>」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>R³LIVE++ 存到每个点上的「辐射量」，已经能表达「正面看和斜着看亮度不同」吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="还不能。R³LIVE++ 的辐射是每通道一个单值常量（Lambertian、各向同性、与视角无关）。视角相关的反射是下一篇 0098 LIV-GaussMap 用球谐（SH）才建模的。别把两篇混为一谈。" onclick="lessonKit.answer(this,'q0097a')">还不能，那是0098</button>
+          <button data-correct="yes" data-explanation="错。如果你选了「能」，就掉进张冠李戴的坑了。R³LIVE++ 只把曝光 / 渐晕除掉得到常量辐射，并不建模视角相关反射；视角相关是 LIV-GaussMap 的球谐才做的事。" onclick="lessonKit.answer(this,'q0097a')">能，已经建模了</button>
+        </div>
+        <div class="quiz-feedback" id="q0097a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 为什么必须做光度标定（回链 DSO）</h2>
+
+      <p>你可能会想：<b>「不就是除个曝光吗，至于专门做一套标定？」</b> 问题在于：相机不是理想的。它有两层「欺骗」：</p>
+
+      <ul>
+        <li><b>非线性响应（CRF）</b>：真实亮度翻倍，照片像素值<b>不</b>一定翻倍——相机的响应曲线是弯的。直接除曝光得到的是「被曲线扭过的量」，不是真辐射。</li>
+        <li><b>渐晕（vignetting）</b>：镜头边缘比中心暗，同一面墙在画面四角和中间看起来亮度不同。这是<b>位置相关</b>的乘法因子 $V(\boldsymbol{\rho})$。</li>
+      </ul>
+
+      <p>所以要把观测还原成真辐射，必须同时除掉「曝光 × 渐晕」<b>再</b>过一遍响应曲线的反函数 $\mathbf{f}_i^{-1}$。这整件事，<b>和第三季 0048 DSO 做的在线光度标定是同一个问题</b>——DSO 是为了让自己的直接法光度误差算得准，才去估相机响应和曝光；这里是为了「给地图上准颜色」，做同样的事。只是 DSO 发生在「估计自身位姿」上，R³LIVE++ 发生在「给地图上色」上。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_R___3__3LIVE____A_Robust__Real-Time__Radiance_Reconstruc/de00ae0eb1c36e157be183c7522dbddd790cd6b36a31d814a134d6dcb145140b.jpg" alt="R3LIVE++ Fig.3 image formation process">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The image formation process of a color camera.（彩色相机的成像过程。）<br>
+          <b>怎么看这张图：</b>它把「光源 → 反射 → 镜头 → CMOS → CRF」整条成像链画出来，对应我们公式里的 $\mathbf{O}_i=V(\boldsymbol{\rho})\gamma_i$ 与 $\mathbf{I}_i=\mathbf{f}_i(\tau V(\boldsymbol{\rho})\gamma_i)$。看这张图时要记住：照片里的像素值，是「真实辐射」被曝光、渐晕、响应曲线三层变换之后的结果——所以要还原真辐射，得把这三层都反过来除 / 反变换掉。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 在线曝光估计在解决什么</h2>
+
+      <p>曝光 $\tau$ 本来是个「相机参数」，R³LIVE++ 把它变成<b>状态向量里的一项 $\epsilon=1/\tau$</b>（原文式 5，状态比 R³LIVE 多了这一项）。也就是说，系统一边跑一边估「这一帧到底曝光了多少」。</p>
+
+      <p>为什么非估不可？因为真实场景里，相机经常在明暗之间快速切换（从暗的室内走到亮的室外）。如果系统<b>不知道</b>这一帧偏暗是因为「曝光短」还是因为「墙面本来黑」，就会把「暗」错当成「墙面变黑了」，颜色就全错。R³LIVE++ 自己估出 $\epsilon$，等于说「这一帧是暗的，不是墙黑」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">曝光估计在解决什么：系统自己认出「这一帧是暗的」</text>
+
+          <!-- 三格：室内暗 / 门口 / 室外亮 -->
+          <rect x="40" y="60" width="240" height="170" rx="9" fill="#3a3f47" stroke="#222" stroke-width="1.4"/>
+          <text x="160" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#e8eef5">室内（暗）</text>
+          <rect x="80" y="104" width="120" height="90" rx="5" fill="#5a6068"/>
+          <text x="160" y="232" text-anchor="middle" font-size="11.5" fill="#3a3f47">估出曝光小</text>
+          <text x="160" y="250" text-anchor="middle" font-size="11.5" fill="#3a3f47">ε 大（快门短）</text>
+
+          <rect x="330" y="60" width="240" height="170" rx="9" fill="#8a8f96" stroke="#5a5f66" stroke-width="1.4"/>
+          <text x="450" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#2b2b2b">门口（过渡）</text>
+          <rect x="370" y="104" width="120" height="90" rx="5" fill="#b8bdc4"/>
+          <text x="450" y="232" text-anchor="middle" font-size="11.5" fill="#3a3f47">估出曝光中等</text>
+          <text x="450" y="250" text-anchor="middle" font-size="11.5" fill="#3a3f47">ε 中等</text>
+
+          <rect x="620" y="60" width="240" height="170" rx="9" fill="#eef2f6" stroke="#b8c2cc" stroke-width="1.4"/>
+          <text x="740" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#2b2b2b">室外（亮）</text>
+          <rect x="660" y="104" width="120" height="90" rx="5" fill="#ffffff"/>
+          <text x="740" y="232" text-anchor="middle" font-size="11.5" fill="#3a3f47">估出曝光大</text>
+          <text x="740" y="250" text-anchor="middle" font-size="11.5" fill="#3a3f47">ε 小（快门长）</text>
+
+          <!-- 箭头 -->
+          <path d="M280 145 L330 145" stroke="#6b6b6b" stroke-width="1.6" fill="none"/>
+          <path d="M330 145 L322 140 M322 150" fill="#6b6b6b"/>
+          <path d="M570 145 L620 145" stroke="#6b6b6b" stroke-width="1.6" fill="none"/>
+          <path d="M620 145 L612 140 M612 150" fill="#6b6b6b"/>
+
+          <text x="450" y="300" text-anchor="middle" font-size="12.5" fill="#5a4a42">同一台相机快速穿越明暗，系统每帧估出曝光值</text>
+          <text x="450" y="326" text-anchor="middle" font-size="12.5" fill="#5a4a42">「暗」被识别为曝光短，而不是「墙面变黑了」</text>
+          <text x="450" y="368" text-anchor="middle" font-size="11.5" fill="#8a786f">这一步直接喂给辐射反解：γ = f⁻¹(I) / (τ V)</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一台相机在「室内暗 → 门口过渡 → 室外亮」三档环境里快速切换，每格下方标一个系统估出来的曝光值。要点是：系统认出「这一帧偏暗」是因为曝光短，而不是墙真的黑。<br>
+          <b>怎么看这张图：</b>① 三格亮度递增，代表同一场景在不同时刻的成像；② 每格下方的「ε」是系统实时估出的曝光倒数——亮环境 ε 小、暗环境 ε 大；③ 最下面那行说明这一估出来的值直接进辐射反解公式，所以 frame-to-map 的辐射误差才不会因为明暗切换而失真。<br>
+          <b>要记住的一句话：</b>曝光估计让系统把「环境暗」和「物体黑」分开——这是给地图存对颜色的前提。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 它的估计器结构：几何一个、光度一个</h2>
+
+      <p>回到「是不是有多个并行的估计器」这个问题。原文的写法是：<b>LIO 与 VIO 两子系统仍紧耦合于同一个 on-manifold ESIKF</b>（第 78 行），但状态向量比 R³LIVE 多了曝光项 $\epsilon$。所以更准确地说，是<b>一路主估计器 + 一路光度标定器</b>的分工：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>主估计器（on-manifold ESIKF）</b>
+          <p>估<b>几何 + 位姿 + 曝光</b>：状态 x 里多了 $\epsilon=1/\tau$。LIO 用 GICP 点-面残差推进几何，VIO 用 frame-to-frame PnP + frame-to-map 辐射误差推进位姿与曝光。</p>
+        </div>
+        <div class="mini-card">
+          <b>光度标定器（在线）</b>
+          <p>估相机的 <b>CRF $\mathbf{f}_i$</b> 与<b>渐晕 $V(\boldsymbol{\rho})$</b>。它不直接进位姿，但为辐射反解提供 $\mathbf{f}_i^{-1}$ 与 $V$，是「把观测折成真辐射」的必要输入。</p>
+        </div>
+      </div>
+
+      <p>VIO 的 frame-to-map 辐射残差（原文式 19）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathbf{r}_c=\Phi_s-\gamma_s,\qquad \Phi_s=\check{\epsilon}_k\,\Gamma_k(\check{\boldsymbol{\rho}}_{s_k}) $$</div>
+      </div>
+
+      <p>$\Phi_s$ 是用当前估出的曝光 $\check{\epsilon}_k$ 对「光度校正后的图像 $\Gamma_k$」在该点取的值，$\gamma_s$ 是地图里存的辐射。误差 = 校正后观测 − 地图辐射。<b>和 R³LIVE 的「颜色误差」相比，这里多乘了曝光 $\epsilon$、观测也先过了光度校正</b>——这就是「辐射误差」和「光度误差」的差别。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_R___3__3LIVE____A_Robust__Real-Time__Radiance_Reconstruc/f7158fedd9a440390c370dbb96c582e22e5cb88633a3f248f2ed5f7a1bc9d97c.jpg" alt="R3LIVE++ Fig.6 frame-to-map radiance error">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Frame-to-map VIO refines the state estimate by minimizing the radiance error between the map point and the observed radiance in the current image.（frame-to-map VIO 通过最小化地图点与当前图像中观测辐射之间的辐射误差来精修状态估计。）<br>
+          <b>怎么看这张图：</b>它是 R³LIVE 图 4 的「辐射版」——残差从「颜色误差」换成了「辐射误差」。注意它比较的是「地图里存的辐射」和「本帧观测折算后的辐射」，而不是原始像素色。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_R___3__3LIVE____A_Robust__Real-Time__Radiance_Reconstruc/4afeff1a12adfc4e9faad2c2e6cd0164a911814d9d4990cc6b22f7468f3cce46.jpg" alt="R3LIVE++ Fig.2 system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The overview of our proposed system.（我们提出的系统总览。）<br>
+          <b>怎么看这张图：</b>和 R³LIVE 图 2 同构，但 VIO 那一路已经从「光度误差」升级成「辐射误差」，且多了曝光 / 光度标定的支路。把它和上一代系统图并排看，增量一目了然。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字：HDR、精度、速度</h2>
+
+      <ul>
+        <li><b>数据集</b>：NCLT（25 序列，138 km，33h34m，剔除 2 个有 100 ms 时差序列）；自采 R³LIVE-dataset（13 序列，8.4 km，2.4h）。</li>
+        <li><b>定位</b>：NCLT 上平均 APE <b>8.51 m</b>，优于 FAST-LIVO / R²LIVE / LVI-SAM / Our-LIO / FAST-LIO2（关掉回环以公平比）。</li>
+        <li><b>鲁棒</b>：激光退化 seq00 / 01 漂移 4.1 cm / 4.6 cm；同时激光 + 视觉退化 seq02 漂移 1.62° / 4.57 cm。</li>
+        <li><b>曝光估计</b>：表 V 误差显著低于 Tum-cali、DSO（如 hku_main_building 2.572 / 16.855 ms vs 5.196 / 26.775）。</li>
+        <li><b>光度误差</b>：表 VI 平均 baseline 38.60、R³LIVE 23.58、<b>R³LIVE++ 18.01</b>（全序列最低）。</li>
+        <li><b>速度</b>（表 VII，纯 CPU i7-9700K / 64GB）：NCLT 激光帧 34.27 ms、相机帧 16.6 ms @ 10 Hz / 5 Hz；R³LIVE-dataset 激光 23.45 ms、相机 16.24 ms @ 10 Hz / 15 Hz——约 2× 实时余量。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_R___3__3LIVE____A_Robust__Real-Time__Radiance_Reconstruc/8c42fa75d386f89b8fa940ce1ca9435a5b2bab57552224ef15a71ad56fa55860.jpg" alt="R3LIVE++ Fig.17 HDR rendering at different exposures">
+        <figcaption>
+          <b>原图注（Fig. 17）：</b>Images rendered from the reconstructed radiance map at different exposure time: 1 ms, 2 ms, 5 ms and 10 ms. (e) The HDR image merged from (a∼d).（从重建的辐射地图按不同曝光时间渲染出的图像：1 / 2 / 5 / 10 ms。(e) 由 (a∼d) 合并出的 HDR 图像。）<br>
+          <b>怎么看这张图：</b>这是「辐射重建」相对「着色」最直观的差别证明。(a)–(d) 是用<b>同一个辐射地图</b>按四档不同曝光渲染出来的——能做到这点，正是因为地图里存的是「与曝光无关的辐射量」；右下 (e) 是把它们合并出的 HDR 图。R³LIVE 那种「贴原始像素色」是做不到这一点的。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_R___3__3LIVE____A_Robust__Real-Time__Radiance_Reconstruc/481439d7eb70d6a88a85a55c31ed5e3cac5e27e15ffc94b82525146ca189b6ac.jpg" alt="R3LIVE++ Fig.1 radiance map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The radiance map of HKU (a and b) and HKUST campuses (c) reconstructed by R³LIVE++ in real-time.（R³LIVE++ 实时重建的 HKU 与 HKUST 校区辐射地图。）<br>
+          <b>怎么看这张图：</b>这是本文的主打产出——「辐射地图」。它看起来和彩色点云差不多，但区别在于：里面的颜色是物理量，可以像上面 Fig.17 那样按任意曝光重渲染。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 边界与局限</h2>
+
+      <p>原文 VIII-B 未来工作里诚实列出的短板：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 仍无回环校正</b>
+          <p>重访同地会累积漂移、重建不一致，计划接激光回环。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 点密度受激光限制（约 1 cm）</b>
+          <p>点云不够密，无法从高密辐射地图渲染高分辨率图像；加密会增耗时。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 非朗伯 / 低纹理仍挑战</b>
+          <p>它假设 Lambertian 常量辐射，遇到玻璃、金属这类非朗伯或极端低纹理场景仍有困难。</p>
+        </div>
+      </div>
+
+      <p>最关键的一点，回到本课的纠正：<b>R³LIVE++ 把颜色升级成了「与曝光无关的辐射量」，但仍是各向同性常量。</b> 它解决了「换曝光颜色就乱」的问题，却还没解决「换个角度看亮度不同」的问题。后者，正是下一篇 LIV-GaussMap 用球谐要做的事——也是「建图」与「渲染」真正合流的那一步。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用一句话 + 一个公式，解释「着色」和「辐射重建」的本质差别。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>着色 = 把「这一帧看到的颜色」直接贴到点上，换曝光 / 光照颜色就错；辐射重建 = 先把观测折算成与曝光 / 姿态无关的真实辐射量，再按任意曝光出图。</p>
+              <p>公式就是辐射反解：$\gamma_i=\mathbf{f}_i^{-1}(\mathbf{I}_i(\boldsymbol{\rho}))/(\tau\,V(\boldsymbol{\rho}))$。把曝光 $\tau$ 和渐晕 $V$ 都除掉、再过响应曲线反函数，得到不随相机姿态和时间变的辐射量。</p>
+            </div></details>
+          </li>
+          <li>为什么 R³LIVE++ 必须做在线光度标定（CRF + 渐晕），只除曝光不够吗？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不够。相机响应不是线性的（CRF 把真实亮度扭弯了），而且镜头边缘比中心暗（渐晕是位置相关的乘法因子）。只除曝光得到的是「被曲线和渐晕扭过的量」，不是真辐射。</p>
+              <p>这和第三季 <b>0048</b> DSO 的在线光度标定是同一个问题——DSO 为了直接法光度误差准才估 CRF 和曝光，这里为了给地图上准颜色做同样的事。</p>
+            </div></details>
+          </li>
+          <li>R³LIVE++ 的状态向量比 R³LIVE 多了哪一项？它进残差的方式是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>多了曝光倒数 $\epsilon=1/\tau$。在 frame-to-map 辐射残差里，观测值变成 $\Phi_s=\check{\epsilon}_k\,\Gamma_k(\check{\boldsymbol{\rho}}_{s_k})$——即先用估出的曝光 $\check{\epsilon}_k$ 乘上「光度校正后的图像」在该点的值，再和地图辐射 $\gamma_s$ 比。所以曝光既进状态、又进残差，形成闭环。</p>
+            </div></details>
+          </li>
+          <li>R³LIVE++ 的辐射量，能不能表达「视角相关的反射」？如果不能，是谁做的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不能。它的辐射是每通道一个单值常量（Lambertian、各向同性、与视角无关）。视角相关的反射是下一篇 <b>0098</b> LIV-GaussMap 用<b>球谐（SH）</b>建模的。这是两篇最容易混的一点，必须分清楚。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0096-R3LIVE2022-两条流水线并行.html">← R³LIVE（2022）：两条流水线并行</a>
+        <a class="next" href="0098-LIV-GaussMap2024-地图本身就是一组高斯.html">LIV-GaussMap（2024）：地图本身就是一组高斯 →</a>
+      </div>
+      <p class="foot-note">颜色变成物理量了，下一步让地图直接能被光线穿过渲染出来 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

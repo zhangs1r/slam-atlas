@@ -48,7 +48,7 @@ window.ACHIEVEMENT_CARDS = {
         "<polygon points='200,50 194,66 206,66' fill='rgb(255,244,236)'/>" +
         "<text x='200' y='216' font-size='30' text-anchor='middle' fill='rgb(255,248,244)' font-family='Georgia, serif' font-weight='bold'>坐标系建立者</text>" +
         "<text x='200' y='244' font-size='14' text-anchor='middle' fill='rgba(255,245,240,0.85)' font-family='Helvetica, Arial, sans-serif'>阶段 A · 20 篇综述 · 16 节课</text>" +
-        "<text x='200' y='268' font-size='12' text-anchor='middle' fill='rgba(255,245,240,0.6)' font-family='Helvetica, Arial, sans-serif'>LEGENDARY · SLAM PAPER LESSON</text>" +
+        "<text x='200' y='268' font-size='12' text-anchor='middle' fill='rgba(255,245,240,0.6)' font-family='Helvetica, Arial, sans-serif'>LEGENDARY · SLAM ATLAS</text>" +
         "</svg>",
       card_file: "reference/成就卡-第一季.html"
     },
