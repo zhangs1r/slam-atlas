@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MonoSLAM（2007）：把路标放进状态向量 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0041</div>
+      <h1>MonoSLAM（2007）：把路标放进状态向量</h1>
+      <p class="subtitle">视觉 SLAM 最早是怎么跑起来的，以及为什么它必然会被淘汰 📷</p>
+      <div class="hero-meta">
+        <span>🎯 主题：单目 EKF-SLAM 的巅峰与天花板</span>
+        <span>👥 作者：Davison, Reid, Molton, Stasse</span>
+        <span>📅 2007 · <i>MonoSLAM: Real-Time Single Camera SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它要解决什么</a>
+        <a href="#b">状态向量与全协方差</a>
+        <a href="#c">EKF 处理循环</a>
+        <a href="#d">特征的生命周期</a>
+        <a href="#e">主动视觉</a>
+        <a href="#f">为什么被淘汰</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：用一句话说清 MonoSLAM 把「相机」和「路标」塞进同一个状态向量意味着什么；讲出 EKF-SLAM 的处理循环（预测→测量→更新）；解释特征为什么先是一条射线、后来才变成一个点；并列出它最终被淘汰的根本原因。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>这是第二季 <b>0028 MSCKF</b> 的<b>对偶</b>：0028 讲「不把路标放进状态向量」（用零空间投影把路标边缘化掉），本篇恰恰论证「<b>必须</b>把路标放进单一状态向量＋全协方差」。它也是 <b>0024 VO 教程</b>（单目只有方向、尺度不可观）在滤波框架里的正面遭遇，还是 <b>0002 SLAM 全景纲领</b> 里「滤波范式」的教科书级实例——后面四篇要推翻的，正是它。</p></div>
+      </div>
+
+      <h2>1. 它要解决什么问题</h2>
+      <p>先说一个让人意外的事实：在 2007 年之前，几乎没有「能边建持久地图、边闭环、还实时」的纯视觉 SLAM。为什么？因为相机和激光雷达、声呐根本不是一类传感器。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>相机数据率远高于激光/声呐</h4>
+          <p>激光每秒转几圈、声呐更慢；相机动辄几十赫兹。数据来得又快又密，要求算法必须「实时在线」，不能等全部数据到齐再慢慢算。</p>
+        </div>
+        <div class="mini-card">
+          <h4>相机缺少直接深度测量</h4>
+          <p>一张照片只告诉你「某个东西在那个像素方向」，不告诉你「离我多远」。单张图无法量距离，这是单目相机天生的残疾。</p>
+        </div>
+      </div>
+      <p>作者还点出一个对手：当时的 SfM（运动恢复结构）方法本质是<b>离线</b>的——它要拿整段视频，靠 bundle adjustment 在前后所有帧上一遍遍迭代，才能得到一个全局一致的地图。这跟「实时」是矛盾的。所以 MonoSLAM 把目标主动缩小：不做大范围探索，只做<b>受限体积内的可重复定位</b>——比如一个人拿着相机在房间里来回走，随时知道自己在哪。这个「认怂」很重要：它让问题变得可解。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>MonoSLAM 把目标限定为「房间尺度、可重复定位」，而不是「大范围探索」——这是技术倒退吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="不是。单目相机缺深度、且要实时，当年算力做不到大范围。限场景是让问题可解的工程取舍，是聪明的收口。" onclick="lessonKit.answer(this,'q0041a')">明智的收口</button>
+          <button data-correct="no" data-explanation="恰恰相反：限场景是为了在「无深度+实时」双重约束下把问题做对，而非能力不够硬撑。后面 PTAM/ORB-SLAM 才逐步放开。" onclick="lessonKit.answer(this,'q0041a')">技术的倒退</button>
+        </div>
+        <div class="quiz-feedback" id="q0041a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 状态向量与全协方差：把世界装进一个表格</h2>
+      <p>MonoSLAM 的核心设计，可以一句话概括：<b>把相机和所有路标，一起塞进「同一个」状态向量；把所有的不确定性，塞进「同一个」协方差矩阵。</b>这就是它和第二季 0028 MSCKF 最根本的分歧点。</p>
+      <p>相机自己的状态由四部分组成，共 13 个参数：</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathbf x_v=(\mathbf r^W,\ \mathbf q^{WR},\ \mathbf v^W,\ \boldsymbol\omega^R)^T$$</div></div>
+      <ul>
+        <li>$\mathbf r^W$：相机在世界坐标系里的<b>位置</b>（3 个参数）；</li>
+        <li>$\mathbf q^{WR}$：相机相对于世界的<b>姿态</b>四元数（4 个参数）；</li>
+        <li>$\mathbf v^W$：相机的<b>速度</b>（3 个参数）；</li>
+        <li>$\boldsymbol\omega^R$：相机在自身坐标系里的<b>角速度</b>（3 个参数）。</li>
+      </ul>
+      <p>然后，把所有路标（论文叫 visual landmark）一个接一个地接在相机状态后面，得到完整状态向量 $\hat{\mathbf x}$；同时把所有的不确定性装进一个协方差矩阵 $\mathrm P$：</p>
+      <div class="formula-box"><div class="flow-formula">$$\hat{\mathbf x}=\begin{pmatrix}\hat{\mathbf x}_v\\ \hat{\mathbf y}_1\\ \hat{\mathbf y}_2\\ \vdots\end{pmatrix},\quad \mathrm P=\begin{bmatrix}\mathrm P_{xx}&\mathrm P_{xy_1}&\mathrm P_{xy_2}&\cdots\\ \mathrm P_{y_1x}&\mathrm P_{y_1y_1}&\cdots&\cdots\\ \vdots&\vdots&\ddots&\end{bmatrix}$$</div></div>
+      <p>$\mathrm P$ 的对角块（比如 $\mathrm P_{y_1y_1}$）是「某个路标自己有多不确定」；而<b>非对角块</b>（比如 $\mathrm P_{xy_1}$、$\mathrm P_{y_1y_2}$）是「相机和路标之间、路标和路标之间，不确定性怎么互相牵连」。</p>
+      <p>★ <b>为什么当年这是唯一选择？</b>论文的作者写得很直白：那些空间上挨得近的路标，它们「相对位置」彼此知道得很清楚，但「这一整群作为一个整体」的位置可能并不清楚。要表达这种灵活的、随运动不断变化的互相关，当年没有后来那些「利用稀疏性」的工具（图优化、滑窗边缘化都还没成熟），而 EKF 又要求每一步都实时更新。于是「单一状态向量＋全协方差」成了当时能实时表达相关性的唯一务实方案。代价我们后面会说：这个矩阵有 $O(N^2)$ 个格子。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 俯视房间 -->
+          <rect x="40" y="40" width="820" height="390" fill="#f4efe6" stroke="#8a7a5c" stroke-width="3"/>
+          <!-- 门 -->
+          <rect x="430" y="34" width="70" height="14" fill="#cdb892" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="465" y="28" fill="#6b5b3e" font-size="14" text-anchor="middle">门</text>
+          <!-- 桌子 -->
+          <rect x="610" y="250" width="170" height="110" fill="#e3d2b0" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="695" y="312" fill="#6b5b3e" font-size="14" text-anchor="middle">桌子</text>
+          <!-- 相机 -->
+          <g>
+            <rect x="430" y="225" width="46" height="30" rx="5" fill="#37474f" stroke="#1b262c" stroke-width="2"/>
+            <polygon points="476,240 560,180 560,300" fill="#bfe3ff" fill-opacity="0.45" stroke="#1976d2" stroke-width="2"/>
+            <text x="453" y="222" fill="#1b262c" font-size="14" text-anchor="middle">相机</text>
+          </g>
+          <!-- 路标：书角/桌腿/画框角 -->
+          <g>
+            <circle cx="200" cy="120" r="9" fill="#c0392b"/>
+            <text x="200" y="105" fill="#6b1f18" font-size="13" text-anchor="middle">书角</text>
+            <ellipse cx="200" cy="120" rx="40" ry="22" fill="none" stroke="#c0392b" stroke-width="2" stroke-dasharray="5 4"/>
+          </g>
+          <g>
+            <circle cx="300" cy="320" r="9" fill="#c0392b"/>
+            <text x="300" y="345" fill="#6b1f18" font-size="13" text-anchor="middle">桌腿</text>
+            <ellipse cx="300" cy="320" rx="30" ry="46" fill="none" stroke="#c0392b" stroke-width="2" stroke-dasharray="5 4"/>
+          </g>
+          <g>
+            <circle cx="690" cy="110" r="9" fill="#c0392b"/>
+            <text x="690" y="95" fill="#6b1f18" font-size="13" text-anchor="middle">画框角</text>
+            <ellipse cx="690" cy="110" rx="50" ry="24" fill="none" stroke="#c0392b" stroke-width="2" stroke-dasharray="5 4"/>
+          </g>
+          <g>
+            <circle cx="540" cy="150" r="9" fill="#c0392b"/>
+            <text x="540" y="135" fill="#6b1f18" font-size="13" text-anchor="middle">灯座</text>
+            <ellipse cx="540" cy="150" rx="36" ry="20" fill="none" stroke="#c0392b" stroke-width="2" stroke-dasharray="5 4"/>
+          </g>
+          <g>
+            <circle cx="150" cy="380" r="9" fill="#c0392b"/>
+            <text x="150" y="405" fill="#6b1f18" font-size="13" text-anchor="middle">插销</text>
+            <ellipse cx="150" cy="380" rx="28" ry="40" fill="none" stroke="#c0392b" stroke-width="2" stroke-dasharray="5 4"/>
+          </g>
+          <!-- 互相关连线（粗橙线）：这是 O(N^2) 的来源 -->
+          <g stroke="#e67e22" stroke-width="3" fill="none" opacity="0.85">
+            <line x1="476" y1="240" x2="200" y2="120"/>
+            <line x1="476" y1="240" x2="300" y2="320"/>
+            <line x1="476" y1="240" x2="690" y2="110"/>
+            <line x1="476" y1="240" x2="540" y2="150"/>
+            <line x1="476" y1="240" x2="150" y2="380"/>
+            <line x1="200" y1="120" x2="540" y2="150"/>
+            <line x1="300" y1="320" x2="690" y2="110"/>
+            <line x1="540" y1="150" x2="690" y2="110"/>
+            <line x1="200" y1="120" x2="300" y2="320"/>
+            <line x1="150" y1="380" x2="300" y2="320"/>
+          </g>
+          <text x="453" y="448" fill="#9a5b12" font-size="14" text-anchor="middle">橙色粗线 = 协方差矩阵里的「互相关」——路标之间也有连线，这就是 O(N²) 的来源</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一间俯视的房间，中心是相机（带蓝色视锥），周围红点是真实特征物（书角、桌腿、画框角、灯座、插销），每个红点旁的红虚线椭圆是它的位置不确定度。<br>
+          <b>怎么看这张图：</b>① 相机和每个路标之间用橙色粗线相连，表示「相机位姿不确定」会牵连「路标位置不确定」；② 路标和路标之间也有橙色粗线，表示「这群路标作为一个整体漂到哪了」是共同不确定的；③ 这些连线正是协方差矩阵 $\mathrm P$ 里的非对角块。<br>
+          <b>要记住的一句话：</b>地图不是一堆独立的点，而是一张相互锁死的网；网越密，计算越贵——这就是后面要算账的地方。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 协方差块矩阵示意 -->
+          <text x="40" y="34" fill="#37474f" font-size="16">协方差矩阵 P（所有量共用一个）：</text>
+          <!-- 大外框 -->
+          <rect x="200" y="60" width="520" height="240" fill="#fff" stroke="#37474f" stroke-width="3"/>
+          <!-- 行/列分隔，4x4 块（x, y1, y2, y3） -->
+          <line x1="330" y1="60" x2="330" y2="300" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="460" y1="60" x2="460" y2="300" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="590" y1="60" x2="590" y2="300" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="200" y1="130" x2="720" y2="130" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="200" y1="200" x2="720" y2="200" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="200" y1="270" x2="720" y2="270" stroke="#9aa7ad" stroke-width="1.5"/>
+          <!-- 对角块：各自不确定度（绿） -->
+          <rect x="204" y="64" width="122" height="62" fill="#c8e6c9" opacity="0.9"/>
+          <rect x="334" y="134" width="122" height="62" fill="#c8e6c9" opacity="0.9"/>
+          <rect x="464" y="204" width="122" height="62" fill="#c8e6c9" opacity="0.9"/>
+          <rect x="594" y="274" width="122" height="22" fill="#c8e6c9" opacity="0.9"/>
+          <!-- 非对角块：互相关（橙） -->
+          <rect x="334" y="64" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="464" y="64" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="594" y="64" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="204" y="134" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="464" y="134" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="594" y="134" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="204" y="204" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="334" y="204" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="594" y="204" width="122" height="62" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="204" y="274" width="122" height="22" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="334" y="274" width="122" height="22" fill="#ffe0b2" opacity="0.95"/>
+          <rect x="464" y="274" width="122" height="22" fill="#ffe0b2" opacity="0.95"/>
+          <!-- 标签 -->
+          <text x="265" y="98" fill="#1b5e20" font-size="15" text-anchor="middle">Pₓₓ 相机</text>
+          <text x="395" y="168" fill="#1b5e20" font-size="15" text-anchor="middle">P_y1y1</text>
+          <text x="525" y="238" fill="#1b5e20" font-size="15" text-anchor="middle">P_y2y2</text>
+          <text x="655" y="288" fill="#1b5e20" font-size="15" text-anchor="middle">P_y3y3</text>
+          <text x="395" y="98" fill="#7a4a00" font-size="13" text-anchor="middle">互相关</text>
+          <text x="525" y="98" fill="#7a4a00" font-size="13" text-anchor="middle">互相关</text>
+          <text x="655" y="98" fill="#7a4a00" font-size="13" text-anchor="middle">互相关</text>
+          <!-- 右侧 N² 标注 -->
+          <text x="760" y="160" fill="#37474f" font-size="15">N 个路标</text>
+          <text x="760" y="185" fill="#37474f" font-size="15">→ N² 个格</text>
+          <text x="760" y="210" fill="#e67e22" font-size="15" font-weight="700">每帧都要更新</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把「相机＋所有路标」的协方差矩阵画成一个小块网格。绿色块是每个量「自己的」不确定度（对角块），橙色块是「谁和谁互相牵连」的互相关（非对角块）。<br>
+          <b>怎么看这张图：</b>① 只要有两个量会被一起观测，它们之间就多一条橙色互相关；② 路标越多，橙色块越多，总数约 $N^2$；③ 每来一帧新测量，EKF 都要把整块矩阵重算一遍。<br>
+          <b>要记住的一句话：</b>全协方差很强大，但代价是「地图越大，算得越慢」——这是 MonoSLAM 的天花板。
+        </figcaption>
+      </figure>
+
+      <p>原文还给了这张真实的概率地图快照——椭球就是 3σ 不确定边界，颜色表示测量状态（红=测到了、蓝=试了没测到、黄=这帧没轮到它）：</p>
+      <figure class="figure">
+        <img src="../../md/images/2007_MonoSLAM__Real-Time_Single_Camera_SLAM/8c460fe0e4c04ab29ab9e7c930bcb078ef55690f5c04c07298aa8f9c212f178c.jpg" alt="Probabilistic 3D map snapshot with camera and uncertainty ellipsoids">
+        <figcaption>
+          <b>原图注（Fig. 1a）：</b>A snapshot of the probabilistic 3D map, showing camera position estimate and feature position uncertainty ellipsoids.（概率 3D 地图快照，显示相机位姿估计与特征位置不确定椭球；红=测量成功，蓝=尝试失败，黄=本帧未选中测量。）<br>
+          <b>怎么看这张图：</b>① 那些悬在空中的椭圆就是每个路标的位置不确定度；② 注意有的椭球被明显「沿相机视线方向拉长」——论文说不确定度大致沿视线方向最长，因为单目对「远近」最没把握；③ 这正是我们上面自绘图里红虚线椭圆的实物版本。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. EKF 处理循环：预测 → 测量 → 更新</h2>
+      <p>MonoSLAM 是滤波器，核心就是卡尔曼滤波的三步循环，每来一帧图像跑一遍：</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{预测(prediction)} \;\to\; \text{测量(measurement)} \;\to\; \text{更新(update)}$$</div></div>
+      <div class="grid-3">
+        <div class="mini-card"><h4>预测</h4><p>用运动模型，根据上一帧状态猜「这一帧相机在哪、速度多少」，同时把不确定性（协方差）放大一点——因为运动有噪声。</p></div>
+        <div class="mini-card"><h4>测量</h4><p>真正去看图像，在某个路标「该出现的位置附近」找它，得到观测。</p></div>
+        <div class="mini-card"><h4>更新</h4><p>把「预测」和「实测」的差异（新息）按比例揉进状态与协方差，让估计更准、不确定度更小。</p></div>
+      </div>
+      <p>它用的运动模型叫<b>匀速＋匀角速度模型</b>（constant velocity, constant angular velocity）：假设在相邻两帧之间，相机的速度和角速度都不变。写成状态转移就是：</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathbf f_v=\begin{pmatrix}\mathbf r^W+(\mathbf v^W+\mathbf V^W)\Delta t\\ \mathbf q^{WR}\otimes \mathbf q((\boldsymbol\omega^R+\boldsymbol\Omega^R)\Delta t)\\ \mathbf v^W+\mathbf V^W\\ \boldsymbol\omega^R+\boldsymbol\Omega^R\end{pmatrix}$$</div></div>
+      <p>其中 $\mathbf V^W,\boldsymbol\Omega^R$ 是加速度噪声（论文里线性加速度噪声标准差约 10 m/s²，约等于 1 g；角加速度约 6 rad/s²）。这个模型很简单，但也意味着：如果相机猛地一抖，模型就跟不上——论文自己承认它「cannot cope with very sudden, jerky movement」。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 特征的生命周期：从一条射线到一颗钉子</h2>
+      <p>这是 MonoSLAM 最巧妙、也最影响后人的一处。前面说过：单目相机只知方向、不知距离。所以一个新特征刚被发现时，<b>还不能被当成一个 3D 点</b>。</p>
+      <p>论文把特征分成两阶段：</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{partially initialized（半初始化）}\;\to\;\text{fully initialized（全初始化）}$$</div></div>
+      <ul>
+        <li><b>半初始化：</b>只确定「这个特征一定在那条从相机射出的 3D 射线上」，但远近未知。于是用一串「深度假设粒子」表示——假设它离相机 0.5 m 到 5 m 之间都可能是，每个假设等权重。</li>
+        <li><b>全初始化：</b>随着相机移动、从多个角度反复观测，这些深度假设里大部分被否定，活下来的收敛成一个尖峰，于是这个特征从「射线＋粒子」变成了一个标准的 3D 高斯（即一个确定的点，带不确定度）。论文说大约 2–4 帧就能收敛。</li>
+      </ul>
+      <p>★ <b>这是逆深度思想的伏笔。</b>论文正文在 §3.6 末明确说，用「逆深度」（inverse depth）而不是「深度」来均匀分布假设，是 Solà、Montiel 等人（即 Civera 的逆深度参数化）的工作，并称赞这样「更高效」。MonoSLAM 自己用的是「深度均匀」的粒子，但它第一次把「单目特征先不确定深度、再收敛」这件事讲透——这正是后面<b>直接法</b>（LSD-SLAM / DSO）大规模使用逆深度参数的前置思想。先记住：逆深度 → 直接法的前置。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 960 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 三个面板，真实高斯曲线（Python 生成） -->
+          <!-- 面板1：观测1次 -->
+          <text x="195" y="40" fill="#37474f" font-size="16" text-anchor="middle">观测 1 次</text>
+          <rect x="60" y="120" width="270" height="220" fill="#fbfbf7" stroke="#cfcfcf" stroke-width="1.5"/>
+          <line x1="60" y1="330" x2="330" y2="330" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="70" y1="120" x2="70" y2="340" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="208.9" y1="120" x2="208.9" y2="330" stroke="#2e7d32" stroke-width="2" stroke-dasharray="4 3"/>
+          <polyline points="70.0,280.1 74.2,275.9 78.3,271.4 82.5,266.7 86.7,261.8 90.8,256.7 95.0,251.4 99.2,245.9 103.3,240.3 107.5,234.6 111.7,228.7 115.8,222.8 120.0,216.8 124.2,210.7 128.3,204.7 132.5,198.6 136.7,192.6 140.8,186.7 145.0,180.9 149.2,175.3 153.3,169.9 157.5,164.6 161.7,159.7 165.8,155.0 170.0,150.6 174.2,146.6 178.3,143.0 182.5,139.8 186.7,137.0 190.8,134.6 195.0,132.8 199.2,131.4 203.3,130.4 207.5,130.0 211.7,130.1 215.8,130.7 220.0,131.8 224.2,133.3 228.3,135.4 232.5,137.9 236.7,140.8 240.8,144.2 245.0,147.9 249.2,152.0 253.3,156.5 257.5,161.3 261.7,166.3 265.8,171.6 270.0,177.2 274.2,182.8 278.3,188.7 282.5,194.6 286.7,200.6 290.8,206.7 295.0,212.7 299.2,218.8 303.3,224.8 307.5,230.7 311.7,236.5 315.8,242.2 320.0,247.8" fill="none" stroke="#c0392b" stroke-width="3"/>
+          <text x="208.9" y="355" fill="#2e7d32" font-size="12" text-anchor="middle">真值 3m</text>
+          <text x="195" y="378" fill="#888" font-size="12" text-anchor="middle">钟形又宽又偏</text>
+
+          <!-- 面板2：观测5次 -->
+          <text x="495" y="40" fill="#37474f" font-size="16" text-anchor="middle">观测 5 次</text>
+          <rect x="360" y="120" width="270" height="220" fill="#fbfbf7" stroke="#cfcfcf" stroke-width="1.5"/>
+          <line x1="360" y1="330" x2="630" y2="330" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="370" y1="120" x2="370" y2="340" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="508.9" y1="120" x2="508.9" y2="330" stroke="#2e7d32" stroke-width="2" stroke-dasharray="4 3"/>
+          <polyline points="370.0,328.5 374.2,328.0 378.3,327.3 382.5,326.5 386.7,325.4 390.8,324.1 395.0,322.5 399.2,320.5 403.3,318.1 407.5,315.2 411.7,311.7 415.8,307.7 420.0,302.9 424.2,297.5 428.3,291.3 432.5,284.3 436.7,276.6 440.8,268.1 445.0,258.8 449.2,248.9 453.3,238.4 457.5,227.5 461.7,216.3 465.8,204.9 470.0,193.6 474.2,182.6 478.3,172.1 482.5,162.3 486.7,153.5 490.8,145.8 495.0,139.5 499.2,134.7 503.3,131.6 507.5,130.1 511.7,130.4 515.8,132.4 520.0,136.2 524.2,141.5 528.3,148.3 532.5,156.3 536.7,165.5 540.8,175.5 545.0,186.2 549.2,197.4 553.3,208.7 557.5,220.0 561.7,231.2 565.8,242.0 570.0,252.3 574.2,262.0 578.3,271.0 582.5,279.3 586.7,286.7 590.8,293.5 595.0,299.4 599.2,304.6 603.3,309.1 607.5,312.9 611.7,316.2 615.8,318.9 620.0,321.2" fill="none" stroke="#c0392b" stroke-width="3"/>
+          <text x="508.9" y="355" fill="#2e7d32" font-size="12" text-anchor="middle">真值 3m</text>
+          <text x="495" y="378" fill="#888" font-size="12" text-anchor="middle">钟形变窄、移向真值</text>
+
+          <!-- 面板3：观测20次 -->
+          <text x="795" y="40" fill="#37474f" font-size="16" text-anchor="middle">观测 20 次</text>
+          <rect x="660" y="120" width="270" height="220" fill="#fbfbf7" stroke="#cfcfcf" stroke-width="1.5"/>
+          <line x1="660" y1="330" x2="930" y2="330" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="670" y1="120" x2="670" y2="340" stroke="#9aa7ad" stroke-width="1.5"/>
+          <line x1="808.9" y1="120" x2="808.9" y2="330" stroke="#2e7d32" stroke-width="2" stroke-dasharray="4 3"/>
+          <polyline points="670.0,330.0 674.2,330.0 678.3,330.0 682.5,330.0 686.7,330.0 690.8,330.0 695.0,330.0 699.2,330.0 703.3,330.0 707.5,330.0 711.7,330.0 715.8,330.0 720.0,330.0 724.2,330.0 728.3,330.0 732.5,329.9 736.7,329.8 740.8,329.6 745.0,329.1 749.2,328.2 753.3,326.6 757.5,323.9 761.7,319.5 765.8,312.8 770.0,302.9 774.2,289.4 778.3,271.8 782.5,250.4 786.7,225.9 790.8,200.0 795.0,175.0 799.2,153.5 803.3,138.0 807.5,130.5 811.7,132.0 815.8,142.4 820.0,160.1 824.2,183.1 828.3,208.7 832.5,234.3 836.7,257.9 840.8,278.1 845.0,294.3 849.2,306.6 853.3,315.3 857.5,321.2 861.7,325.0 865.8,327.3 870.0,328.6 874.2,329.3 878.3,329.7 882.5,329.8 886.7,329.9 890.8,330.0 895.0,330.0 899.2,330.0 903.3,330.0 907.5,330.0 911.7,330.0 915.8,330.0 920.0,330.0" fill="none" stroke="#c0392b" stroke-width="3"/>
+          <text x="808.9" y="355" fill="#2e7d32" font-size="12" text-anchor="middle">真值 3m</text>
+          <text x="795" y="378" fill="#888" font-size="12" text-anchor="middle">尖峰＝已收敛成点</text>
+
+          <!-- 顶部射线示意 -->
+          <text x="480" y="410" fill="#37474f" font-size="13" text-anchor="middle">曲线由真实高斯 y=A·exp(−(x−μ)²/2σ²) 生成，σ 随观测次数递减（1.5→0.8→0.35），μ=3m</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个特征，在不同观测次数下「深度不确定度」的样子。横轴是深度（0.5–5 m），纵轴是不确定度大小，红色钟形就是深度概率分布。<br>
+          <b>怎么看这张图：</b>① 观测 1 次时，钟形又宽又没对准真值（3 m 处的绿虚线），因为只知方向不知远近；② 观测 5 次后，钟形收窄并移向真值；③ 观测 20 次后，收成一个尖峰，特征就从「射线＋粒子」变成了「一个确定的点」。曲线用真实公式算点，不是手画。<br>
+          <b>要记住的一句话：</b>单目特征先不确定深度、后收敛——这一步就是逆深度思想的雏形，直接法后面会接着用。
+        </figcaption>
+      </figure>
+
+      <p>原文给了两张很具象的图，正好对应这两阶段。第一张是「初始化期间连续帧的图像搜索」——你能在原图上看到一串沿射线投影出来的待搜索椭圆：</p>
+      <figure class="figure">
+        <img src="../../md/images/2007_MonoSLAM__Real-Time_Single_Camera_SLAM/b08abb324f83306798ca386f3356e8916566794c1400e8aa7159d694a3d5c8ff.jpg" alt="Close-up of image search in successive frames during feature initialization">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>A close-up view of image search in successive frames during feature initialization… A 3D ray along which the feature must lie is added to the SLAM map, and this ray is projected into subsequent images. A distribution of depth hypotheses from 0.5 m to 5 m translates into a set of ellipses which are all searched.（特征初始化期间连续帧的图像搜索特写；0.5–5 m 的深度假设分布被投影成一串待搜索椭圆。）<br>
+          <b>怎么看这张图：</b>① 左边第一帧认出一个候选 patch；② 从相机射出的 3D 射线被投到后面几帧，变成一串椭圆；③ 每一帧都在这些椭圆里找同一个特征——这就是「半初始化」在图像上的样子。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2007_MonoSLAM__Real-Time_Single_Camera_SLAM/8442305dd9a58ed73973d49342320f83844ad20f8a5270e56f7abd8f6c2e5dcd.jpg" alt="Particle set evolution of feature depth probability density">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Frame-by-frame evolution of the probability density over feature depth represented by a particle set. One hundred equally-weighted particles are initially spread evenly along the range 0.5 m to 5.0 m; with each subsequent image measurement the distribution becomes more closely Gaussian.（用粒子集表示的特征深度概率密度逐帧演化；100 个等权粒子初始均匀分布在 0.5–5.0 m，随每次观测越来越接近高斯。）<br>
+          <b>怎么看这张图：</b>① 最开始的直方图是平的（到处都可能）；② 越往后越收成一个尖峰；③ 这张图就是上一页自绘图里「钟形收窄」的实物版本。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>MonoSLAM 里一个新特征刚被发现时，为什么不能立刻当成一个 3D 点？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="单目相机只提供方向（bearing），不提供深度。必须先沿射线积累多次观测，深度不确定度才能收敛成点。" onclick="lessonKit.answer(this,'q0041b')">还不知道深度</button>
+          <button data-correct="no" data-explanation="不是算力问题。即便算力充足，单张图在数学上就无法确定深度，这是观测模型本身决定的。" onclick="lessonKit.answer(this,'q0041b')">因为算力不够</button>
+        </div>
+        <div class="quiz-feedback" id="q0041b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 主动视觉：下一步该看哪里</h2>
+      <p>实时系统不能每帧把整张图所有特征都搜一遍——太慢。MonoSLAM 用一个聪明的办法决定「下一步该看哪里」，论文叫 <b>active search</b>（主动搜索 / 主动测量）。</p>
+      <p>核心判据是「可预测的可测性」（predicted measurability）和「可见性」（visibility）：对于每个路标，先用当前状态预测「它这帧最该出现在图像哪个位置、不确定度多大」，只在这个位置附近的小椭圆窗里搜（这是 §3.5 的新息协方差 $\mathbf S_i$ 决定的 $3\sigma$ 门限椭圆）。</p>
+      <p>更妙的是选哪个特征去测：论文说，它优先选那些「当前最不确定、测了能压下去最多不确定度」的特征——也就是把系统沿「最长那根不确定轴」压扁。每帧最多只挑 <b>10 或 12 个</b>信息量最大的特征去测，地图维护的目标是「任意相机位置附近约有 12 个可靠可见特征」。</p>
+      <p>一句话：它不是被动地「看到啥算啥」，而是主动地问「我现在最该确认哪个，才能把地图锁得更死」。这正是「主动视觉」的意思。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 为什么它最终被淘汰</h2>
+      <p>MonoSLAM 是 EKF-SLAM 在单目上的巅峰，但天花板也很硬。论文自己承认的局限，归纳成几条：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 复杂度 O(N²)</h4><p>全协方差矩阵有 $N^2$ 个格子，每帧都要更新。论文说实时下路标数上限约 <b>100 个</b>。地图一大就崩。</p></div>
+        <div class="mini-card"><h4>② 特征数硬顶</h4><p>受 O(N²) 拖累，能同时维护的特征约 100 个，远少于后面 PTAM 的数千个。</p></div>
+        <div class="mini-card"><h4>③ 漂移与初始化弱点</h4><p>沿光轴运动（视差小）时初始化更差；相机平移离初始化视角太远，相关匹配会失败；误匹配可能 catastrophic failure。</p></div>
+        <div class="mini-card"><h4>④ 极端场景脆弱</h4><p>对着白墙/天花板（无特征）无法工作；运动噪声模型扛不住猛抖；特征朝向估计只在大面积纹理丰富的 patch 上有效。</p></div>
+      </div>
+      <p>把账算清楚：地图规模 $\propto N$，但计算和存储 $\propto N^2$。当别人想把地图扩到几千点时，EKF 这条路在数学结构上就走不通了。下一节 PTAM 给出的答案是——<b>干脆不把路标放进状态向量</b>，改用「地图点＋关键帧」另起炉灶。这正是 MonoSLAM 与 MSCKF（0028）那场「装还是不装」争论的延伸。</p>
+      <p>顺带一提：MonoSLAM 其实能做闭环、能纠正漂移。下面这张是机器人走半径 0.75 m 圆、绕回来闭环后漂移被纠正的快照：</p>
+      <figure class="figure">
+        <img src="../../md/images/2007_MonoSLAM__Real-Time_Single_Camera_SLAM/d84799b682f6b293a1d085b3af502ba7310ac232c13eeafa1e7bf24f7dc49ea5.jpg" alt="End of circle with closed loop and drift corrected">
+        <figcaption>
+          <b>原图注（Fig. 10(d)）：</b>End of circle with closed loop and drift corrected.（绕圈结束、闭环完成、漂移被纠正；黄色是估计轨迹，椭圆是特征位置不确定度，颜色码同 Fig. 1a。）<br>
+          <b>怎么看这张图：</b>① 机器人走了一整圈回到起点附近；② 注意不确定度在「重新看到早期路标」之前一直在长大，闭环那一刻被猛地纠正回来；③ 这说明滤波器路线本身能闭环，只是规模和速度撑不起更大世界。
+        </figcaption>
+      </figure>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用一句话解释：为什么 MonoSLAM 的协方差矩阵是「全」的（包含所有互相关），而不能只保留每个路标自己的不确定度？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为空间上相邻的路标「作为一个整体漂到哪」是共同不确定的，相机位姿的不确定也会同时牵连所有路标。只有保留互相关（非对角块），才能正确表达这种灵活的、随运动变化的相关性。代价就是矩阵有 $N^2$ 个格子。</div></details>
+          </li>
+          <li>「partially initialized」和「fully initialized」分别指特征的什么状态？为什么要有这个两阶段？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>partially initialized：特征只知道在一条从相机射出的 3D 射线上，深度未知，用 0.5–5 m 的深度假设粒子表示。fully initialized：多次观测后深度收敛成 3D 高斯，成为一个确定的点。两阶段是因为单目单帧没有深度，必须先积累方向观测才能定距离。</div></details>
+          </li>
+          <li>主动视觉（active search）解决了什么实际问题？它每帧最多挑几个特征？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>解决了「实时下不能每帧搜全图所有特征」的问题：它只在预测位置附近的小椭圆窗里搜，并优先挑信息量最大（最能压不确定度）的特征。每帧最多挑 10 或 12 个。</div></details>
+          </li>
+          <li>MonoSLAM 实时下能维护的路标数上限约是多少？根本原因是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>约 100 个。根本原因是全协方差矩阵复杂度 O(N²)，每帧都要更新整块矩阵，N 一大计算与存储都撑不住。</div></details>
+          </li>
+          <li>本节说 MonoSLAM 是第二季 0028 MSCKF 的「对偶」。请问两者的核心分歧是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>分歧在「路标要不要进状态向量」：MonoSLAM 主张必须把路标放进单一状态向量＋全协方差；MSCKF 用零空间投影把路标彻底边缘化出状态向量。一个「装」、一个「不装」，是滤波派处理路标的两种相反路线。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0040-导览-第三季开场-视觉主干.html">← 导览：第三季开场</a>
+        <a class="next" href="0042-PTAM2007-跟踪与建图分家.html">PTAM（2007）：跟踪与建图分家 →</a>
+      </div>
+      <p class="foot-note">MonoSLAM 把路标装进状态向量，跑通了最早的实时单目 SLAM，也亲手画出了自己的天花板。下一节看 PTAM 怎么用「双线程」把它拆开重来 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

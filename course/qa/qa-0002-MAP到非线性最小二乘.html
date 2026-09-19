@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>追问答疑：从 MAP 到非线性最小二乘 — SLAM 课程答疑</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="../lessons/assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="../lessons/assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">追问答疑 · 源自 Lesson 0002 ｜ 独立答疑页，不占主线编号</div>
+      <h1>追问答疑：从 MAP 到非线性最小二乘，这四行到底在说什么</h1>
+      <p class="subtitle">你说很久没推过公式了、一直在做项目——那我们就当从零开始：<b>先补 5 个数学零件，再一行一行拆这四式，最后用走廊里的一台机器人手算到底。</b>读完你会发现，这四行其实不是四件事，而是同一件事被化简了四次。🧮</p>
+      <div class="hero-meta">
+        <span>🎯 主题：贝叶斯 · 高斯 · argmax→argmin · 加权最小二乘</span>
+        <span>📚 依据：论文第 II-A 节（MAP Estimation and the SLAM Back End）</span>
+        <span>🧮 含：一个手算到底的算例（13.2 m 是这么来的）</span>
+      </div>
+      <p style="margin:1rem 0 0;padding:.6rem .9rem;border-radius:12px;background:rgba(204,120,92,.10);border:1px dashed rgba(204,120,92,.3);font-size:.95rem;">
+        ⤴ <b>本页是"就地追问"的展开版。</b>你是在第 0002 课第 3 节「事实标准形式化」的 (4) 式那里卡住的——
+        <a href="../lessons/0002-PastPresentFuture-2016-SLAM的全景纲领.html#q0002-map">← 点这里回到 0002 课原位置（含一句话结论补丁）</a>。
+        读完本页，建议再回去把那一节通读一遍，会顺得多。
+      </p>
+      <div class="toc">
+        <a href="#prereq">先补五个数学零件</a>
+        <a href="#f1">第 (1) 式</a>
+        <a href="#f2">第 (2) 式</a>
+        <a href="#f3">第 (3) 式</a>
+        <a href="#f4">第 (4) 式</a>
+        <a href="#example">手算到底</a>
+        <a href="#faq">七个最容易卡住的点</a>
+        <a href="#check">自测与练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="prereq">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 用自己的话说出 (1)–(4) 式各自"只做了一件事"；② 独立手算一个两量测的最小二乘并解释结果；③ 回答"先验为什么能扔""为什么要取 log""Ω 到底是什么"这三个人人都会卡的问题。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节只干一件事：把第 0002 课第 3 节那四行公式拆开揉碎。四行里出现的概率与优化词汇，第 0002 课是直接拿来用的；第 0003 课讲 EKF-SLAM 时你会再见到"后验"（那里叫"置信度"）。想先补直觉，可以看项目里的 <code>outputs/SLAM图解入门.html</code>。</p>
+        </div>
+      </div>
+
+      <h2>1. 先补五个数学零件（你缺的大概就是这些）</h2>
+
+      <p><b>先给一句话答案：</b>这四行公式不是在算四件事，而是在做<b>四次化简</b>——把一个听起来很哲学的问题（"我应该相信哪个位姿？"）一步步翻译成一个有现成求解器的问题（"谁的加权平方和最小？"）。</p>
+
+      <div class="callout">
+        <h4>打个比方：侦探破案</h4>
+        <p>你是侦探。$\mathcal{X}$ 是"真相"（机器人走过的整条轨迹 + 房间里每个路标在哪），$Z$ 是"证据"（一堆带着误差的测量）。你要找的 $\mathcal{X}^\star$ 就是"最符合这堆证据的那个真相"。<br>
+        <b>这四行公式，就是"如何从一堆模糊证据里挑出最可能的真相"的标准写法。</b>SLAM 领域三十年，大家吵来吵去都在用这一套语言。</p>
+      </div>
+
+      <h3>零件 1｜$p(\cdot)$：把概率读成"可信度"</h3>
+      <p>严格说，$\mathcal{X}$ 是连续变量，$p(\mathcal{X})$ 是<b>概率密度</b>，不是"某个具体值的概率"（连续变量取到单个点的概率是 0）。但做工程时你完全可以这样读：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(\mathcal{X}) \;\approx\; \text{「我觉得 } \mathcal{X} \text{ 长成这样，有多可信」}$$</div>
+      </div>
+      <p>这个读法一定，后面全通。<b>不要纠结密度的严格定义，先把 $p$ 当"分数"用。</b>（分数大小本身没有量纲意义，我们只比较谁的分数更高。）</p>
+
+      <h3>零件 2｜贝叶斯定理：一个可以白扔掉的分母</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(\mathcal{X}\mid Z)=\frac{p(Z\mid\mathcal{X})\,p(\mathcal{X})}{p(Z)}$$</div>
+      </div>
+      <p>三个名字必须记牢，这是全篇的地基：</p>
+      <ul>
+        <li><b>后验 $p(\mathcal{X}\mid Z)$</b>——看完证据之后的判断。<b>这就是我们要的答案。</b>读作"在证据 $Z$ 已知的前提下，真相是 $\mathcal{X}$ 的可信度"。</li>
+        <li><b>似然 $p(Z\mid\mathcal{X})$</b>——反过来问："假设真相就是 $\mathcal{X}$，那么我看到的这堆证据有多合理？"它衡量的是<b>证据对候选真相的解释力</b>。</li>
+        <li><b>先验 $p(\mathcal{X})$</b>——看证据之前就知道的事。比如"机器人不会瞬移""起点大概在这附近"。</li>
+      </ul>
+      <p><b>★ 关键一步：分母 $p(Z)$ 可以白扔。</b>因为 $p(Z)$ 是"这堆证据本身出现的概率"，它<b>一点 $\mathcal{X}$ 都不含</b>。对"挑出最大的那个 $\mathcal{X}$"（argmax）来说，一个跟 $\mathcal{X}$ 无关的正数因子只是把所有候选<b>同比例缩放</b>，改变不了谁排第一。所以：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X}\mid Z) \;=\; \operatorname*{argmax}_{\mathcal{X}} \frac{p(Z\mid\mathcal{X})p(\mathcal{X})}{p(Z)} \;=\; \operatorname*{argmax}_{\mathcal{X}} p(Z\mid\mathcal{X})\,p(\mathcal{X})$$</div>
+      </div>
+      <p>这就是 (1) 式的那个等号——<b>它是贝叶斯定理 + "分母可扔"两步合起来的结论，不是什么高深技巧。</b></p>
+
+      <h3>零件 3｜高斯分布：一条钟形曲线，和一个叫 Ω 的"自信度"</h3>
+      <p>一维高斯（正态）分布的密度函数长这样，$\mu$ 是均值、$\sigma$ 是标准差：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z\mid x)=\frac{1}{\sqrt{2\pi}\,\sigma}\exp\!\left(-\frac{(z-\mu)^2}{2\sigma^2}\right)$$</div>
+      </div>
+      <p>做 SLAM 时，"均值"就是我们模型的预测值（第 $k$ 个量测的预测是 $h_k(\mathcal{X}_k)$），而 $(z-\mu)$ 就是<b>残差</b>——量测值与预测值之差。于是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{残差 } e = z - h(\mathcal{X}) \qquad\qquad \text{信息矩阵 } \Omega = \frac{1}{\sigma^2}$$</div>
+      </div>
+      <p><b>Ω 的读法："这个传感器有多自信"。</b>$\sigma$ 越小（越准）→ $\Omega$ 越大（说话越大声）。多维情形下，"协方差矩阵 $\Sigma$ 的逆"就是 $\Omega$，含义是一样的。<b>这个字母后面会反复出现，务必先建立"Ω 大 = 准 = 权重大"的条件反射。</b></p>
+
+      <h3>零件 4｜argmax / argmin：要的是"哪一个"，不是"多少"</h3>
+      <p>$\operatorname*{argmax}$ 读作 "arg max"，意思是<b>"让后面那个东西取到最大值的那个 $\mathcal{X}$"</b>——注意，它交出来的是 $\mathcal{X}$，不是最大值本身。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\max_x f(x)=5 \;\Longrightarrow\; \text{最大值是 } 5 \qquad\quad \operatorname*{argmax}_x f(x)=3 \;\Longrightarrow\; \text{在 } x=3 \text{ 处取到最大值}$$</div>
+      </div>
+      <p>为什么这个区分重要？因为 SLAM 要的是<b>答案</b>（位姿、地图），不是"这个答案有多可信"。所以我们从头到尾都只关心 argmax 的<b>位置</b>——也正因为如此，那些不影响位置的常数因子可以被大摇大摆地扔掉。</p>
+
+      <h3>零件 5｜取 log 与取负：两个"不改变答案"的变形</h3>
+      <p>这是全篇最容易被忽略、但用处最大的两招：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\underbrace{\operatorname*{argmax}_x f(x)=\operatorname*{argmax}_x \ln f(x)}_{\text{log 单调递增，不改变最大值的位置}} \qquad \underbrace{\operatorname*{argmax}_x \ln f(x)=\operatorname*{argmin}_x\big(-\ln f(x)\big)}_{\text{加负号：把"山峰"翻成"山谷"}}$$</div>
+      </div>
+      <p>为什么可以用？因为 $\ln$ 是<b>单调递增</b>函数：$f$ 大的地方 $\ln f$ 一定也大，次序完全不变。而负号是单调递减的，它把次序<b>整个翻过来</b>——最大的变成最小的。两招合起来，就让"找最可信"变成了"找最便宜"。<b>唯一的坑：负号那一翻别忘了。</b></p>
+
+      <div class="callout">
+        <h4>符号速查（读后面时不用来回翻）</h4>
+        <p>$\mathcal{X}$：要估计的全部未知量（机器人轨迹 + 路标位置）；<br>
+        $Z=\{z_1,\dots,z_m\}$：全部 $m$ 个量测；<br>
+        $z_k$：第 $k$ 个量测的具体读数；<br>
+        $\mathcal{X}_k$：第 $k$ 个量测<b>真正涉及</b>的那一小撮变量（$\mathcal{X}_k\subseteq\mathcal{X}$）；<br>
+        $h_k(\cdot)$：第 $k$ 个量测的<b>观测模型</b>（"给定状态，应该看到什么"）；<br>
+        $\epsilon_k$：第 $k$ 个量测的随机噪声；<br>
+        $\Omega_k$：第 $k$ 个量测的信息矩阵（$=\Sigma_k^{-1}$，越大越准）。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 ①</h3>
+        <p>把 (1) 式右边的分母 $p(Z)$ 扔掉，下面哪个理由是对的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正是如此。p(Z) 里没有任何关于 X 的信息，它对所有候选做的是「同比例缩放」，所以改不了谁排第一——对 argmax 来说它就是常数。" onclick="lessonKit.answer(this,'q0002a')">分母不含未知量 X</button>
+          <button data-correct="no" data-explanation="不对。p(Z) 确实是概率、也确实是正的，但「它是常数」这个说法要落到「不依赖 X」上。真正的理由是它不含未知量，而不是它很小或者不重要。" onclick="lessonKit.answer(this,'q0002a')">分母的数值非常小</button>
+        </div>
+        <div class="quiz-feedback" id="q0002a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="f1">
+      <h2>2. 第 (1) 式：那个等号是从哪来的？</h2>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{X}^{\star} \doteq \operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X}\mid Z) = \operatorname*{argmax}_{\mathcal{X}} p(Z\mid\mathcal{X})\,p(\mathcal{X}) \tag{1}$$</div>
+      </div>
+
+      <p><b>人话翻译：</b></p>
+      <div class="callout">
+        <p>左边在说：「在<b>所有可能的真相</b>里，挑出那个<b>看完证据后最可信</b>的。」<br>
+        右边在说：「挑出那个『<b>证据最支持它</b> × <b>我原来最信它</b>』乘积最大的。」<br>
+        <b>两句话是同一句话。</b>等号就是零件 2 里那个"分母可扔"的贝叶斯。</p>
+      </div>
+
+      <p>把动作拆成三步，就不会晕：</p>
+      <ol>
+        <li><b>列出所有候选</b>：走廊里机器人可能走的每一条路、房间里路标可能摆的每一个位置，都是候选。</li>
+        <li><b>给每个候选打一个分</b>：分数就是后验 $p(\mathcal{X}\mid Z)$。注意它是<b>乘出来</b>的，不是加权平均出来的。</li>
+        <li><b>取分数最高的那个</b>：这就是 $\mathcal{X}^\star$。</li>
+      </ol>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="40" y="40" width="420" height="300" rx="12" fill="#fffdfa" stroke="#dccdbe" stroke-width="2"/>
+          <rect x="40" y="150" width="150" height="12" fill="#e8dcd0"/>
+          <rect x="230" y="118" width="92" height="62" rx="8" fill="#efe0d2" stroke="#dccdbe"/>
+          <rect x="150" y="248" width="112" height="46" rx="10" fill="#e6d3bf" stroke="#d9c3ab"/>
+          <rect x="158" y="240" width="96" height="12" rx="5" fill="#dcc7b0"/>
+          <path d="M404 300 L436 300 L431 328 L409 328 Z" fill="#d9c3ab"/>
+          <ellipse cx="420" cy="286" rx="10" ry="16" fill="#a8c4a0"/>
+          <ellipse cx="408" cy="292" rx="8" ry="12" fill="#bcd2b4"/>
+          <ellipse cx="432" cy="292" rx="8" ry="12" fill="#bcd2b4"/>
+          <circle cx="76" cy="306" r="13" fill="#cc785c"/>
+          <rect x="62" y="315" width="8" height="7" rx="2" fill="#8b786f"/>
+          <rect x="82" y="315" width="8" height="7" rx="2" fill="#8b786f"/>
+          <path d="M76 306 L126 274 L132 296 Z" fill="#cc785c" fill-opacity="0.16"/>
+          <line x1="414" y1="66" x2="414" y2="104" stroke="#6a554d" stroke-width="2.5"/>
+          <path d="M414 68 L444 78 L414 90 Z" fill="#4f9a63"/>
+          <text x="404" y="62" font-size="12" fill="#4f9a63" text-anchor="end">目标点</text>
+          <path d="M92 306 C130 336 250 344 320 300 C370 268 400 150 410 100" fill="none" stroke="#cc785c" stroke-width="3" stroke-dasharray="9 6"/>
+          <path d="M92 306 L410 100" fill="none" stroke="#a89a8c" stroke-width="2.5" stroke-dasharray="4 5"/>
+          <path d="M92 306 C56 220 104 118 210 96 C300 78 372 88 408 100" fill="none" stroke="#e0a389" stroke-width="2.5" stroke-dasharray="9 6"/>
+          <text x="196" y="322" font-size="13" fill="#b15d44" text-anchor="middle">X₁</text>
+          <text x="140" y="132" font-size="13" fill="#b15d44" text-anchor="middle">X₃</text>
+          <text x="288" y="228" font-size="13" fill="#8b786f" text-anchor="middle">X₂</text>
+          <text x="572" y="108" font-size="14" fill="#b15d44" text-anchor="end" font-weight="700">X₁ · 0.16</text>
+          <rect x="580" y="92" width="230" height="22" rx="5" fill="#cc785c"/>
+          <text x="572" y="182" font-size="14" fill="#4a342c" text-anchor="end">X₃ · 0.12</text>
+          <rect x="580" y="166" width="172" height="22" rx="5" fill="#dda48d"/>
+          <text x="572" y="256" font-size="14" fill="#4a342c" text-anchor="end">X₂ · 0.01</text>
+          <rect x="580" y="240" width="14" height="22" rx="5" fill="#e0c2b2"/>
+          <text x="580" y="300" font-size="14" fill="#b15d44" font-weight="700">argmax → 选得分最高的 X₁</text>
+          <text x="40" y="364" font-size="13" fill="#b15d44">— X₁ 绕开桌子</text>
+          <text x="200" y="364" font-size="13" fill="#b15d44">— X₃ 绕远路</text>
+          <text x="330" y="364" font-size="13" fill="#8b786f">— X₂ 撞穿桌子</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间、同一个机器人（左下角的橙色小车）、同一个目标点（右上角绿旗），三条候选轨迹里只有一条真的合理。右边三根横条就是每条轨迹的<b>后验得分</b>。
+          <br><b>怎么看这张图：</b>先看房间——桌子是障碍、沙发在下方、隔墙在左上。① <b>X₁</b>（深橙）从桌子下方绕过去，物理可行；② <b>X₃</b>（浅橙）走大弯从桌子上方绕过去，也可行但绕了远路；③ <b>X₂</b>（灰色）是"起点到目标的直线"，它会直接穿过桌子——物理上不可能。<br><b>要记住的一句话：</b>"最可能的真相"不是"最省事的那条路"（X₃ 才是最短的直觉解），而是<b>分数最高的那条</b>（X₁）。分数怎么来的、为什么是乘法——看下面这张表。
+        </figcaption>
+      </figure>
+
+      <h3>把 (1) 式真的算一遍：三条候选取哪个？</h3>
+      <p>为了让"乘法"这个动作看得见，我用一组<b>教学用的假数字</b>（不是论文里的数值，只为演示算法）走一遍：</p>
+      <table>
+        <thead>
+          <tr><th>候选轨迹</th><th>似然 $p(Z\mid\mathcal{X})$<br><span style="font-weight:400;font-size:.85em;">"证据有多支持它"</span></th><th>先验 $p(\mathcal{X})$<br><span style="font-weight:400;font-size:.85em;">"我原来多信它"</span></th><th>后验 = 两者相乘</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><b>X₁ 绕开桌子</b></td><td>0.80</td><td>0.20</td><td><b>0.160</b> ← 最大</td></tr>
+          <tr><td>X₂ 撞穿桌子</td><td>0.10</td><td>0.10</td><td>0.010</td></tr>
+          <tr><td>X₃ 绕远路</td><td>0.40</td><td><b>0.30</b> ← 先验最高</td><td>0.120</td></tr>
+        </tbody>
+      </table>
+      <p>读这张表要注意两件事：</p>
+      <ul>
+        <li><b>X₃ 的先验其实最高</b>（"绕远路"这件事本身很常见），但它的似然偏低，乘完就输了。<b>所以 argmax 绝不能"分成两半各挑一个最大"。先乘，再比。</b></li>
+        <li><b>X₂ 的似然最低</b>——因为"撞穿桌子"这个真相，很难解释"我们看到的量测"。</li>
+      </ul>
+      <p>（上表里"先验"这一列是 (1) 式里最容易迷路的一项。<b>它为什么有时候可以整个扔掉，见第 7 节的 Q1。</b>）</p>
+
+      <div class="callout">
+        <h4>原文在这一步还提醒了两件事（第 II-A 节）</h4>
+        <p>① <b>如果没有先验知识</b>，$p(\mathcal{X})$ 退化成均匀分布（即常数），对优化没有影响，可以丢掉——此时 MAP 就退化成<b>最大似然估计 MLE</b>。原文用的词是 "inconsequential"，即"无关紧要"。<br>
+        ② <b>MAP 与卡尔曼滤波的一个关键差别</b>：MAP 不需要显式区分"运动模型"和"观测模型"——两者都被当成<b>因子（factor）</b>塞进同一个估计过程。这就是它比滤波框架更"通用"的原因。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f2">
+      <h2>3. 第 (2) 式：那个 ∏ 连乘是怎么冒出来的？右边为什么又把 $\mathcal{X}$ 换成 $\mathcal{X}_k$？</h2>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{X}^{\star} = \operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X})\prod_{k=1}^{m}p(z_k\mid \mathcal{X}) = \operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X})\prod_{k=1}^{m}p(z_k\mid \mathcal{X}_k) \tag{2}$$</div>
+      </div>
+
+      <p><b>★ 这一式里塞了两个完全不同的假设，很多人把它俩揉成一件事，然后就再也读不懂了。</b>先把它们分清楚：</p>
+
+      <table>
+        <thead>
+          <tr><th></th><th>假设 A：量测相互独立</th><th>假设 B：每个量测只依赖一小撮变量</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>数学形态</b></td>
+            <td>联合似然 = 各自似然<b>相乘</b>：$p(Z\mid\mathcal{X})=\prod_k p(z_k\mid\mathcal{X})$</td>
+            <td>每个因子只连几个节点：$p(z_k\mid\mathcal{X})\;\to\;p(z_k\mid\mathcal{X}_k)$</td>
+          </tr>
+          <tr>
+            <td><b>生活翻译</b></td>
+            <td>三份体检报告互不影响，合起来看的总可信度 = 三份可信度相乘</td>
+            <td>一张照片只跟"拍它时的那个位姿"+"它看到的那个路标"有关，跟别的无关</td>
+          </tr>
+          <tr>
+            <td><b>给我们什么好处</b></td>
+            <td>乘积 → 取 log 后变成<b>求和</b>（见下面算例）</td>
+            <td>图变<b>稀疏</b> → 矩阵稀疏 → 后端<b>算得动</b></td>
+          </tr>
+          <tr>
+            <td><b>它不成立会怎样</b></td>
+            <td>还是要优化，但得老老实实写联合分布，写不出连乘形式</td>
+            <td>每个因子都要连全部变量 → 稠密矩阵 → 规模一大就算不动</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><b>一句话记住：假设 A 决定"能不能拆成乘积"，假设 B 决定"拆完之后算得快不快"。</b></p>
+
+      <h3>假设 A：为什么叫"独立"？</h3>
+      <p>原文的原话是：<i>"Assuming that the measurements $Z$ are independent (i.e., the corresponding noises are uncorrelated), problem (1) factorizes into…"</i>——注意括号里的解释：<b>这里的"独立"指的是噪声不相关</b>。翻译成人话：<b>第 3 个量测偏大还是偏小，不会告诉你第 5 个量测会偏成什么样。</b></p>
+      <p>这个假设在工程上非常自然：激光雷达这一帧测偏了，不会让下一帧的相机也跟着偏。所以每个量测的误差可以<b>各自独立地打折</b>——打折不就是这样一项一项乘起来吗？</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <ellipse cx="230" cy="140" rx="18" ry="17" fill="#f0d9c8" stroke="#c9a58c" stroke-width="2"/>
+          <circle cx="224" cy="138" r="2" fill="#6a554d"/>
+          <circle cx="236" cy="138" r="2" fill="#6a554d"/>
+          <rect x="204" y="166" width="52" height="58" rx="16" fill="#cc785c"/>
+          <ellipse cx="450" cy="140" rx="18" ry="17" fill="#f0d9c8" stroke="#c9a58c" stroke-width="2"/>
+          <circle cx="444" cy="138" r="2" fill="#6a554d"/>
+          <circle cx="456" cy="138" r="2" fill="#6a554d"/>
+          <rect x="424" y="166" width="52" height="58" rx="16" fill="#cc785c"/>
+          <ellipse cx="670" cy="140" rx="18" ry="17" fill="#f0d9c8" stroke="#c9a58c" stroke-width="2"/>
+          <circle cx="664" cy="138" r="2" fill="#6a554d"/>
+          <circle cx="676" cy="138" r="2" fill="#6a554d"/>
+          <rect x="644" y="166" width="52" height="58" rx="16" fill="#cc785c"/>
+          <path d="M208 182 L188 224 M252 182 L272 224 M428 182 L408 224 M472 182 L492 224 M648 182 L628 224 M692 182 L712 224" stroke="#c9a58c" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+          <rect x="170" y="224" width="120" height="8" rx="3" fill="#f4e3a1" stroke="#cbb45f"/>
+          <rect x="390" y="224" width="120" height="8" rx="3" fill="#f4e3a1" stroke="#cbb45f"/>
+          <rect x="610" y="224" width="120" height="8" rx="3" fill="#f4e3a1" stroke="#cbb45f"/>
+          <rect x="130" y="230" width="640" height="26" rx="6" fill="#e6d3bf"/>
+          <rect x="130" y="256" width="640" height="10" fill="#d9c3ab"/>
+          <rect x="160" y="266" width="18" height="54" fill="#cdb69c"/>
+          <rect x="722" y="266" width="18" height="54" fill="#cdb69c"/>
+          <line x1="70" y1="320" x2="840" y2="320" stroke="#ded0c2" stroke-width="2"/>
+          <rect x="150" y="52" width="160" height="56" rx="14" fill="#fffdfa" stroke="#d9c8b8" stroke-width="2"/>
+          <path d="M222 108 L238 108 L230 124 Z" fill="#fffdfa" stroke="#d9c8b8" stroke-width="2"/>
+          <text x="230" y="86" font-size="17" fill="#4a342c" text-anchor="middle">10.0 m</text>
+          <rect x="370" y="32" width="160" height="56" rx="14" fill="#fffdfa" stroke="#d9c8b8" stroke-width="2"/>
+          <path d="M442 88 L458 88 L450 104 Z" fill="#fffdfa" stroke="#d9c8b8" stroke-width="2"/>
+          <text x="450" y="66" font-size="17" fill="#4a342c" text-anchor="middle">10.4 m</text>
+          <rect x="590" y="52" width="160" height="56" rx="14" fill="#fffdfa" stroke="#d9c8b8" stroke-width="2"/>
+          <path d="M662 108 L678 108 L670 124 Z" fill="#fffdfa" stroke="#d9c8b8" stroke-width="2"/>
+          <text x="670" y="86" font-size="17" fill="#4a342c" text-anchor="middle">9.7 m</text>
+          <text x="128" y="250" font-size="13" fill="#8b786f" text-anchor="end">同一张桌子</text>
+          <text x="450" y="356" font-size="15" fill="#6a554d" text-anchor="middle">三份测量互不影响 → 合起来看的总可信度＝三者相乘</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三个同学拿各自的尺子量同一张桌子，读数分别是 10.0 m、10.4 m、9.7 m。
+          <br><b>怎么看这张图：</b>盯着"三个读数不一样"这件事——如果他们的测量互相影响（比如商量过再报数），那读到 10.4 就能猜到下一个大概也会报 10.4 左右，<b>三个数会一起错</b>；而现实中他们各量各的，所以误差是"各自独立地抖动"。<b>正是"各自独立"，才允许我们把总可信度写成三项相乘</b>：$p(z_1)\,p(z_2)\,p(z_3)$。如果它们相关，就必须写成联合分布，乘积形式立刻失效。
+          <br><b>要记住的一句话：</b>独立 ≠ 数值不一样；独立 = <b>一个错了不代表另一个会怎么错</b>。
+        </figcaption>
+      </figure>
+
+      <h3>假设 B：为什么右边把 $\mathcal{X}$ 换成了 $\mathcal{X}_k$？</h3>
+      <p>原文在 (2) 式右边底下专门写了一句解释：<i>"we noticed that $z_k$ only depends on the subset of variables in $\mathcal{X}_k$"</i>——我们注意到 $z_k$ <b>只依赖 $\mathcal{X}_k$ 这一小撮变量</b>。</p>
+      <p>这句话听起来平淡，其实是整个后端效率的命根子。举个具体的例子：机器人第 100 帧拍到的一颗路标，这个量测只跟"第 100 帧的位姿"和"这颗路标的位置"有关——它跟第 1 帧的位姿、第 50 帧的位姿、别的路标全都<b>无关</b>。所以量测 $z_k$ 在"打分"时只看两个节点，不看五千个节点。这一事实画出来就是<b>因子图</b>：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <path d="M130 150 C130 55 670 55 670 150" fill="none" stroke="#b15d44" stroke-width="2" stroke-dasharray="8 6"/>
+          <line x1="58" y1="150" x2="111" y2="150" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="149" y1="150" x2="291" y2="150" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="329" y1="150" x2="471" y2="150" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="509" y1="150" x2="651" y2="150" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="130" y1="150" x2="240" y2="310" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="310" y1="150" x2="240" y2="310" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="490" y1="150" x2="560" y2="310" stroke="#b9a99c" stroke-width="2"/>
+          <line x1="670" y1="150" x2="560" y2="310" stroke="#b9a99c" stroke-width="2"/>
+          <circle cx="130" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+          <text x="130" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₁</text>
+          <circle cx="310" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+          <text x="310" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₂</text>
+          <circle cx="490" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+          <text x="490" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₃</text>
+          <circle cx="670" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+          <text x="670" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₄</text>
+          <circle cx="240" cy="310" r="19" fill="#d5e8da" stroke="#7cb08a" stroke-width="2"/>
+          <text x="240" y="316" font-size="14" fill="#2f5238" text-anchor="middle">l₁</text>
+          <circle cx="560" cy="310" r="19" fill="#d5e8da" stroke="#7cb08a" stroke-width="2"/>
+          <text x="560" y="316" font-size="14" fill="#2f5238" text-anchor="middle">l₂</text>
+          <rect x="58" y="139" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="69" y="132" font-size="13" fill="#3a3230" text-anchor="middle">p</text>
+          <rect x="209" y="139" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="220" y="132" font-size="13" fill="#3a3230" text-anchor="middle">u</text>
+          <rect x="389" y="139" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="400" y="132" font-size="13" fill="#3a3230" text-anchor="middle">u</text>
+          <rect x="569" y="139" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="580" y="132" font-size="13" fill="#3a3230" text-anchor="middle">u</text>
+          <rect x="174" y="219" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="185" y="212" font-size="13" fill="#3a3230" text-anchor="middle">v</text>
+          <rect x="264" y="219" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="275" y="212" font-size="13" fill="#3a3230" text-anchor="middle">v</text>
+          <rect x="514" y="219" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="525" y="212" font-size="13" fill="#3a3230" text-anchor="middle">v</text>
+          <rect x="604" y="219" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="615" y="212" font-size="13" fill="#3a3230" text-anchor="middle">v</text>
+          <rect x="389" y="68" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="400" y="106" font-size="13" fill="#b15d44" text-anchor="middle">c</text>
+          <rect x="60" y="378" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="92" y="394" font-size="13" fill="#4a342c">p ＝ 先验：出发前就知道的事</text>
+          <rect x="60" y="416" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="92" y="432" font-size="13" fill="#4a342c">u ＝ 里程计：轮子转了多少</text>
+          <rect x="460" y="378" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="492" y="394" font-size="13" fill="#4a342c">v ＝ 观测：相机／激光看到路标</text>
+          <rect x="460" y="416" width="22" height="22" rx="3" fill="#3a3230"/>
+          <text x="492" y="432" font-size="13" fill="#4a342c">c ＝ 回环：绕一圈又回到老地方</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>论文 Fig. 3 的简化版——<b>蓝色圆</b>是机器人各时刻的位姿 $x_1\dots x_4$，<b>绿色圆</b>是路标 $l_1,l_2$，<b>黑色方块</b>是因子（约束）。方块上的字母含义见图的底部图例。（论文原图里还有一个红色圆表示相机内参 $K$ 和几处回环因子，这里为了看清主干做了简化；颜色约定沿用原图：蓝＝位姿、绿＝路标。）
+          <br><b>怎么看这张图：</b>数一数每个方块连着几个圆——<b>最多只连 2 个</b>。这就是假设 B 的图形化：u 只连相邻两个位姿，v 只连"某个位姿 + 某个路标"，c（回环）只连它闭合的那两个位姿。<b>没有任何一个方块同时连着全部 6 个圆</b>。原文说"因子图的连接稠密程度直接决定 SLAM 问题的稀疏性"，指的就是这件事：方块越"瘦"（连的圆越少），后端求解器越快。
+          <br><b>要记住的一句话：</b>因子图上<b>没有一个方块是"连所有圆"的</b>——这就是为什么 SLAM 后端能算几万个变量。
+        </figcaption>
+      </figure>
+
+      <h3>为什么非要把乘积取 log？（工程理由，不是数学理由）</h3>
+      <p>数学上，(2) 式的乘积形式已经能用了。但工程上有一个硬问题：<b>小概率连乘会"下溢"</b>。</p>
+      <table>
+        <thead><tr><th>量测个数 $m$</th><th>每个似然都是 0.5 时，连乘的结果</th><th>计算机能表示吗</th></tr></thead>
+        <tbody>
+          <tr><td>10</td><td>$0.5^{10}\approx 9.8\times10^{-4}$</td><td>✅ 没问题</td></tr>
+          <tr><td>1000</td><td>$0.5^{1000}\approx 10^{-301}$</td><td>⚠️ 勉强（双精度浮点最小正数约 $10^{-308}$）</td></tr>
+          <tr><td>10000</td><td>$0.5^{10000}\approx 10^{-3010}$</td><td>❌ <b>直接变成 0，所有候选的分数全都一样了</b></td></tr>
+        </tbody>
+      </table>
+      <p>取 log 之后，$10000\times\ln 0.5\approx -6931$，一个普普通通的数，稳稳当当。<b>而且乘积变求和，后面求导时也简单得多</b>——这两条合起来，就是 (4) 式一定要取 log 的原因。这是典型的"<b>数学等价、工程不等价</b>"：log 没有改变答案，但它救了你的计算。</p>
+    </section>
+
+    <section class="section-card" id="f3">
+      <h2>4. 第 (3) 式：似然里为什么会冒出一个 exp(−½ × 加权平方)？</h2>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z_k\mid \mathcal{X}_k) \propto \exp\!\left(-\tfrac{1}{2}\left\| h_k(\mathcal{X}_k) - z_k \right\|_{\Omega_k}^{2}\right), \qquad \|e\|_\Omega^2 = e^{\mathsf{T}}\Omega e \tag{3}$$</div>
+      </div>
+
+      <p>这一式看着最吓人，其实是<b>零件 3（高斯分布）直接搬过来</b>。我们一步步走，不用跳：</p>
+
+      <h3>第 1 步：一维高斯，把"均值"换成"模型的预测"</h3>
+      <p>零件 3 里那条曲线是这样的（$\mu$ 是均值、$\sigma$ 是标准差）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z\mid x)=\frac{1}{\sqrt{2\pi}\,\sigma}\exp\!\left(-\frac{(z-\mu)^2}{2\sigma^2}\right)$$</div>
+      </div>
+      <p>做 SLAM 时，"真实的均值 $\mu$"我们不知道，我们只知道<b>模型预测它会是多少</b>，也就是 $h_k(\mathcal{X}_k)$。于是把 $\mu$ 换掉：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z_k\mid \mathcal{X}_k)=\frac{1}{\sqrt{2\pi}\,\sigma_k}\exp\!\left(-\frac{\big(h_k(\mathcal{X}_k)-z_k\big)^2}{2\sigma_k^2}\right)$$</div>
+      </div>
+      <p>再把 $\dfrac{1}{\sigma_k^2}$ 写成 $\Omega_k$（一维时 $\Omega_k$ 就是个正数），把 $\dfrac{1}{2}$ 提到外面：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z_k\mid \mathcal{X}_k)=\underbrace{\frac{1}{\sqrt{2\pi}\,\sigma_k}}_{\text{不含 } \mathcal{X}\text{，是常数}}\exp\!\left(-\tfrac{1}{2}\,\Omega_k\big(h_k(\mathcal{X}_k)-z_k\big)^2\right)\;\propto\;\exp\!\left(-\tfrac{1}{2}\big\|h_k(\mathcal{X}_k)-z_k\big\|_{\Omega_k}^2\right)$$</div>
+      </div>
+      <p><b>★ 为什么能写成 $\propto$（正比于）？</b>因为前面那个 $\frac{1}{\sqrt{2\pi}\sigma_k}$ 里<b>没有任何未知量</b>，对 argmax 来说就是常数——跟零件 2 里扔掉分母 $p(Z)$ 是同一个理由，同一个动作。</p>
+
+      <h3>第 2 步：一维的"平方"在多维里变成"二次型"</h3>
+      <p>多维时，残差 $e=h_k(\mathcal{X}_k)-z_k$ 变成<b>一个向量</b>（比如激光一帧有几百个点、相机一帧有上千个特征）。这时"按各自的方差打折再平方相加"这件事，就写成了：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\|e\|_{\Omega}^{2}=e^{\mathsf{T}}\Omega\,e \qquad (\text{一维退化为 } \Omega e^2)$$</div>
+      </div>
+      <p><b>一句话理解：</b>$\Sigma$（协方差）是误差椭圆的形状，$\Omega=\Sigma^{-1}$ 是它的倒数——<b>误差椭圆越扁的方向，误差被罚得越狠</b>。现在只要建立这个直觉就够了，"$\Omega$ 具体长什么样、怎么从标定参数算出来"是第二季（阶段 B，Bundle Adjustment / g2o 那几节）的活。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="80" y="40" font-size="15" fill="#4a342c" font-weight="700">① 高斯：残差越小，可信度越高</text>
+          <line x1="80" y1="300" x2="520" y2="300" stroke="#cbbaa9" stroke-width="2"/>
+          <line x1="80" y1="300" x2="80" y2="60" stroke="#cbbaa9" stroke-width="2"/>
+          <polyline points="130,296.0 140,293.7 150,290.3 160,285.5 170,279.0 180,270.2 190,259.0 200,245.1 210,228.6 220,209.6 230,188.6 240,166.6 250,144.5 260,123.8 270,105.9 280,91.9 290,83.0 300,80.0 310,83.0 320,91.9 330,105.9 340,123.8 350,144.5 360,166.6 370,188.6 380,209.6 390,228.6 400,245.1 410,259.0 420,270.2 430,279.0 440,285.5 450,290.3 460,293.7 470,296.0" fill="none" stroke="#cc785c" stroke-width="3"/>
+          <line x1="80" y1="80" x2="300" y2="80" stroke="#c9ab95" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text x="86" y="74" font-size="12" fill="#8b786f">100%</text>
+          <line x1="300" y1="80" x2="300" y2="300" stroke="#cc785c" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <circle cx="300" cy="80" r="5" fill="#cc785c"/>
+          <text x="312" y="92" font-size="14" fill="#b15d44">e = 0：可信度最高</text>
+          <line x1="80" y1="270" x2="420" y2="270" stroke="#c9ab95" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text x="86" y="263" font-size="12" fill="#8b786f">13.5%</text>
+          <line x1="420" y1="270" x2="420" y2="300" stroke="#b15d44" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <circle cx="420" cy="270" r="5" fill="#b15d44"/>
+          <text x="420" y="324" font-size="13" fill="#8b786f" text-anchor="middle">e = 1.0 m</text>
+          <text x="300" y="352" font-size="13" fill="#8b786f" text-anchor="middle">残差 e ＝ z − h(X)</text>
+          <text x="580" y="40" font-size="15" fill="#4a342c" font-weight="700">② Ω 是什么：曲线的胖瘦</text>
+          <line x1="580" y1="300" x2="880" y2="300" stroke="#cbbaa9" stroke-width="2"/>
+          <line x1="580" y1="300" x2="580" y2="60" stroke="#cbbaa9" stroke-width="2"/>
+          <polyline points="545,298.3 555,297.3 565,295.7 575,293.4 585,290.1 595,285.7 605,279.7 615,272.1 625,262.6 635,251.3 645,238.3 655,224.0 665,209.0 675,194.0 685,179.9 695,167.6 705,158.1 715,152.1 725,150.0 735,152.1 745,158.1 755,167.6 765,179.9 775,194.0 785,209.0 795,224.0 805,238.3 815,251.3 825,262.6 835,272.1 845,279.7 855,285.7 865,290.1 875,293.4" fill="none" stroke="#e0a389" stroke-width="3"/>
+          <polyline points="600,300.0 605,300.0 610,300.0 615,300.0 620,300.0 625,299.9 630,299.8 635,299.6 640,299.3 645,298.6 650,297.3 655,295.2 660,291.8 665,286.5 670,278.7 675,267.5 680,252.5 685,233.3 690,209.9 695,183.2 700,154.4 705,125.7 710,99.5 715,78.5 720,64.8 725,60.0 730,64.8 735,78.5 740,99.5 745,125.7 750,154.4 755,183.2 760,209.9 765,233.3 770,252.5 775,267.5 780,278.7 785,286.5 790,291.8 795,295.2 800,297.3 805,298.6 810,299.3 815,299.6 820,299.8 825,299.9 830,300.0 835,300.0 840,300.0 845,300.0 850,300.0" fill="none" stroke="#b15d44" stroke-width="3"/>
+          <line x1="580" y1="372" x2="606" y2="372" stroke="#b15d44" stroke-width="3"/>
+          <text x="614" y="377" font-size="13" fill="#4a342c">Ω 大（σ 小）：很准，偏离一点就重罚</text>
+          <line x1="580" y1="400" x2="606" y2="400" stroke="#e0a389" stroke-width="3"/>
+          <text x="614" y="405" font-size="13" fill="#4a342c">Ω 小（σ 大）：不太准，偏一点也宽容</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是一维高斯曲线——横轴是<b>残差</b>（量测减预测），纵轴是这个量测的<b>可信度</b>。右图是同样一条曲线在多维"信息矩阵"下的两种极端形状。
+          <br><b>怎么看这张图：</b>左图盯两个点：顶点处 $e=0$（量测和预测完全吻合）可信度 100%；往右走到 $e=1.0$ m 时，可信度只剩 13.5%——<b>这就是 $\exp(-\frac12\Omega e^2)$ 在做的事：把"偏离"翻译成"打折"</b>（这里的数值按 $\sigma=0.5$ m 算，$e=1$ m 即 $2\sigma$，$\exp(-2)\approx13.5\%$）。右图盯两件事：两条曲线的<b>峰高不一样</b>（Ω 大的更尖更高）、<b>胖瘦不一样</b>（Ω 大的更瘦）。<b>瘦，就意味着"稍微偏一点，分数啪一下就掉下去"——这就是"这个传感器很准"的数学表达。</b>
+          <br><b>要记住的一句话：</b>$\Omega$ 不是一个抽象的矩阵符号，它是"<b>这个传感器的读数有多不能违抗</b>"。
+        </figcaption>
+      </figure>
+
+      <table>
+        <thead><tr><th>传感器</th><th>$\sigma$（标准差）</th><th>$\Omega=\sigma^{-2}$</th><th>曲线的样子</th><th>工程含义</th></tr></thead>
+        <tbody>
+          <tr><td>很准的激光测距</td><td>0.5 m</td><td><b>4</b></td><td>又瘦又高</td><td>它的读数你敢信；误差大一点就重罚</td></tr>
+          <tr><td>不太准的轮式里程计</td><td>2 m</td><td><b>0.25</b></td><td>又胖又矮</td><td>它说错 1 m 是家常便饭，别太当真</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section-card" id="f4">
+      <h2>5. 第 (4) 式：怎么就从"最大化可信度"变成"最小化加权平方和"了？</h2>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{X}^{\star} = \operatorname*{argmin}_{\mathcal{X}} \sum_{k=1}^{m}\left\| h_k(\mathcal{X}_k) - z_k \right\|_{\Omega_k}^{2} \tag{4}$$</div>
+      </div>
+
+      <p>这一次的"化简"要用到零件 5 的两招。整条链一气呵成，请一行一行跟着看（先验也写成同样的高斯形式，合并进同一个求和）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$
+\begin{aligned}
+\mathcal{X}^\star
+&\overset{(1)}{=}\operatorname*{argmax}_{\mathcal{X}}\; p(\mathcal{X})\prod_{k}p(z_k\mid\mathcal{X}_k)\\[4pt]
+&\overset{(3)}{=}\operatorname*{argmax}_{\mathcal{X}}\;\exp\!\left(-\tfrac12\sum_{k}\big\|h_k(\mathcal{X}_k)-z_k\big\|_{\Omega_k}^{2}\right)\\[4pt]
+&\overset{\text{取对数}}{\underset{\text{（单调）}}{=}}\operatorname*{argmax}_{\mathcal{X}}\;\left(-\tfrac12\sum_{k}\big\|h_k(\mathcal{X}_k)-z_k\big\|_{\Omega_k}^{2}\right)\\[4pt]
+&\overset{\text{取负号}}{=}\operatorname*{argmin}_{\mathcal{X}}\;\sum_{k}\big\|h_k(\mathcal{X}_k)-z_k\big\|_{\Omega_k}^{2}
+\end{aligned}
+$$</div>
+      </div>
+
+      <table>
+        <thead><tr><th>这一步</th><th>做了什么</th><th>凭什么可以这么做</th></tr></thead>
+        <tbody>
+          <tr><td>① 乘积 → exp 里的求和</td><td>合并成一个指数</td><td>$\exp(a)\cdot\exp(b)=\exp(a+b)$</td></tr>
+          <tr><td>② 脱掉 exp</td><td>只留指数的内容</td><td>$\exp$ 单调递增，不改变最大值的位置</td></tr>
+          <tr><td>③ 扔掉 $-\tfrac12$ 和一切常数</td><td>简化系数</td><td>正的常数因子对所有候选同比例缩放，改不了排名</td></tr>
+          <tr><td>④ 取负号，max → min</td><td>把"山峰"翻成"山谷"</td><td>取负对数后，"可信度"变成了"代价"；argmax 翻成 argmin</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="60" y="42" font-size="15" fill="#4a342c" font-weight="700">p(X|Z)：后验（可信度）</text>
+          <polyline points="95,280.2 103,276.1 111,270.7 119,263.9 127,255.4 135,245.0 143,232.8 151,218.7 159,203.1 167,186.2 175,168.7 183,151.2 191,134.5 199,119.4 207,106.7 215,97.3 223,91.6 231,90.0 239,92.7 247,99.3 255,109.6 263,122.9 271,138.5 279,155.5 287,173.1 295,190.5 303,207.1 311,222.4 319,236.0 327,247.8 335,257.7 343,265.8 351,272.2 359,277.2" fill="none" stroke="#4f9a63" stroke-width="3"/>
+          <line x1="60" y1="290" x2="380" y2="290" stroke="#cbbaa9" stroke-width="2"/>
+          <line x1="231" y1="90" x2="231" y2="290" stroke="#4f9a63" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <circle cx="231" cy="90" r="5" fill="#4f9a63"/>
+          <text x="231" y="324" font-size="13" fill="#4f9a63" text-anchor="middle">最大值＝最可能</text>
+          <path d="M395 200 L495 200" stroke="#b15d44" stroke-width="2.5"/>
+          <path d="M487 192 L499 200 L487 208 Z" fill="#b15d44"/>
+          <text x="445" y="182" font-size="14" fill="#b15d44" text-anchor="middle" font-weight="700">取 log 再取负</text>
+          <text x="520" y="42" font-size="15" fill="#4a342c" font-weight="700">−log p(X|Z)：代价</text>
+          <polyline points="540,90.3 548,90.6 556,91.0 564,91.8 572,93.0 580,94.9 588,97.7 596,101.8 604,107.5 612,115.1 620,125.0 628,137.3 636,151.8 644,168.4 652,186.2 660,204.5 668,222.0 676,237.5 684,249.6 692,257.3 700,260.0 708,257.3 716,249.6 724,237.5 732,222.0 740,204.5 748,186.2 756,168.4 764,151.8 772,137.3 780,125.0 788,115.1 796,107.5 804,101.8 812,97.7 820,94.9 828,93.0 836,91.8 844,91.0 852,90.6 860,90.3" fill="none" stroke="#cc785c" stroke-width="3"/>
+          <line x1="520" y1="290" x2="870" y2="290" stroke="#cbbaa9" stroke-width="2"/>
+          <line x1="700" y1="260" x2="700" y2="290" stroke="#cc785c" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <circle cx="700" cy="260" r="5" fill="#cc785c"/>
+          <text x="700" y="324" font-size="13" fill="#b15d44" text-anchor="middle">最小值＝最可能</text>
+          <line x1="60" y1="290" x2="870" y2="290" stroke="#e6dcd2" stroke-width="1.5" stroke-dasharray="3 5"/>
+          <text x="90" y="352" font-size="13" fill="#8b786f">横轴：同一个候选变量 X（两幅图共用同一条横轴）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是"后验"（可信度）——我们要爬的山；右边是"负对数后验"（代价）——我们要下的谷。
+          <br><b>怎么看这张图：</b>把两张图<b>叠在一起看</b>：绿色的峰顶和橙色的谷底落在<b>同一个横坐标</b>上（横轴都是"候选变量 X"）。这就说明"找最大可信度"和"找最小代价"是<b>同一个答案</b>——我们只是把这座山倒过来看。中间那支箭头就是整套变换：$\ln$（单调，不改位置）加上一个负号（把山翻成谷）。<b>所以以后看到"优化代价函数"和"求最大后验"，别再当成两回事。</b>
+          <br><b>要记住的一句话：</b>负对数把"山峰"翻成"山谷"，但<b>峰顶和谷底在同一个地方</b>。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>★ 一个"考眼力"的诚实提醒：原文 (4) 式把先验藏起来了</h4>
+        <p>我们在核对原文第 II-A 节时注意到一处细节：原文在 (4) 式前一段说"先验也可以写成高斯形式" $p(\mathcal{X})\propto\exp(-\tfrac12\|h_0(\mathcal{X})-z_0\|_{\Omega_0}^2)$，而 (4) 式第一行也确实写了 $\operatorname*{argmin}-\log\big(p(\mathcal{X})\prod_k p(z_k\mid\mathcal{X}_k)\big)$——<b>先验是包含在里面的</b>；但最终那行求和 $\sum_{k}$ 只从 $k=1$ 到 $m$，<b>没有把先验项显式写出来</b>。</p>
+        <p>严格写完整，应该是：</p>
+        <div class="formula-box">
+          <div class="flow-formula">$$\mathcal{X}^\star=\operatorname*{argmin}_{\mathcal{X}}\left(\underbrace{\big\|h_0(\mathcal{X})-z_0\big\|_{\Omega_0}^{2}}_{\text{先验因子}}+\sum_{k=1}^{m}\big\|h_k(\mathcal{X}_k)-z_k\big\|_{\Omega_k}^{2}\right)$$</div>
+        </div>
+        <p><b>这不是错误，是排版上的省略</b>（大多数场景没有先验，那一项不出现）。但你必须知道它在那儿——否则第 0002 课说"先验可以被丢掉"，你会以为先验从此消失了。<b>先验没消失，它只是变成了一个因子。</b></p>
+      </div>
+
+      <h3>为什么叫"非线性"最小二乘？</h3>
+      <p>因为 $h_k(\cdot)$ 通常是<b>非线性</b>函数——旋转不是加法、透视投影更不是。于是代价函数 $J(\mathcal{X})=\sum_k\|h_k(\mathcal{X}_k)-z_k\|^2_{\Omega_k}$ 对 $\mathcal{X}$ 是非线性的，<b>一般没有一步到位的闭式解</b>。实际做法是"逐次线性化"：在当前估计处把 $h_k$ 一阶展开，把问题变成一串线性方程（原文叫 normal equations，正规方程），解完再展开、再解——这就是<b>高斯-牛顿法</b>；再加个阻尼让它更稳，就是<b>列文伯格-马夸尔特法（LM）</b>。g2o、Ceres、GTSAM 这些库做的就是这件事。</p>
+      <p><b>注意：下一节那个 1 维算例恰好能闭式解（因为它退化成二次函数了），别被它骗了——真实问题里你是解不出来的，必须迭代。</b></p>
+
+      <div class="callout">
+        <h4>为什么说"理解了这四行，就理解了 80% 的后端论文"？</h4>
+        <p>因为后端的论文基本都在<b>改这四行里的某一行</b>：</p>
+        <p>· 改<b>代价函数</b>：换成 ℓ₁（拉普拉斯噪声）、换成 Huber / Tukey 鲁棒核（抗外点）——原文明确写了这两条；<br>
+        · 改<b>因子集合</b>：加 IMU 因子（第 0002 课提到的预积分）、轮速计因子、GPS 因子、回环因子、语义因子；<br>
+        · 改<b>变量集合</b>：把路标边缘化掉、只留位姿（位姿图优化）、把相机内外参也当成变量；<br>
+        · 改<b>求解方式</b>：Schur 消元加速、增量式求解（iSAM）、流形上的优化——这些是第二季"打地基"的正题。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="example">
+      <h2>6. 手算到底：走廊里的一台机器人，13.2 m 是怎么来的</h2>
+
+      <p>数学推导看完了，我们来<b>真刀真枪算一个数</b>。这是这一节最该带走的东西——因为能算出来，你才算真的懂了。</p>
+
+      <h3>设定</h3>
+      <p>一台机器人在一条直走廊里前进，我们要估计它在某一时刻的位置 $x$（一维，单位 m）。两个传感器同时对 $x$ 给出了读数：</p>
+      <table>
+        <thead><tr><th>量测</th><th>读数 $z_k$</th><th>标准差 $\sigma_k$</th><th>信息矩阵 $\Omega_k=1/\sigma_k^2$</th><th>观测模型</th></tr></thead>
+        <tbody>
+          <tr><td>轮式里程计</td><td>$z_1 = 10$ m</td><td>$\sigma_1 = 1$ m</td><td>$\Omega_1 = 1$</td><td>$h_1(x)=x$</td></tr>
+          <tr><td>激光测距</td><td>$z_2 = 14$ m</td><td>$\sigma_2 = 0.5$ m</td><td>$\Omega_2 = 4$</td><td>$h_2(x)=x$</td></tr>
+        </tbody>
+      </table>
+      <p>先验暂时没有（我们对 $x$ 一无所知）→ $p(x)$ 是常数 → 按零件 2 的规则丢掉。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="210" y="118" font-size="13" fill="#8b786f" text-anchor="middle">（σ = 1，Ω = 1）</text>
+          <text x="210" y="138" font-size="14" fill="#4a342c" text-anchor="middle" font-weight="700">里程计读数 10 m</text>
+          <circle cx="210" cy="172" r="10" fill="#fffdfa" stroke="#6a554d" stroke-width="2"/>
+          <circle cx="210" cy="172" r="2.5" fill="#6a554d"/>
+          <path d="M210 162 L210 152 M200 172 L190 172 M220 172 L230 172" stroke="#6a554d" stroke-width="2"/>
+          <text x="650" y="118" font-size="13" fill="#8b786f" text-anchor="middle">（σ = 0.5，Ω = 4）</text>
+          <text x="650" y="138" font-size="14" fill="#4a342c" text-anchor="middle" font-weight="700">激光读数 14 m</text>
+          <path d="M650 162 L640 182 L660 182 Z" fill="#fffdfa" stroke="#6a554d" stroke-width="2"/>
+          <path d="M650 182 L650 190" stroke="#6a554d" stroke-width="2"/>
+          <path d="M210 182 L210 190 M650 190 L210 190" stroke="#6a554d" stroke-width="2"/>
+          <line x1="210" y1="190" x2="210" y2="215" stroke="#b9a99c" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <line x1="650" y1="190" x2="650" y2="215" stroke="#b9a99c" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <polyline points="210,215 230,207 249,223 269,207 288,223 308,207 327,223 347,207 366,223 386,207 406,223 425,207 445,223 464,207 484,223 503,207 523,223 542,207 562,215" fill="none" stroke="#cc785c" stroke-width="1.6"/>
+          <polyline points="562,215 571,206 580,224 588,206 597,224 606,206 615,224 624,206 632,224 641,206 650,215" fill="none" stroke="#b15d44" stroke-width="4.5"/>
+          <line x1="100" y1="250" x2="790" y2="250" stroke="#8b786f" stroke-width="2"/>
+          <line x1="100" y1="250" x2="100" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <line x1="210" y1="250" x2="210" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <line x1="320" y1="250" x2="320" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <line x1="430" y1="250" x2="430" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <line x1="540" y1="250" x2="540" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <line x1="650" y1="250" x2="650" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <line x1="760" y1="250" x2="760" y2="259" stroke="#8b786f" stroke-width="2"/>
+          <text x="100" y="276" font-size="14" fill="#8b786f" text-anchor="middle">9</text>
+          <text x="210" y="276" font-size="14" fill="#8b786f" text-anchor="middle">10</text>
+          <text x="320" y="276" font-size="14" fill="#8b786f" text-anchor="middle">11</text>
+          <text x="430" y="276" font-size="14" fill="#8b786f" text-anchor="middle">12</text>
+          <text x="540" y="276" font-size="14" fill="#8b786f" text-anchor="middle">13</text>
+          <text x="650" y="276" font-size="14" fill="#8b786f" text-anchor="middle">14</text>
+          <text x="760" y="276" font-size="14" fill="#8b786f" text-anchor="middle">15</text>
+          <path d="M562 240 L572 250 L562 260 L552 250 Z" fill="#4f9a63"/>
+          <text x="562" y="300" font-size="15" fill="#4f9a63" text-anchor="middle" font-weight="700">融合结果 x* = 13.2 m</text>
+          <rect x="150" y="340" width="200" height="22" rx="4" fill="#cc785c"/>
+          <text x="250" y="356" font-size="13" fill="#ffffff" text-anchor="middle">里程计侧：3.2 × 1</text>
+          <text x="376" y="357" font-size="18" fill="#4f9a63" text-anchor="middle" font-weight="700">=</text>
+          <rect x="400" y="340" width="200" height="22" rx="4" fill="#b15d44"/>
+          <text x="500" y="356" font-size="13" fill="#ffffff" text-anchor="middle">激光侧：0.8 × 4</text>
+          <text x="150" y="386" font-size="14" fill="#4a342c">两边拉力相等（都是 3.2）→ 这个位置就是最优解</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把上面那张设定表画成一根数轴。两个传感器各在 10 m 和 14 m 处"拽"着答案，中间的<b>弹簧</b>表示"谁拽得动"。
+          <br><b>怎么看这张图：</b>① 左边那根弹簧<b>又细又长</b>（里程计 Ω 小，说话没份量）；② 右边那根弹簧<b>又粗又短</b>（激光 Ω 大，很硬）；③ 绿色菱形是最后落在 13.2 m 的位置——<b>明显更靠近激光说的 14 m</b>，这就是"更准的传感器把答案拉过去"的可视化。④ 最下面两根色条长度<b>一模一样</b>，因为它们代表的是同一个数：$3.2\times1=3.2$ 和 $0.8\times4=3.2$。<b>最优解的条件就是"两边的拉力相等"</b>。
+          <br><b>要记住的一句话：</b>最小二乘的结果 = 各读数的<b>加权平均</b>，权重就是 $\Omega$。
+        </figcaption>
+      </figure>
+
+      <h3>第 1 步：写出 (3) 式——每条证据的可信度</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z_1\mid x)\propto\exp\!\left(-\tfrac{1}{2}\cdot 1\cdot(x-10)^2\right),\qquad p(z_2\mid x)\propto\exp\!\left(-\tfrac{1}{2}\cdot 4\cdot(x-14)^2\right)$$</div>
+      </div>
+
+      <h3>第 2 步：写出 (2) 式——两条证据独立，可信度相乘</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(Z\mid x)\propto\exp\!\left(-\tfrac{1}{2}\Big[\,1\cdot(x-10)^2+4\cdot(x-14)^2\,\Big]\right)$$</div>
+      </div>
+      <p>（相乘时指数相加：$e^{a}\cdot e^{b}=e^{a+b}$。看，乘积就这么自然地变成了<b>求和</b>。）</p>
+
+      <h3>第 3 步：写出 (4) 式——取负对数，求最小</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$x^{\star}=\operatorname*{argmin}_{x}\Big[\underbrace{(x-10)^2}_{\text{第一项 } J_1}+\underbrace{4(x-14)^2}_{\text{第二项 } J_2}\Big]$$</div>
+      </div>
+
+      <h3>第 4 步：手算（一行都不跳）</h3>
+      <p>展开：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$J(x)=\underbrace{(x^2-20x+100)}_{J_1}+\underbrace{4(x^2-28x+196)}_{J_2}=5x^2-132x+884$$</div>
+      </div>
+      <p>求导、令零（因为 $J$ 是开口向上的二次函数，导数零点就是最小值点）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$J'(x)=10x-132=0\;\Longrightarrow\;x^{\star}=\frac{132}{10}=\boxed{13.2}$$</div>
+      </div>
+      <p>验一下二阶导：$J''(x)=10$，恒为正 → 确实是<b>极小值</b>，不是极大值。✅</p>
+
+      <h3>第 5 步：验算——"两边拉力相等"</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\underbrace{(13.2-10)\times 1=3.2}_{\text{到里程计的距离}\times\text{它的权重}}\qquad\underbrace{(14-13.2)\times 4=3.2}_{\text{到激光的距离}\times\text{它的权重}}$$</div>
+      </div>
+      <p>两边都是 3.2 → <b>平衡</b>。为什么最优解一定满足这个条件？因为对 $J(x)=\sum_k\omega_k(x-z_k)^2$ 求导得 $J'(x)=2\sum_k\omega_k(x-z_k)$，令它为零就是 $\sum_k\omega_k x=\sum_k\omega_k z_k$，也就是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\boxed{\;x^{\star}=\frac{\sum_k\omega_k z_k}{\sum_k\omega_k}=\frac{1\times 10+4\times 14}{1+4}=\frac{66}{5}=13.2\;}$$</div>
+      </div>
+      <p><b>这个式子眼熟吗？就是"加权平均"。</b>所以（在没有先验、观测模型为线性恒等式的简单情形下）"最大后验估计"其实就是"各读数的加权平均"——权重 $\omega_k$ 就是 $\Omega_k$。<b>把这句话记住，你就已经抓住了整个 SLAM 后端的灵魂。</b></p>
+
+      <h3>第 6 步：把先验加回来</h3>
+      <p>假设出发前我们知道"机器人大概在 12 m 附近"，不确定度 $\sigma_0=1$ m（即 $\Omega_0=1$、$z_0=12$、$h_0(x)=x$）。那就多一项"先验拉力"：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$x^{\star}=\frac{1\times 12+1\times 10+4\times 14}{1+1+4}=\frac{12+10+56}{6}=\frac{78}{6}=13.0$$</div>
+      </div>
+      <p>答案从 13.2 被拉回 13.0——<b>先验果然"有份量"，它就在 (4) 式那个被省略的第一项里。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="100" y="36" font-size="13" fill="#6a554d">○ 两个测量读数（固定不动）　　◆ 融合后的位置（随权重滑动）</text>
+          <line x1="100" y1="56" x2="100" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <line x1="210" y1="56" x2="210" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <line x1="320" y1="56" x2="320" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <line x1="430" y1="56" x2="430" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <line x1="540" y1="56" x2="540" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <line x1="650" y1="56" x2="650" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <line x1="760" y1="56" x2="760" y2="300" stroke="#f0e7dd" stroke-width="1.5"/>
+          <text x="100" y="84" font-size="14" fill="#4a342c">① 按真实精度：里程计 Ω=1、激光 Ω=4</text>
+          <line x1="210" y1="100" x2="650" y2="100" stroke="#dccdbe" stroke-width="2"/>
+          <circle cx="210" cy="100" r="7" fill="#fffdfa" stroke="#8b786f" stroke-width="2"/>
+          <circle cx="650" cy="100" r="7" fill="#fffdfa" stroke="#8b786f" stroke-width="2"/>
+          <text x="210" y="126" font-size="13" fill="#8b786f" text-anchor="middle">10 m</text>
+          <text x="650" y="126" font-size="13" fill="#8b786f" text-anchor="middle">14 m</text>
+          <path d="M562 92 L570 100 L562 108 L554 100 Z" fill="#4f9a63"/>
+          <text x="582" y="105" font-size="15" fill="#4f9a63" font-weight="700">13.2 m</text>
+          <text x="100" y="159" font-size="14" fill="#4a342c">② 假设两个一样准：Ω₁ = Ω₂ = 1</text>
+          <line x1="210" y1="175" x2="650" y2="175" stroke="#dccdbe" stroke-width="2"/>
+          <circle cx="210" cy="175" r="7" fill="#fffdfa" stroke="#8b786f" stroke-width="2"/>
+          <circle cx="650" cy="175" r="7" fill="#fffdfa" stroke="#8b786f" stroke-width="2"/>
+          <path d="M430 167 L438 175 L430 183 L422 175 Z" fill="#4f9a63"/>
+          <text x="450" y="180" font-size="15" fill="#4f9a63" font-weight="700">12.0 m</text>
+          <text x="100" y="234" font-size="14" fill="#4a342c">③ 反过来假设里程计更准：Ω₁ = 4、Ω₂ = 1</text>
+          <line x1="210" y1="250" x2="650" y2="250" stroke="#dccdbe" stroke-width="2"/>
+          <circle cx="210" cy="250" r="7" fill="#fffdfa" stroke="#8b786f" stroke-width="2"/>
+          <circle cx="650" cy="250" r="7" fill="#fffdfa" stroke="#8b786f" stroke-width="2"/>
+          <path d="M298 242 L306 250 L298 258 L290 250 Z" fill="#4f9a63"/>
+          <text x="318" y="255" font-size="15" fill="#4f9a63" font-weight="700">10.8 m</text>
+          <line x1="100" y1="300" x2="776" y2="300" stroke="#8b786f" stroke-width="2"/>
+          <text x="100" y="322" font-size="14" fill="#8b786f" text-anchor="middle">9</text>
+          <text x="210" y="322" font-size="14" fill="#8b786f" text-anchor="middle">10</text>
+          <text x="320" y="322" font-size="14" fill="#8b786f" text-anchor="middle">11</text>
+          <text x="430" y="322" font-size="14" fill="#8b786f" text-anchor="middle">12</text>
+          <text x="540" y="322" font-size="14" fill="#8b786f" text-anchor="middle">13</text>
+          <text x="650" y="322" font-size="14" fill="#8b786f" text-anchor="middle">14</text>
+          <text x="760" y="322" font-size="14" fill="#8b786f" text-anchor="middle">15</text>
+          <text x="790" y="322" font-size="14" fill="#8b786f">位置（米）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把"权重"这个抽象概念变成能滑动的菱形。两个测量读数固定在 10 m 和 14 m 不动，只有 $\Omega$ 在变。
+          <br><b>怎么看这张图：</b>从上往下看三行的菱形位置：① 14 m 那边更准 → 菱形<b>偏右</b>（13.2 m）；② 一样准 → 菱形<b>停在正中间</b>（12.0 m，就是普通平均）；③ 反过来 10 m 那边更准 → 菱形<b>滑到左边</b>（10.8 m）。<b>三个数一起把一句话说清楚了：谁更准，答案就更靠近谁。</b>
+          <br><b>要记住的一句话：</b>$\Omega$ 就是"话语权"的刻度尺——它决定答案往哪边偏、偏多少。
+        </figcaption>
+      </figure>
+
+      <table>
+        <thead><tr><th>情形</th><th>$\Omega_1$（里程计）</th><th>$\Omega_2$（激光）</th><th>结果 $x^\star$</th><th>谁在主导</th></tr></thead>
+        <tbody>
+          <tr><td>按真实精度</td><td>1</td><td>4</td><td><b>13.2</b></td><td>激光（结果靠近 14）</td></tr>
+          <tr><td>假设一样准</td><td>1</td><td>1</td><td><b>12.0</b></td><td>各占一半（普通平均）</td></tr>
+          <tr><td>反过来假设里程计更准</td><td>4</td><td>1</td><td><b>10.8</b></td><td>里程计（结果靠近 10）</td></tr>
+          <tr><td>再加一个先验 $z_0=12,\Omega_0=1$</td><td>1</td><td>4</td><td><b>13.0</b></td><td>先验把结果往 12 拉了一点</td></tr>
+        </tbody>
+      </table>
+
+      <div class="interactive-card">
+        <h3>互动判断 ②</h3>
+        <p>把上面算例里激光的 $\Omega_2$ 从 4 改成 100（相当于"我极其相信这个读数"），结果会怎样？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。Ω 就是权重：权重越大，加权平均越被它牵着走。Ω₂=100 时，x*=(1×10+100×14)/101≈13.96，几乎就等于 14——也就是「最准的那个说了算」。" onclick="lessonKit.answer(this,'q0002b')">结果几乎就等于 14 m</button>
+          <button data-correct="no" data-explanation="不对。Ω 不影响「要不要保留这个测量」，它只影响这个测量在加权平均里的话语权。真要丢掉一个测量，是数据关联或外点剔除的活，跟 Ω 不是一回事。" onclick="lessonKit.answer(this,'q0002b')">里程计测量会被丢弃</button>
+        </div>
+        <div class="quiz-feedback" id="q0002b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="faq">
+      <h2>7. 七个最容易卡住的点（都是我自己当年卡过的）</h2>
+
+      <h3>Q1｜先验为什么能"扔掉"？扔了结果还准吗？</h3>
+      <p><b>扔掉的不是"先验"这个概念，而是"当你对 $\mathcal{X}$ 一无所知时"那个特定的先验。</b>一无所知 = 均匀分布 = 一个常数 = 对 argmax 毫无影响（回到零件 2 里"分母可扔"的同一条逻辑）。</p>
+      <p>反过来，<b>一旦你真的知道点什么，先验就绝不能扔</b>——比如"机器人不会瞬移"、"出发点大概在 12 m 附近"。它会变成 (4) 式里那个 $\|h_0(\mathcal{X})-z_0\|^2_{\Omega_0}$ 项（第 6 节第 6 步已经算过了：13.2 → 13.0）。</p>
+      <p><b>注意第 0002 课原文的措辞</b>是"MAP <b>可以</b>退化成 MLE"，那个"可以"就是这个意思：<b>在没有先验知识的时候才可以。</b></p>
+
+      <h3>Q2｜"量测相互独立"和"每个量测只依赖一小部分变量"，是一回事吗？</h3>
+      <p><b>不是。这是第 (2) 式里最容易被揉成一件事的两个假设</b>（第 3 节已经用表格拆开过，这里再给一句最短的记法）：</p>
+      <table>
+        <thead><tr><th></th><th>量测独立（假设 A）</th><th>局部依赖（假设 B）</th></tr></thead>
+        <tbody>
+          <tr><td>它是什么</td><td>关于<b>噪声</b>的概率假设</td><td>关于<b>结构</b>的客观事实</td></tr>
+          <tr><td>它管什么</td><td>能不能拆成<b>连乘</b></td><td>拆完<b>算得快不快</b></td></tr>
+          <tr><td>它不成立</td><td>只得老实写联合分布，别想连乘</td><td>每个因子连全部变量 → 稠密 → 算不动</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Q3｜为什么非要取 log？不取行不行？</h3>
+      <p><b>数学上：行。</b>因为 $\ln$ 单调递增，取不取 log 得到的是<b>同一个</b> $\mathcal{X}^\star$。</p>
+      <p><b>工程上：不行。</b>两个理由：① 上千个小概率连乘会<b>数值下溢成 0</b>（第 3 节那张表），届时所有候选分数都是 0，算法彻底失去分辨力；② 求导时，乘积要套乘法法则，取 log 后变成"求和"，每一项可以独立求导，简单太多。<b>这是"数学等价、工程不等价"的典型样本，也是你以后读论文时判断"某个技巧为什么要加"的好抓手。</b></p>
+
+      <h3>Q4｜Ω 为什么用"协方差的逆"，而不是协方差本身？</h3>
+      <p>因为我们要的是<b>"话语权"</b>，而话语权应该"越准越大"。$\sigma$ 越小表示越准，$1/\sigma^2$ 恰好就有"越小越大"这个性质，所以用它。</p>
+      <p><b>两个字母，两种心态：</b>$\Sigma$（协方差）= "我不确定度"；$\Omega=\Sigma^{-1}$（信息矩阵）= "我有多确定"。<b>看到 $\Omega$ 就往"自信/权重"上想，看到 $\Sigma$ 就往"误差范围"上想。</b>回到第 6 节：激光 $\sigma=0.5$ → $\Omega=4$，是里程计（$\Omega=1$）的 4 倍——所以答案明显偏向激光说的 14 m。</p>
+
+      <h3>Q5｜高斯假设是哪来的？如果不成立怎么办？</h3>
+      <p>"到处都假设高斯"一半是因为它数学上好用（乘积还是高斯、取 log 变成二次型），一半是因为中心极限定理（很多小误差叠加起来近似高斯）。<b>但原文明确给了两条出路：</b></p>
+      <ul>
+        <li><b>换噪声分布就换代价函数</b>：噪声服从拉普拉斯分布时，(4) 式里的平方（ℓ₂ 范数）就换成<b>绝对值（ℓ₁ 范数）</b>。ℓ₁ 对离群点没那么敏感——因为"错得离谱"的项只被线性惩罚，而不是平方级爆炸。</li>
+          <li><b>为抗外点，把平方项换成鲁棒损失函数</b>（原文点名 Huber 与 Tukey 损失）。这是工程上最常用的一招，第 0005 课（动态环境激光 SLAM）和第 0012 课（动态环境视觉 SLAM）讲"怎么对付动态物体"时，用的正是这条路子。</li>
+      </ul>
+
+      <h3>Q6｜$h_k$ 是非线性的，那 (4) 式到底怎么解？</h3>
+      <p>一般<b>没有闭式解</b>。做法是"逐次线性化"：在当前估计 $\hat{\mathcal{X}}$ 处把 $h_k$ 做一阶展开，把代价函数近似成一个<b>二次函数</b>，而二次函数的最小值可以一步解出（解一组线性方程，即原文说的正规方程）；解完得到新估计，再展开、再解，反复迭代。这就是<b>高斯-牛顿法</b>；加一个阻尼让它更稳就是 <b>LM</b>。第 0003 课讲"从滤波到优化"时提到的 g2o，就是干这件事的库。</p>
+      <p><b>原文在 (4) 式后面还埋了一句关键的话：</b>正规方程里那个矩阵是<b>稀疏的</b>，而稀疏结构完全由因子图拓扑决定——这就是后面 Schur 消元、增量式求解、iSAM 这些技术的入口，也是第二季"打地基"（阶段 B 的 BA / g2o / GraphSLAM 几节）的正题。</p>
+
+      <h3>Q7｜这跟卡尔曼滤波是什么关系？</h3>
+      <p>原文讲得很干脆：<b>在线性高斯情形下，MAP 估计与卡尔曼滤波给出相同的结果</b>；一般情况下二者不同。区别在"怎么组织计算"：滤波是<b>在线递推</b>（每来一帧就更新一次状态与协方差），MAP 是<b>整段一起优化</b>（把所有位姿与路标当变量，一起解）。今天主流后端选优化，理由有三条：能反复线性化（对付非线性）、能增量式求解（新量测不断到来）、能把 IMU/轮速计/GPS 这些异构因子无差别地塞进同一个代价函数里。<b>这部分第 0003 课用 EKF-SLAM 的状态向量与协方差矩阵讲得很透，建议接着读。</b></p>
+
+      <div class="callout">
+        <h4>OCR 修正说明（我们改了什么）</h4>
+        <p>你如果回 <code>md/2016_Past__Present__and_Future_of_Simultaneous_Localization_a.md</code> 对照原文，会看到下面几处"不像人写的"地方。那是 PDF 转 Markdown 的识别错误，不是论文写错：</p>
+        <p>① (1)(2)(4) 式里 argmax / argmin 的下标被识别成了希腊字母 $\chi$，实际是花体的 $\mathcal{X}$（变量集）。<br>
+        ② (2) 式后半写成了 <code>p(z_k|\mathcal{X}_k))</code>，<b>多出一个右括号</b>——原文没有。<br>
+        ③ 讲鲁棒损失那一段里，"ℓ₂ 范数"被拆成了 <code>squared &lt;sub&gt;2&lt;/sub&gt;-norm</code>（下标那个 ℓ 被吃掉了），实际说的是 squared <b>ℓ₂-norm</b>。<br>
+        ④ 先验公式处出现 <code>ex p ( - ...)</code> 这种断字，是 <code>exp</code> 被拆开了。<br>
+        <b>这些只影响排版，不影响含义；本文一律按正确形式书写。</b></p>
+      </div>
+    </section>
+
+    <section class="section-card" id="check">
+      <h2>8. 自测：读完你应该能回答</h2>
+
+      <p>先别急着翻回上面。把这四句话列出来，看自己能不能<b>不看原文</b>说出来：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>一句话总结四式</h4>
+          <p><b>(1)</b> 用贝叶斯把后验拆成"似然 × 先验"，分母扔掉；<br>
+          <b>(2)</b> 量测独立 → 可信度连乘；每个量测只依赖少数变量 → 图稀疏；<br>
+          <b>(3)</b> 高斯噪声 → 每条证据的可信度是 $\exp(-\frac12\|h-z\|^2_\Omega)$；<br>
+          <b>(4)</b> 取负对数 → "找最可信"变成"找加权平方和最小"。</p>
+        </div>
+        <div class="mini-card">
+          <h4>三个必答问题</h4>
+          <p>① 先验在什么情况下能扔？扔了之后 MAP 变成了什么？<br>
+          ② "量测独立"和"局部依赖"分别带来什么好处？<br>
+          ③ $\Omega$ 变大会让结果往哪边走？为什么？</p>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>式</th><th>它只做了一件事</th><th>人话</th></tr></thead>
+        <tbody>
+          <tr><td>(1)</td><td>用贝叶斯拆开后验，扔掉与 $\mathcal{X}$ 无关的分母</td><td>"最可能的真相" = 让"证据最支持 × 我原来最信"最大的那个</td></tr>
+          <tr><td>(2)</td><td>独立 → 连乘；局部依赖 → 每个因子只连几个节点</td><td>一堆独立证据的可信度相乘；而且每条证据只跟少数几个未知数有关（所以能算得动）</td></tr>
+          <tr><td>(3)</td><td>把高斯分布代进去</td><td>每条证据都自带一个"苛刻度"$\Omega$：越准罚得越狠</td></tr>
+          <tr><td>(4)</td><td>取负对数、扔常数、翻面</td><td>"找最可信" → "找加权平方和最小" → 交给现成的最小二乘求解器</td></tr>
+        </tbody>
+      </table>
+
+      <section class="exercise-box">
+        <h3>课后练习（先自己算，再展开对答案）</h3>
+        <ol>
+          <li>
+            同一个走廊，两个量测换成：里程计 $z_1=10$ m（$\sigma_1=0.5$ m）、激光 $z_2=14$ m（$\sigma_2=1$ m）。请算出 $x^\star$，并说出答案偏向哪一边。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>
+                $\Omega_1=1/0.5^2=4$，$\Omega_2=1/1^2=1$。<br>
+                $x^\star=\dfrac{4\times10+1\times14}{4+1}=\dfrac{54}{5}=10.8$ m。<br>
+                答案明显偏向 10 m——因为这回是<b>里程计更准</b>（$\Omega_1=4$）。<br>
+                <b>对照记忆：</b>这正是第 6 节表格里的第三种情形，反过来把两个 $\Omega$ 调个头，答案就从 13.2 滑到 10.8。
+              </div>
+            </details>
+          </li>
+          <li>
+            为什么"取负对数"这一步不改变答案？请说出你用到的<b>两条</b>性质。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>
+                ① <b>log 单调递增</b>：$a&gt;b\Leftrightarrow\ln a&gt;\ln b$，所以最大值的<b>位置</b>不变，只改变最大值的大小；<br>
+                ② <b>乘以 −1 会翻转次序</b>：原来的最大值变成最小值，所以 argmax 变成 argmin。<br>
+                （顺带：正数常数因子（如 $\frac12$、$\frac{1}{\sqrt{2\pi}\sigma}$）对所有候选同比例缩放，也可以扔。）
+              </div>
+            </details>
+          </li>
+          <li>
+            如果噪声服从<b>拉普拉斯分布</b>而不是高斯分布，(4) 式会变成什么？这样做的直观好处是什么？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>
+                平方项（ℓ₂ 范数）换成<b>绝对值（ℓ₁ 范数）</b>：$x^\star=\operatorname*{argmin}\sum_k\|h_k(\mathcal{X}_k)-z_k\|_{\Omega_k}$（这里范数取 ℓ₁）。<br>
+                <b>直观好处：抗离群点。</b>ℓ₂ 对误差是平方级惩罚，"错得离谱"的那一项会主导整个代价函数，把一个外点拖成错误的解；ℓ₁ 是线性惩罚，外点的"破坏力"被压住。<br>
+                （原文原话："if the noise follows a Laplace distribution, the squared ℓ₂-norm in (4) is replaced by the ℓ₁-norm."）
+              </div>
+            </details>
+          </li>
+          <li>
+            把 (4) 式里被省略的先验项写出来，并说明它与"运动模型/观测模型"里的哪一个对应。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>
+                完整形式：$\mathcal{X}^\star=\operatorname*{argmin}_{\mathcal{X}}\Big(\|h_0(\mathcal{X})-z_0\|^2_{\Omega_0}+\sum_{k=1}^{m}\|h_k(\mathcal{X}_k)-z_k\|^2_{\Omega_k}\Big)$。<br>
+                先验项写成 $h_0,z_0,\Omega_0$ 之后，它在形式上与观测因子<b>完全一样</b>——这就是第 0002 课说的"MAP 不需要显式区分运动模型和观测模型，两者都被当作因子"，<b>也解释了为什么因子图里那个方块可以统一叫"因子"</b>。
+              </div>
+            </details>
+          </li>
+          <li>
+            为什么说 (4) 式"一般是解不出来的"（没有闭式解），但第 6 节的算例却一步就算出来了？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>
+                因为算例里 $h(x)=x$ 是<b>恒等函数（线性）</b>，代价函数退化成纯二次函数 $5x^2-132x+884$，二次函数求导得一次方程，一步解出。<br>
+                真实问题里 $h_k$ 含旋转、透视投影等非线性操作，代价函数是四次以上的复杂曲面，没有闭式解，只能<b>逐次线性化</b>（高斯-牛顿 / LM）。<br>
+                <b>所以那个算例是用来建立直觉的，不是用来代表真实问题的。</b>
+              </div>
+            </details>
+          </li>
+          <li>
+            （串联前后课）第 0002 课说"回环闭合把一个序列问题变成了图问题"。用今天学的四行解释这句话。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>
+                没有回环时，因子图是一条链：每个位姿只与相邻位姿（里程计因子）和它看到的路标（观测因子）相连，误差只沿着链传递、会一路累积。<br>
+                一旦检测到回环，就新增一个因子 $c$，<b>把一个很早的位姿和一个很晚的位姿直接连起来</b>——(4) 式的求和里多了一项约束，这一项同时含两端变量，于是"整段一起优化"才有可能把累积漂移一次性摊平。<br>
+                图形上，链变成了有环的图（第 0002 课原文说的正是这个意思）；数学上，(4) 式的因子集合里多了一个<b>稀疏但很长的约束</b>——这也是为什么后端必须能处理稀疏结构。
+              </div>
+            </details>
+          </li>
+        </ol>
+      </section>
+
+      <div class="callout">
+        <h4>还想再往下走一步？</h4>
+        <p>这四行里还留了三个坑没填，正好是第二季（阶段 B「打地基」）的活：<br>
+        ① 正规方程里的矩阵到底长什么样、为什么稀疏 → Bundle Adjustment 现代综述（2000）；<br>
+        ② 稀疏矩阵怎么快速解、增量式求解怎么做 → GraphSLAM 教程（2010）与 g2o（2011）；<br>
+        ③ 位姿是旋转（不是普通向量），"在流形上线性化"是什么意思 → 流形上的 IMU 预积分（2017）。</p>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="../lessons/0002-PastPresentFuture-2016-SLAM的全景纲领.html#q0002-map">← 回到：0002 课原位置（(4) 式之后）</a>
+        <a class="next" href="../lessons/0003-SLAM综述2021-从滤波到优化的演进主线.html">接着读：为什么是优化而不是滤波 →</a>
+      </div>
+      <p class="foot-note">公式这东西，看懂一遍是不够的，自己动手算一遍才真的长在身上。第 6 节那三行算术，建议用纸笔再走一次 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

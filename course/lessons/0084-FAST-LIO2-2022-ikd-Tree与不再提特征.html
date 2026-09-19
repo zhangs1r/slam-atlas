@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAST-LIO2（2022）：ikd-Tree 与「不再提特征」 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0084</div>
+      <h1>FAST-LIO2（2022）：ikd-Tree 与「不再提特征」</h1>
+      <p class="subtitle">挂了两季的那笔 ikd-Tree 之债，本节连本带利还清 🪓</p>
+      <div class="hero-meta">
+        <span>🎯 主题：直接配准 · 增量 k-d 树 · 懒惰删除与并行重建</span>
+        <span>👥 作者：香港大学 MaRS 实验室（与 FAST-LIO 同门）</span>
+        <span>📅 2022 · <i>FAST-LIO2: Fast Direct LiDAR-Inertial Odometry</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">还债链</a>
+        <a href="#b">第一条贡献：不再提特征</a>
+        <a href="#c">第二条贡献：ikd-Tree 解决什么</a>
+        <a href="#d">点插入与树上下采样</a>
+        <a href="#e">懒惰删除</a>
+        <a href="#f">部分重建与平衡判据</a>
+        <a href="#g">双线程并行重建</a>
+        <a href="#h">点到面残差与五邻域</a>
+        <a href="#i">实验数字与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「不提特征」到底省掉了什么麻烦；把 ikd-Tree 的「增量」两个字拆成<b>点插入 / 懒惰删除 / 部分重建 / 双线程并行</b>四件具体的事，每件都能用一句生活化的类比讲给别人听；写出它的两个平衡判据；并且记住那几个刺眼的速度数字。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节是整季的枢纽，一次性还两笔债。第一笔是第一季 <b>0006</b> 课挂起的「ikd-Tree 与 k-d 树到底差在哪」；第二笔是第一季 <b>0006</b> 提出、第三季 <b>0046–0050</b> 在视觉侧讲过的「提取特征 vs 不提取特征」——那个辩论在激光侧的第二回合（本季 <b>0074</b> LOAM 提特征）到本节才真正分胜负。</p>
+        </div>
+      </div>
+
+      <h2>1. 先把「还债链」讲清楚：这笔债是怎么挂了两季的</h2>
+
+      <p>ikd-Tree 这个名字，你不是第一次听见了。但它到底「增」在哪、和普通 k-d 树差在哪，前面几季一直欠着没讲。这条债的来龙去脉是这样的：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:1rem 0;line-height:2">
+        第一季 <b>0006</b>（LiDAR 里程计综述）第一次点出「ikd-Tree 是 FAST-LIO2 的关键」，<b>但没展开</b><br>
+        ↓<br>
+        第二季 <b>0022</b>（点云 BA）明确写：「本文走的是自适应体素化路线，<b>ikd-Tree 是另一条路线，我们留到阶段 D</b>」<br>
+        ↓<br>
+        第三季 <b>0023</b>（PCL / FLANN k-d 树家族）把问题立起来：「<b>为什么激光 SLAM 后来需要一棵能动态插入删除的树？</b>」<br>
+        ↓<br>
+        本季 <b>0074</b>（LOAM）把这个开销量化了：LOAM 建图阶段<b>每个扫描周期都要对地图重建一次 k-d 树</b>，建树耗时 <b>58–131 ms</b><br>
+        ↓<br>
+        <b>本节 0084：正面回答。</b>
+      </div>
+
+      <p>把这条链上的每一环摊开看：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">课号</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">那一课说了什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">留下的悬念</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0006</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">激光里程计综述：第一次提到 ikd-Tree 是 FAST-LIO2 的关键</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">它到底是什么？没展开</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0022</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">点云 BA：讲自适应体素化时明确指路「ikd-Tree 是另一条路线」</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">「留到阶段 D」——也就是今天</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0023</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">PCL：讲 FLANN 的 k-d 树一族（含近似最近邻）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">静态树够用吗？为什么需要能动态增删的树？</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0074</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">LOAM：讲清「每个扫描周期重建一次地图 k-d 树」这个开销，并把它命名为天花板</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">这个开销怎么消掉？</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0084</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">本节：把增量更新、懒惰删除、部分重建、并行重建逐个讲透</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">——债清了</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>另外还有一笔债也在本节到期。第一季 <b>0006</b> 课提出、第三季 <b>0046–0050</b> 课在视觉侧完整讲过的那场辩论——<b>「到底要不要先提取特征？」</b>——在激光侧的第一回合是 LOAM（本季 <b>0074</b>：挑出角点和平面点），而<b>本节是第二回合，也是分胜负的一回合</b>：FAST-LIO2 把特征提取整个删掉了。</p>
+
+      <p>所以这一节的分量，不只是「又多了一个 LIO 系统」，而是<b>两条埋了很久的线索在这里同时收口</b>。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 第一条贡献：直接配准（彻底「不再提特征」）</h2>
+
+      <p>上一节我们看到，FAST-LIO 虽然快，但它的管线里仍然先做一件事：<b>把点云挑一遍</b>——照局部平滑度挑出「面特征」（落在平面上的点）和「边特征」（落在棱线上的点），其余的丢掉，然后只把这些特征点送进滤波器。</p>
+
+      <p><b>FAST-LIO2 的第一条贡献，就是把这个「挑」的步骤整个删掉：</b>原始点云不挑不拣，直接拿去和地图配准。原文给这种做法起了一个名字，而且明确说了这个名字是借来的：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「We term this raw points based registration as a direct method in analogy to visual SLAM.」（我们把这种基于原始点的配准称为<b>直接法</b>，这个叫法是类比视觉 SLAM 而来的。）</p>
+
+      <p>那么原文凭什么认为「提特征」是个坏主意？它给了三条理由，每一条都是原文明写的：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 它对环境太敏感</b>
+          <p>原文说特征提取的性能「easily influenced by the environment」（容易被环境左右）：在<b>没有大平面、没有长棱线的无结构环境</b>里，它根本挑不出几个点来。原文原话是「the feature extraction will lead to few feature points」。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 小视场会把问题放大</b>
+          <p>原文紧接着补了一句：「This situation is considerably worsened if the LiDAR field of view (FoV) is small, a typical phenomenon of emerging solid-state LiDARs.」——<b>视场越小，这个问题越严重</b>，而小视场正是新兴固态激光雷达的典型特征。这一句直接呼应第一季 <b>0007</b> 课讲过的固态雷达话题。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 它把你绑死在一种雷达上</b>
+          <p>原文说特征提取「varies from LiDAR to LiDAR, depending on the scanning pattern (e.g., spinning, prism based, and MEMS based) and point density」——<b>换个扫描方式的雷达，提特征的规则就得重写</b>。原文的结论很直白：这会让采用一套 LIO 方法「requires much hand-engineering work」（需要大量手工调参的工程工作）。</p>
+        </div>
+      </div>
+
+      <p>而删掉它换来了什么？原文摘要里的说法是：直接配准「enables the exploitation of subtle features in the environment and, hence, increases the accuracy」（<b>使得环境中细微的几何结构也能被利用，从而提升精度</b>），并且「makes it naturally adaptable to emerging LiDARs of different scanning patterns」（<b>天然适配各种扫描方式的新兴激光雷达</b>）。</p>
+
+      <p>读到「细微的几何结构」这个说法，你应该立刻想起第三季 <b>0046–0050</b> 那一组课。视觉侧的直接法（DTAM、LSD-SLAM、DSO、SVO）当年主张的就是同一件事：<b>别提特征了，像素里那些「不够尖锐、不够像角点」的信息也是信息，扔掉就是白扔。</b>现在把「像素」换成「激光点」，把「光度」换成「距离」，辩论的逻辑一字不改。这就是第一季 <b>0006</b> 课埋下、本节收口的那条线。</p>
+
+      <p>原文还给了两个很具体的证据，说明这不是纸上推演：</p>
+
+      <ul>
+        <li><b>精度上的证据</b>：在大部分序列上，带特征提取的 FAST-LIO 变体和直接法表现差不多——<b>除了 lili_7 这一个序列</b>。原文的解释是，这个序列「contains many trees and large open areas that feature extraction will remove many effective points from trees and faraway buildings」（<b>包含大量树木和大片开阔区域，特征提取会把树和远处建筑物上的许多有效点删掉</b>）。</li>
+        <li><b>成败上的证据</b>：在港大校园那个 650 米、100 Hz 的手持序列上，另一个也支持固态雷达的系统 LILI-OM <b>直接失败了</b>。原文给的原因是：「its feature extraction module produces too few features at the 100 Hz scan rate」——<b>在 100 Hz 的扫描率下，它的特征提取模块产出太少的特征。</b></li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIO2/923022f4dbb28f9c317d46382ce47b383dd2be986d8988e865ae07d4ca74e42b.jpg" alt="System overview of FAST-LIO2">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>System overview of FAST-LIO2. The overall system consists of a state estimation module, which estimates the full LiDAR state by registering raw points in a scan to the map points via a tightly coupled iterated Kalman filter, and a mapping module, which incrementally adds the new points in each scan to a k-d tree structure (i.e., ikd-Tree) and rebalances the tree when necessary.<br>
+          （中译：FAST-LIO2 的系统总览。整个系统由一个状态估计模块和一个建图模块组成：状态估计模块通过紧耦合的迭代卡尔曼滤波，把一帧中的<b>原始点</b>配准到地图点上，从而估计完整的激光雷达状态；建图模块把每帧中的新点<b>增量地</b>加入一棵 k-d 树结构（即 ikd-Tree），并在必要时重新平衡该树。）<br>
+          <b>怎么看这张图：</b>① 找一个关键词——上半部分写的是「registering <b>raw points</b>」，也就是「配准原始点」，<b>整张图里再也找不到 feature extraction 这个模块了</b>；② 看下半部分的建图模块，它写的是「<b>incrementally</b> adds … and <b>rebalances</b>…」——增量加入、必要时再平衡，这正是本节后半程要逐条拆开的 ikd-Tree；③ 把这张图和上一节 FAST-LIO 的 Fig. 2 并排放，差别一眼可见：<b>上一节那根管子里有一个提特征的盒子，这一节没了。</b><br>
+          <b>要记住的一句话：</b>本节的两条贡献在这张图上各自占一半——上半「不再提特征」，下半「ikd-Tree 增量地图」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="200" y="28" text-anchor="middle" font-size="15.5" font-weight="700" fill="#9b2c2c">LOAM 式做法：先挑特征</text>
+          <g fill="#b9b9b9" opacity="0.5">
+            <circle cx="90" cy="90" r="3.4"/><circle cx="140" cy="80" r="3.4"/><circle cx="190" cy="95" r="3.4"/><circle cx="240" cy="85" r="3.4"/><circle cx="290" cy="100" r="3.4"/>
+            <circle cx="80" cy="140" r="3.4"/><circle cx="130" cy="130" r="3.4"/><circle cx="180" cy="145" r="3.4"/><circle cx="230" cy="135" r="3.4"/><circle cx="280" cy="150" r="3.4"/><circle cx="320" cy="140" r="3.4"/>
+            <circle cx="95" cy="190" r="3.4"/><circle cx="145" cy="180" r="3.4"/><circle cx="195" cy="195" r="3.4"/><circle cx="245" cy="185" r="3.4"/><circle cx="295" cy="200" r="3.4"/>
+            <circle cx="85" cy="240" r="3.4"/><circle cx="135" cy="230" r="3.4"/><circle cx="185" cy="245" r="3.4"/><circle cx="235" cy="235" r="3.4"/><circle cx="285" cy="250" r="3.4"/><circle cx="325" cy="240" r="3.4"/>
+            <circle cx="100" cy="285" r="3.4"/><circle cx="150" cy="275" r="3.4"/><circle cx="200" cy="290" r="3.4"/><circle cx="250" cy="280" r="3.4"/><circle cx="300" cy="295" r="3.4"/>
+          </g>
+          <polyline points="130,130 180,145 230,135" fill="none" stroke="#1f6fb0" stroke-width="2.5"/>
+          <g fill="#1f6fb0"><circle cx="130" cy="130" r="4"/><circle cx="180" cy="145" r="4"/><circle cx="230" cy="135" r="4"/></g>
+          <g fill="none" stroke="#c0392b" stroke-width="2">
+            <circle cx="90" cy="90" r="11"/><circle cx="320" cy="140" r="11"/><circle cx="200" cy="290" r="11"/>
+          </g>
+          <text x="200" y="352" text-anchor="middle" font-size="12" fill="#555">红圈＝挑出的角点，蓝线＝平面点</text>
+          <text x="200" y="376" text-anchor="middle" font-size="12" fill="#b00000">其余点变灰：被丢掉了</text>
+
+          <text x="700" y="28" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1d6f3c">FAST-LIO2：原始点全用</text>
+          <g>
+            <circle cx="540" cy="90" r="3.4" fill="#e67e22"/><circle cx="585" cy="80" r="3.4" fill="#27ae60"/><circle cx="630" cy="95" r="3.4" fill="#8e44ad"/><circle cx="675" cy="85" r="3.4" fill="#16a085"/><circle cx="720" cy="100" r="3.4" fill="#e67e22"/>
+            <circle cx="530" cy="140" r="3.4" fill="#27ae60"/><circle cx="575" cy="130" r="3.4" fill="#8e44ad"/><circle cx="620" cy="145" r="3.4" fill="#16a085"/><circle cx="665" cy="135" r="3.4" fill="#e67e22"/><circle cx="710" cy="150" r="3.4" fill="#27ae60"/><circle cx="740" cy="140" r="3.4" fill="#8e44ad"/>
+            <circle cx="545" cy="190" r="3.4" fill="#8e44ad"/><circle cx="590" cy="180" r="3.4" fill="#16a085"/><circle cx="635" cy="195" r="3.4" fill="#e67e22"/><circle cx="680" cy="185" r="3.4" fill="#27ae60"/><circle cx="725" cy="200" r="3.4" fill="#8e44ad"/>
+            <circle cx="535" cy="240" r="3.4" fill="#16a085"/><circle cx="580" cy="230" r="3.4" fill="#e67e22"/><circle cx="625" cy="245" r="3.4" fill="#27ae60"/><circle cx="670" cy="235" r="3.4" fill="#8e44ad"/><circle cx="715" cy="250" r="3.4" fill="#16a085"/>
+            <circle cx="550" cy="285" r="3.4" fill="#e67e22"/><circle cx="595" cy="275" r="3.4" fill="#27ae60"/><circle cx="640" cy="290" r="3.4" fill="#8e44ad"/><circle cx="685" cy="280" r="3.4" fill="#16a085"/><circle cx="730" cy="295" r="3.4" fill="#e67e22"/>
+          </g>
+          <circle cx="655" cy="190" r="42" fill="none" stroke="#1d6f3c" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <line x1="697" y1="190" x2="760" y2="190" stroke="#1d6f3c" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <rect x="762" y="118" width="120" height="140" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <polygon points="778,196 866,206 858,222 772,212" fill="#1f6fb0" fill-opacity="0.18" stroke="#1f6fb0" stroke-width="1.4"/>
+          <g fill="#16a085">
+            <circle cx="788" cy="203" r="3"/><circle cx="808" cy="206" r="3"/><circle cx="828" cy="209" r="3"/><circle cx="848" cy="212" r="3"/><circle cx="868" cy="215" r="3"/>
+          </g>
+          <line x1="822" y1="205" x2="822" y2="172" stroke="#c0392b" stroke-width="1.8"/>
+          <path d="M822 168 L817 178 L827 178 Z" fill="#c0392b"/>
+          <text x="830" y="168" font-size="10.5" fill="#c0392b">法向</text>
+          <circle cx="800" cy="160" r="4" fill="#e67e22"/>
+          <line x1="800" y1="164" x2="800" y2="207" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="3 2"/>
+          <text x="768" y="152" font-size="10.5" fill="#c0392b">残差</text>
+          <text x="818" y="274" text-anchor="middle" font-size="10.5" fill="#2f6d51">5 邻居 → 拟合小平面</text>
+          <text x="700" y="352" text-anchor="middle" font-size="12" fill="#555">所有点都留下，全都参与配准</text>
+          <text x="700" y="376" text-anchor="middle" font-size="12" fill="#1d6f3c">放大镜：找 5 个邻近点拟出一个小平面</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一帧点云画了两次。左边是 LOAM 式的做法：用红圈圈出少量角点、用蓝线连出少量平面点，<b>其余点全部涂灰，表示被丢弃</b>；右边是 FAST-LIO2 的做法：<b>所有点都保留、都参与配准</b>，并且在一个「放大镜」里画出它到底怎么用一个点——找到它的 5 个邻近地图点，拟出一块小平面，然后量这个点到平面的垂直距离。<br>
+          <b>怎么看这张图：</b>① 先对比两边的<b>点数和颜色</b>：左边一片灰，右边一片彩，灰色的那些就是被筛掉的信息；② 再看右边放大镜里的三样东西：绿色小点（5 个邻居）、蓝色斜四边形（由这 5 个点拟合出的小平面）、红色虚线（这个点到平面的距离，也就是残差）；③ 最后一件事最关键：右边之所以敢全用，<b>不是因为它算得更快，而是因为它有一个能扛住海量点查询的数据结构</b>——那就是下一节要讲的 ikd-Tree。<br>
+          <b>要记住的一句话：</b>左边为了「挑得准」，丢掉了大部分；右边全都用，但靠一个数据结构保证还算得动。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>按原文的论述，FAST-LIO2 之所以要删掉「提取特征」这一步，下面哪一条是它给出的理由？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文明确说，在无结构环境里提特征「会挑不出几个点」，小视场会让问题更严重；而丢弃这些点就意味着丢掉了大量有效几何信息。原文用 lili_7 序列（大量树木和开阔区域）说明了直接法在这类场景更有优势。" onclick="lessonKit.answer(this,'q0084a')">无结构场景会丢掉有效点</button>
+          <button data-correct="no" data-explanation="错。这不是理由——原文说的是不同的雷达有不同的扫描方式，所以提特征的规则必须为每种雷达单独手工设计，这带来大量工程负担；它并不是说硬件做不了这件事。" onclick="lessonKit.answer(this,'q0084a')">激光雷达本身无法提特征</button>
+        </div>
+        <div class="quiz-feedback" id="q0084a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 第二条贡献：ikd-Tree 到底「增」在哪</h2>
+
+      <p>不提特征之后，问题立刻变成反的：<b>点变多了，地图里要存的点也变多了，你怎么还查得动？</b>这就引出本节真正的技术高潮。</p>
+
+      <h3>3.1 先看静态 k-d 树的死穴</h3>
+
+      <p>普通 k-d 树（也就是第二季 <b>0023</b> 课 PCL / FLANN 里的那一族，以及本季 <b>0074</b> 课 LOAM 用的那种）是<b>静态</b>的：它一旦建好，就假设点的集合不再变化。于是每次地图有更新，常见的做法是——<b>把整棵树推倒重建。</b></p>
+
+      <p>这一步的代价是 $O(n \log n)$，$n$ 是地图里的点数，而 $n$ 会随着你走得越远而持续增长。上一节（FAST-LIO）其实就踩在这个坑上，原文在对比实验里把这一点写得很清楚：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「The difference between these two methods is that FAST-LIO is a feature-based method, and it retrieves map points in the current FoV to build a new static k-d tree for kNN search at every step.」<br>
+      （中译：这两种方法的差别在于，FAST-LIO 是基于特征的方法，它<b>在每一步都从当前视场里的地图点重建一棵新的静态 k-d 树</b>，用于 kNN 搜索。）</p>
+
+      <p>「at every step」（每一步）——这就是全部问题的根源。这个开销在原文的表 VII 里被量化了：<b>FAST-LIO 的建图环节平均每帧要 13.81 毫秒</b>，而 FAST-LIO2 只需要 <b>0.13 毫秒</b>。差了大约一百倍。</p>
+
+      <h3>3.2 ikd-Tree 的答案：不重建，而是「增量地改」</h3>
+
+      <p>ikd-Tree 的全称是 <b>incremental k-d tree</b>（增量 k-d 树）。它的全部主张可以压成一句话：</p>
+
+      <div class="callout">
+        <h4>一句话</h4>
+        <p><b>每次地图变化，只动「跟这次变化有关的那一小块」，而不是把整棵树推倒重来。</b>于是插入和删除的代价从 $O(n\log n)$ 降到 $O(\log n)$——和地图有多大基本脱钩。</p>
+      </div>
+
+      <p>原文对这个数据结构有一段很值得知道的实现细节：<b>它的点不存在只有叶子的「桶」里，而是同时存在叶节点和内部节点上。</b>原文原话是：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「Different from many existing implementations of k-d trees, which store a bucket of points only on leaf nodes, our ikd-Tree stores points on both leaf nodes and internal nodes to better support dynamic point insertion and tree rebalancing.」<br>
+      （中译：与许多现有 k-d 树实现「只在叶节点上存一桶点」不同，我们的 ikd-Tree <b>把点同时存在叶节点和内部节点上</b>，以更好地支持动态点插入与树再平衡。）</p>
+
+      <p>打个比方：常见的 k-d 树像一本「目录只在最后一页」的书——要查什么，你得一路翻到最底层。ikd-Tree 则是<b>每一层都摆着书</b>——因为地图是活的，随时会有新点插进来，每一层都得能接住。</p>
+
+      <p>原文还用一组实验证明这不是自说自话。它在 18 个序列上把 ikd-Tree 和三类同类结构做了横向对比：<b>octree（八叉树）、R*-tree、nanoflann k-d 树</b>。结论有两句很具体：</p>
+
+      <ul>
+        <li>对 nanoflann：「the insertion time is often slightly shorter than the ikd-Tree and R*-tree, but <b>huge peaks occasionally occur</b> due to its logarithmic structure of organizing a series of k-d trees. Such peaks severely degrade the real-time ability, especially when maintaining a large map.」（它的插入时间往往略短，但会<b>偶发巨大的尖峰</b>；这类尖峰会严重破坏实时性，尤其是在地图很大时。）</li>
+        <li>对 R*-tree：「achieves a similar insertion time with ikd-Tree but with a <b>significantly higher search time</b> for large tree sizes.」（插入时间和 ikd-Tree 差不多，但在树规模很大时<b>查询时间明显更高</b>。）</li>
+        <li>而对 octree：「achieves the best performance in point insertion … but its inquiry time is much higher due to the <b>unbalanced tree structure</b>.」（插入最快，但查询慢得多，因为树结构不平衡。）</li>
+      </ul>
+
+      <p>换句话说：<b>别人各有各的长处，但 ikd-Tree 是「插入不慢、查询不慢、还没有尖峰」的那一个。</b>而「没有尖峰」这件事对实时系统来说是生死线——偶尔一次 100 毫秒的卡顿，就足以让里程计在快速运动时丢掉跟踪。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIO2/852e722dd23397435fad9e01585a4477fd0dd08a3175d7690795d6eed565007d.jpg" alt="Data structure comparison over different tree size">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Data structure comparison over different tree size. The upper figure shows the average processing time of searching five nearest neighbors. The bottom figure shows the average processing time of inserting one point to the data structure.<br>
+          （中译：不同树规模下的数据结构对比。上图是搜索五个最近邻的平均处理时间；下图是向数据结构中插入一个点的平均处理时间。）<br>
+          <b>怎么看这张图：</b>① 横轴是树的规模（点数），纵轴是单次操作耗时，<b>越低越好</b>；② 重点盯 nanoflann（nano flann k-d 树）那条曲线——它不只是位置高，而是<b>会冒出孤立的尖峰</b>，那几次尖峰就是实时性的杀手；③ 再看 ikd-Tree 的曲线走势：原文的结论是它「is indeed proportional to $\log n$」，也就是<b>随规模缓慢增长</b>，而不是爆炸。<br>
+          <b>要记住的一句话：</b>这张图比较的不只是「谁平均更快」，更重要的是「谁不会突然卡一下」——对实时系统来说，稳定性比平均值更值钱。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 增量第一件事：点插入与「树上下采样」</h2>
+
+      <p>地图长起来的第一种方式是<b>新点进来</b>。但 ikd-Tree 不是简单地往树里塞——它顺手做了一次<b>下采样</b>，也就是「局部留一个代表就够」。</p>
+
+      <p>原文把这个过程写成插入算法（Algorithm 2），它的骨架可以概括成一条链：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{FindCube}(l,\mathbf{p}) \;\to\; \text{BoxwiseSearch} \;\to\; \text{FindNearest} \;\to\; \text{BoxwiseDelete} \;\to\; \text{Insert}$$</div>
+      </div>
+
+      <p>逐步翻译成人话：</p>
+
+      <ol>
+        <li><b>FindCube</b>：以新点 $\mathbf{p}$ 为中心，找出它落在哪个边长为 $l$ 的小立方体里；</li>
+        <li><b>BoxwiseSearch</b>：把这个立方体内的<b>所有</b>已有地图点都找出来；</li>
+        <li><b>FindNearest</b>：在这些点里挑出<b>离立方体中心最近</b>的那一个，作为这个格子的「代表」；</li>
+        <li><b>BoxwiseDelete</b>：把被淘汰的旧点删掉（怎么删，是下一节「懒惰删除」的事）；</li>
+        <li><b>Insert</b>：把新的代表点插进树里。</li>
+      </ol>
+
+      <p><b>大白话：</b>这就像往一个格子柜里放东西——每个格子只留一件「最有代表性的」，新东西进来了、更合适，就把旧的换掉。<b>格子的大小 $l$ 就是你在地图精度和内存占用之间拧的那个旋钮。</b></p>
+
+      <p>为了让这套操作跑得动，ikd-Tree 的每个节点上还额外记了几样「账目」。原文给出的节点属性包括：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">属性</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">记的是什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">为什么需要它</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>treesize</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">以本节点为根的子树里一共有多少个节点（<b>含有效和无效</b>）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">平衡判据要用它算「左右子树占比」</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>invalidnum</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">这棵子树里<b>被删掉</b>的点有多少个</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">删除判据要用它算「垃圾占比」</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>range</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">一个<b>轴对齐的包围盒</b>（aabb），把子树里所有点都包住</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">删除一块区域时，用它<b>一眼判断「这块和我要删的区域有没有关系」</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>deleted</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">这一个节点是否已被标记删除</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">懒惰删除的「便签」</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>treedeleted</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">以本节点为根的<b>整棵子树</b>是否已被标记删除</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">整块删除时，一个标记顶替成千上万次操作</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这五行「账目」听起来枯燥，但请记住它们——<b>下面两节讲的懒惰删除和部分重建，判断依据全部来自这几个数字和这个包围盒。</b></p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 增量第二件事：懒惰删除（lazy deletion）</h2>
+
+      <p>地图长大的方式有两种：加点，和<b>删点</b>。删点这件事比加点麻烦——因为机器人一直在动，你身后那一大片区域再也不需要了，但你不可能真的逐个访问那些点再一个个抹掉，那样太贵。</p>
+
+      <p>ikd-Tree 的办法叫<b>懒惰删除</b>：<b>删的时候不真删，只贴个「待删」的标记；真正从内存里抹掉，推迟到后面重建的时候再一起做。</b>原文的描述是：「When points are removed from the map, the nodes are not deleted from the tree immediately, but only setting the boolean variable <b>deleted</b> to be true.」</p>
+
+      <p>那么问题来了：怎么判断「哪一大块该贴标记」？答案是前面提到的那个包围盒 <b>range</b>。原文的算法（Algorithm 3）拿每个节点的包围盒 $\mathbf{C}_T$ 和「要删的盒子」$\mathbf{C}_O$ 做比较，分三种情况：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>情况一：不相交</b>
+          <p>包围盒和目标盒子完全没有重叠 → <b>直接返回，什么都不用做。</b>原文：「the recursion returns directly without updating the tree」。</p>
+        </div>
+        <div class="mini-card">
+          <b>情况二：完全包含</b>
+          <p>整个子树都被包在目标盒子里 → <b>整棵子树打一个标记就够了</b>：<b>deleted</b> 和 <b>treedeleted</b> 都置为 true，同时把 <b>invalidnum</b> 直接设成 <b>treesize</b>（因为全无效了）。原文：「As all points on the (sub-)tree are deleted, the attribute invalidnum is equal to the treesize.」</p>
+        </div>
+        <div class="mini-card">
+          <b>情况三：相交但不含</b>
+          <p>只重叠了一部分 → 先看当前这个点本身在不在目标盒子里，在就删它；然后<b>递归进左右子树继续判断</b>。</p>
+        </div>
+      </div>
+
+      <p>三种情况合起来的效果是：<b>能整块删的绝不逐个删。</b>这正是为什么「地图平移时整块删除旧区域」的代价可以控制在 $O(\log n)$ 量级，而不是 $O(n)$。</p>
+
+      <div class="callout">
+        <h4>大白话</h4>
+        <p>搬家要扔一堆旧家具。你不会当场一件件搬下楼（太贵），而是<b>先给整片区域贴一张「待扔」的便签</b>；等哪天有工夫重整房间（重建）时，一次性把它们全清走。<br>
+        如果这堆家具就在门口，你顺手扔一件；如果整间屋都不要了，贴一张便签就代表一屋子都扔——<b>贴一张纸的成本，和搬一屋子东西的成本，是两回事。</b></p>
+      </div>
+
+      <p>为什么地图一定会需要「整块删」？因为 FAST-LIO2 的地图是<b>以机器人为中心的一块有限立方区域</b>，它会跟着机器人一起移动。原文给出的规则是：地图立方体的边长为 $L$，检测球半径 $r = \gamma R$，当地图需要平移时位移量 $d = (\gamma - 1)R$。一旦检测球碰到地图边界，整块地图就往前挪——挪走的那一部分，就是需要整块删掉的旧区域。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIO2/f4acad2df42bdc9e86547adf82fd480b5c0bdf2b2fc29089ff238d1e3f56052f.jpg" alt="2-D demonstration of map region management">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>2-D demonstration of map region management. (a) Blue rectangle is the initial map region with length L. The red circle is the initial detection area centered at the initial LiDAR position p<sub>0</sub>. (b) Detection area (dashed red circle) moves to a new position p<sup></sup> (circle with solid red line) where the map boundaries are touched. The map region is moved to a new position.<br>
+          （中译：地图区域管理的二维示意。(a) 蓝色矩形是长度为 L 的初始地图区域，红圈是以初始激光雷达位置 p<sub>0</sub> 为中心的初始检测区域。(b) 检测区域（红虚线圆）移动到新位置 p<sup></sup>（红实线圆），此时地图边界被触及；地图区域随之移动到新的位置。）<br>
+          <b>怎么看这张图：</b>① 蓝框是<b>地图</b>（边长 $L$），红圈是<b>检测范围</b>——只有落在检测范围内的地图点才会被拿去配准；② 看 (b)：红圈一路往右走，<b>碰到蓝框边界的那一刻，蓝框整体往前跳一格</b>；③ 跳走之后，左边露出来的那一块旧区域就彻底没用了——<b>这正需要「整块删除」，也正是上一节那种「包围盒对包围盒」的懒惰删除机制存在的理由。</b><br>
+          <b>要记住的一句话：</b>地图不是「无限长、只增不减」的，它是一块<b>跟着车走的有限窗口</b>；窗口一移动，就必须有廉价的大块删除手段。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 增量第三件事：部分重建（partial rebuild）</h2>
+
+      <p>插入和标记删除做多了，树会慢慢「歪」——一边重、一边轻；同时，那些被贴了「待删」标记的节点还占着位置。这两种情况都会让查询变慢。所以需要「重建」来收拾。</p>
+
+      <p>但这里有一个至关重要的限定词：<b>部分</b>。ikd-Tree 的重建<b>不是把整棵树推倒重来</b>，而是只对<b>违反了平衡准则的那棵子树</b>动手。原文的描述是：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「Violation of either criterion will trigger a rebuilding process to rebalance <b>that subtree</b>」（违反任一准则都会触发一次重建过程，以重新平衡<b>那棵子树</b>）。</p>
+
+      <p>重建的动作本身很朴素，分两步：先把这棵子树<b>摊平成一个点的数组 V</b>（摊平的过程中，被标记为删除的节点就直接丢掉，不进入数组）；然后用数组里的所有点<b>重新建一棵完全平衡的 k-d 树</b>。这个套路在数据结构里有个名字，叫 <b>scapegoat tree（替罪羊树）</b>——原文也在这个思路上说明了它属于这一族。</p>
+
+      <h3>6.1 什么时候该重建？两个判据</h3>
+
+      <p>那么「什么时候算歪了」？原文给了两条判据，都写成不等式。</p>
+
+      <p><b>第一条：平衡判据（$\alpha$-balanced）。</b>对以 $T$ 为根的子树：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$S(T.\text{leftchild}) < \alpha_{\text{bal}}\left(S(T)-1\right), \qquad S(T.\text{rightchild}) < \alpha_{\text{bal}}\left(S(T)-1\right)$$</div>
+      </div>
+
+      <p>其中 $\alpha_{\text{bal}} \in (0.5, 1)$，$S(T)$ 就是那个 <b>treesize</b> 属性（子树里的节点总数）。<b>说人话：左右两个孩子的规模都不能超过整棵子树的 $\alpha_{\text{bal}}$ 倍。</b>如果 $\alpha_{\text{bal}}$ 取 0.6，那就意味着任何一侧都不许超过六成——一旦超过，说明这棵树已经开始「偏沉」了，查询会变慢，该重建了。</p>
+
+      <p>这条判据管的是<b>树高</b>。原文顺便给了一个漂亮的结论：「It can be easily proved that the maximum height of an $\alpha$-balanced tree is $\log_{1/\alpha_{\text{bal}}}(n)$.」——$\alpha$ 平衡树的最大高度是 $\log_{1/\alpha_{\text{bal}}}(n)$。对比一下：完全静态的平衡 k-d 树高度是 $\log_2 n$。因为 $\alpha_{\text{bal}}$ 大于 0.5，所以 $\log_{1/\alpha_{\text{bal}}}$ 的底数小于 2，树会略高一点点——<b>这就是「允许动态增删」要付的代价：树稍微高一点，但换来了不用重建整棵树。</b></p>
+
+      <p><b>第二条：删除判据（$\alpha$-deleted）。</b>同样以 $T$ 为根：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$I(T) < \alpha_{\text{del}}\, S(T)$$</div>
+      </div>
+
+      <p>其中 $\alpha_{\text{del}} \in (0,1)$，$I(T)$ 就是 <b>invalidnum</b>（这棵子树里被标记删除的节点数）。<b>说人话：垃圾不能占太多地方。</b>一旦无效节点的占比超过 $\alpha_{\text{del}}$，就必须重建，把这些「僵尸节点」真正清出去。原文对此的解释是：「the $\alpha$-deleted criterion ensures invalid nodes … are removed to reduce tree size」（删除判据保证无效节点被清掉，从而减小树的规模）。</p>
+
+      <div class="callout">
+        <h4>大白话（把两个判据记住）</h4>
+        <p><b>$\alpha$-balanced 管「歪没歪」，$\alpha$-deleted 管「脏没脏」。</b><br>
+        书架歪了，你只扶歪的那一层，不是把整架书都搬下来重摆——这就是「部分重建」。<br>
+        而这两条判据就是你的「什么时候该扶」的标准：一侧的书明显比另一侧多太多（歪了），或者一堆书已经标了「要扔」却还占着位置（脏了）。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIO2/7e51daa0c499a3cb991b532311add0eb7440bec4d638bf7c69fe983801006809.jpg" alt="Rebuilding an unbalanced subtree">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Rebuilding an unbalanced subtree.<br>
+          （中译：重建一棵不平衡的子树。）<br>
+          <b>怎么看这张图：</b>① 图中被特别标出的那一小块，就是<b>违反了平衡准则的那棵子树</b>；② 注意它周围的结构<b>完全没有被动过</b>——这正是「部分重建」四个字的字面含义；③ 把这张图和上一节的判据对上：出现这种局部重建，说明在某个节点上 $S(\text{leftchild})$ 或 $S(\text{rightchild})$ 超过了 $\alpha_{\text{bal}}(S(T)-1)$，或者 $I(T)$ 超过了 $\alpha_{\text{del}}S(T)$。<br>
+          <b>要记住的一句话：</b>重建的粒度是「子树」而不是「整棵树」——这是 ikd-Tree 能把更新代价压在 $O(\log n)$ 而不是 $O(n\log n)$ 的关键。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 增量第四件事：双线程并行重建与 operation logger</h2>
+
+      <p>部分重建已经比整树重建便宜了，但它仍然可能遇到一个问题：<b>如果那棵要重建的子树本身就很大，重建它要花的时间可能超过一帧的扫描周期。</b>那就又卡住了。</p>
+
+      <p>原文的解法是把它挪到<b>第二条线程</b>去做：「When rebuilding a large subtree on the ikd-Tree, a considerable delay could occur and undermine the real-time performance of FAST-LIO2. To preserve high real-time ability, we design a <b>double-thread rebuilding</b> method.」——重建大子树可能造成可观的延迟、破坏实时性，所以设计了<b>双线程重建</b>。</p>
+
+      <p>具体规则是：当平衡准则被违反时，如果这棵子树的大小<b>小于阈值 $N_{\max}$</b>，就在主线程里就地重建；否则，交给第二线程（原文的函数叫 <code>ParRebuild</code>）。</p>
+
+      <h3>7.1 最难的那一步：怎么做到「不丢信息、不冲突」</h3>
+
+      <p>把重建扔到后台说起来容易，真做起来有一个很尖锐的矛盾：<b>后台在重建这棵子树的同时，主线程还在不停地往里插新点、删旧点。</b>如果不管，两边就会打架——数据丢了，或者内存冲突了。</p>
+
+      <p>原文的解法是引入一个 <b>operation logger（操作日志）</b>。整个流程是（按原文 Algorithm 4）：</p>
+
+      <ol>
+        <li>第二线程先<b>锁住这棵子树上的「增量更新」</b>（插点和删除），但<b>不锁查询</b>——原文特别强调：「LockUpdates does not block queries」，查询可以继续在主线里并行进行；</li>
+        <li>然后把这棵子树里的所有<b>有效点摊平</b>到一个数组 V 里。注意这一步的细节：<b>原来的子树结构暂时保持不动</b>，因为可能还有查询要进来；</li>
+        <li>摊平完成后，<b>立刻解锁</b>——主线程可以继续提交增删请求了；</li>
+        <li>这些请求会被<b>同时记进 operation logger 这个队列</b>里；</li>
+        <li>第二线程用数组 V 建出一棵新的平衡树 $\mathcal{T}'$；</li>
+        <li><b>把队列里记录下来的更新请求，在新树 $\mathcal{T}'$ 上重放一遍</b>（原文的 <code>IncrementalUpdates</code>）；</li>
+        <li>重放完毕后，新树和旧树在<b>点的内容上完全一致</b>，只是新树的结构更平衡。这时才短暂地 <code>LockAll</code>——原文说这个动作「finishes very quickly (i.e., only one instruction)」，很快——把 $\mathcal{T}'$ 替换上去，并释放旧树的内存。</li>
+      </ol>
+
+      <p>原文对整个机制的效果给了两句总结：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「This design ensures that during the rebuilding process in the second thread, the mapping process in the main thread proceeds still at <b>the odometry rate</b> without any interruption, albeit at a lower efficiency due to the temporarily unbalanced k-d tree structure.」<br>
+      （中译：这一设计确保第二线程重建期间，主线程的建图过程仍然以<b>里程计的频率</b>继续推进、不被打断——尽管由于树结构暂时不平衡，效率会低一些。）</p>
+
+      <p><b>大白话：</b>前台照常营业，后台悄悄把歪掉的那层书架扶正。扶的过程里，前台客人要办的事先记在小本本上；书扶完了，再把小本本上的事逐条补办。于是谁也没被晾着，一秒钟的生意都没耽误——只是这段时间里书架还歪着，找书稍微慢一点。</p>
+
+      <h3>7.2 复杂度清单</h3>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">操作</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">复杂度</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">出处 / 说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>点插入（含树上下采样）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">$O(\log n)$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">原文 Lemma 2</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>kNN 查询</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">$O(\log n)$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">树高上界为 $\log_{1/\alpha_{\text{bal}}}(n)$</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>重建（单线程）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">$O(n\log n)$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">每层排序 $O(n)$，共 $\log n$ 层</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>重建（双线程，主线程视角）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">$O(n)$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">主线程只承担「摊平」+ 常数次的树替换，<b>建树本身在第二线程</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>box-wise 删除 / 搜索</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">$O(\log n)$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">原文 Lemma 1（当操作盒子远小于整个空间时）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>最后一行值得多看一眼：「双线程重建」在主线程视角下是 $O(n)$，而单线程是 $O(n\log n)$。<b>差的那个 $\log n$ 因子，就是被搬到后台去的那部分工作量。</b>这不是把工作变少了，而是把它<b>挪到了不影响实时性的地方</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 280" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="150" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#9b2c2c">① 静态 k-d 树：每帧整树重建</text>
+          <rect x="55" y="44" width="240" height="124" fill="#b9b9b9" opacity="0.35"/>
+          <g stroke="#9e9e9e" stroke-width="1.6" fill="none">
+            <line x1="150" y1="60" x2="105" y2="105"/><line x1="150" y1="60" x2="195" y2="105"/>
+            <line x1="105" y1="105" x2="80" y2="150"/><line x1="105" y1="105" x2="130" y2="150"/>
+            <line x1="195" y1="105" x2="170" y2="150"/><line x1="195" y1="105" x2="220" y2="150"/>
+          </g>
+          <g fill="#9e9e9e">
+            <circle cx="150" cy="60" r="6"/><circle cx="105" cy="105" r="6"/><circle cx="195" cy="105" r="6"/>
+            <circle cx="80" cy="150" r="6"/><circle cx="130" cy="150" r="6"/><circle cx="170" cy="150" r="6"/><circle cx="220" cy="150" r="6"/>
+          </g>
+          <text x="150" y="186" text-anchor="middle" font-size="11.5" fill="#555">每来一帧：整棵树变灰重画</text>
+          <text x="150" y="208" text-anchor="middle" font-size="12" fill="#b00000">重建代价随地图变大</text>
+
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#1d6f3c">② ikd-Tree：只改一条路</text>
+          <rect x="362" y="88" width="124" height="76" fill="none" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="5 4"/>
+          <g stroke="#444" stroke-width="1.6" fill="none">
+            <line x1="450" y1="60" x2="405" y2="105"/><line x1="450" y1="60" x2="495" y2="105"/>
+            <line x1="405" y1="105" x2="380" y2="150"/><line x1="405" y1="105" x2="430" y2="150"/>
+            <line x1="495" y1="105" x2="470" y2="150"/><line x1="495" y1="105" x2="520" y2="150"/>
+          </g>
+          <line x1="450" y1="60" x2="495" y2="105" stroke="#1d9b4e" stroke-width="3.6"/>
+          <line x1="495" y1="105" x2="520" y2="150" stroke="#1d9b4e" stroke-width="3.6"/>
+          <g fill="#444">
+            <circle cx="450" cy="60" r="6"/><circle cx="405" cy="105" r="6"/><circle cx="380" cy="150" r="6"/><circle cx="430" cy="150" r="6"/><circle cx="470" cy="150" r="6"/>
+          </g>
+          <g fill="#1d9b4e"><circle cx="495" cy="105" r="6"/><circle cx="520" cy="150" r="6"/></g>
+          <text x="450" y="186" text-anchor="middle" font-size="11.5" fill="#1d6f3c">插入：只高亮一条根到叶的路</text>
+          <text x="450" y="208" text-anchor="middle" font-size="11.5" fill="#c0392b">虚线框那一片：先只打个标记</text>
+
+          <text x="745" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#1f6fb0">③ 双线程：一边跑一边重建</text>
+          <rect x="640" y="48" width="215" height="36" rx="6" fill="#1d9b4e" opacity="0.88"/>
+          <text x="747" y="71" text-anchor="middle" font-size="11.5" fill="#ffffff">主线程：继续跑里程计</text>
+          <rect x="658" y="96" width="180" height="32" rx="5" fill="#ffffff" stroke="#666666" stroke-width="1.5"/>
+          <text x="748" y="117" text-anchor="middle" font-size="11" fill="#444444">队列：新请求先排队</text>
+          <rect x="640" y="142" width="215" height="36" rx="6" fill="#e67e22" opacity="0.92"/>
+          <text x="747" y="165" text-anchor="middle" font-size="11.5" fill="#ffffff">后台线程：重建局部子树</text>
+          <text x="745" y="206" text-anchor="middle" font-size="11.5" fill="#555">重建完再重放，查询全程不断</text>
+
+          <text x="450" y="254" text-anchor="middle" font-size="12.5" fill="#2b2b2b">三件事加起来，才让它能一边长、一边查</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三板连环画，把 ikd-Tree 的「增量」到底增在哪讲完。<b>板①</b>是静态 k-d 树：每来一帧新扫描，整棵树被涂灰、全部重画一遍，代价随地图变大；<b>板②</b>是 ikd-Tree：绿线高亮出「这次插入只走了从根到叶的一条路」，红色虚线框标出「这一片要删了，但先只打个标记」；<b>板③</b>是双线程重建：上面的绿泳道是主线程继续跑里程计，下面的橙泳道是后台线程重建局部子树，中间那个白框是队列——重建期间的新请求先排队、重建完再补上。<br>
+          <b>怎么看这张图：</b>① 板①与板②的对比就是「全树重画」和「只改一条路」的对比，前者代价随地图增长，后者是 $O(\log n)$；② 板②里那条绿路只碰了 3 个节点，其余结构一动不动——这就是增量的字面意思；③ 板③回答了一个很容易被忽略的问题：<b>后台在改结构的时候，前台还能不能继续干活？</b>答案靠的是「队列 + 重建完重放」这一套。<br>
+          <b>要记住的一句话：</b>这三件事（路径插入 + 懒惰删除 + 双线程重建）加起来，才让它能<b>一边长、一边查</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 点怎么配到面：五邻域平面拟合</h2>
+
+      <p>数据结构讲完了，回到「怎么算」。既然不再提特征，那一个原始点要怎么和地图对上？FAST-LIO2 的办法是<b>现场拟合一个局部平面</b>：原文的流程是——把当前这个激光点投影到全局坐标系，然后在 ikd-Tree 里<b>找它的 5 个最近邻地图点</b>，用这 5 个点拟合出一小块局部平面，得到法向 $^{G}\mathbf{u}_j$ 和平面上的一个点 $^{G}\mathbf{q}_j$；接着就量「这个点到那个平面的距离」。</p>
+
+      <p>测量模型写出来是这样的（原文式 8）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{0} = {}^{G}\mathbf{u}_j^{\top}\left( {}^{G}\mathbf{T}_{I_k}\,{}^{I}\mathbf{T}_L\left({}^{L}\mathbf{p}_j + {}^{L}\mathbf{n}_j\right) - {}^{G}\mathbf{q}_j \right)$$</div>
+      </div>
+
+      <p>逐项读：${}^{L}\mathbf{p}_j$ 是激光坐标系下测到的那个点，${}^{L}\mathbf{n}_j$ 是它的测量噪声；${}^{I}\mathbf{T}_L$ 是雷达到 IMU 的外参；${}^{G}\mathbf{T}_{I_k}$ 是当前位姿（<b>注意它是待估状态的一部分</b>）；乘完之后那个点是它在世界坐标系下的位置。最后减去平面上一点 ${}^{G}\mathbf{q}_j$、再和法向 ${}^{G}\mathbf{u}_j$ 点乘——<b>得到的就是「这个点到平面的有向距离」</b>。</p>
+
+      <p>而我们真正送进滤波器当残差用的，是把噪声项去掉之后的版本（原文式 13）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{z}_j^{\kappa} = \mathbf{u}_j^{\top}\left( {}^{G}\widehat{\mathbf{T}}_{I_k}^{\kappa}\,{}^{I}\widehat{\mathbf{T}}_{L}^{\kappa}\,{}^{L}\mathbf{p}_j - {}^{G}\mathbf{q}_j \right)$$</div>
+      </div>
+
+      <p>上标那个 $\kappa$ 就是上一节讲过的<b>迭代次数</b>——每迭代一次，位姿估计变了，这个残差就要按新位姿重算一遍。</p>
+
+      <p>这里还有两个工程细节，原文都提到了，值得记住：</p>
+
+      <ul>
+        <li><b>测量噪声协方差被设成了常数。</b>原文说：「In practice, we set $\mathbf{R}_j$ to a constant value and found that it works very well.」——实践中把 $\mathbf{R}_j$ 设成一个常数，效果就很好。这是个很实用的「工程上够用就行」的取舍。</li>
+        <li><b>近邻搜索有范围限制。</b>原文说只有落在目标点给定阈值以内的邻居才会被当作内点（inliers）参与状态估计。这既提高了鲁棒性，也顺手给 kNN 搜索提供了一个「最大搜索距离」，让剪枝更有效。</li>
+      </ul>
+
+      <p><b>大白话：</b>不认识哪个点是「平面点」没关系——随便抓一个点，看它周围 5 个邻居大致躺在什么斜面上，它就该贴着那个斜面；差多少，就是误差多少。<b>「是不是平面点」这件事不再是提前挑出来的标签，而是每次配准时临时算出来的。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_FAST-LIO2/dec755385b69f3a2e89d50f3f8897552a9d7e546644851790954141232084973.jpg" alt="Measurement model of FAST-LIO2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Measurement model. A LiDAR point is assumed to lie on a small plane formed by its nearby map points. ${}^{G}\mathbf{u}_j$ is the normal vector of the plane and ${}^{G}\mathbf{q}_j$ is a point lying on the plane.<br>
+          （中译：测量模型。一个激光点被假定为落在由其邻近地图点构成的小平面上。${}^{G}\mathbf{u}_j$ 是该平面的法向量，${}^{G}\mathbf{q}_j$ 是位于该平面上的一点。）<br>
+          <b>怎么看这张图：</b>① 先找那个「<b>被扰动了的点</b>」——图上画的是一个真实点加噪声之后的实际测量位置；② 再看它「应该在哪里」——由邻近地图点拟出来的那块小平面；③ 最后看 ${}^{G}\mathbf{u}_j$（法向）和 ${}^{G}\mathbf{q}_j$（平面上一点）这两个量：<b>它们俩就完全定义了这个平面，而残差就是「被扰动点」到该平面的垂直距离。</b><br>
+          <b>要记住的一句话：</b>这个模型和上一节 FAST-LIO 的点到面观测是同一族东西，唯一的区别是：<b>上一节的「面」来自提前挑好的平面特征点，这一节的「面」来自现场找的 5 个邻居。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 实验数字与原文承认的局限</h2>
+
+      <h3>9.1 先把最刺眼的表摆出来</h3>
+
+      <p>原文的表 VII 把 FAST-LIO 与 FAST-LIO2 的每帧耗时拆到各个环节，数字非常干脆（都是在一台 DJI Manifold 2-C 上测的）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">环节</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">FAST-LIO（Intel）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">FAST-LIO2（Intel）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">FAST-LIO2（ARM）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">预处理</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.03 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.03 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.05 ms</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>特征提取</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.90 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0 ms</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0 ms</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">状态估计</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.99 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">1.66 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">4.75 ms</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>建图</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">13.81 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0.13 ms</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0.43 ms</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>合计</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>15.83 ms</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>1.82 ms</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>5.23 ms</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">使用的点数</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">447</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>756</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>756</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这张表里藏着三个必须看懂的对照：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>对照一：建图快了约一百倍</b>
+          <p>13.81 ms → <b>0.13 ms</b>。这正是 ikd-Tree 换掉「每步重建静态树」带来的。原文对此的评语是：FAST-LIO 的建图平均每帧超过 10 毫秒，「hence cannot be processed in real-time for this large scene」——<b>在这种大场景下无法实时处理</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>对照二：状态估计反而变慢了</b>
+          <p>0.99 ms → <b>1.66 ms</b>。为什么？因为直接法<b>用的点更多</b>了：447 → <b>756</b>。原文的解释是：提特征虽然要花 0.9 ms，但它筛掉了很多点，后面的 kNN 和状态估计就更快；直接法省下了提特征的时间，却要处理更多点。</p>
+        </div>
+        <div class="mini-card">
+          <b>对照三：ARM 上第一次做到实时</b>
+          <p>ARM 平台上合计 <b>5.23 ms</b>。原文的说法是：FAST-LIO2「can also achieve 10 Hz real-time performance that <b>has not been demonstrated on an ARM-based platform by any prior work</b>」——<b>此前没有任何工作在 ARM 平台上展示过这样的 10 Hz 实时性能。</b></p>
+        </div>
+      </div>
+
+      <p>注意对照二告诉我们一件很重要的事：<b>直接法并不是「免费」的。</b>它省下了提特征的钱，但把更多点带进了后面的环节。它真正的收益来自<b>两条贡献的合力</b>：ikd-Tree 把建图成本砍掉两个数量级，腾出来的算力才够用来多处理一倍的点——而多出来的这些点，正是那些被特征提取丢掉的「有效点」。</p>
+
+      <h3>9.2 激进运动与精度</h3>
+
+      <ul>
+        <li><b>翻转实验（flip）</b>：一架小型四旋翼在空中翻跟头。原文给的角速度是「<b>平均值 1023 deg/s，最大值 1242 deg/s</b>」（在 44 到 44.5 秒之间）；对照 VICON 动捕真值，这段飞行（18.0–50.0 秒）的 <b>RMSE 是 0.0186 m</b>；而且 FAST-LIO2 平均每帧只花 <b>2.21 ms</b>。原文说这个耗时「suffices the real-time requirement of controllers」——<b>足以满足控制器的实时要求</b>。</li>
+        <li><b>快速手持实验</b>：在过街天桥上快速来回走，最大速度 <b>7 m/s</b>，角速度在 <b>±100 deg/s</b> 附近变化。总轨迹长 <b>81 m</b>，起终点回到同一处，<b>端到端误差小于 0.06 m</b>。这个实验还顺便验证了外参能被估出来：旋转外参的初值被故意设成 (5°, 5°, 5°)、平移外参设成全零，最后两者都收敛到接近手册真值。</li>
+        <li><b>大规模场景</b>：手持平台在港大的校园里走 <b>650 m</b>（室外室内混合），<b>100 Hz</b> 扫描率，回到起点时漂移是 <b>0.14 m</b>。</li>
+        <li><b>数据集基准</b>：在 19 个序列上做对比，原文的结论是综合精度更高而算力更低——「<b>8× faster than LILI-OM, 10× faster than LIO-SAM, and 6× faster than LINS</b>」（比 LILI-OM 快 8 倍、比 LIO-SAM 快 10 倍、比 LINS 快 6 倍）。</li>
+      </ul>
+
+      <p>这些激进运动之所以扛得住，原文自己给了两条原因：「first, the direct raw point registration uses more LiDAR measurements in high frame rate and aggressive motion compared to the feature based methods; second, the timely updated (at the frame rate) map allows each new scan to be registered to map points of the most recent scans, which share large FoVs with the new scan.」——<b>一是直接法在高帧率和激进运动下用到了更多测量；二是地图以帧率被及时更新，所以每帧新扫描总能配到「刚刚那一帧」的地图点上，两者视场重合度高。</b>第二条尤其值得玩味：<b>地图更新得越快，配准就越稳</b>——这正是 ikd-Tree 的功劳在起作用。</p>
+
+      
+
+      <h3>9.3 原文承认的局限：完全退化环境会失败</h3>
+
+      <p>这一条必须原原本本讲，因为它是原文在讨论部分<b>主动写下来的</b>：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「FAST-LIO2 cannot work in completely degenerated environments where no geometrical structures exists in the LiDAR FoV (hence, no or very few LiDAR points). Examples include facing the LiDAR to <b>open sea</b>, <b>sky</b>, <b>ground</b>, <b>single large wall</b>, or in <b>close proximity to objects (e.g., within 1 m)</b> causing no points measurements. In these scenarios, FAST-LIO2 can be augmented by other sensors such as GPS and cameras.」<br>
+      （中译：FAST-LIO2 <b>无法</b>在完全退化的环境中工作——也就是激光视场内不存在任何几何结构的环境（因此没有点、或只有极少的点）。例子包括：把激光雷达<b>正对开阔海面、天空、地面、单一的整面墙</b>，或者<b>过于靠近物体（例如 1 米以内）</b>以至于测不到点。在这些场景中，FAST-LIO2 可以借助 GPS、相机等其他传感器来补充。）</p>
+
+      <p>把原文点名的场景列成清单：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>开阔海面 / 天空</b>
+          <p>正对着它们时，激光打出去没有回波，视场里<b>几乎是空的</b>。没有点就没有约束，滤波器只能靠 IMU 推——那就会漂。</p>
+        </div>
+        <div class="mini-card">
+          <b>纯地面</b>
+          <p>只看到一个平面。平面只能约束「垂直于地面的那个方向」，而<b>沿地面平移和绕竖直轴旋转</b>全都估不出来。这是几何退化最典型的一课。</p>
+        </div>
+        <div class="mini-card">
+          <b>单一整面墙</b>
+          <p>只从一个方向看到几何。墙能约束法向的距离，但<b>沿着墙面滑动、绕墙面法向旋转</b>都没人管你——车会悄悄滑走。</p>
+        </div>
+        <div class="mini-card">
+          <b>距物体 &lt; 1 m</b>
+          <p>太近了，激光测不到有效回波，视场里同样没有点。这是一个非常「物理」的失败条件——不是算法不够好，是传感器拿不到数据。</p>
+        </div>
+      </div>
+
+      <p>本质上，这和我们第三季反复讲过的「退化」是同一件事：<b>当环境只在很少的几个方向上提供几何约束时，信息矩阵在某些方向上的特征值会趋近于零，对应方向的自由度就估不出来。</b>这不是 FAST-LIO2 独有的毛病——LOAM、LIO-SAM 一样怕它，只是 FAST-LIO2 把它写在纸上了。本季后面讲 Point-LIO、LOG-LIO 时，你会看到大家如何从不同角度去缓解它。</p>
+
+      <p>另外补一句上一节留下的伏笔：FAST-LIO2 的状态维度是 <b>24</b>（在 FAST-LIO 的 18 维之外，多出了激光与 IMU 之间的外参 $SO(3)\times\mathbb{R}^3$）。这个设计在快速手持实验里得到了验证——外参被成功估了出来。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文表 VII 给出的合计耗时里，FAST-LIO2 在 <b>Intel</b> 平台上是多少？（FAST-LIO 是 15.83 ms）</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。FAST-LIO2 在 Intel（Manifold 2-C）上是 1.82 ms，其中建图只占 0.13 ms——这个数字直接来自 ikd-Tree 换掉「每步重建静态树」。" onclick="lessonKit.answer(this,'q0084b')">一点八二毫秒</button>
+          <button data-correct="no" data-explanation="错。5.23 ms 是 ARM 平台（Khadas VIM3）上的数字，不是 Intel。原文特意强调 ARM 上首次做到了 10 Hz 实时，但那不是本题问的平台。" onclick="lessonKit.answer(this,'q0084b')">五点二三毫秒</button>
+        </div>
+        <div class="quiz-feedback" id="q0084b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>FAST-LIO2 为什么要把「提取特征」这一步删掉？原文给了哪几条理由？请至少说出三条，并说明删掉之后换来了什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>三条理由（原文）：</b></p>
+              <p>① <b>对环境敏感</b>：提特征的性能容易被环境左右。在没有大平面、没有长棱线的无结构环境里，「feature extraction will lead to few feature points」（挑不出几个点）。</p>
+              <p>② <b>小视场会放大问题</b>：视场越小这个情况越严重，而小视场正是新兴固态激光雷达的典型特征。</p>
+              <p>③ <b>增加手工工程负担</b>：特征提取的规则因雷达而异（旋转式、棱镜式、MEMS 式，以及点密度不同），所以采用一套 LIO 方法「requires much hand-engineering work」。</p>
+              <p>另外还有一条隐含的：挑剩的少数特征丢失了大部分几何信息，直接法「enables the exploitation of subtle features」，能利用更细微的结构从而提升精度。</p>
+              <p><b>换来了什么：</b>① 精度上有实例——lili_7 序列包含大量树木和开阔区域，特征提取会删掉许多有效点，而直接法在这条序列上更好；② 成败上有实例——LILI-OM 在港大 650 m、100 Hz 的手持序列上直接失败，原因就是它的特征提取模块在该扫描率下产出太少的特征；③ 泛化性上——系统天然适配不同扫描方式的雷达。</p>
+            </div></details>
+          </li>
+          <li>静态 k-d 树每次地图更新要整体重建，复杂度是多少？ikd-Tree 的插入和 kNN 查询复杂度各是多少？为什么能降低？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>静态 k-d 树整体重建是 $O(n\log n)$；ikd-Tree 的<b>点插入（含树上下采样）是 $O(\log n)$</b>，<b>kNN 查询也是 $O(\log n)$</b>。</p>
+              <p><b>为什么能降低：</b>因为它不再「整树推倒重建」，而是<b>增量地只改相关的一小块</b>——插入时只沿一条从根到叶的路径走，删除时用包围盒判断后整块打标记（懒惰删除），只有当某棵子树违反平衡准则时才局部重建它。</p>
+              <p>原文在对比实验里还给出了一个关键观察：ikd-Tree 的插入与 kNN 时间「is indeed proportional to $\log n$」，和复杂度分析一致；而 nanoflann k-d 树虽然平均插入略快，却会偶发巨大尖峰，严重破坏实时性。</p>
+            </div></details>
+          </li>
+          <li>懒惰删除（lazy deletion）里，包围盒与删除盒的比较分成哪三种情况？每种情况下算法分别做什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>设节点子树的外接包围盒为 $\mathbf{C}_T$，要删除的目标盒子为 $\mathbf{C}_O$：</p>
+              <p>① <b>不相交</b>：递归直接返回，不更新树（「the recursion returns directly without updating the tree」）。</p>
+              <p>② <b>$\mathbf{C}_T$ 完全被 $\mathbf{C}_O$ 包含</b>：把 <b>deleted</b> 和 <b>treedeleted</b> 都置为 true，同时把 <b>invalidnum</b> 设为 <b>treesize</b>（整棵子树都无效了）。</p>
+              <p>③ <b>相交但不被包含</b>：先判断当前这个点本身是否落在 $\mathbf{C}_O$ 里，在就删它；然后递归进左右子节点继续；递归返回后再做属性更新与平衡维护。</p>
+              <p><b>要理解的核心：</b>能整块删的绝不逐个删。这样「地图平移时删掉身后一整块旧区域」的代价才能控制在 $O(\log n)$ 量级。</p>
+            </div></details>
+          </li>
+          <li>请写出 ikd-Tree 的 $\alpha$-balanced 与 $\alpha$-deleted 两个判据，并说明它们各自在防止什么问题。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>$\alpha$-balanced：</b>$S(T.\text{leftchild}) < \alpha_{\text{bal}}(S(T)-1)$ 且 $S(T.\text{rightchild}) < \alpha_{\text{bal}}(S(T)-1)$，其中 $\alpha_{\text{bal}} \in (0.5,1)$，$S(T)$ 即 treesize。它防止的是<b>树长歪、变得太高</b>。原文给出：$\alpha$ 平衡树的最大高度是 $\log_{1/\alpha_{\text{bal}}}(n)$（对比静态平衡 k-d 树的 $\log_2 n$，略高一点点，这就是「支持动态增删」的代价）。</p>
+              <p><b>$\alpha$-deleted：</b>$I(T) < \alpha_{\text{del}} S(T)$，其中 $\alpha_{\text{del}} \in (0,1)$，$I(T)$ 即 invalidnum。它防止的是<b>「僵尸节点」堆积</b>——被标记删除但还没物理清除的节点会一直占着树的位置、拖慢查询，所以一旦它们的比例超过阈值就必须重建把它们清掉。</p>
+              <p>一句话：<b>前者管「歪没歪」，后者管「脏没脏」。</b>任一被违反都会触发对<b>那棵子树</b>（而不是整棵树）的重建。</p>
+            </div></details>
+          </li>
+          <li>双线程并行重建里，operation logger 解决了什么问题？请描述它在整个流程中出现的时机与作用；并说明「主线程视角下重建复杂度为 $O(n)$」这句话该怎么理解。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>它解决的问题：</b>把大子树的重建挪到第二线程之后，主线程仍在不停地插点、删点。如果直接让两边同时改这棵树，就会发生<b>信息丢失或内存冲突</b>。operation logger 就是用来消解这个矛盾的。</p>
+              <p><b>时机与作用：</b>第二线程先 <code>LockUpdates</code>——<b>只锁增量更新、不锁查询</b>；然后把子树里的有效点摊平到数组 V（此时原结构保持不变，以便查询继续）；<b>摊平完成立刻解锁</b>；此后主线程提交的所有增删请求被<b>同时记录进 operation logger 队列</b>；第二线程用 V 建出新树 $\mathcal{T}'$ 后，<b>把队列里的请求逐条在新树上重放</b>。重放完毕后新旧两棵树在点的内容上完全一致，只是新树更平衡；最后短暂 <code>LockAll</code>（原文说只相当于一条指令那么快）完成替换，并释放旧树内存。</p>
+              <p><b>$O(n)$ 怎么理解：</b>主线程真正承担的工作只有「摊平」（$O(n)$）和几次常数时间的锁与指针替换；<b>建树那部分（$O(n\log n)$ 里的 $\log n$ 因子）整个被搬到了第二线程。</b>所以这不是让总工作量变少，而是把它挪到了不影响实时性的地方——原文的说法是主线程的建图过程仍以「里程计的频率」继续推进、不被打断。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0083-FAST-LIO2021-迭代卡尔曼与新增益公式.html">← FAST-LIO（2021）：迭代卡尔曼与一个新公式</a>
+        <a class="next" href="0085-Faster-LIO2022-用体素哈希取代树.html">Faster-LIO（2022）：用体素哈希取代树 →</a>
+      </div>
+      <p class="foot-note">两季的债在这里还清了。但下一个问题马上就来了：ikd-Tree 的 $O(\log n)$ 还不够快吗？下一节我们看有人干脆把树换掉 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

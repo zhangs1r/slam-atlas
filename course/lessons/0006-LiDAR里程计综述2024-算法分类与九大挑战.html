@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LiDAR 里程计综述（2024）· 算法分类与剩余挑战 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0006</div>
+      <h1>LiDAR 里程计综述（2024）：按"传感器组合方式"分类</h1>
+      <p class="subtitle">这是第一份专门讲 LiDAR 里程计的综述，作者自称"首个全面探索 LiDAR 里程计的工作"。它的分类方式很特别——<b>不按算法分，而按"你用了哪些传感器"分</b>。这一节我们就顺着这个分类走一遍，再重点读它列的<b>五类剩余挑战</b>，那是选题的金矿。📡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：LiDAR 里程计分类 + remaining challenges</span>
+        <span>👥 Dongjae Lee, Minwoo Jung, Wooseong Yang, Ayoung Kim</span>
+        <span>📅 2024 · <i>LiDAR odometry survey: recent advancements and remaining challenges</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">为什么单独立一档</a>
+        <a href="#cls">四条分类线</a>
+        <a href="#pipe">通用管线与松紧耦合</a>
+        <a href="#chal">五类剩余挑战（重点）</a>
+        <a href="#deg">退化 vs 降质：一对容易混的词</a>
+        <a href="#eval">数据集与评测</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出 LiDAR 里程计的四条分类线；② 讲清"预处理 / 初值估计 / 状态估计"三阶段以及松紧耦合的分界；③ 准确区分<b>退化</b>与<b>降质</b>环境；④ 说出这条线上至少五个开放问题。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>第 0005 课讲了一个具体的动态环境激光方案（SW-NDT），属于"前端改造"。本节把视野拉高到整个激光路线。你会发现第 0005 课里那些概念——NDT、Scan Context、松/紧耦合——在这里都被放进了统一的分类框架。而第 0004 课讲的"视觉失败三大主因"，在激光域会演变成完全不同的另一组挑战。🔗</p>
+        </div>
+      </div>
+
+      <h2>1. 为什么激光要单独立一档</h2>
+      <p>原文在引言里给的理由非常清楚，而且和视觉形成了鲜明对照。它先回顾里程计的历史：早期严重依赖轮式编码器与航位推算，但精度受限于<b>打滑</b>与算法误差；随后研究分成两大流派——<b>基于测距传感器的里程计</b>与<b>视觉里程计</b>。</p>
+      <p>然后三维激光出现，成为"能测量周围三维空间的变革性技术"。而视觉里程计存在的关键限制被原文点名：</p>
+      <div class="callout">
+        <h4>原文的立论</h4>
+        <p>"尽管取得了实质性进展，<b>视觉里程计尤其在低光条件下存在局限，限制了它的适用性——比如夜间作业。</b>"于是研究者把注意力转向 LiDAR，因为它<b>能对周围做三维扫描，并且不受光照条件影响</b>。</p>
+      </div>
+      <p>请把这个对立记牢：<b>相机怕光（太暗、太亮、光照剧变都不行），激光不怕光；但相机有纹理与颜色信息，激光没有。</b>这一对互补关系，是后面第 0007 课（硬件演进）与多传感器融合一章的全部动机来源。</p>
+    </main>
+
+    <section class="section-card" id="cls">
+      <h2>2. 四条分类线：按"传感器组合方式"切</h2>
+      <p>这篇综述的组织逻辑是：<b>按传感器集成方式来划分 LiDAR 里程计方法</b>。原文明确列出四种：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LiDAR_odometry_survey__recent_advancements_and_remaining/1abda0e857d5e392b12080fcab23622d339942fcf8d0c2f40e79e20cb76dd216.jpg" alt="Structure of LiDAR odometry survey">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Structure of LiDAR odometry survey（本综述的结构）。Section 2 探讨 LiDAR 技术细节；Section 3、4、5、6 分别在不同传感器模态下考察 LiDAR 里程计；Section 7 介绍挑战；Section 8 分析数据集与评测。
+          <br><b>怎么看这张图：</b>这是本节的目录图。请记住这个组织方式——它<b>不是按算法流派分的，而是按"你手上有哪些传感器"分的</b>。这个选择很务实：真实工程里最先确定的往往就是"我能装什么传感器"，而不是"我想用什么算法"。
+        </figcaption>
+      </figure>
+
+      <table>
+        <thead><tr><th>章节</th><th>分类</th><th>子类</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Sec. 3</b></td>
+            <td><b>仅用 LiDAR</b>（LiDAR-only）</td>
+            <td>① <b>直接匹配</b>（direct matching）<br>② <b>基于特征匹配</b>（feature-based matching）<br>③ <b>基于深度学习匹配</b>（deep learning-based matching）</td>
+          </tr>
+          <tr>
+            <td><b>Sec. 4</b></td>
+            <td><b>LiDAR + IMU</b>（LiDAR-inertial）</td>
+            <td>① <b>松耦合</b>（loosely coupled）<br>② <b>紧耦合</b>（tightly coupled）</td>
+          </tr>
+          <tr>
+            <td><b>Sec. 5</b></td>
+            <td><b>多 LiDAR</b>（multiple LiDARs）</td>
+            <td>多台雷达的扫描区域互补与联合估计</td>
+          </tr>
+          <tr>
+            <td><b>Sec. 6</b></td>
+            <td><b>与其他传感器融合</b></td>
+            <td>与相机、雷达（radar）、GNSS 等的融合</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>请把"仅用 LiDAR"下面的三分类记住</h4>
+        <p>它其实是<b>整个激光路线最核心的一条技术分岔</b>，而且和历史演进完全对应：<br>
+        <b>① 直接匹配</b>——不挑点，直接用全部点做点云配准（ICP / GICP / NDT 家族）。<br>
+        <b>② 基于特征匹配</b>——先挑出角点/面点，再匹配特征（<b>LOAM 家族</b>是代表）。<br>
+        <b>③ 基于深度学习匹配</b>——用网络学描述子或学配准。</p>
+        <p>有意思的是，这条分岔的走向是<b>来回摆动</b>的：LOAM 提出"挑特征"是进步；后来 FAST-LIO2 又"彻底不挑特征"，也是进步；再后来深度学习又来学特征。为什么同样的问题会有相反方向的正确答案？因为<b>判据变了</b>——早期算力有限，挑特征是为了快；后期数据结构变好了（ikd-Tree），不挑特征反而更快更鲁棒。第 0007 课之后进入激光主干时，你会看到这个摆动的完整故事。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="pipe">
+      <h2>3. 通用管线：三阶段，以及"松 / 紧"到底分在哪</h2>
+      <p>原文画出了一条通用的 LiDAR 里程计管线，并且用它来定义松耦合与紧耦合的分界。这是本节最"解渴"的一段——因为"松耦合 vs 紧耦合"这个词你会在后面几十篇论文里反复看到，但很少有人讲清它的判据。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LiDAR_odometry_survey__recent_advancements_and_remaining/7f62c921e056cc16d9dac3a456d29604e7f31ad360ff462285341809a866ef01.jpg" alt="LiDAR Odometry Pipeline">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>LiDAR Odometry Pipeline —— LiDAR 里程计的通用框架可大致分为三个阶段：<b>预处理（preprocessing）、初值估计（initial estimation）、状态估计（state estimation）</b>。当引入其他传感器时，<b>根据"额外传感器数据在哪个阶段被使用"，其集成方式被分为松耦合或紧耦合</b>。在状态估计阶段，精化后的状态同时被用于里程计与建图。
+          <br><b>怎么看这张图：</b>这张图的价值在于它给了一个<b>可操作的判据</b>：
+          <ul>
+            <li>如果额外传感器只在<b>前段</b>用（比如只用 IMU 给一个初值、或只用它做去畸变），那就是<b>松耦合</b>——传感器各自的估计结果在外部被"拼"起来。</li>
+            <li>如果额外传感器的量测被<b>直接写进状态估计的优化/滤波模型里</b>共同求解，那就是<b>紧耦合</b>。</li>
+          </ul>
+          换句话说，<b>松紧之分不是"接得牢不牢"，而是"额外传感器的量测有没有进入统一的误差模型"。</b>这个判据在第 0007 课讲 FAST-LIVO2"把激光与图像融进同一体素地图"时，会体现得淋漓尽致。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="chal">
+      <h2>4. 五类剩余挑战：这是选题金矿</h2>
+      <p>原文第 7 章是整篇综述最有价值的部分。它说得很清楚：虽然在各种真实环境中都展示了性能，但<b>未解决的问题仍然值得进一步研究</b>。下面五类，几乎每一条后面都跟着"目前还缺乏研究"这样的字眼——这些就是可做的工作。</p>
+
+      <h3>7.1 LiDAR 的固有局限（三个）</h3>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① 数据量大</h4>
+          <p>原文给的具体数字：<b>OS1-128 这类雷达单帧可达数十万点（several 100K），最高 20 Hz</b>；而且每个点还带距离、强度、反射率、环境条件、采集时刻等信息，进一步放大体量。使用 NTU VIRAL 数据集（含两台 16 线雷达）的两项研究中，<b>优化过程耗时超过 100 ms——相当于一次激光扫描的时长</b>。原文的评价：对使用关键帧的系统可以接受，但<b>在需要"每次扫描都估计"的场景里就不实用了</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 运动畸变</h4>
+          <p>机器人相对传感器采集频率高速运动时，单次扫描的<b>起止时刻</b>之间会有明显空间位移，从而给扫描引入畸变。必须做补偿，也就是 <b>de-skewing（去畸变）</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 感知能力有限</h4>
+          <p>视场角（FOV）相对较窄；数据比相机图像<b>更稀疏</b>；虽然 VCSEL 技术进步让通道数更多、数据更密，但<b>分辨率仍低于常规相机</b>。另外机械式雷达为了 360° 视野常装在车顶等开放位置，<b>难以防护外部冲击</b>，改到更受遮蔽的位置又要牺牲 FOV。</p>
+        </div>
+      </div>
+
+      <h4>去畸变的四种办法，以及各自的代价</h4>
+      <p>原文把 de-skewing 的做法列得很全，这是一份很实用的工程清单：</p>
+      <table>
+        <thead><tr><th>做法</th><th>原理</th><th>代价 / 限制</th></tr></thead>
+        <tbody>
+          <tr><td><b>用 IMU</b></td><td>用高频 IMU 把点对齐到同一时刻</td><td>需要有 IMU，且要标定与时间同步</td></tr>
+          <tr><td><b>线性插值</b></td><td>处理传感器的离散性与"量测时刻 ≠ 实际位置"的错配</td><td>只是一种近似</td></tr>
+          <tr><td><b>恒定速度模型</b></td><td>没有额外传感器时的兜底方案</td><td>原文明确：<b>在剧烈运动或速度估计不确定时缺乏精度</b></td></tr>
+          <tr><td><b>连续时间插值</b></td><td>用 B 样条插值估计连续轨迹，保证每个点的变换都准确</td><td>原文明确：<b>显著增加计算量</b>，因为每个点都要单独算状态。所以"精度与效率之间要权衡，取决于应用的具体需求与约束"</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <h4>注意这个"四选项 + 各自代价"的结构</h4>
+        <p>没有哪一种是"正确答案"。<b>每一个选择都是在特定算力/传感器/运动剧烈程度下的折中。</b>顺带一提：最后那条"连续时间插值"正是阶段 B 里"连续时间 vs 离散时间"那几篇论文的主题——你已经在这里预见到了它的动机。</p>
+      </div>
+
+      <h3>7.2 异构 LiDAR：为什么算法不能通用</h3>
+      <p>原文把这个问题讲得很直接。它先回顾第 2.2 节的分类——机械式与扫描式固态两类——然后指出：<b>这两类在视场角、扫描模式等方面有显著差异，而这些差异本质上导致它们需要不同的里程计算法。</b></p>
+
+      <!-- QA-PATCH id="q0006-cat" date="2026-09-16" src="正文 2.2 节 vs 7.2 节 -->
+      <details class="qa-patch" open>
+        <summary>❓ 追问：原文一会儿说三类、一会儿说两类，到底该记几个？<span class="qa-badge">就地答疑</span></summary>
+        <div class="qa-body">
+          <p><b>你的疑问：</b>本节表格里列了三种成像机制（机械式 / 扫描式固态 / flash），但 7.2 节原文却说"分为两类"（机械式与扫描式固态）。到底哪个对？</p>
+          <span class="qa-verdict"><b>结论：两个数都没错，但说的不是同一件事。</b>"三类"是<b>分类学</b>（世界上有哪几类雷达），"两类"是<b>本文范围</b>（这篇综述打算讲哪几类）。</span>
+          <p><b>依据一（分类学，2.2 节原文）：</b>"Imaging mechanisms of LiDAR can be classified into <b>three</b> main categories: mechanical LiDARs, scanning solid-state LiDARs, and flash LiDARs with non-scanning architectures." —— 这是说全世界的激光雷达按成像机制可以分成三类。</p>
+          <p><b>依据二（本文范围，紧接在 2.2 节同一段后面）：</b>"However, in this paper, we concentrate on <b>mechanical LiDARs, scanning solid-state LiDARs</b>, ToF LiDARs, and FMCW LiDARs, as these variants of LiDAR hold significant relevance in the context of LiDAR odometry." —— 作者明确说本文只聚焦其中两类，因为这两类才与<b>激光里程计</b>真正相关。</p>
+          <p><b>那 flash 为什么不讲？</b>因为它一次曝光出整幅深度图、<b>没有扫描时序</b>。而激光里程计最基础的两件事——"按时间戳给帧内点做运动补偿"和"相邻两帧扫描结构配准"——都建立在扫描时序上。所以 flash 不落在本文的"里程计"范围里（它的算法范式更接近深度相机，这一点第 0007 课会再讲一次）。</p>
+          <p><b>该怎么记：</b>记<b>三类</b>（机械 / 扫描固态 / flash），但要知道<b>主流激光里程计只谈前两类</b>。以后读到别的论文说"两类"，先看它是不是也在做里程计——多半是在<b>限定范围</b>，而不是在纠正分类。</p>
+          <p class="qa-meta">📍 本条补丁插入位置：第 4 节「7.2 异构 LiDAR」；依据：原文 2.2 节与 7.2 节原文对照。可直接回 <code>md/2024_LiDAR_odometry_survey__recent_advancements_and_remaining.md</code> 复核。</p>
+        </div>
+      </details>
+      <!-- /QA-PATCH -->
+      <p>更麻烦的是：<b>即使在同一类雷达内部，不同厂商、不同产品线之间的 FOV、分辨率等因素也有差异。这意味着"在某一类型上有效的算法，用到另一类型上可能需要调整额外参数。"</b></p>
+      <p>于是就有了"对通用算法的需求"。原文点名的代表是 <b>KISS-ICP</b>：一个简化但有效的纯激光里程计方案，<b>依赖点到点 ICP</b>，在各种平台与环境条件下与其他纯激光方法表现相当，而且对<b>多种激光传感器</b>都通用。</p>
+      <div class="callout">
+        <h4>但原文紧接着说了一句很关键的话</h4>
+        <p>"虽然 KISS-ICP 对各种激光传感器是一个简单而通用的方案，<b>但针对 LiDAR-inertial 里程计以及与其他传感器融合，仍然缺乏通用的方法论</b>。因此整体通用方案仍有性能提升的空间。"</p>
+        <p>请记住这个句式：<b>"A 已经做到了，但 B 还没有"</b>——这是综述论文里最典型的机会陈述方式。KISS-ICP 会在阶段 D（激光主干）里专门讲，它被标为 ★ 难度、●●● 重要性，正是因为它"重新定义了激光里程计最少需要什么"。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LiDAR_odometry_survey__recent_advancements_and_remaining/c56b514fa27098c4352ecd04990f4afca5724fd77cc68683f7e7595ad0a0083e.jpg" alt="LiDAR scanning pattern (a)">
+        <img src="../../md/images/2024_LiDAR_odometry_survey__recent_advancements_and_remaining/7a349b988bae6a418cd4b2b7616e6c0d93cdf4b236e3bb3f9fe4a883c2fab8de.jpg" alt="LiDAR scanning pattern (b)">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Diverse LiDAR Scanning Patterns —— 图中展示了激光扫描模式中的重复式与非重复式。<b>(a)</b> Velodyne VLP-16，一台机械式 LiDAR，显示<b>基于垂直通道的重复式模式</b>；<b>(b)</b> Livox Mid-70，一台采用 Risley 棱镜的扫描式固态 LiDAR，显示独特的<b>莲花状、非重复式模式</b>。
+          <br><b>怎么看这张图：</b>（两张子图按原文顺序，先 (a) 后 (b)。）<b>这张图是"为什么算法不能通用"最直观的答案。</b>请看两件事：<br>
+          ① <b>点落在哪里。</b>(a) 的点呈规则的环状/线状，因为机械雷达靠旋转形成固定的扫描线；(b) 的点分布不规则、随时间逐渐"铺满"视野——因为 Risley 棱镜让光束走非重复路径。<br>
+          ② <b>同一位置的信息怎么来。</b>(a) 每一帧都在同样的位置采样，所以帧与帧可以直接对齐；(b) 每一帧的采样位置都不同，所以"帧到帧"的对应关系天生更弱。<br>
+          这就是原文说的"不规则扫描模式给精确扫描配准带来稀疏性挑战"的图证。也解释了为什么专门为固态雷达设计特征提取方法（比如基于"单线深度变化"的方案）会成为一个小研究方向。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="deg">
+      <h2>5. 退化 vs 降质：一对必须分清的词</h2>
+      <p>原文把这两个问题分成了 7.3 和 7.4 两节，而且<b>明确点出它们的区别</b>。原文原话：降质环境是"对 LiDAR 的<b>感知能力</b>提出挑战"的环境，"<b>与退化环境不同</b>"。请务必分清：</p>
+
+      <table>
+        <thead><tr><th></th><th>退化环境（Degenerative）</th><th>降质环境（Degraded）</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>问题出在哪</b></td>
+            <td>出在<b>几何约束不足</b>。环境本身没坏，传感器也没坏，但场景缺少可区分的结构。</td>
+            <td>出在<b>传感器感知被干扰</b>。几何可能很丰富，但激光脉冲的传播/返回被破坏或误导了。</td>
+          </tr>
+          <tr>
+            <td><b>典型场景</b></td>
+            <td><b>隧道、长走廊</b>等"特征稀缺且重复"的环境</td>
+            <td>直射阳光、雨、雪、雾；以及<b>玻璃</b>等部分反射/透射激光的物体</td>
+          </tr>
+          <tr>
+            <td><b>失效机制</b></td>
+            <td>扫描配准出现<b>歧义</b>，位姿估计不准（沿走廊方向几乎没有约束）</td>
+            <td>出现"不该有的点"（雪花、雾滴）或"位置错的点"（玻璃另一侧的回波），导致配准歧义</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>退化的应对：五条技术路线</h3>
+      <ol>
+        <li><b>数学化的退化因子。</b>Zhang 等引入用<b>特征值与特征向量</b>推导并评估的"退化因子"的数学定义，从而在检测到退化时能做更准确的状态估计。</li>
+        <li><b>自适应参数。</b>AdaLIO 提出自适应参数设定策略，主张使用"环境特定的参数"来应对退化：做法很直接——<b>为一般场景与退化场景各预先定义一套参数，然后按情况切换。</b></li>
+        <li><b>从分布协方差里剔除特征值元素。</b>Wang 等用这种做法减轻相应残差的不确定性，从而处理退化问题。</li>
+        <li><b>自适应相关扫描匹配（CSM）。</b>Shi 等提出根据"退化描述子"动态调整运动权重的自适应 CSM 算法，使系统能自主适应不同环境。做法是让初始位姿权重与环境特征对齐，从而改善里程计结果。</li>
+        <li><b>传感器融合 / 用几何之外的信息。</b>
+          <ul>
+            <li>DAMS-LIO 用迭代扩展卡尔曼滤波（iEKF）估 LiDAR-inertial 里程计，<b>当系统检测到退化时，切换到一个松耦合策略，整合各传感器各自的里程计结果。</b>（注意这里"检测到退化才切换"这个设计。）</li>
+            <li><b>不用融合也能做</b>：如果能从量测里拿到几何之外的额外信息。研究者探索用 LiDAR 的<b>强度（intensity）或反射率（reflectivity）</b>数据来增强退化环境下的状态估计。</li>
+            <li><b>用 FMCW 雷达测多普勒速度。</b>DICP 借用与毫米波雷达类似的思路，<b>在原始 ICP 上增加一个多普勒速度目标项</b>，提升扫描匹配性能，尤其在特征稀缺环境中。原文给出的结果是：<b>在 900 米长的隧道序列这种苛刻场景下仍能高精度地预测里程计。</b>后续工作（Wu 等、Yoon 等）把多普勒速度因子整合进<b>连续时间</b>里程计框架。原文由此得出一个明确判断：<b>退化问题可以通过使用 FMCW LiDAR 得到有效解决。</b></li>
+          </ul>
+        </li>
+      </ol>
+
+      <div class="callout">
+        <h4>这一条最重要：退化的根因是"信息不足"，不是"算法不好"</h4>
+        <p>请体会 DICP 那条思路的精妙之处。长隧道里激光匹配失败的根因是：<b>沿隧道方向没有任何几何特征约束你</b>——你无法从"两侧的墙"推断"我沿隧道走了多远"。换更聪明的几何算法也无法凭空造出信息。所以胜负手是<b>引入一种全新的量测类型</b>：多普勒速度直接告诉你"我在沿视线方向移动多快"，而这正好补上了几何缺失的那一维。<b>遇到"信息不足"型问题，正解往往不是改算法，而是换/加传感器的观测维度。</b></p>
+      </div>
+
+      <h3>降质的应对，以及原文坦言的空白</h3>
+      <p><b>天气干扰</b>方面，已有不少去噪研究：Park 等提出 <b>LIOR（Low-Intensity Outlier Removal）滤波器</b>，用以从点云中剔除雪花粒子；<b>WeatherNet</b>（LiLaNet 的一个变体）用 CNN，在融入雾模型与雨模型的数据上做增广训练，用以从真实激光数据中去除恶劣天气造成的噪声。</p>
+      <div class="callout">
+        <h4>但原文明确指出一个尚无人做的事</h4>
+        <p>"尽管关于天气噪声去除算法已有大量研究，<b>但对于使用这些算法的 LiDAR 里程计性能，仍缺乏研究。</b>探索这一领域对于确保 LiDAR 里程计在恶劣天气下持续提供高水平性能、保障自动驾驶的稳定性，是必要的。"</p>
+        <p>换句话说：<b>去噪是去噪，里程计是里程计，两者还没有被认真接起来。</b>——这又是一个典型的选题缺口。</p>
+      </div>
+      <p><b>玻璃问题</b>同样被点出：玻璃等物体会部分反射或透射激光脉冲，在窗户众多的城市或室内环境中，<b>一侧的反射会干扰玻璃另一侧的激光点</b>，造成扫描匹配歧义。原文的原话是：<b>"目前仍然缺乏能够完全解决这一问题的算法研究。"</b></p>
+
+      <h3>7.5 多传感器带来的三类新问题</h3>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>标定（Calibration）</h4>
+          <p>既要做每个传感器的内参标定，又要做传感器之间的外参标定。原文指出即使有工具与方法，这个过程仍可能<b>极具挑战且复杂</b>。一个具体例子很值得记住：<b>像汽车这样的平台往往对 z 轴、横滚（roll）、俯仰（pitch）角缺乏足够约束，导致这些量的精度甚至可能不如手工测量。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>布局（Placement）</h4>
+          <p>原文的判断是：<b>简单地增加传感器而不做策略性规划，可能对里程计性能毫无影响。</b>多雷达时，策略性布置以互补扫描区域才有提升空间；但<b>过度重叠会导致冗余</b>，引入不必要的数据、增加计算成本。<br>原文还点名一个缺口：已有工作讨论多雷达布局策略，但<b>其关注点是目标检测而非里程计研究</b>，因此这一领域需要专门研究。</p>
+        </div>
+        <div class="mini-card">
+          <h4>同步（Synchronization）</h4>
+          <p>不同传感器以不同频率输出数据，必须处理<b>异步</b>场景。原文提到已有工作用 IMU 在离散时间或连续时间下融合异构雷达数据，但<b>关于多种传感器模态集成的相关工作相对有限</b>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="eval">
+      <h2>6. 数据集与评测：怎么证明"我的坐标对"</h2>
+      <p>原文第 8 章分两块：公开数据集（8.1）、评测（8.2，含真值生成与评测方法）、以及基准结果（8.3）。评测这一块对写论文的人尤其重要——因为<b>激光里程计的"真值"比视觉更难获得</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LiDAR_odometry_survey__recent_advancements_and_remaining/3591e4cec5ed51e8562c947e6c72c0e035c0164cb895bc17202aac409a7f5095.jpg" alt="Various Evaluation Methods of LiDAR Odometry">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Various Evaluation Methods of LiDAR Odometry —— 图中展示多种 LiDAR 里程计的评估方式：<b>(a) 轨迹误差（Trajectory Error）</b>显示沿估计路径的局部与全局偏差；<b>(b) 起点到终点误差（Start-to-End Error）</b>强调从起点到终点的长期漂移；其余还有若干评估方式（原文图注在此处被截断）。
+          <br><b>怎么看这张图：</b>这是"指标工具箱"。关键认知是：<b>不同指标测的是不同的东西。</b>"轨迹误差"整体反映全程贴合度；"起点到终点误差"专门放大<b>长期漂移</b>——而长期漂移恰恰是回环与后端优化要解决的问题。<b>一个方法可能轨迹误差很小但起点到终点误差很大（局部贴合、全局漂移），也可能反过来。</b>所以看论文时一定要先确认它报的是哪个指标，才判断得了它到底强在哪。这个习惯在阶段 D 与 I 会一直用。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LiDAR_odometry_survey__recent_advancements_and_remaining/416607f241726150c3aaeee4cf939697555b4e42d7c8905ecca0f00b560c1042.jpg" alt="Estimated Trajectories">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Estimated Trajectories —— (a) 与 (b) 分别是 HeLiPR 与 ConSLAM 数据集上的结果。在 (b) 中，<b>红框放大了 LiDAR 里程计相对 LiDAR-inertial 里程计偏离真值的那些片段。</b>
+          <br><b>怎么看这张图：</b>这张图做了一件很好的事——<b>它把"差异发生在哪些片段"显式标出来了</b>。请养成这个读图习惯：不要只问"谁更准"，而要问"在什么条件下谁更准"。从 (b) 的红框可以推断，LiDAR-only 在那些片段遇到的情形（可能是快速转向、退化结构、或动态干扰）正是 IMU 起作用的地方。这正是第 0005 课说"一般融合匹配比单纯点云匹配更准"的图证。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>⚠️ 关于原文表格的一处提醒</h4>
+        <p>原文 8.3 节的<b>文字说"六个 LiDAR-only 方法、六个 LiDAR-inertial 方法"，但实际列举各 5 个，而 Table 4 里有 11 个方法</b>（多出一个 Faster-LIO）。这属于原文自身的不一致。本课按"以表格为准"处理，并在此明确标注。另外 Table 1 / 2 / 3 / 4 在 Markdown 转换中都有不同程度的列错位，<b>如果要引用具体数值，请回原 PDF 核对。</b></p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>一台雷达在长隧道里定位失败。按本节的分类框架，这属于哪一类问题？最有效的应对思路是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。隧道里通常没有动态物体；而且"退化"的核心是几何约束不足，不是噪声或干扰。" onclick="lessonKit.answer(this,'q0006a')">降质环境；应加强去噪</button>
+          <button data-correct="yes" data-explanation="对。隧道/长走廊是"退化环境"的教科书例子：几何特征稀缺且重复，沿隧道方向缺少约束。而最有效的思路往往不是改几何算法（信息本来就不足），而是引入新的量测维度——比如用 FMCW 雷达测多普勒速度（DICP 的思路），或用强度/反射率信息。" onclick="lessonKit.answer(this,'q0006a')">退化环境；应引入几何之外的量测维度（如多普勒速度或强度信息）</button>
+          <button data-correct="no" data-explanation="不对。这不是降质问题，增大发射功率也不解决"沿隧道方向无约束"这个几何事实。" onclick="lessonKit.answer(this,'q0006a')">降质环境；应提高激光发射功率</button>
+        </div>
+        <div class="quiz-feedback" id="q0006a"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>
+            请用自己的话定义"松耦合"与"紧耦合"，并说明判据是什么。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>判据是<b>"额外传感器的量测在哪个阶段被使用"</b>。如果额外传感器只在预处理或初值估计阶段起作用（例如只用 IMU 给配准一个初值、或用它做去畸变），它的量测没有进入统一的状态估计模型——这就是松耦合，本质上是"各传感器各自算，结果在外部被组合"。如果额外传感器的量测被直接写进状态估计的优化目标或滤波更新方程里，与激光的量测在同一个模型内联合求解——这就是紧耦合。用一句话概括：<b>松紧之分不取决于物理上"接得牢不牢"，而取决于数学上"有没有进同一个误差模型"。</b></div>
+            </details>
+          </li>
+          <li>
+            为什么"运动畸变"在激光里程计里比在视觉里程计里更值得单独处理？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>因为相机的曝光时间很短（微秒到毫秒量级），可以近似认为一帧图像是"同一时刻"拍到的；而激光的一次扫描是<b>逐点、逐角度进行的，耗时较长</b>（通常 100 ms 量级）。在这段时间里机器人已经移动了，于是同一帧点云里的点实际上是在不同位姿下采到的——开头和结尾的点之间可能有明显的空间位移。原文的说法是"如果机器人在单次激光扫描的起止时刻之间移动较快，会形成一个可观的空间间隙，进而引入显著畸变"。所以必须显式做 de-skewing，把点对齐到同一时刻。这也解释了为什么"逐点处理"会成为后面 Point-LIO 那类工作的核心卖点。</div>
+            </details>
+          </li>
+          <li>
+            原文说"简单地增加传感器而不做策略性规划，可能对里程计性能毫无影响"。请解释为什么"过度重叠"是有害的。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>因为重叠区域的点<b>没有新增信息</b>，但会带来三重成本：① 数据量增加，直接推高实时处理的负担（而原文在 7.1 已经指出数据量本身就是挑战）；② 冗余观测在优化中可能产生"伪增强"——同一块区域被重复计数，会让人误以为约束更多，但对某些方向的估计精度并无实质提升；③ 冗余还可能导致退化检测与协方差估计的偏差。所以多雷达布局的目标是<b>互补视场</b>（比如一台朝前、一台朝后，或不同安装角度覆盖不同方向）而不是<b>叠在同一区域</b>。原文同时也指出：已有关于多雷达布局策略的讨论，但其关注点是目标检测而不是里程计，所以这个问题在里程计语境下还需要专门研究。</div>
+            </details>
+          </li>
+          <li>
+            请列出原文中至少三处"明确指出某方向缺乏研究"的地方，并说明它们为什么是好的选题。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>① <b>天气去噪算法与里程计性能之间没有被接起来</b>——原文说尽管去噪研究很多，但"对这些算法用于 LiDAR 里程计时的性能缺乏研究"，并称探索这一领域是必要的。好在哪里：输入（去噪）和下游任务（定位）都是成熟模块，缺的是系统性的联合评测与联合设计。② <b>玻璃反射问题缺乏能完全解决的算法</b>——原文明确"目前仍然缺乏"。好在哪里：问题清晰、真实（城市与室内普遍存在）、当前无人解决。③ <b>LiDAR-inertial 与其他传感器融合缺乏通用方法论</b>——原文说 KISS-ICP 证明了纯激光可以做通用方案，但推广到惯性与其他模态还没做到。好在哪里：有明确的"标杆"（KISS-ICP）可以对比，目标明确。④ 另可补充：多雷达/多模态的<b>布局策略</b>在里程计语境下缺乏专门研究；<b>多模态同步</b>的系统性工作有限；以及<b>标定</b>在"平台本身无法对某些自由度施加约束"时精度不足（如汽车的 z/roll/pitch）。</div>
+            </details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0005-动态环境下的激光SLAM-2022.html">← 动态环境下的激光 SLAM（2022）</a>
+        <a class="next" href="0007-固态激光雷达与纳米光子学2022-硬件演进.html">固态激光雷达与纳米光子学（2022）→</a>
+      </div>
+      <p class="foot-note">算法这一侧讲完了。下一节我们看<b>硬件</b>这一侧——机械旋转为什么正在被取代，以及这件事对算法意味着什么 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LeGO-LOAM（2018）：为嵌入式瘦身 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0075</div>
+      <h1>LeGO-LOAM（2018）：为嵌入式瘦身</h1>
+      <p class="subtitle">同一套骨架，砍掉一半算力，还顺手治好了「草地噪声」🌿</p>
+      <div class="hero-meta">
+        <span>🎯 主题：点云分割 · 地面约束三自由度 · 两步 LM</span>
+        <span>👥 作者：Tixiao Shan、Brendan Englot</span>
+        <span>📅 2018 · <i>LeGO-LOAM: Lightweight and Ground-Optimized Lidar Odometry and Mapping on Variable Terrain</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">LOAM 在地面车上为什么不够用</a>
+        <a href="#seg">第一招：先分割，再提特征</a>
+        <a href="#ground">第二招：地面只管三个自由度</a>
+        <a href="#two">第三招：两步优化</a>
+        <a href="#result">结果与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 LeGO-LOAM 相对 LOAM 改了三处什么；并能解释一个很反直觉的结论——<b>为什么地面点只能约束六个自由度里的三个</b>。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>上一节 <b>0074</b> 讲了 LOAM 的骨架。这一节是它的第一个「改良版」——骨架不动，换里面的零件。它同时接第一季 <b>0006</b> 课的「特征法 + 退化」与 <b>0009</b> 课的越野场景。</p>
+        </div>
+      </div>
+
+      <h2>1. LOAM 在地面车上为什么不够用</h2>
+
+      <p>上一节我们把 LOAM 夸了一通。但那是在 KITTI 那种<b>城市道路</b>上——路是平的、两侧有建筑、有清晰的人造特征。</p>
+
+      <p>现在把同一套东西搬到一台<b>越野地面机器人</b>（UGV）上，场景换成草丛、树林、土路。原文列出了三个具体问题：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>问题一：算力跟不上</b>
+          <p>嵌入式平台（比如 Jetson TX2）的算力远不如笔记本。而 LOAM 要<b>逐点</b>算曲率、逐点判特征——原文实测，原版 LOAM 在 Jetson 上「提取特征」和「里程计」两步各要 <b>超过 100 ms</b>，大量帧被直接跳过，<b>根本跑不到实时</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>问题二：草和树叶在骗人</b>
+          <p>雷达装得低，紧贴地面。<b>草丛与树叶会给出大量高曲率的点</b>——因为每一片叶子都很小、很散，看起来就像「边缘」。但这些点在下一帧就完全不一样了（叶子在动、风在吹），根本不可靠。</p>
+        </div>
+        <div class="mini-card">
+          <b>问题三：两帧重叠少</b>
+          <p>越野机器人速度快、地形起伏大，相邻两帧点云重叠的部分变少，找对应更难。</p>
+        </div>
+      </div>
+
+      <p>LeGO-LOAM 的改进可以概括成一句话：<b>骨架一点没动，但加了三道「过滤器」</b>——先按可分割性筛一遍，再按「地面/非地面」分两路优化，最后按结构分两步求解。三个改动都指向同一个目标：<b>用更少的点、更少的计算，做出更稳的结果。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_LeGO-LOAM/7076b97b5336900bc862a775f2a54a893f86c56cae6deebaf76be1f151e2399c.jpg" alt="LeGO-LOAM Fig.1 hardware and system overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Hardware and system overview of LeGO-LOAM.<br>
+          （中译：LeGO-LOAM 的硬件与系统总览。）<br>
+          <b>怎么看这张图：</b>① 先数一下它有几个模块——原文分成 <b>Segmentation（分割）→ Feature Extraction（特征提取）→ Lidar Odometry（里程计）→ Lidar Mapping（建图）→ Transform Integration（位姿融合）</b> 五块；② 和上一节 LOAM 的结构图比一比，<b>最前面多出来的那个「Segmentation」就是本节的第一个改动</b>；③ 注意右边还画了硬件（小车上装 VLP-16），这篇论文的实验平台就是它。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="seg">
+      <h2>2. 第一招：先分割，再提特征</h2>
+
+      <p>既然草和树叶会给出大量假特征，最直接的办法就是：<b>在提特征之前，先把那些「不可靠的点」找出来扔掉。</b></p>
+
+      <p>但怎么判断一个点「不可靠」？LeGO-LOAM 的想法很巧妙：<b>它不看单个点，而是看「一小片连在一起的点」有多大。</b></p>
+
+      <p>具体做法是：把一帧点云按<b>同一根扫描线、相邻角度</b>组织成一张「距离图像」（range image，可以理解成「把环形扫描展开成一张长方形照片，每个像素存的是距离」），然后在这张图上做两步：</p>
+
+      <ol>
+        <li><b>挑出地面</b>——相邻扫描线之间，如果某个点与它的「垂直邻居」之间的夹角很小，说明这里是平坦的地面。</li>
+        <li><b>把地面之外的点聚类</b>——地面点去掉之后，剩下的点在图像上会连成一团团。<b>对每一团数点数</b>：如果这一团少于 <b>30 个点</b>，就直接整团丢掉。</li>
+      </ol>
+
+      <p>为什么「小于 30 个点就丢」能滤掉草和树叶？因为<b>草叶、树叶都是零散的、小块的</b>——它们构成的簇很小；而<b>树干、墙、石头、建筑</b>这些真正有结构的东西，会连成一大团。原文的实验图非常直观：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_LeGO-LOAM/0d5f4db9dbf1eb823328827b5bad15625592ae7ef1e46d8ce9f814894d68f1ce.jpg" alt="LeGO-LOAM Fig.2 feature extraction in noisy environment">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Feature extraction process for a scan in a noisy environment. (b) red points labeled as ground, and other points are segmented. (c) and (d) blue and yellow points labeled as edge and planar features in F_e and F_p.<br>
+          （中译：噪声环境下一次扫描的特征提取过程。(b) 红色点被标为地面，其余点被分割；(c)(d) 蓝色与黄色点分别被标为边缘特征与平面特征。）<br>
+          <b>怎么看这张图：</b>① 先看 (b)——<b>红色那一层是识别出来的地面</b>，它把地面与其它东西分开了；② 再看 (a)(b) 里那些<b>零散的、一团一团的点</b>——那些就是草与树叶，它们会在下一步被整团丢掉；③ 最后看 (c)(d)：留下的蓝点（边缘）与黄点（平面）<b>明显集中在树干的棱与路面上</b>，而不是散在草丛里。<b>这就是「先分割再提特征」的效果。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">分割去噪：为什么「点数少于 30 就丢掉」能治好草地噪声</text>
+
+          <!-- ===== 左：不分割 ===== -->
+          <rect x="18" y="46" width="420" height="336" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="228" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 不分割：草丛树叶全被当成「特征」</text>
+
+          <!-- 地面线 -->
+          <line x1="50" y1="300" x2="406" y2="300" stroke="#8d6e63" stroke-width="2.4"/>
+          <!-- 树干 -->
+          <rect x="196" y="150" width="16" height="150" fill="#795548"/>
+          <circle cx="204" cy="140" r="34" fill="#a5d6a7" stroke="#66bb6a" stroke-width="1.4"/>
+          <!-- 草丛（许多小点） -->
+          <g fill="#7cb342">
+            <circle cx="80" cy="288" r="2.6"/><circle cx="92" cy="278" r="2.6"/><circle cx="104" cy="290" r="2.6"/>
+            <circle cx="116" cy="280" r="2.6"/><circle cx="128" cy="292" r="2.6"/><circle cx="140" cy="282" r="2.6"/>
+            <circle cx="86" cy="272" r="2.6"/><circle cx="110" cy="270" r="2.6"/><circle cx="134" cy="274" r="2.6"/>
+            <circle cx="290" cy="290" r="2.6"/><circle cx="302" cy="280" r="2.6"/><circle cx="314" cy="292" r="2.6"/>
+            <circle cx="326" cy="282" r="2.6"/><circle cx="338" cy="290" r="2.6"/><circle cx="350" cy="278" r="2.6"/>
+            <circle cx="296" cy="270" r="2.6"/><circle cx="320" cy="272" r="2.6"/><circle cx="344" cy="272" r="2.6"/>
+          </g>
+          <!-- 被误标为边缘（红叉） -->
+          <g stroke="#c0392b" stroke-width="2">
+            <line x1="74" y1="266" x2="86" y2="278"/><line x1="86" y1="266" x2="74" y2="278"/>
+            <line x1="110" y1="264" x2="122" y2="276"/><line x1="122" y1="264" x2="110" y2="276"/>
+            <line x1="308" y1="266" x2="320" y2="278"/><line x1="320" y1="266" x2="308" y2="278"/>
+            <line x1="344" y1="266" x2="356" y2="278"/><line x1="356" y1="266" x2="344" y2="278"/>
+          </g>
+
+          <text x="228" y="330" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">草丛被当成大量「边缘特征」</text>
+          <text x="228" y="350" text-anchor="middle" font-size="11" fill="#a8846f">但这些点在下一帧完全是另一批</text>
+          <text x="228" y="368" text-anchor="middle" font-size="11" fill="#a8846f">配准时把位姿往错误方向拉</text>
+
+          <!-- ===== 右：分割后 ===== -->
+          <rect x="462" y="46" width="420" height="336" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="672" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 分割后：小簇整团丢掉</text>
+
+          <line x1="494" y1="300" x2="850" y2="300" stroke="#8d6e63" stroke-width="2.4"/>
+          <rect x="640" y="150" width="16" height="150" fill="#795548"/>
+          <circle cx="648" cy="140" r="34" fill="#a5d6a7" stroke="#66bb6a" stroke-width="1.4"/>
+
+          <!-- 草丛被划掉 -->
+          <g fill="#cfd8dc">
+            <circle cx="524" cy="288" r="2.6"/><circle cx="536" cy="278" r="2.6"/><circle cx="548" cy="290" r="2.6"/>
+            <circle cx="560" cy="280" r="2.6"/><circle cx="572" cy="292" r="2.6"/><circle cx="584" cy="282" r="2.6"/>
+            <circle cx="530" cy="272" r="2.6"/><circle cx="554" cy="270" r="2.6"/><circle cx="578" cy="274" r="2.6"/>
+            <circle cx="734" cy="290" r="2.6"/><circle cx="746" cy="280" r="2.6"/><circle cx="758" cy="292" r="2.6"/>
+            <circle cx="770" cy="282" r="2.6"/><circle cx="782" cy="290" r="2.6"/><circle cx="794" cy="278" r="2.6"/>
+            <circle cx="740" cy="270" r="2.6"/><circle cx="764" cy="272" r="2.6"/><circle cx="788" cy="272" r="2.6"/>
+          </g>
+          <g stroke="#9e9e9e" stroke-width="1.8">
+            <line x1="518" y1="264" x2="596" y2="300"/><line x1="596" y1="264" x2="518" y2="300"/>
+            <line x1="728" y1="264" x2="800" y2="300"/><line x1="800" y1="264" x2="728" y2="300"/>
+          </g>
+          <text x="528" y="322" text-anchor="middle" font-size="10.5" fill="#757575">小簇（&lt;30 点）</text>
+          <text x="764" y="322" text-anchor="middle" font-size="10.5" fill="#757575">小簇（&lt;30 点）</text>
+
+          <!-- 留下的可靠特征 -->
+          <g stroke="#1e6fa8" stroke-width="2.6">
+            <line x1="626" y1="170" x2="626" y2="304"/>
+            <line x1="670" y1="170" x2="670" y2="304"/>
+          </g>
+          <text x="648" y="330" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">只留下树干这样的大簇</text>
+          <text x="648" y="350" text-anchor="middle" font-size="11" fill="#5f8a72">它们是稳定、可重复观测的</text>
+          <text x="648" y="368" text-anchor="middle" font-size="11" fill="#5f8a72">特征数减少 29%–72%</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一片带草丛与树木的路边，在「不做分割」与「做分割」两种处理下，提取出来的特征有什么不同。<br>
+          <b>怎么看这张图：</b>① 左格里的<b>红叉</b>表示「草丛里被误判成边缘特征的点」——它们看起来很像边缘（因为叶片零散），但下一帧就全变了；② 右格里这些点被<b>打叉整团划掉</b>（灰色），规则很简单：<b>这一团点数少于 30 就丢掉</b>；③ 留下来的（蓝色竖线）是<b>树干这类大簇</b>——它们稳定、可重复观测。<br>
+          <b>要记住的一句话：</b>这不是在「识别草」，而是在<b>用「连成一片的点有多少」来判断这个东西值不值得信</b>。原文实测这样一筛，特征数能减掉 29%–72%，而精度反而更好。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="ground">
+      <h2>3. 第二招：地面只管三个自由度</h2>
+
+      <p>这一节要讲的是本节<b>最反直觉、也最值得琢磨</b>的一个结论。</p>
+
+      <p>先回顾：一个刚体在三维空间里的位姿有 <b>6 个自由度</b>——3 个平移（上下、左右、前后）＋ 3 个旋转（横滚 roll、俯仰 pitch、偏航 yaw）。SLAM 的任务就是把它们全估出来。</p>
+
+      <p>现在问一个问题：<b>如果我把车放在一块无限大、绝对平的地面上，这块地面能帮我确定几个自由度？</b></p>
+
+      <p>直觉上似乎「地面能帮不少忙」。但原文的答案是：<b>只有三个。</b>而且具体是哪三个，很好玩。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">为什么「地面」只能约束六个自由度里的三个</text>
+
+          <!-- ===== 格 1：侧视 ===== -->
+          <rect x="18" y="46" width="276" height="300" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="156" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">侧视看</text>
+
+          <!-- 地面 -->
+          <rect x="40" y="270" width="232" height="12" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <!-- 车 -->
+          <rect x="122" y="238" width="68" height="26" rx="5" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="138" cy="270" r="7" fill="#37474f"/><circle cx="174" cy="270" r="7" fill="#37474f"/>
+          <!-- 上下箭头（t_z） -->
+          <path d="M120 250 L120 180" stroke="#2e9e6b" stroke-width="2.2"/>
+          <path d="M120 180 L114 192 L126 192 Z" fill="#2e9e6b"/>
+          <path d="M120 250 L114 238 L126 238 Z" fill="#2e9e6b"/>
+          <text x="106" y="172" text-anchor="middle" font-size="11" font-weight="700" fill="#2e9e6b">上下</text>
+          <!-- 俯仰箭头 -->
+          <path d="M196 250 A 26 26 0 0 1 214 222" fill="none" stroke="#2e9e6b" stroke-width="2.2"/>
+          <path d="M214 222 L209 233 L219 231 Z" fill="#2e9e6b"/>
+          <text x="228" y="218" font-size="10.5" fill="#2e6d51">俯仰</text>
+          <!-- 横滚（画一个小的倾斜标记） -->
+          <path d="M124 296 L152 288" stroke="#2e9e6b" stroke-width="2.2"/>
+          <text x="158" y="292" font-size="10.5" fill="#2e6d51">横滚</text>
+
+          <text x="156" y="322" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2e9e6b">绿勾：地面管得住</text>
+          <text x="156" y="340" text-anchor="middle" font-size="11" fill="#5f8a72">抬高降低、前倾后倾、左倾右倾</text>
+
+          <!-- ===== 格 2：俯视 ===== -->
+          <rect x="312" y="46" width="276" height="300" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="450" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">俯视看</text>
+
+          <!-- 地面（无限大平面：用一片灰色 + 边缘虚化） -->
+          <rect x="334" y="90" width="232" height="164" fill="#eceff1" stroke="#b0bec5" stroke-width="1" stroke-dasharray="8 6"/>
+          <text x="450" y="262" text-anchor="middle" font-size="10.5" fill="#90a4ae">同一块「无限大平地」</text>
+          <!-- 车 -->
+          <rect x="416" y="156" width="30" height="16" rx="4" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <!-- 平移箭头 -->
+          <path d="M416 164 L376 164" stroke="#c0392b" stroke-width="2.2"/>
+          <path d="M376 164 L384 159 L384 169 Z" fill="#c0392b"/>
+          <text x="392" y="152" text-anchor="middle" font-size="10.5" fill="#c0392b">前后左右</text>
+          <path d="M431 156 L431 124" stroke="#c0392b" stroke-width="2.2"/>
+          <path d="M431 124 L426 132 L436 132 Z" fill="#c0392b"/>
+          <!-- 偏航 -->
+          <path d="M446 148 A 40 40 0 0 1 470 186" fill="none" stroke="#c0392b" stroke-width="2.2"/>
+          <path d="M470 186 L466 176 L459 184 Z" fill="#c0392b"/>
+          <text x="496" y="196" font-size="10.5" fill="#c0392b">偏航</text>
+
+          <text x="450" y="290" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">红叉：地面完全无感</text>
+          <text x="450" y="308" text-anchor="middle" font-size="11" fill="#a8846f">在第几米？朝向哪边？</text>
+          <text x="450" y="326" text-anchor="middle" font-size="11" fill="#a8846f">平地怎么滑都还是同一块平地</text>
+
+          <!-- ===== 格 3：比喻 ===== -->
+          <rect x="606" y="46" width="276" height="300" rx="10" fill="#f7f4fb" stroke="#d6c9e6" stroke-width="1.4"/>
+          <text x="744" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#5b4a80">打个比方</text>
+
+          <!-- 玻璃板 -->
+          <g transform="rotate(-8 744 180)">
+            <rect x="642" y="172" width="204" height="16" fill="#b3e5fc" opacity="0.75" stroke="#4fc3f7" stroke-width="1.4"/>
+          </g>
+          <!-- 人 -->
+          <circle cx="744" cy="132" r="13" fill="#8a76ad"/>
+          <rect x="736" y="146" width="16" height="34" rx="6" fill="#8a76ad"/>
+          <path d="M736 200 L730 226" stroke="#8a76ad" stroke-width="5" stroke-linecap="round"/>
+          <path d="M752 200 L758 226" stroke="#8a76ad" stroke-width="5" stroke-linecap="round"/>
+
+          <text x="744" y="256" text-anchor="middle" font-size="11.5" fill="#5b4a80">站在一块巨大的</text>
+          <text x="744" y="274" text-anchor="middle" font-size="11.5" fill="#5b4a80">玻璃板上</text>
+          <text x="744" y="300" text-anchor="middle" font-size="11" fill="#7c6f94">你知道自己站得平不平</text>
+          <text x="744" y="318" text-anchor="middle" font-size="11" fill="#7c6f94">但玻璃板自己在往哪滑</text>
+          <text x="744" y="336" text-anchor="middle" font-size="11" fill="#7c6f94">你一点感觉都没有</text>
+
+          <!-- 底部小结 -->
+          <text x="450" y="392" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">所以：地面点交给第一步（管 3 个自由度）</text>
+          <text x="450" y="414" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">墙、树干、石块这些「非地面」边缘点交给第二步（管另外 3 个）</text>
+          <text x="450" y="444" text-anchor="middle" font-size="11.5" fill="#8a786f">这就是「两步优化」的分工依据</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个问题从三个角度看——侧视、俯视，以及一个生活比喻。核心结论是：<b>无限大的平地，只能告诉你「你站得平不平、有多高」，不能告诉你「你在第几米、朝向哪边」</b>。<br>
+          <b>怎么看这张图：</b>① 左格侧视——抬高降低（上下）、前倾后倾（俯仰）、左倾右倾（横滚）这三件事，都会改变地面相对你雷达的姿态，所以<b>地面管得住</b>（绿勾）；② 中格俯视——前后左右平移、以及绕竖直轴转航向，<b>平地本身完全没变化</b>（怎么滑都还是那块平地），所以<b>地面管不住</b>（红叉）；③ 右格是那个比喻：站在一块巨大的玻璃板上，你知道自己站得稳不稳，但<b>不知道玻璃板自己在往哪滑</b>。<br>
+          <b>要记住的一句话：</b>「地面管三个、非地面管另外三个」——这个分工不是省事的权宜之计，而是<b>从几何本身推出来的</b>。原文的第二步优化正是按这个分工做的。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_LeGO-LOAM/918d51c35cbd22db2b62b527aeefedc70452b8c968d3e77b3f5598f80328cd11.jpg" alt="LeGO-LOAM Fig.3 two-step optimization">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Two-step optimization. The first step obtains [t_z, θ_roll, θ_pitch] from planar features of the ground. The second step obtains [t_x, t_y, θ_yaw] from edge features of the segmented points.<br>
+          （中译：两步优化。第一步从地面的平面特征得到竖直平移与横滚、俯仰角；第二步从分割后点云的边缘特征得到水平平移与航向角。）<br>
+          <b>怎么看这张图：</b>这张就是刚才那个分工的<b>算法版</b>。① 第一步用的输入只有<b>地面点</b>，输出只有三个量；② 第二步用剩下的<b>非地面边缘点</b>，输出另外三个量；③ 关键的一点是：<b>第二步会把第一步的结果当成约束</b>——也就是「我已经知道自己站多高了，现在只求水平方向和朝向」。这样两步各自要解的变量少了，<b>求解更快，也更不容易被噪声带跑</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="two">
+      <h2>4. 第三招：两步优化与「只跟同类配」</h2>
+
+      <p>把第二招变成算法，就是「两步 LM」：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">第一步</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">第二步</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>用哪些点</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">地面点的<b>平面特征</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">非地面点的<b>边缘特征</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>求哪些量</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">竖直平移、横滚、俯仰</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">水平平移、航向</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>怎么衔接</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">先解</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>以第一步结果为约束</b>再解</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>还有一个和它配套的细节：<b>只让「同类的点」互相配。</b>地面点只去找地面平面片，非地面边缘点只去找非地面边缘线，两边不混。这叫「标签匹配」。好处是<b>候选范围缩小了</b>——你不需要在一个几万点的地图里找，只需要在「同类」的那一小撮里找。</p>
+
+      <p>这两件事加起来的效果很实在：原文实测，<b>里程计那一层的运行时间下降了 34%–48%，用到的特征数下降 29%–72%</b>，而精度没有变差。</p>
+
+      <p>为什么能「用更少的点做出更好的结果」？因为被减掉的<b>本来就不是有用的信息</b>——草丛的虚假特征、以及地面在水平方向的无效约束，去掉它们只会让优化更干净。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>LeGO-LOAM 在草地和树林里比原版 LOAM 稳得多。请问它主要是靠哪一招救回来的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="两步优化确实省了算力，也让求解更稳，但它解决的是「计算量」和「变量耦合」的问题。草地场景里 LOAM 是直接发散的，光靠省算力救不回来。" onclick="lessonKit.answer(this,'q0075a')">靠两步优化省算力</button>
+          <button data-correct="yes" data-explanation="对。分割把草丛与树叶产生的虚假特征整团丢掉了（规则是「这一团点数少于 30 就丢」）。原文第三个森林实验里，原版 LOAM 发散到 62–69 m，而 LeGO-LOAM 只有 13.93 m——差别主要就来自这一步。" onclick="lessonKit.answer(this,'q0075a')">靠分割丢掉小簇噪声</button>
+          <button data-correct="no" data-explanation="LeGO-LOAM 里的 IMU 只用来提供初值，并没有进入优化。而且在这个实验里它并不是救命的那一招——真正起作用的是在提特征之前先把不可靠的点筛掉。" onclick="lessonKit.answer(this,'q0075a')">靠 IMU 提供初值</button>
+        </div>
+        <div class="quiz-feedback" id="q0075a"></div>
+      </div>
+
+      <div class="callout">
+        <h4>一个反过来的提问</h4>
+        <p>看到「特征数减了 29%–72%，精度反而更好」，可能有人会想：<b>那是不是特征越少越好？</b>不是的。被减掉的只是「本来就不该参与计算」的那部分；剩下的特征仍然要足够覆盖场景、要分布均匀。原文在极嘈杂的环境里仍然有十几米误差，说明<b>该有的信息如果本来就少，减完就更少了</b>——这不是算法的错，是场景的信息量不够。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>5. 结果与边界</h2>
+
+      <p>先看它到底快了多少。原文在 <b>Nvidia Jetson TX2</b>（一块嵌入式板子）上做了实测：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>LeGO-LOAM 在 Jetson 上</b>
+          <p>分割 29 ms ＋ 提特征 9 ms ＋ 里程计 19 ms ＝ <b>前端约 57 ms</b>，可以达到 <b>10 Hz 实时</b>（建图 267 ms，那一层本来就是低频的）。</p>
+        </div>
+        <div class="mini-card">
+          <b>原版 LOAM 在 Jetson 上</b>
+          <p>提特征与里程计两步<b>各超过 100 ms</b>，大量帧被直接跳过，<b>根本跑不到实时</b>。</p>
+        </div>
+      </div>
+
+      <p>精度上的对比更有说服力。原文的第三个实验是一条<b>森林步道</b>——正是草地与树木最多的场景：</p>
+
+      <ul>
+        <li><b>LeGO-LOAM</b>：回环误差 <b>13.93 m / 7.73°</b>（Jetson）或 14.87 m / 7.96°（笔记本）；</li>
+        <li><b>原版 LOAM</b>：在同一场景直接<b>发散</b>，误差达 <b>62–69 m</b>。</li>
+      </ul>
+
+      <p>也就是说，在这类场景里，LOAM 不是「差一点」，而是<b>完全失效</b>；而 LeGO-LOAM 还能工作。这个差距的来源，正是第一招（分割去噪）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_LeGO-LOAM/f51e0c128f299c1c2128f623c4f34d46aadaf13fb36177fc857d7ff03745a076.jpg" alt="LeGO-LOAM Fig.4 feature comparison LOAM vs LeGO-LOAM">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Edge and planar features. LOAM shown in (b)(c) and LeGO-LOAM in (d)(e).<br>
+          （中译：边缘与平面特征。LOAM 的结果见 (b)(c)，LeGO-LOAM 的结果见 (d)(e)。）<br>
+          <b>怎么看这张图：</b>这是一张「并排打脸图」。① 看 (b)(c)——原版 LOAM 从<b>草丛与树冠里抽出了大量特征</b>（那些密集的彩色点），这些点既不稳定也没有真实结构；② 看 (d)(e)——LeGO-LOAM 经分割之后，<b>那些虚假特征被大幅削减</b>，留下的是真正有结构的点；③ 结论很直接：<b>特征多不等于信息多。</b>在草地上，多出来的那些特征反而是噪声源。
+        </figcaption>
+      </figure>
+
+      <h3>原文承认的边界（逐条）</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 专为地面车辆优化</b>
+          <p>原文明确说：如果要上<b>无人机</b>，需要去掉「地面提取」这一步，退回原来的 LM 求解。因为空中没有「地面」这个概念。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 仍然依赖足够的几何特征</b>
+          <p>在极端嘈杂的环境里，即便做了分割，效果也仍然受限（原文的森林实验本身仍有十几米误差）。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 分割依赖「距离图像」这种投影</b>
+          <p>它需要能把自己的点云展开成一张规则的长方形图像。<b>这对机械旋转式雷达很自然，但对后来出现的非重复扫描固态雷达就不友好了</b>——这正好接上第一季 <b>0007</b> 课讲过的固态雷达难题。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 没有 IMU 紧耦合</b>
+          <p>IMU 在这里只用来提供初值，没有进入优化。把 IMU 正式拉进优化要等下一模块（0077 课起）。</p>
+        </div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请解释：「一块无限大的平地只能约束 3 个自由度」——具体是哪 3 个？为什么另外 3 个约束不到？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>能约束的 3 个：</b>竖直方向的平移、横滚（roll）、俯仰（pitch）。</p>
+              <p>原因是这三个动作都会改变「地面相对于雷达的姿态」：你把车抬高一点，雷达看到的地面就整体下移了一点；你把车前后倾斜，雷达看到的地面就倾斜了。所以只要比对「我这一帧测到的地面」和「上一帧的地面」，就能察觉这些变化。</p>
+              <p><b>约束不到的 3 个：</b>水平方向的平移（前后、左右）与航向（yaw）。</p>
+              <p>原因是<b>平地是均匀的、无限的</b>——你在它上面无论往哪滑、无论朝向哪边转，雷达测到的都还是<b>同一块没有特征的地平面</b>。从数据上完全看不出差别。这就是「退化」最典型的一种：数据不是没有，而是<b>数据里没有能区分位置的信息</b>。</p>
+              <p>所以后三个只能靠非地面的特征（墙的棱、树干、石块）来补——这就是「两步优化」的分工来源。</p>
+            </div></details>
+          </li>
+          <li>LeGO-LOAM 的「分割」是怎么判断哪些点该丢的？为什么这条规则能滤掉草和树叶？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>判断方式：</b>先把点云按「同一根扫描线、相邻角度」组织成一张距离图像；在这张图上先把地面挑出来，再把剩下的点聚类成一个个「团」；然后<b>对每一团数点数，少于 30 个就整团丢掉</b>。</p>
+              <p><b>为什么有效：</b>因为这条规则利用的是<b>「物理尺寸」这个统计特征</b>——草叶、树叶都是很小、很零散的东西，它们在距离图像上只能形成小簇；而树干、墙、石头这些真正有结构、稳定的东西，会连成一大簇。</p>
+              <p>所以它其实<b>并不需要真的「认出这是草」</b>，只需要判断「这一片连在一起的东西够不够大」。这也解释了它为什么对噪声环境特别有效。</p>
+            </div></details>
+          </li>
+          <li>为什么 LeGO-LOAM 要规定「地面点只配地面平面片、非地面边缘点只配非地面边缘线」？这样做有什么好处？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>有两个好处，一个关于速度、一个关于正确性。</p>
+              <p><b>速度：</b>配准的时候要「找最近邻」。如果不分标签，一个点要在一整张地图里搜；分了标签之后，它只需要在「同类的那个子集」里搜。<b>候选范围小了，搜索就快。</b></p>
+              <p><b>正确性：</b>更重要的是，<b>不同性质的几何量本来就不该互相配。</b>把地面点配到一条墙棱上，或者把墙棱上的点配到一个平面上，得到的残差在几何上是没有意义的（它们本来就不是同一类东西）。强行让它们配对，会把噪声引进优化。分标签之后，这种「不合理配对」在源头就被排除了。</p>
+              <p>这两点加起来，正是原文那个「特征数减了 29%–72%，精度反而更好」的原因：<b>减掉的本来就不该参与计算。</b></p>
+            </div></details>
+          </li>
+          <li>LeGO-LOAM 的「分割」依赖把点云展开成一张规则的「距离图像」。这个前提在什么情况下会失效？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它依赖于「<b>点云能按扫描线的顺序，规则地排列成一张长方形图像</b>」这个假设。</p>
+              <p>机械旋转式雷达（如 VLP-16、HDL-64E）天然满足这个假设：它一圈一圈地扫，每一圈就是图像的一行，角度就是列——所以很自然。</p>
+              <p>但第一季 <b>0007</b> 课讲过的<b>非重复扫描固态雷达</b>就不满足：它的扫描轨迹不是规则的环，也不重复扫同一个位置，因此没法简单地展开成规则图像。这时 LeGO-LOAM 的这套「先分割再提特征」就不适用了。</p>
+              <p>这也解释了为什么后来的固态雷达方案（Loam_Livox、FAST-LIO 一系）要另想办法——而 FAST-LIO2 的答案更彻底：<b>干脆不提特征了</b>（第 0084 课）。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0074-LOAM2017-激光SLAM的分水岭.html">← LOAM（2017）：激光 SLAM 的分水岭</a>
+        <a class="next" href="0076-两条变体路线-NDT与EKF.html">两条变体路线：用分布替代特征，用多传感器兜住退化 →</a>
+      </div>
+      <p class="foot-note">这一节最好的收获是那个「地面只管三个自由度」——它是从几何推出来的，不是拍脑袋定的 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

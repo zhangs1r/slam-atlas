@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ROVIO（2015）：滤波派的直接法 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0059</div>
+      <h1>ROVIO（2015）：滤波派的直接法</h1>
+      <p class="subtitle">上一节是优化派的主力，这一节换阵营——同样融合 IMU，但它走 EKF 那条路，而且把「直接法」也搬进了滤波器。两个技术选择凑在一起，长出了一套很有意思的设计 🛩️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：机器人中心表示 + 多层 patch 的视觉惯性 EKF</span>
+        <span>👥 作者：Bloesch, Omari, Hutter, Siegwart（ETH Zurich · Autonomous Systems Lab）</span>
+        <span>📅 2015 · <i>Robust Visual Inertial Odometry Using a Direct EKF-Based Approach</i>（IROS）</span>
+      </div>
+      <div class="toc">
+        <a href="#split">与优化派的根本分歧</a>
+        <a href="#robocentric">★ robot-centric：把原点绑在自己身上</a>
+        <a href="#patch">★ 多层 patch 与 QR 分解</a>
+        <a href="#undelayed">未延迟初始化</a>
+        <a href="#obs">可观性：谁会漂、谁不会</a>
+        <a href="#exp">实验，与一个诚实的发散模式</a>
+        <a href="#drill">巩固练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="split">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清「滤波派」和「优化派」在工程上真正差在哪；② 解释 robocentric 表示为什么能改善数值行为；③ 讲明白「256 个强度误差」是怎么被压成「一个 2 维约束」的，以及为什么非压不可；④ 用自己的话说出这个系统里哪些量可观、哪些会漂；⑤ 复述那个「收敛不回来」的发散模式。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第二季 <b>0028 MSCKF</b>——那一篇是滤波派在现代 VIO 里的开端，本节是它的近亲（同样把视觉特征放进滤波器，但做法相反：MSCKF 想方设法把特征<b>移出</b>状态，ROVIO 把特征<b>放进来</b>并只用 3 个参数表示）。接本季 <b>0041 MonoSLAM</b>——那是「把路标全塞进状态向量」的原始版本，ROVIO 是对它的现代化改造。也接 <b>0050 SVO</b>——那一节的概率深度滤波也是用多层假设表示深度不确定性，本节是它在滤波框架里的另一支。</p>
+        </div>
+      </div>
+
+      <h2>1. 先说清这一节的位置</h2>
+      <p>到这一节为止，本季的 VIO 已经出现两条路线：上一节的 <b>VINS-Mono</b> 是<b>优化派</b>（把测量堆成代价函数，做滑动窗 BA）；这一节的 <b>ROVIO</b> 是<b>滤波派</b>（用 EKF 递推状态）。</p>
+      <p>但 ROVIO 不只是「换成 EKF」那么简单。原文在引言里列了四条贡献，逐条看能看清它想干什么：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 特征用「方向 + 距离」表示</h4>
+          <p>点特征被参数化为一个 <b>bearing vector（方向向量）</b>加一个<b>相对当前帧的距离参数</b>，并配上一套合适的 σ-代数来推导动力学与滤波操作</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 多层 patch 直接进 EKF</h4>
+          <p>特征不是「先匹配再算重投影误差」，而是把 patch 的<b>强度误差直接当作滤波器的 innovation 项</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 用 QR 分解给误差降维</h4>
+          <p>一个 patch 能产生几百个强度误差，直接塞进 EKF 会让计算不可行。原文用 QR 分解把它们压缩成一个低维约束</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 完全 robocentric</h4>
+          <p>整个滤波状态用<b>机器人中心</b>表示；相机外参与 IMU 偏置一起在线估计</p>
+        </div>
+      </div>
+      <p>原文对整体目标的描述是：「在追求简单且一致的方案、避免临时凑合的解法的同时，我们沿用了标准视觉惯性 EKF-SLAM 的结构。」（原文：<i>While targeting a simple and consistent approach and avoiding ad-hoc solutions, we adapt the structure of the standard visual-inertial EKF-SLAM formulation</i>。）注意「<b>consistent（一致）</b>」这个词——它是滤波派的核心痛点，我们在第 5 节会再遇到它。</p>
+    </main>
+
+    <section class="section-card" id="robocentric">
+      <h2>2. ★ robot-centric：把坐标原点绑在自己身上</h2>
+      <p>这是 ROVIO 最有特色、也最容易被读者一眼略过的设计。先讲它是什么，再讲它为什么有用。</p>
+      <p>通常的做法（叫 world-centric）是：所有状态都相对一个固定的世界原点表示。你走了 100 米，位置就是「相对原点 100 米」。而 robocentric（机器人中心）是：<b>位置和速度都相对「当前机体自己」表示</b>——原点跟着你走。</p>
+      <p>原文的状态向量（式 1）长这样：</p>
+      <div class="formula-box">
+        $$\mathbf{x} := \big(\mathbf{r},\ \mathbf{v},\ \mathbf{q},\ \mathbf{b}_f,\ \mathbf{b}_\omega,\ \mathbf{c},\ \mathbf{z},\ \mu_0,\ldots,\mu_N,\ \rho_0,\ldots,\rho_N\big)$$
+      </div>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>$\mathbf{r},\mathbf{v}$：机器人中心的位置与速度</h4>
+          <p>原文明确写了它们都是 <b>robocentric</b> 的（expressed in 机体/机器人系）。$\mathbf{q}$ 是姿态，$\mathbf{b}_f,\mathbf{b}_\omega$ 是两个 IMU 偏置</p>
+        </div>
+        <div class="mini-card">
+          <h4>$\mathbf{c},\mathbf{z}$：相机外参</h4>
+          <p>平移部分与旋转部分分开写，<b>都是在线被估计的</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>$\mu_i,\rho_i$：每个特征两个量</h4>
+          <p>$\mu_i$ 是指向特征 i 的<b>方向向量</b>（属于单位球面 $S^2$，2 个自由度），$\rho_i$ 是它的<b>距离参数</b>（1 个自由度）</p>
+        </div>
+      </div>
+      <p>关于那个距离参数，原文给了一个很值得注意的说明：它采用通用的映射 $d_i=d(\rho_i)$，而「本工作中我们主要测试了<b>逆距离</b>参数化，即 $d(\rho_i)=1/\rho_i$」，其他参数化的研究留作未来工作。</p>
+      <p>为什么 robocentric 能改善数值行为？原文在结论里给了一句总结：通过选择完全 robocentric 的状态表示，再配上「数值上最小」的 bearing/distance 特征表示，他们「<b>避免了主要的一致性问题</b>」，同时保持了准确跟踪与高鲁棒性。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 两种坐标系：原点钉在地上，还是钉在自己身上</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">同一个房间、同一架无人机，两种表示法看到的「数字」完全不同</text>
+
+          <!-- 左：world-centric -->
+          <rect x="30" y="72" width="400" height="316" fill="#e3f2fd" stroke="#1565c0" stroke-width="2" rx="10"/>
+          <text x="230" y="98" fill="#0d3c75" font-size="14" text-anchor="middle" font-weight="700">world-centric：原点钉在房间角落</text>
+          <!-- 房间 -->
+          <line x1="60" y1="300" x2="415" y2="300" stroke="#a1887f" stroke-width="2.4"/>
+          <line x1="66" y1="150" x2="66" y2="300" stroke="#a1887f" stroke-width="2.4"/>
+          <!-- 世界原点 -->
+          <circle cx="66" cy="300" r="7" fill="#c62828"/>
+          <text x="80" y="322" fill="#8e2020" font-size="11">世界原点（固定不动）</text>
+          <!-- 无人机 -->
+          <rect x="268" y="212" width="52" height="20" fill="#455a64" rx="4"/>
+          <path d="M 268 216 L 250 200 M 320 216 L 338 200" stroke="#546e7a" stroke-width="2.4"/>
+          <text x="294" y="250" fill="#37474f" font-size="11" text-anchor="middle">无人机</text>
+          <!-- 位置向量 -->
+          <line x1="66" y1="300" x2="294" y2="232" stroke="#1565c0" stroke-width="2.6" stroke-dasharray="6 4"/>
+          <text x="170" y="284" fill="#0d3c75" font-size="11.5" font-weight="600">位置 = 相对原点约 6.2 m</text>
+          <text x="230" y="352" fill="#0d3c75" font-size="11.5" text-anchor="middle">走过的距离越长，这个数字越大</text>
+          <text x="230" y="372" fill="#0d3c75" font-size="11.5" text-anchor="middle">→ 数值动态范围越来越大</text>
+
+          <!-- 右：robocentric -->
+          <rect x="470" y="72" width="400" height="316" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2" rx="10"/>
+          <text x="670" y="98" fill="#1b5e20" font-size="14" text-anchor="middle" font-weight="700">robot-centric：原点跟自己走</text>
+          <line x1="500" y1="300" x2="855" y2="300" stroke="#a1887f" stroke-width="2.4"/>
+          <line x1="506" y1="150" x2="506" y2="300" stroke="#a1887f" stroke-width="2.4"/>
+          <!-- 无人机 + 自身原点 -->
+          <rect x="708" y="212" width="52" height="20" fill="#455a64" rx="4"/>
+          <path d="M 708 216 L 690 200 M 760 216 L 778 200" stroke="#546e7a" stroke-width="2.4"/>
+          <circle cx="734" cy="222" r="7" fill="#2e7d32"/>
+          <text x="734" y="250" fill="#1b5e20" font-size="11" text-anchor="middle">原点就在机身上</text>
+          <!-- 相对位置短箭头 -->
+          <line x1="734" y1="222" x2="762" y2="222" stroke="#2e7d32" stroke-width="2.6"/>
+          <text x="820" y="200" fill="#1b5e20" font-size="11.5" font-weight="600">位置 ≈ 0</text>
+          <text x="670" y="352" fill="#1b5e20" font-size="11.5" text-anchor="middle">无论走多远，「自己相对自己」永远是 0</text>
+          <text x="670" y="372" fill="#1b5e20" font-size="11.5" text-anchor="middle">→ 数值始终在小范围内，不乱</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两格是同一个房间、同一架正在飞的无人机。左格把世界原点钉在房间角落，于是「无人机在哪」这个数字会随飞行距离越变越大（走了几百米就是几百）；右格把原点钉在无人机自己身上，于是「我相对我自己」永远是零，状态里真正活跃的只有<b>姿态、速度、以及各特征相对我的方向与距离</b>。<br>
+          <b>怎么看这张图：</b>① 先看左格那条长长的虚线向量——它代表的数值会不断增长，这是「绝对定位」的代价；② 再看右格：没有那条长向量了，取而代之的是「特征相对我的方向」这类天然有界的量（方向向量永远落在单位球面上）；③ 所以 robocentric 的收益不是「更准」，而是<b>数值行为的改善</b>——原文把它归功为「避免主要的一致性问题」的关键，对滤波派来说这一点尤其重要，因为 EKF 的协方差矩阵很容易在数值上变得不自洽。<br>
+          <b>要记住的一句话：</b>把「绝对位置」这个会无限增长的量大＝换成一堆相对量，是滤波派处理大场景的老办法。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>顺带说一个参数化上的讲究</h4>
+        <p>特征只用 3 个参数表示（2 个方向 + 1 个距离），原文特意强调了这点：「与其他参数化相比，我们<b>没有对三维特征位置做过参数化</b>，每个特征对应协方差矩阵中的 <b>3 列</b>（2 列为方向向量、1 列为距离参数）。这也<b>避免了重新参数化的需要</b>。」</p>
+        <p>这句话其实是在跟另一派做对比：那种「先当作无穷远的点、等观测够了再重参数化成普通三维点」的做法（第二季 <b>0041 MonoSLAM</b> 讲过的两阶段初始化就是那一类），需要额外的重参数化操作。ROVIO 用「方向 + 距离」一次表示到底，<b>特征在检测那一刻就能直接进滤波器</b>——这就是下一节要讲的「未延迟初始化」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="patch">
+      <h2>3. ★ 多层 patch 与 QR 分解：256 个误差怎么塞进滤波器</h2>
+      <p>这一节是 ROVIO 的技术核心，也是最值得细看的地方。</p>
+      <h3>3.1 多层 patch 是什么</h3>
+      <p>对一个给定的图像金字塔（每层下采样 2 倍）和一个给定的方向向量 $\mu$，系统在<b>每个图像层级</b>上提取一个<b>固定尺寸（8×8 像素）的 patch</b> $P_l$（$l$ 是层号）。</p>
+      <p>原文指出了这么做的好处，其中最有价值的一条是：<b>这样的 patch 特征允许把强度误差直接反馈进滤波器</b>；而相比基于<b>重投影误差</b>的算法，这能「formulate a more accurate error model which inherently takes into account the texture of the tracked image patch」——也就是<b>误差模型能天然考虑被跟踪 patch 的纹理</b>。原文还给了一个具体推论：它甚至<b>支持边缘特征</b>，因为此时得到的信息位于「垂直于边缘」的方向上。</p>
+      <p>另外还有一个工程细节：为了补偿 patch 在相邻帧间的局部形变，系统通过<b>跟踪 patch 内额外两个方向向量</b>计算出一个 <b>仿射形变矩阵 $\mathbf{W}\in\mathbb{R}^{2\times2}$</b>；并假设特征距离远大于 patch 尺寸，因此 patch 法向直接指向相机中心；而且每当一帧跟踪成功，就<b>重新提取</b>多层 patch 以避免误差累积。</p>
+
+      <h3>3.2 QR 分解：把几百个误差压成一个约束</h3>
+      <p>下面是本节最漂亮的一步。强度误差的定义是（式 17）：</p>
+      <div class="formula-box">
+        $$e_{l,j} = P_l(\mathbf{p}_j) - I_l(\mathbf{p}\,s_l + \mathbf{W}\mathbf{p}_j) - m,\qquad s_l = 0.5^l$$
+      </div>
+      <p>读法：$P_l$ 是 patch 第 $j$ 个像素的强度，$I_l$ 是当前图像在「patch 投影过去的位置」上的强度，$s_l=0.5^l$ 负责处理金字塔的下采样。最后那个 $m$ 是<b>减去强度误差均值</b>——原文说明这么做是为了「account for inter-frame illumination changes」，也就是<b>对付帧间光照变化</b>。</p>
+      <p>问题来了：4 层金字塔 × 每层 8×8 像素 = <b>256 个误差项</b>。原文说得很直接：「在 EKF 中直接使用如此大量的误差项会让计算变得不可行。」（<i>the direct use of such a large number of error terms within an EKF would make it computationally intractable</i>）</p>
+      <p>解法是：把所有误差项堆起来形成一个线性方程组（式 18），然后对它做 <b>QR 分解</b>，得到等价的<b>降维</b>线性系统（式 19）：</p>
+      <div class="formula-box">
+        $$\bar{\mathbf{b}}(\hat{\mathbf{p}}) = \bar{\mathbf{A}}(\hat{\mathbf{p}})\,\delta\mathbf{p}\quad\Longrightarrow\quad \mathbf{b}(\hat{\mathbf{p}}) = \mathbf{A}(\hat{\mathbf{p}})\,\delta\mathbf{p},\qquad \mathbf{A}\in\mathbb{R}^{2\times2},\ \mathbf{b}\in\mathbb{R}^2$$
+      </div>
+      <p>请盯住最后那个维度：<b>从 256 个数，压成了 1 个 2×2 矩阵与 1 个 2 维向量。</b>原文还特意说明，这个化简「independent of the rank of the matrix」——不管原矩阵秩是多少都成立。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 B · 256 个强度误差，如何变成一个 2×2 的约束</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">同一个特征在 4 层金字塔上各取一个 8×8 的 patch，然后被 QR 分解压缩</text>
+
+          <!-- 金字塔 + patch -->
+          <text x="140" y="86" fill="#0d3c75" font-size="12.5" text-anchor="middle" font-weight="700">① 四层图像金字塔</text>
+          <!-- level 0 大 -->
+          <rect x="40" y="100" width="200" height="140" fill="#fff8e1" stroke="#8d6e63" stroke-width="1.8"/>
+          <text x="140" y="256" fill="#6b5b52" font-size="11" text-anchor="middle">第 0 层（原分辨率）</text>
+          <!-- patch 位置 -->
+          <rect x="100" y="140" width="48" height="48" fill="none" stroke="#c62828" stroke-width="2.4"/>
+          <text x="196" y="168" fill="#8e2020" font-size="10.5">8×8 patch</text>
+          <!-- level 1 -->
+          <rect x="268" y="120" width="130" height="90" fill="#fff8e1" stroke="#8d6e63" stroke-width="1.6"/>
+          <rect x="306" y="146" width="32" height="32" fill="none" stroke="#c62828" stroke-width="2.2"/>
+          <text x="333" y="228" fill="#6b5b52" font-size="11" text-anchor="middle">第 1 层（÷2）</text>
+          <!-- level 2 -->
+          <rect x="416" y="140" width="86" height="60" fill="#fff8e1" stroke="#8d6e63" stroke-width="1.6"/>
+          <rect x="441" y="157" width="21" height="21" fill="none" stroke="#c62828" stroke-width="2"/>
+          <text x="459" y="220" fill="#6b5b52" font-size="11" text-anchor="middle">第 2 层（÷4）</text>
+          <!-- level 3 -->
+          <rect x="522" y="152" width="56" height="40" fill="#fff8e1" stroke="#8d6e63" stroke-width="1.6"/>
+          <rect x="539" y="165" width="14" height="14" fill="none" stroke="#c62828" stroke-width="1.8"/>
+          <text x="550" y="212" fill="#6b5b52" font-size="11" text-anchor="middle">第 3 层（÷8）</text>
+          <text x="140" y="278" fill="#8e2020" font-size="11.5" text-anchor="middle">每层都是 8×8 = 64 个强度误差</text>
+          <text x="400" y="278" fill="#8e2020" font-size="11.5" text-anchor="middle">4 × 64 = 256 个误差项/特征</text>
+
+          <!-- 箭头 -->
+          <path d="M 610 180 L 668 180" stroke="#78909c" stroke-width="2.6"/>
+          <polygon points="668,173 684,180 668,187" fill="#78909c"/>
+          <text x="647" y="168" fill="#546e7a" font-size="11" text-anchor="middle">QR 分解</text>
+          <text x="647" y="204" fill="#546e7a" font-size="10.5" text-anchor="middle">降维</text>
+
+          <!-- 压缩结果 -->
+          <rect x="696" y="112" width="176" height="136" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.2" rx="9"/>
+          <text x="784" y="138" fill="#1b5e20" font-size="12.5" text-anchor="middle" font-weight="700">压缩后的约束</text>
+          <rect x="724" y="154" width="52" height="46" fill="#ffffff" stroke="#2e7d32" stroke-width="1.8"/>
+          <text x="750" y="182" fill="#1b5e20" font-size="13" text-anchor="middle" font-weight="600">A</text>
+          <text x="750" y="216" fill="#1b5e20" font-size="10" text-anchor="middle">2×2</text>
+          <rect x="790" y="154" width="52" height="46" fill="#ffffff" stroke="#2e7d32" stroke-width="1.8"/>
+          <text x="816" y="182" fill="#1b5e20" font-size="13" text-anchor="middle" font-weight="600">b</text>
+          <text x="816" y="216" fill="#1b5e20" font-size="10" text-anchor="middle">2×1</text>
+          <text x="784" y="240" fill="#1b5e20" font-size="10.5" text-anchor="middle">→ 可以直接进 EKF 更新</text>
+
+          <!-- 底部两条说明 -->
+          <rect x="40" y="300" width="400" height="112" fill="#fdf6f4" stroke="#ef9a9a" stroke-width="1.6" rx="8"/>
+          <text x="60" y="324" fill="#8e2020" font-size="12" font-weight="600">⚠️ 不压缩会怎样</text>
+          <text x="60" y="348" fill="#8e2020" font-size="11.5">把一个特征的 256 个误差全部当独立测量</text>
+          <text x="60" y="368" fill="#8e2020" font-size="11.5">送进 EKF 更新 → 计算量直接爆掉</text>
+          <text x="60" y="392" fill="#8e2020" font-size="11.5">（原文：would make it computationally intractable）</text>
+
+          <rect x="460" y="300" width="412" height="112" fill="#f4f9f4" stroke="#a5d6a7" stroke-width="1.6" rx="8"/>
+          <text x="480" y="324" fill="#1b5e20" font-size="12" font-weight="600">★ 一个反直觉的副产品（原文原话）</text>
+          <text x="480" y="348" fill="#1b5e20" font-size="11.5">因为每层的缩放因子（0.5 的层数次幂），高层误差项纠正作用更弱；</text>
+          <text x="480" y="368" fill="#1b5e20" font-size="11.5">但它们对图像模糊、坏初值的鲁棒性更强，</text>
+          <text x="480" y="392" fill="#1b5e20" font-size="11.5">→ 整体对齐方法的鲁棒性因此明显提升</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是「一个特征在四层金字塔上各有一个 8×8 patch」，红框就是 patch 的位置——同一个特征，在越小的图上框住的像素越少但覆盖的场景范围一样大，合计 4×64＝256 个强度误差。中间经过 QR 分解降维，右边得到的是一个 2×2 矩阵 $\mathbf{A}$ 和一个 2 维向量 $\mathbf{b}$，可以直接拿去更新 EKF。<br>
+          <b>怎么看这张图：</b>① 先数左边的数：为什么是 256 而不是 64——因为金字塔有四层；② 再看中间那句「QR 分解」：它不是近似、不是抽样，而是把一个超定方程组化成<b>等价</b>的最小二乘形式，所以信息没有丢，只是被换了一个更紧凑的写法；③ 最后看底部两栏：左栏说明「为什么非压不可」，右栏是原文观察到的一个很有意思的副作用——<b>高层的小图纠正力弱但鲁棒性强</b>，两者互补，整体反而更稳。<br>
+          <b>要记住的一句话：</b>这个设计的第一目的从来不是「更准」，而是「让 256 个误差能进得去滤波器」——<b>可行性的门槛先过，性能才谈得上</b>。
+        </figcaption>
+      </figure>
+      <p>原文还讲到一处工程上的改良：如果某个方向向量的初始猜测<b>不确定性很大</b>（典型情况是新初始化的特征、距离不确定度大），直接更新可能会失败。为此，系统会用一次 <b>patch-based search</b> 得到更好的方向估计 $\bar{\mu}_i$，再用它来计算更新式里的各项——原文把它总结为「<b>这基本上改善了 EKF 的线性化点</b>」，并提到一个类似的替代方案是直接使用<b>迭代 EKF</b>。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>一个多层 patch 特征会产生 256 个强度误差。它们最终是怎么进入 EKF 更新的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文把 256 个误差堆成一个线性方程组，对系数矩阵做 QR 分解，得到一个等价的降维系统：A 是 2×2、b 是 2 维向量。原文特别强调这个化简与原矩阵的秩无关，是等价变换，不是近似或抽样——信息没有丢，只是换了更紧凑的写法。" onclick="lessonKit.answer(this,'q0059a')">用 QR 分解压成一个 2×2 的等价约束再进更新</button>
+          <button data-correct="no" data-explanation="不对。原文没有做「挑梯度最大的像素」这种采样。它的做法是把全部 256 个误差都放进方程组，然后靠 QR 分解整体降维——这是一个代数上的等价变换，而不是丢弃一部分测量。" onclick="lessonKit.answer(this,'q0059a')">只挑梯度最大的若干像素参与更新</button>
+          <button data-correct="no" data-explanation="不对。如果把 256 个误差平均成一个标量，方向信息就丢了——patch 在二维图像平面上的位移是二维的，压成一个标量无法表达。这也是为什么降维的目标是 2×2 而不是一个数。" onclick="lessonKit.answer(this,'q0059a')">平均成一个标量误差后当作一次测量</button>
+        </div>
+        <div class="quiz-feedback" id="q0059a"></div>
+      </div>
+      <p>至于外点处理，原文用的是很朴素的做法：<b>基于 Mahalanobis 距离的简单检验</b>，拿 innovation 和预测的 innovation 协方差比较，超过阈值就拒掉这次测量。原文给出一句挺有意思的说明——这个做法「inherently takes into account the covariance of the state and measurements」，例如它<b>会把图像梯度也考虑进去，因此更容易拒绝那些没有梯度的图像 patch</b>。</p>
+    </section>
+
+    <section class="section-card" id="undelayed">
+      <h2>4. 未延迟初始化：一个和 MSCKF 正好相反的取舍</h2>
+      <p>这一节要讲一个很能体现「两派分歧」的对比。</p>
+      <p>还记得第二季 <b>0028 MSCKF</b> 吗？它的核心招式是：<b>不把特征点放进状态向量</b>，而是把「多个相机位姿对同一个特征的观测」凑成一个几何约束，再用零空间投影把特征坐标消掉。代价是——因为特征位置本身不被估计，<b>处理必须被延迟</b>，要等同一样征被观测够了才能更新。</p>
+      <p>ROVIO 的做法正好相反，而且原文把它明确写成了一个优点：</p>
+      <div class="callout">
+        <p>「通过使用<b>方向向量与距离的组合参数化</b>，特征可以以<b>未延迟（undelayed）</b>的方式初始化，即<b>特征在检测那一刻就被整合进滤波器</b>。」（译文对应原文：<i>features can be initialized in an undelayed manner, i.e., the features are integrated into the filter at detection</i>。）</p>
+        <p>具体做法：距离初始化为一个固定值，或者（如果已经充分收敛）用一个当前平均场景距离的估计；<b>对应的协方差被设为一个非常大的值</b>。</p>
+      </div>
+      <p>这个「很大的初始协方差」是整套设计的关键：它表达的是「我现在完全不知道它有多远」。而滤波器会随着观测逐步把这个不确定度压小——这正是 EKF 擅长的事。</p>
+      <p>原文在后文还给了一个直接的收益说明：在平均角速度约 1.5 rad/s 这种旋转较强的运动下，<b>「能处理任意短特征轨迹」的方法更受青睐</b>；而因为采用了未延迟初始化，「<b>滤波器从特征的第二次观测起就能提取视觉信息</b>」。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>MSCKF 路线（0028）</h4>
+          <p>特征<b>不</b>进状态 → 用零空间投影消掉特征坐标 → 代价是处理必须<b>延迟</b>，只能线性化一次</p>
+        </div>
+        <div class="mini-card">
+          <h4>ROVIO 路线（本节）</h4>
+          <p>特征<b>进</b>状态（只用 3 个参数） → 检测即刻可用、无需重参数化 → 代价是状态维数随特征数增长</p>
+        </div>
+        <div class="mini-card">
+          <h4>两条路的共同点</h4>
+          <p>都在「怎么处理特征位置」上做文章，因为他们面对的都是同一个问题：<b>单目特征的距离一开始完全未知</b>。一个选择「不估它」，一个选择「用一个极不确定但可以立即估的参数表示它」</p>
+        </div>
+      </div>
+      <p>顺便说一句，ROVIO 用 3 个参数表示一个三维点，本身也是在「不做过参数化」上做文章——这一点其实是滤波派的一致性命门：<b>如果你的参数化比真实自由度多，协方差矩阵会有一个「虚假的零特征值方向」，滤波器会误以为自己知道得比实际更多或多更少。</b>这个坑我们在下面还会再碰到。</p>
+    </section>
+
+    <section class="section-card" id="obs">
+      <h2>5. 可观性：谁会漂、谁不会</h2>
+      <p>原文在快速运动实验里报告了一组很好的观测结果，值得单独拿出来讲。</p>
+      <p>首先它指出一个已知事实（并引了文献）：视觉惯性系统的<b>倾斜角（roll / pitch）与 robocentric 速度是完全可观的</b>。这在实验里表现为「相应协方差的初始下降」，尤其是当系统被激励起来的时候。而另一方面——原话是：<b>「yaw 角是不可观的，会随时间缓慢漂移。」</b></p>
+      <figure class="figure">
+        <img src="../../md/images/2015_Robust_visual_inertial_odometry_using_a_direct_EKF-based/4c2b8447b4d2d5d2eb20b1c8c57376009831629dd174c5c0e8de494bef39719b.jpg" alt="euler angle estimates with 3 sigma bounds">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Euler angle estimates. Red: estimate, blue: motion capture, red dashed: 3σ-bound. <b>Only the yaw angle is not observable and exhibits a growing covariance.</b> The inclination angles (roll and pitch) exhibit a high quality tracking accuracy.（欧拉角估计。红：估计值；蓝：动捕真值；红虚线：3σ 界。<b>只有 yaw 角不可观，其协方差随时间增长。</b>倾斜角（roll 与 pitch）表现出高质量的跟踪精度。）<br>
+          <b>怎么看这张图：</b>请把注意力放在<b>红虚线（3σ 界）的宽窄变化</b>上，而不是曲线本身贴得有多紧。roll 与 pitch 那两幅：3σ 界会随激励而收窄，说明滤波器「越跑越有把握」；yaw 那幅：3σ 界<b>持续变宽</b>，这是「我越来越不确定」的直接可视化——而滤波器<b>知道</b>自己在漂，所以它诚实地把不确定度写大了。<br>
+          <b>要记住的一句话：</b>一个诚实的滤波器会告诉你它在哪漂——协方差变宽不是失败，而是正确的不确定性报告；恰恰是「明明在漂却报告很自信」才是灾难。
+        </figcaption>
+      </figure>
+      <p>顺便，原文还报告了标定参数的收敛情况，其中两条观察很实用：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>IMU-相机外参的平移项「需要大量旋转运动」才能恰当收敛</h4>
+          <p>原文原话是 the translational term of the IMU-camera calibration <b>requires a lot of rotational motion</b> in order to converge appropriately。这条直觉上说得通：平移外参要产生影响，需要机体的不同姿态去「换个角度看」同一段位移</p>
+        </div>
+        <div class="mini-card">
+          <h4>加速度计偏置收敛最慢</h4>
+          <p>本实验中它的收敛速率最差，但仍在合理范围内。而陀螺仪偏置收敛更好，原文的推测是「probably due to the more direct link of rotational rates to visual errors」——<b>旋转率与视觉误差的联系更直接</b></p>
+        </div>
+      </div>
+      <p>把这一节和上一节 <b>0058</b> 的「4 自由度位姿图」对照着看会很有收获：两篇都指出 <b>yaw 是那个必然会漂的自由度</b>，但处理方式不同——VINS-Mono 是在位姿图里显式优化它，ROVIO 则是让滤波器诚实地把它的协方差放大。同一个物理事实，两种应对。</p>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>6. 实验，与一个诚实的发散模式</h2>
+
+      <h3>6.1 实验设置</h3>
+      <p>数据用 <b>VI-Sensor</b> 采集：两个时间同步的全局快门、宽 VGA、1/3 英寸传感器，前向平行双目配置；镜头<b>对角视场角 120°</b>；出厂时已按标准针孔模型 + 径向切向畸变模型标定；<b>传感器与 IMU 硬件时间同步</b>（曝光中期触发）。<b>本工作只需要一台相机的图像流。</b>真值来自外部动捕系统。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>频率与传感器</h4>
+          <p>IMU <b>200 Hz</b>，图像 <b>20 Hz</b>；IMU 是工业级 <b>ADIS 16448</b>（角度随机游走 0.66 deg/√Hz、速度随机游走 0.11 m/s/√Hz）</p>
+        </div>
+        <div class="mini-card">
+          <h4>参数设置</h4>
+          <p>状态里最大特征数 <b>50</b>；图像金字塔 <b>4 层</b>；初始 IMU-相机外参只粗略猜测（<b>平移设为 0</b>）；特征初始<b>逆距离参数 0.5 m⁻¹，标准差 1 m⁻¹</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>一句值得记住的自我评价</h4>
+          <p>原文说协方差参数「尽可能按硬件规格选取」，并强调：「<b>不需要强调参（Strong tuning was not necessary），而且框架在很大的参数范围内都工作良好。</b>」——这是很多系统论文不会主动说的话</p>
+        </div>
+      </div>
+
+      <h3>6.2 慢/中速运动：与批优化对比</h3>
+      <p>约 1 分钟的手持慢到中速运动，特征数从 10 变化到 50（步长 10），用「相对位置误差相对行进距离」评估，并与一个<b>批优化框架</b>对比。结论是：<b>性能与批优化框架相似，而且常常略高一点。</b></p>
+      <p>更值得注意的是一个「意外发现」：<b>性能相对独立于跟踪特征的总数</b>，只有特征数<b>低于 20</b> 时才能看到明显的精度下降。原文为这个现象给了两个可能原因：一是该数据的运动类型（旋转率较高）会产生更多坏特征与外点；二是<b>本方法每个特征考虑了 256 个强度误差，因此不能与标准的基于特征跟踪的视觉里程计直接比较</b>——也就是说，它的 50 个特征携带的信息量，可能相当于别的方法几百个特征。</p>
+      <p>时间开销（原文 Table I，单核 Intel i7-2760QM）：</p>
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;margin-top:.7rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:left">特征总数</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">10</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">20</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">30</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">40</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">50</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.42rem .6rem;border:1px solid #d7ccc8">处理时间（ms/帧）</td>
+            <td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">6.65</td>
+            <td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">10.50</td>
+            <td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">14.87</td>
+            <td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">21.48</td>
+            <td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>29.72</b></td>
+          </tr>
+        </tbody>
+      </table>
+      <p>50 特征时平均 29.72 ms/帧，原文说「因此可以轻松跑在 20 Hz」。这里请对比一下上一节的 VINS-Mono：它的窗口优化要 50 ms（10 Hz），但前端特征检测 + KLT 只要 20 ms。两者的算力分布完全不同——<b>优化派把成本压在「解问题」上，滤波派把成本压在「处理测量」上。</b></p>
+
+      <h3>6.3 ★ 一个诚实的发散模式</h3>
+      <p>这一条我特别想让你记住，因为很少有论文会把自己的失效机制讲得这么具体。原文在快速运动实验之后写了一段：</p>
+      <div class="callout">
+        <p>「此外，我们确实观察到了本方法的一个<b>发散模式</b>。它可能发生在<b>速度估计发散</b>的时候，例如由于运动缺失或者外点过多。此时的问题是，滤波器为了最小化错误速度对方向向量的影响，<b>会试图把特征的距离设为无穷大</b>。而这又进一步<b>降低了任何对发散速度的纠正作用</b>，导致进一步发散。总而言之，在常规使用中这很少被观察到，尤其是当系统在开始时被充分激励的话。」</p>
+      </div>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 C · 一个诚实的失效模式：越错越错的正反馈</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">速度估计一发散，滤波器就把特征「推远」来自保，结果让速度更没得救</text>
+
+          <!-- 三个环节 -->
+          <rect x="40" y="86" width="240" height="120" fill="#fdf6f4" stroke="#c62828" stroke-width="2" rx="9"/>
+          <text x="160" y="112" fill="#8e2020" font-size="13" text-anchor="middle" font-weight="700">① 速度估计发散</text>
+          <text x="160" y="138" fill="#8e2020" font-size="11.5" text-anchor="middle">原因：缺少运动，</text>
+          <text x="160" y="158" fill="#8e2020" font-size="11.5" text-anchor="middle">或外点太多</text>
+          <text x="160" y="184" fill="#8e2020" font-size="11" text-anchor="middle">（滤波器以为自己在飞快地动）</text>
+
+          <rect x="330" y="86" width="240" height="120" fill="#fff3e0" stroke="#ef6c00" stroke-width="2" rx="9"/>
+          <text x="450" y="112" fill="#7a1f00" font-size="13" text-anchor="middle" font-weight="700">② 特征距离被推远</text>
+          <text x="450" y="138" fill="#7a1f00" font-size="11.5" text-anchor="middle">滤波器发现「把距离设成无穷大」</text>
+          <text x="450" y="158" fill="#7a1f00" font-size="11.5" text-anchor="middle">能最小化错误速度的影响</text>
+          <text x="450" y="184" fill="#7a1f00" font-size="11" text-anchor="middle">（自保动作）</text>
+
+          <rect x="620" y="86" width="240" height="120" fill="#fdf6f4" stroke="#c62828" stroke-width="2" rx="9"/>
+          <text x="740" y="112" fill="#8e2020" font-size="13" text-anchor="middle" font-weight="700">③ 纠正作用消失</text>
+          <text x="740" y="138" fill="#8e2020" font-size="11.5" text-anchor="middle">特征在无穷远处 → 它对位姿</text>
+          <text x="740" y="158" fill="#8e2020" font-size="11.5" text-anchor="middle">与速度几乎不再提供约束</text>
+          <text x="740" y="184" fill="#8e2020" font-size="11" text-anchor="middle">→ 速度更没得救</text>
+
+          <!-- 箭头 -->
+          <path d="M 284 146 L 324 146" stroke="#8d6e63" stroke-width="2.4"/>
+          <polygon points="324,140 338,146 324,152" fill="#8d6e63"/>
+          <path d="M 574 146 L 614 146" stroke="#8d6e63" stroke-width="2.4"/>
+          <polygon points="614,140 628,146 614,152" fill="#8d6e63"/>
+
+          <!-- 回路箭头 -->
+          <path d="M 740 210 C 740 268 160 268 160 210" fill="none" stroke="#c62828" stroke-width="2.6" stroke-dasharray="7 5"/>
+          <polygon points="154,214 162,200 170,214" fill="#c62828"/>
+          <text x="450" y="292" fill="#8e2020" font-size="12.5" text-anchor="middle" font-weight="600">③ 让 ① 更严重 —— 这就是正反馈</text>
+
+          <!-- 底部 -->
+          <rect x="120" y="312" width="660" height="66" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.8" rx="9"/>
+          <text x="450" y="336" fill="#1b5e20" font-size="12.5" text-anchor="middle" font-weight="600">原文的说明：常规使用中很少观察到，尤其在系统启动时被充分激励的情况下</text>
+          <text x="450" y="360" fill="#1b5e20" font-size="11.5" text-anchor="middle">作者也给出了一条缓解思路：用启发式方法检测这种模式，并加入「零速度伪测量」来稳住滤波器</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三个环节首尾相接，构成一个正反馈环。① 速度估计先发散（因为缺少运动或外点太多）；② 滤波器为了自保，会把特征的距离推向无穷远——因为「特征在很远处」意味着「我看错了方向也不太要紧」；③ 但特征一旦被推到无穷远，它对位姿和速度的约束力就几乎消失了，于是更没什么能拉住那个已经发散的速度。<br>
+          <b>怎么看这张图：</b>① 请注意这是<b>原文自己报告</b>的失效模式，不是一个批评；② 这个环的关键在于它的「自保」逻辑其实每一步都合理——滤波器在局部做的都是正确的事，但合起来会跑飞，这类问题在估计系统里很常见；③ 原文给出的诊断与缓解思路（检测这种模式 + 加零速度伪测量）也说明：<b>对付这类问题，往往要靠额外的外部信息（这里就是「不动的时候速度应该是零」这个先验）</b>。<br>
+          <b>要记住的一句话：</b>一个估计器最危险的不是它算错，而是它「有条理地越错越远」——所以在设计时要专门去想「它有没有自保机制、这个机制会不会反噬」。
+        </figcaption>
+      </figure>
+
+      <h3>6.4 飞起来试：从地面起飞就交付控制</h3>
+      <p>原文还做了机载实验：把框架装在一架 UAV 上，配前向视觉惯性传感器。这次实验的<b>特殊之处</b>是——<b>框架在地面上初始化，没有任何事先的标定动作</b>，也就是说标定参数必须在<b>起飞过程中</b>收敛。而滤波器的输出<b>直接被用来做 UAV 的反馈控制</b>。</p>
+      <p>原文的观察很实在：与动捕系统相比，滤波器表现出一定的偏移，而这「mainly attributed to the online calibration of the filter」（主要归因于在线标定）。<b>它没有把这个偏移藏起来，而是说明了来源。</b></p>
+      <figure class="figure">
+        <img src="../../md/images/2015_Robust_visual_inertial_odometry_using_a_direct_EKF-based/5c209dab24411a6bbae5bbf9ef361f4384a92685c7f5628e2ccb89a574e8f186.jpg" alt="onboard UAV trajectory vs groundtruth">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>Estimated trajectory (red) on-board a UAV compared to groundtruth (blue) from the motion capture system. During take-off, flying, and landing the output of the filter is used to stabilize and control the UAV. Calibration is performed online.（机载 UAV 上估计的轨迹（红）与动捕真值（蓝）的对比。在起飞、飞行与降落过程中，滤波器输出被用于稳定与控制 UAV。标定在线完成。）<br>
+          <b>怎么看这张图：</b>看两点：① 红蓝两条轨迹的大致形状与尺度是否吻合——这决定了「能不能拿它当控制反馈」；② 留意它们之间的<b>系统性偏移</b>，原文明确说这主要来自在线标定（因为外参是从零猜的，在飞行中边飞边学）。<br>
+          <b>要记住的一句话：</b>能在「没有任何标定准备」的情况下从地面起飞就把状态喂给控制器，是这套在线标定设计最硬的证据。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2015_Robust_visual_inertial_odometry_using_a_direct_EKF-based/2c5d6ac4bf1142d0b7765c555035174e66a9baff718a15646913a89233c79b94.jpg" alt="feature workflow in filter state">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Overview on the workflow of a feature in the filter state. The heuristics for adding and removing features are adapted to the total number of possible features.（特征在滤波状态中的工作流总览。特征的加入与移除启发式规则会根据可能特征的总数自适应调整。）<br>
+          <b>怎么看这张图：</b>这张图把「一个特征的一生」画全了：从被检测出来、以极大初始协方差进入状态、随观测收敛、直到因质量分数过低被移除。请特别留意原文那句「the heuristics for adding and removing features are adapted to the total number of possible features」——<b>特征的进出数量是被主动控制的</b>，因为 EKF 的状态维数有硬上限（本实验是 50 个）。这和第二季 <b>0035 Voxblox</b> 里「把算力分配给最需要的地方」是同一种工程自觉。<br>
+          <b>要记住的一句话：</b>在滤波器里，特征不是「越多越好」——它是一个被精打细算管理的资源。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>本节小结：滤波派的两个「命根子」</h4>
+        <p>把这一节和上一节对照，可以看到两个阵营各自的命门：</p>
+        <p><b>优化派的命门是稀疏性</b>——所以 VINS-Mono 要费力气做「选择性边缘化」，要维持 H 矩阵的稀疏结构。<br>
+        <b>滤波派的命门是一致性与数值稳定性</b>——所以 ROVIO 要选 robocentric 表示、要用最小参数化、要把 256 个误差压成 2 维约束，还要防那个发散模式。</p>
+        <p>原文最后一句话也点明了这条线：他们未来想做的包括<b>「更详细的可观性分析，其中不可观模式与传感器运动的依赖关系会很值得关注」</b>。这个诉求和 OpenVINS 那篇（下一节之后会讲到）几乎是同一个方向——<b>滤波派在 2015 年之后的主要战场，就是把自己的一致性修好。</b></p>
+      </div>
+    </section>
+
+    <section class="section-card" id="drill">
+      <h2>7. 巩固练习</h2>
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请说明「robot-centric 表示」是什么，以及它相比 world-centric 的主要好处。原文把它的收益归因于哪一类问题的解决？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>robot-centric（机器人中心）表示指的是：状态里的位置与速度都<b>相对当前机体自身</b>表示，坐标原点跟着机器人走；而 world-centric 是相对一个固定的世界原点表示。</p>
+              <p>好处是<b>数值行为的改善</b>：绝对位置这个会随行进距离无限增长的量被消掉了，剩下的量（如特征方向向量）天然落在有界范围内（方向向量恒在单位球面上）。原文在结论里把这一选择与「数值上最小的 bearing/distance 特征表示」并列，说它们共同「<b>避免了主要的一致性问题</b>」——也就是说它解决的是<b>一致性</b>问题，而不是单纯的精度问题。</p>
+            </div></details>
+          </li>
+          <li>一个多层 patch 特征会产生多少个强度误差项？为什么不能直接把它们全塞进 EKF？原文的解法是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>数量是<b>256 = 4 层金字塔 × 每层 8×8 像素</b>。</p>
+              <p>不能直接用，是因为原文明确说：在 EKF 中直接使用如此大量的误差项「<b>would make it computationally intractable</b>」（会让计算变得不可行）。解法是：把所有强度误差堆起来形成一个线性方程组，然后对系数矩阵 $\bar{\mathbf{A}}$ 做 <b>QR 分解</b>，得到等价的降维系统 $\mathbf{b}(\hat{\mathbf{p}})=\mathbf{A}(\hat{\mathbf{p}})\delta\mathbf{p}$，其中 $\mathbf{A}\in\mathbb{R}^{2\times2}$、$\mathbf{b}\in\mathbb{R}^2$。原文特意说明这个化简与原矩阵的秩无关，是一个等价变换，不是近似或抽样。</p>
+            </div></details>
+          </li>
+          <li>原文提到一个「反直觉的副产品」：高层（更小的图）的误差项纠正作用更弱。那它们为什么还是被保留了？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为它们换来了别的东西。原文的说明是：由于式中的缩放因子 $s_l=0.5^l$，高层图像上的误差项对滤波器状态或 patch 对齐的<b>纠正作用更弱</b>；但另一方面，它们<b>对图像模糊和坏的初始对齐的鲁棒性更强</b>，而这「strongly increases the robustness of the overall alignment method」（大幅提升了整体对齐方法的鲁棒性）。</p>
+              <p>所以这是一个典型的「分工」设计：低层负责精细纠正，高层负责兜底鲁棒。这与你在 <b>0042 PTAM</b> 里见过的「由粗到细金字塔」是同一个思想——先在粗层稳住、再到细层精修。</p>
+            </div></details>
+          </li>
+          <li>ROVIO 的「未延迟初始化」与 MSCKF（0028）的做法有什么根本差别？各付了什么代价？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>MSCKF 的做法是<b>不把特征位置放进状态</b>，靠「多个相机位姿对同一特征的观测」构造几何约束，再用零空间投影把特征坐标消掉。代价是：特征位置不被估计，所以<b>处理必须被延迟</b>（要等同一样征被观测足够多次才能更新），而且线性化只做一次。</p>
+              <p>ROVIO 的做法相反：特征<b>用「方向向量 + 距离参数」3 个参数放进状态</b>，于是可以在检测那一刻就以「极大协方差」的方式立刻进入滤波器，无需重参数化，原文还强调「滤波器从特征的第二次观测起就能提取视觉信息」。代价是<b>状态维数随特征数量增长</b>，所以必须对特征做严格的进出管理（本实验上限是 50 个）。</p>
+              <p>两条路的共同点：都在处理「单目特征的距离一开始完全未知」这个同一难题——一个选择不估它，一个选择用一个极不确定但可立即估计的参数表示它。</p>
+            </div></details>
+          </li>
+          <li>请用你自己的话复述那个「发散模式」，并说明它为什么是一个正反馈。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>触发条件：速度估计先发散（原因是缺少运动，或外点太多）。</p>
+              <p>接着滤波器做了一件在局部看合理的事：它发现「把特征的距离设为无穷大」可以最小化错误速度对方向向量的影响——相当于「反正特征很远，我看错方向也无所谓」，是一种自保动作。</p>
+              <p>但后果是：特征被推到无穷远之后，它对位姿与速度几乎不再提供任何约束——于是原本还能拉住速度的那点信息也没了，速度继续发散，然后滤波器又把特征推得更远。这就构成正反馈（①②③→更严重的①）。</p>
+              <p>原文说常规使用中很少观察到这种模式，尤其在启动时被充分激励的情况下；作者提出的缓解方向包括用启发式方法检测这种模式、并<b>加入零速度伪测量</b>来稳住滤波器——后者本质上是用一个额外的外部先验（「不动时速度应为零」）来打破正反馈。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0058-VINS-Mono下-紧耦合后端与4自由度回环.html">← VINS-Mono（下）：紧耦合后端与 4 自由度回环</a>
+        <a class="next" href="0060-Basalt2020-用非线性因子压缩历史.html">Basalt（2020）：用非线性因子压缩历史 →</a>
+      </div>
+      <p class="foot-note">滤波派与优化派争了很多年，但更值得学的其实是它们各自的「命门」——优化派怕稠密，滤波派怕不一致。下一节看一个新思路：把历史信息压成一个因子 ⚖️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

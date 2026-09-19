@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iG-LIO 与 LOG-LIO（2024）：分布配准与实时法向 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0087</div>
+      <h1>iG-LIO 与 LOG-LIO（2024）：分布配准与实时法向</h1>
+      <p class="subtitle">两篇同年的论文，在问同一件事：除了「点到面」，还有没有更稳的度量方式？法向又该怎么实时算出来？ 🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：GICP 分布配准 · MAP 紧耦合 · Ring FALS 法向 · 分层关联</span>
+        <span>👥 作者：iG-LIO — Zijie Chen、Yong Xu、Shenghai Yuan、Lihua Xie（NTU）／ LOG-LIO — Kai Huang、Junqiao Zhao、Zhongyang Zhu、Chen Ye、Tiantian Feng（同济 TIEV）</span>
+        <span>📅 2024 · <i>iG-LIO: An Incremental GICP-Based Tightly-Coupled LiDAR-Inertial Odometry</i> ／ <i>LOG-LIO: A LiDAR-Inertial Odometry With Efficient Local Geometric Information Estimation</i></span>
+      </div>
+      <div class="toc">
+        <a href="#frame">两篇在问同一件事</a>
+        <a href="#ig">iG 指的是什么</a>
+        <a href="#gicp">分布到分布</a>
+        <a href="#log">法向怎么实时算</a>
+        <a href="#table">两篇并排看</a>
+        <a href="#result">数字与短板</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="frame">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「点到面」与「分布到分布」的差别，以及后者为什么对噪声和部分重叠更宽容；说出 iG-LIO 的 iG 是什么、它把 GICP 与惯性约束统一在哪个框架里；说出 LOG-LIO 的 LOG 是什么、Ring FALS 凭什么快；最后能用一张表把两篇并排比较。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这是<b>偿还第二季两笔旧账</b>的一课：<b>0023</b> 课（PCL）里我们第一次见到 ICP / GICP / NDT 三个名字，那时只是「工具箱里有什么」；本篇讲的是有人把 GICP 真正做进了实时 LIO。而 <b>0022</b> 课（点云 BA）的主线「点到面残差」，正是这两篇要超越的那个基准。往前接 <b>0084</b>（ikd-Tree）、<b>0085</b>（体素哈希），本篇两篇的地图结构都从这条线上长出来。</p>
+        </div>
+      </div>
+
+      <h2>1. 两篇在问同一件事</h2>
+
+      <p>我们先不急着进正文，先把这两篇并排放好。它们同一年发表，都在解决 LIO 前端配准层的两个基础问题：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>问题一：残差怎么度量？</b>
+          <p>LOAM 系用的是「点到线 / 点到面」——把一个点配到一条线或一个平面上，算它的垂直距离。这在结构化环境里非常好用。但它是<b>「点对几何基元」</b>的关系：只用到了「这个点离那个面多远」，没有用到<b>这一小块点云长什么形状</b>。</p>
+          <p><b>iG-LIO 的答案：</b>用 GICP 的<b>分布到分布</b>度量，让两个「小椭球」对齐。</p>
+        </div>
+        <div class="mini-card">
+          <b>问题二：几何量怎么实时拿到？</b>
+          <p>点到面残差里那个「面」是怎么来的？靠一个点的邻居点拟合出来——而这里要用到<b>法向</b>。法向估计看起来只是个小工具，但它要么靠邻域搜索（贵），要么靠图像插值（也贵），在每秒几万点的 LIO 里就成了瓶颈。</p>
+          <p><b>LOG-LIO 的答案：</b>利用激光雷达的 <b>ring 结构</b>预建查表，把法向估计做成近 $O(1)$；并把「分布」也做成实时维护的一等公民。</p>
+        </div>
+      </div>
+
+      <p>请注意这两件事其实是<b>一体两面</b>：法向与分布都属于「<b>局部几何信息</b>」（local geometric information，LOG-LIO 的标题就是这么来的）。点到面残差的前提，是你得先知道那块面在哪、朝哪边；而分布到分布残差的前提，是你得先知道每个点周围那一小块点云的<b>形状</b>。所以这两篇其实是在同一块地基上各搭了一层。</p>
+
+      <div class="callout">
+        <h4>这一课的组织方式</h4>
+        <p>按「组课」的写法：① 先立这个统一的问题框架（就是上面这一节）；② 下两节给 iG-LIO 的<b>一句话招式</b>与它的机制；③ 再两节给 LOG-LIO 的；④ 然后用<b>一张对比表当主干</b>；⑤ 最后给一句<b>我们的判断</b>——并注明那是判断，不是原文的自评。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_iG-LIO/35c69600072dde9c5f5e5af1166ee637b2cd37098f66b19fede590896d3dfa6b.jpg" alt="iG-LIO Fig.2 block diagram">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Block diagram of iG-LIO, it receives LiDAR and IMU measurements and outputs IMU-rate odometry and LiDAR-rate odometry.<br>
+          （中译：iG-LIO 的框图。它接收激光雷达与 IMU 测量，输出 IMU 频率的里程计与激光雷达频率的里程计。）<br>
+          <b>怎么看这张图：</b>① 顺着数据流看下去，原文把流程写得很清楚——先用 IMU 积分做运动补偿、同时产生「先验约束」，然后<b>用体素化表面协方差估计器（VSCE）为去畸变后的扫描估计每个点的表面协方差</b>，接着通过哈希索引在体素地图里做最近邻搜索、构造 GICP 约束，最后把<b>先验与 GICP 两类约束一起送进 MAP</b> 求解；② 注意它输出<b>两种频率</b>的里程计（IMU 速率与激光雷达速率），这是 LIO 系统的标配写法；③ 这张图最好和上一课 <b>0086</b> 的 Point-LIO 框图、以及 <b>0084</b> 的 FAST-LIO2 框图对照着看——三者的骨架相似，差别在于「残差怎么算」与「地图怎么存」。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="ig">
+      <h2>2. iG-LIO：iG 指的是什么</h2>
+
+      <p>先把名字说清楚。<b>iG-LIO 里的「iG」= incremental GICP，也就是「增量式的 GICP」。</b>这个「增量」不是随便加的前缀——它指的是这篇论文里两个关键的「增量」设计：用<b>增量体素地图</b>来表示周围环境的概率模型，以及在这个体素地图上<b>增量地</b>维护每个体素的分布（均值与协方差）。</p>
+
+      <p>作者来自新加坡南洋理工大学（NTU）：<b>Zijie Chen、Yong Xu、Shenghai Yuan、Lihua Xie</b>——注意<b>不是</b> FAST-LIO / Point-LIO 那个港大团队，所以这一篇是另一条线上的工作。</p>
+
+      <h3>它想解决什么</h3>
+
+      <p>原文把困难列得很清楚，一共三条：</p>
+
+      <ol>
+        <li><b>GICP 此前多用在松耦合或扫描对扫描（scan-to-scan）的场合</b>，还没有被真正嵌进一个高效又准确的 LIO 里。原文还举了 VGICP 作为参照：它把体素化的最近邻搜索引进 GICP，能在 CPU 上以 30 Hz 处理 15000 个激光点——很快，但仍然是「把 GICP 当配准器用」，而不是与惯性约束紧耦合。</li>
+        <li><b>k-d 树找最近邻的复杂度是 $O(m\log n)$</b>（$n$ 是局部地图里的点数、$m$ 是维度）。原文说，当激光点数量很大时，这个搜索很难实时。这正是 <b>0084</b> 课里 ikd-Tree 要解决的问题的延续——只不过这次大家转而投向<b>体素</b>。</li>
+        <li><b>表面协方差估计对稀疏、小视场的扫描不适用。</b>当扫描里点与点离得很远时（比如固态雷达 100 Hz 采样、或者室内近距离环境），估计出来的协方差很不准，配准精度就跟着掉。</li>
+      </ol>
+
+      <h3>统一框架：把 GICP 与惯性约束放进一个 MAP</h3>
+
+      <p>这是 iG-LIO 在结构上最重要的一步。它没有走「先让 GICP 配准出一个结果、再用 IMU 修正」的松耦合路子，而是把两类约束当成同一个估计问题里的两项：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\min_{\mathbf{x}_k}\left\{\sum_{i\in\mathcal{P}}\sum_{j\in\mathcal{M}}\left\|\mathbf{r}_{i,j}^{\mathrm{GICP}}\right\|_{\Omega_{i,j}^{\mathrm{GICP}}}^{2}+\left\|\mathbf{r}_k^{\mathrm{prior}}\right\|_{\Omega_k^{\mathrm{prior}}}^{2}\right\}$$</div>
+        <p style="margin:.9rem 0 0">其中 $\|\mathbf{r}\|_{\Omega}^{2}=\mathbf{r}^{\top}\Omega\,\mathbf{r}$。第一项是激光点与地图体素之间的 <b>GICP 残差</b>，第二项是由 IMU 积分产生的<b>先验残差</b>。</p>
+      </div>
+
+      <p>这个式子在数学上就是<b>最大后验估计</b>（MAP, Maximum A Posteriori）：在「IMU 告诉我大概在哪」这个先验之下，找那个让激光配准残差最小的状态。原文特别强调：<b>这个 MAP 只维护单个时刻的状态</b>，所以它就等价于<b>把 IMU 测量与 GICP 配准紧耦合在一起</b>。</p>
+
+      <p>紧耦合的好处在哪里？原文的解释值得逐字读一遍：在<b>退化场景</b>下（比如 100 Hz 采样时），MAP 里那些<b>不可观的状态会被 IMU 约束住</b>，而不会像松耦合那样——「只把 IMU 当初值、然后做纯 GICP 配准」——收敛到一个很差的解上。</p>
+
+      <p>这句「不可观的状态被 IMU 约束住」，正是第一季 <b>0006</b> 课（退化）与 <b>0009</b> 课（DARPA 地下挑战赛的实战失败）讲过的那个老问题的又一个解法。<b>退化的本质不是「点太少」，而是「某个方向上几何信息消失了」</b>；iG-LIO 的回答是：那个方向上让 IMU 顶上。</p>
+
+      <p>状态本身很朴素，就是 $\mathbf{x}=[\mathbf{R}_b^w,\ \mathbf{t}_b^w,\ \mathbf{v}_b^w,\ \mathbf{b}_\alpha,\ \mathbf{b}_g]$——姿态、位置、速度、加速度计偏置、陀螺仪偏置。<b>注意这里没有外参</b>（雷达与 IMU 之间的相对位姿），这点在后面和 LOG-LIO 对比时会有用。</p>
+    </section>
+
+    <section class="section-card" id="gicp">
+      <h2>3. 分布到分布：和点到面差在哪</h2>
+
+      <p>现在讲清楚这一课最核心的那个概念差别。它其实可以用两句话概括，但要看图才真正明白。</p>
+
+      <p>先说<b>点到面</b>（也就是 <b>0022</b> 课那条主线、LOAM 系与 FAST-LIO2 都在用）：每个激光点要被配到一块局部平面上去，残差就是这个点到平面的<b>垂直距离</b>。它只需要知道「那块面在哪、朝哪边」——也就是一个法向和一个平面上的点。</p>
+
+      <p>再说<b>分布到分布</b>（GICP 的路子）：每个点不再只是一个位置，而被表示成一个小小的<b>椭球</b>——一个均值加上一个协方差矩阵。这个椭球在说什么？它在说「<b>我所在的这一小块局部面，长什么形状</b>」：如果这块地方是平的，椭球就会被压成一个薄饼（一个方向很短、另两个方向长）；如果这块地方乱糟糟的，椭球就比较圆。</p>
+
+      <p>配准的目标，也就从「让点到面的距离小」变成了「<b>让两个椭球对齐</b>」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">点到面 vs 分布到分布：用多少信息去对齐</text>
+
+          <!-- 左：点到面 -->
+          <rect x="20" y="50" width="420" height="330" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="78" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a8563a">左：点到面</text>
+          <polygon points="80,240 300,175 420,225 200,290" fill="#dbe6ef" stroke="#90a4ae" stroke-width="1.4"/>
+          <circle cx="215" cy="120" r="5" fill="#c0392b"/>
+          <line x1="215" y1="120" x2="215" y2="200" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="5 4"/>
+          <path d="M215 190 L225 190 L225 200" fill="none" stroke="#c0392b" stroke-width="1.2"/>
+          <text x="228" y="162" font-size="11" fill="#c0392b">点到这个面的垂直距离</text>
+          <text x="230" y="330" text-anchor="middle" font-size="10.5" fill="#a8846f">残差 = 点到平面的垂直距离</text>
+          <text x="230" y="352" text-anchor="middle" font-size="10.5" fill="#a8846f">只需要：一个点 + 一个面</text>
+
+          <!-- 右：分布到分布 -->
+          <rect x="460" y="50" width="420" height="330" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="78" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f6d51">右：分布到分布</text>
+          <ellipse cx="600" cy="185" rx="48" ry="20" transform="rotate(-18 600 185)" fill="#5a8fc7" fill-opacity="0.35" stroke="#2c5f8a" stroke-width="1.4"/>
+          <ellipse cx="750" cy="235" rx="48" ry="20" transform="rotate(14 750 235)" fill="#2e9e6b" fill-opacity="0.35" stroke="#2f6d51" stroke-width="1.4"/>
+          <line x1="606" y1="187" x2="744" y2="233" stroke="#8f4a33" stroke-width="1.6"/>
+          <path d="M600 185 L611.1 183.5 L607.9 192.9 Z" fill="#8f4a33"/>
+          <path d="M750 235 L738.9 236.5 L742.1 227.0 Z" fill="#8f4a33"/>
+          <text x="520" y="150" font-size="10.5" fill="#2c5f8a">来自当前帧</text>
+          <text x="858" y="292" text-anchor="end" font-size="10.5" fill="#2f6d51">来自地图</text>
+          <text x="670" y="330" text-anchor="middle" font-size="10.5" fill="#2f6d51">两个「分布」之间对齐</text>
+          <text x="670" y="352" text-anchor="middle" font-size="10.5" fill="#2f6d51">用到了局部形状，比单点更稳</text>
+
+          <text x="450" y="404" text-anchor="middle" font-size="11.5" fill="#5a4a42">GICP 用的是点云局部协方差的形状，所以对噪声与部分重叠更宽容</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是「点到面」的几何关系，右边是「分布到分布」的几何关系。两边都在回答同一个问题——当前帧的一个点，该怎么和地图对齐。<br>
+          <b>怎么看这张图：</b>① 左边只画了两样东西：<b>一个红点</b>和<b>一块蓝色的平面</b>，中间那段红色虚线就是残差（点到面的垂直距离），所以它用到的信息量其实很小；② 右边画的是<b>两个椭圆</b>——蓝色的来自当前帧、绿色的来自地图，每个椭圆代表「这一小块点云的均值与形状」，中间那根双向箭头表示「让这两个分布对齐」；③ 关键差别在椭圆的<b>形状</b>上：GICP 会先把协方差里最小的那个特征值压得很小（原文 Eq. 9，$\boldsymbol{\Sigma}=\mathbf{U}\,\mathrm{diag}(1,1,\epsilon)\,\mathbf{V}^{\top}$，$\epsilon=0.001$），让每个椭球都变成一个「薄饼」——<b>薄饼的朝向就是这一小块面的朝向</b>。于是「对齐两个薄饼」天然就带上了方向信息。<br>
+          <b>要记住的一句话：</b>点到面只用「一个点 + 一个面」，分布到分布用的是「<b>两个小椭球的中心 + 形状</b>」；后者信息更多，所以在噪声大、点云稀疏、两边只部分重叠的时候更不容易被带偏。
+        </figcaption>
+      </figure>
+
+      <h3>GICP 残差长什么样</h3>
+
+      <p>把上面那张图写成公式，就是 iG-LIO 实际使用的一对式子：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{r}_{i,j}^{\mathrm{GICP}}=\mathcal{M}[j].\mu-\mathbf{R}_{b_k}^{w}\left(\mathbf{R}_{l}^{b}\mathbf{p}_i+\mathbf{t}_{l}^{b}\right)-\mathbf{t}_{b_k}^{w}$$</div>
+        <div class="flow-formula" style="margin-top:.6rem">$$\Omega_{i,j}^{\mathrm{GICP}}=\sigma_{\mathrm{GICP}}\left(\mathcal{M}[j].\Sigma+\mathbf{R}_{b_k}^{w}\,\Sigma_i\,\mathbf{R}_{b_k}^{w\top}\right)^{-1}$$</div>
+      </div>
+
+      <p>第一个式子看着眼熟——它就是「把当前帧的这个点变换到世界系，然后减去地图体素的中心位置」，也就是两个中心之间的差。第二个式子是<b>信息矩阵</b>（协方差矩阵的逆），它把两边的协方差加了进来：$\mathcal{M}[j].\Sigma$ 是地图体素的分布，$\Sigma_i$ 是当前帧这个点的分布。</p>
+
+      <p><b>这个信息矩阵的物理含义非常直观：</b>如果某个方向上两块点云都很「不确定」（协方差大），那么在这个方向上，「中心差多少」这件事就不该被太当真——信息矩阵自动把它压小。<b>这就是「对噪声更宽容」这句话在数学上的样子。</b></p>
+
+      <h3>协方差从哪来：VSCE 与它的退路</h3>
+
+      <p>GICP 原本的做法是：为每个点找最近的 20 个邻居点，用它们算协方差。iG-LIO 换成了一种更适合体素结构的做法——<b>体素化表面协方差估计器（VSCE, Voxel-based Surface Covariance Estimator）</b>：<b>用某点所在的 26 个相邻体素里的点来估计它的协方差</b>，而不是去找 20 个最近点。</p>
+
+      <p>这个改动的巧妙之处在于：体素网格滤波器本来就要做降采样，VSCE <b>顺手把降采样和协方差估计合并成了一步</b>。原文说，这样做在稀疏、小视场的扫描上效果更好（这也正是它想解决的第三个困难）。</p>
+
+      <p>但也要说清楚它的退路：原文承认，<b>当最近点数少于 5 个时，VSCE 算不出稳定的表面协方差</b>。这时 iG-LIO 的处理方式是——把对应的 $\Sigma_i$ 直接置为 $\mathbf{0}$，于是公式自动从<b>面对平（plane-to-plane）退化回点到面（point-to-plane）</b>。原文说这个修改是<b>必要的</b>，而不是意外。</p>
+
+      <p>换句话说：<b>iG-LIO 的方法在几何信息足够时用分布配准，不够时自动退回经典的点到面</b>。这是一个很务实的设计，也解释了为什么它能在同一套参数下跨这么多数据集跑。</p>
+
+      <p>另外还有一道保险：iG-LIO 用<b>卡方检验</b>（chi-squared test）剔除离群点——包括「不合适的局部平面近似」和「匹配错误的对应关系」。这和第二季 <b>0019</b> 课讲的鲁棒核是同一族思路（都是「不信任坏数据」），只是手段从「降权」换成了「剔除」。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>「分布到分布」比「点到面」用了更多信息。多出来的那部分信息，具体是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="点的数量确实可能更多，但这不是本质。GICP 完全可以用和点到面一样的点数去配准；区别在于每个点被表示成了什么——是一个位置，还是一个带形状的分布。" onclick="lessonKit.answer(this,'q0087a')">它一次用了更多的激光点</button>
+          <button data-correct="yes" data-explanation="对。每个点被表示成一个协方差椭球，椭球的「扁」和「朝向」编码了它所在那一小块局部面的形状。于是残差不只知道「离多远」，还知道「这一块是平的还是乱的、朝哪边」，所以在噪声大或只部分重叠时更不容易被带偏。这也是原文说 GICP 能减少错误对应影响的原因。" onclick="lessonKit.answer(this,'q0087a')">每个点携带的局部形状信息</button>
+          <button data-correct="no" data-explanation="惯性信息并没有进入 GICP 残差本身。iG-LIO 确实是紧耦合的，但 IMU 是通过 MAP 里的另一项（先验残差）进来的，与 GICP 残差是并列的两项，不是 GICP 残差的一部分。" onclick="lessonKit.answer(this,'q0087a')">IMU 测出来的运动信息</button>
+        </div>
+        <div class="quiz-feedback" id="q0087a"></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_iG-LIO/4ed0fdf9754f1f5865c6928faf695b0568a48a762e0fc9318c96050a975413b8.jpg" alt="iG-LIO Fig.5 box plots of translation errors at different resolutions">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Box plots show the translation errors at different resolutions. The translation error of NDT-LIO increases rapidly with larger resolution size. At a resolution of 2.0 m, the median error of iG-LIO and NDT-LIO are 1.16 m and 19.25 m.<br>
+          （中译：箱线图给出不同（体素）分辨率下的平移误差。NDT-LIO 的平移误差随分辨率变大而急剧上升。当分辨率为 2.0 m 时，iG-LIO 与 NDT-LIO 的中位误差分别是 1.16 m 与 19.25 m。）<br>
+          <b>怎么看这张图：</b>① 箱线图的横轴是<b>体素分辨率</b>，纵轴是<b>平移误差</b>——这是一张「参数敏感性」测试：把分辨率一路调粗，看谁先崩；② 请找那两条走势完全相反的曲线：NDT-LIO 随分辨率变大而<b>急剧恶化</b>（到 2.0 m 时中位误差 19.25 m，基本等于失效），而 iG-LIO 的中位误差仍停在 <b>1.16 m</b>；③ 这张图想说明的是：GICP 这一族度量（原文的消融里还对比了 NDT 与 VGICP）在分辨率这种「工程参数」变得不利时，比基于网格概率的 NDT 更稳。注意横轴分辨率变粗本身也会改变可用的点数，所以这不是纯算法比较，而更接近「同一套系统在参数不确定时谁更扛」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="log">
+      <h2>4. LOG-LIO：法向怎么实时算出来</h2>
+
+      <p>先说名字。<b>LOG-LIO 里的「LOG」= LOcal Geometric information，也就是「局部几何信息」</b>——具体指两样东西：点的<b>法向</b>（normal）和点的<b>分布</b>（distribution）。</p>
+
+      <p>作者来自同济大学 TIEV 实验室：<b>Kai Huang、Junqiao Zhao、Zhongyang Zhu、Chen Ye、Tiantian Feng</b>。</p>
+
+      <h3>为什么「实时算法向」是件难事</h3>
+
+      <p>这件事的难度常常被低估，因为在学校里用法向太容易了：调一个库函数，传进去一个点云和一个搜索半径，它就还你一堆法向。我们第一次见它是在第二季 <b>0023</b> 课（PCL），当时它只是一个可选步骤。</p>
+
+      <p>但在 LIO 里，这个步骤会变成一个真实的瓶颈。原文的说法是：准确估计局部几何信息需要在<b>稠密点云里检索邻域信息</b>，而对 LIO 系统来说，这会带来<b>巨大的计算负担</b>——即使有 k-d 树或体素地图帮忙也一样。</p>
+
+      <p>传统做法是最小二乘：取一个点的邻域点，算它们的协方差矩阵，再做特征分解，<b>最小特征值对应的特征向量就是法向</b>。这套流程对每一个点都要做一遍——几十万个点，每个点都要搜邻域、算矩阵、做分解。</p>
+
+      <h3>Ring FALS：把「搜邻域」这一步彻底绕开</h3>
+
+      <p>LOG-LIO 的突破口是：<b>激光雷达的扫描是有结构的</b>。旋转式激光雷达的每一圈（ring）都在固定的俯仰角上，同一圈内的点按方位角均匀排开。既然位置是「规整格子」上的，那就<b>不需要到三维空间里去搜邻居了</b>——「上下左右」的邻居是谁，从扫描结构里直接就能查出来。</p>
+
+      <p>具体做法（原文叫 <b>Ring FALS</b>，由已有的 FALS 方法改造而来）：<b>预先建一张查找表</b>，表的行数等于 ring 数，列数等于每圈里的点数，表里存的是每个点的<b>结构性信息</b>（方向向量）。等新的一帧扫描到来，只要拿到每个点的<b>距离读数</b>，就能直接从表里查到它的邻居、进而算出法向——<b>不需要插值，也不需要邻域搜索</b>。</p>
+
+      <div class="callout">
+        <h4>为什么「不需要插值」是个关键卖点</h4>
+        <p>原文在讲 FALS 时指出：FALS 是把扫描点投影到<b>球面距离像</b>（SRI）上再做计算，而这就要求距离像里的<b>每个像素都有测量值</b>——可激光点只占其中稀疏的一部分像素，所以必须做插值，而插值本身就很耗时。</p>
+        <p>Ring FALS 换了个思路：<b>查找表完全由实际拿到的测量构成</b>，行是 ring、列是每圈内的点，因此<b>天然没有空像素，也就没有插值</b>。这一步简化正是它快起来的原因。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="16" font-weight="700" fill="#2b2b2b">法向是怎么算出来的：一小块点「朝哪边」</text>
+
+          <text x="60" y="100" font-size="10.5" fill="#8a786f">小圆点 = 一小块邻域点</text>
+
+          <!-- 墙 -->
+          <rect x="286" y="70" width="16" height="244" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+          <text x="270" y="96" text-anchor="end" font-size="10.5" fill="#7a8a99">墙</text>
+          <!-- 地面 -->
+          <rect x="286" y="314" width="560" height="16" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+          <text x="700" y="352" font-size="10.5" fill="#7a8a99">地面</text>
+
+          <!-- 墙上的一小块点 -->
+          <g fill="#2c5f8a">
+            <circle cx="291" cy="172" r="2.6"/><circle cx="297" cy="178" r="2.6"/><circle cx="292" cy="186" r="2.6"/>
+            <circle cx="298" cy="168" r="2.6"/><circle cx="294" cy="192" r="2.6"/>
+          </g>
+          <line x1="300" y1="180" x2="392" y2="180" stroke="#2c5f8a" stroke-width="1.6"/>
+          <path d="M392 180 L382 175 L382 185 Z" fill="#2c5f8a"/>
+          <text x="402" y="176" font-size="11" fill="#2c5f8a">① 墙面法向</text>
+          <text x="402" y="192" font-size="10" fill="#5a4a42">垂直于墙面</text>
+
+          <!-- 地面的一小块点 -->
+          <g fill="#2f6d51">
+            <circle cx="552" cy="318" r="2.6"/><circle cx="560" cy="325" r="2.6"/><circle cx="568" cy="319" r="2.6"/>
+            <circle cx="556" cy="327" r="2.6"/><circle cx="566" cy="323" r="2.6"/>
+          </g>
+          <line x1="560" y1="314" x2="560" y2="235" stroke="#2f6d51" stroke-width="1.6"/>
+          <path d="M560 235 L555 245 L565 245 Z" fill="#2f6d51"/>
+          <text x="576" y="240" font-size="11" fill="#2f6d51">② 地面法向</text>
+          <text x="576" y="256" font-size="10" fill="#5a4a42">垂直向上</text>
+
+          <!-- 墙角棱上的一小块点 -->
+          <g fill="#c0392b">
+            <circle cx="293" cy="308" r="2.6"/><circle cx="299" cy="312" r="2.6"/><circle cx="290" cy="314" r="2.6"/>
+          </g>
+          <line x1="298" y1="312" x2="372" y2="268" stroke="#c0392b" stroke-width="1.6"/>
+          <path d="M372 268 L362 270 L367 278 Z" fill="#c0392b"/>
+          <line x1="300" y1="313" x2="382" y2="313" stroke="#c0392b" stroke-width="1.6"/>
+          <path d="M382 313 L372 308 L372 318 Z" fill="#c0392b"/>
+          <line x1="298" y1="315" x2="356" y2="362" stroke="#c0392b" stroke-width="1.6"/>
+          <path d="M356 362 L346 357 L352 367 Z" fill="#c0392b"/>
+          <text x="396" y="352" font-size="10.5" fill="#c0392b">③ 棱上：法向乱跳，不能用</text>
+
+          <text x="450" y="384" text-anchor="middle" font-size="11.5" fill="#5a4a42">法向＝这一小块点「朝哪边」；它是点到面残差的前提</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个真实的墙角与地面交界处。在三个不同的位置各取一小块邻域点，看它们各自拟合出来的法向指向哪里。<br>
+          <b>怎么看这张图：</b>① 中间那两条灰色带子分别是<b>墙</b>（竖直）和<b>地面</b>（水平），它们在右下角相交成一条棱；② ①号位置在墙上，那一小块点拟合出的法向<b>垂直于墙面</b>（向右）；②号位置在地面上，法向<b>垂直向上</b>——这两个法向都很稳定、很可靠；③ ③号位置正好落在<b>墙角那条棱上</b>，同样的邻域起点却可以拟合出好几个完全不同的方向（图上画了三根红箭头），<b>这说明棱上的法向是不稳定的、不可信的</b>。LOG-LIO 的原文也承认这一点：在墙角、遮挡、距离读数缺失的地方，Ring FALS 的假设不成立，它靠的是「把背向的法向翻转、再做中值模糊平滑、最后用可见性与一致性检查把剩下的坏点剔掉」。<br>
+          <b>要记住的一句话：</b>法向不是「点云自带的一个属性」，而是<b>从一小块邻域里拟合出来的一个估计</b>——邻域选得好不好，决定了这个估计能不能用。
+        </figcaption>
+      </figure>
+
+      <p>当然，快只是第一步。Ring FALS 给出的法向还有一个「和地图对不上」的风险，所以 LOG-LIO 还做了两件事：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>把「分布」也做成实时维护的</b>
+          <p>它把 <b>0084</b> 课里的 ikd-Tree <b>扩展成按体素组织地图</b>，并在每个体素里<b>增量地</b>更新点的分布——同时保证这个分布与法向估计保持一致。原文用到的分布合并式子是：$\mathbf{M}=\mathbf{S}_n+\mathbf{S}_m-\frac{1}{n+m}(\mathbf{P}_n+\mathbf{P}_m)(\cdot)^{\top}$（把两团点合并成一团时，求和项与平方和项各自相加再减掉均值修正项）。</p>
+          <p>另外，为了在「耗时」与「表示是否正确」之间取得平衡，原文的做法是：<b>一旦某个体素的分布收敛了，就把它固定下来</b>（fix），不再反复更新。</p>
+        </div>
+        <div class="mini-card">
+          <b>分层关联：surfel 优先于点面，大优先于小</b>
+          <p>有了分布，就能判断一个体素里的点是不是构成一块像样的<b>面元（surfel）</b>。原文给的判据是两个比值：$\rho_i=\dfrac{2(\lambda_2-\lambda_1)}{\lambda_1+\lambda_2+\lambda_3}&gt;1.0$ 与 $\gamma_i=\dfrac{\lambda_2}{\lambda_1}&gt;100$（$\lambda_1&lt;\lambda_2&lt;\lambda_3$ 是协方差矩阵的特征值）。$\rho$ 越大说明这团点越「平」，$\gamma$ 越大说明越不像「线状」。</p>
+          <p>关联时顺序是：<b>点到面元（point-to-surfel）优先于点到面（point-to-plane），大尺度面元优先于小尺度面元</b>。原文的理由是：大尺度面元由更多的点合并而来，对噪声更不敏感。而且这个「大面元」是可以由多个小面元<b>合并</b>出来的（合并后仍需满足上面的判据）。</p>
+        </div>
+      </div>
+
+      <p>所以 LOG-LIO 的整体结构是：<b>Ring FALS 估法向 → 扩展 ikd-Tree 增量维护体素分布 → 分层关联 → 用误差状态迭代卡尔曼滤波（iEKF）优化位姿</b>。它和 FAST-LIO2 一样是直接配准到地图、不做特征提取，差别在于<b>它把法向与分布这两个「局部几何信息」变成了实时可得的一等公民，并用它们构造出比「面」更精细的「面元」</b>。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Ring FALS 能比传统的「邻域搜索 + 最小二乘」快这么多，最根本的原因是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="它确实没有做插值，但「省掉插值」是结果之一，不是最根本的原因。根本原因是它压根不进入三维空间做邻域检索，而是在扫描的结构上直接查表。" onclick="lessonKit.answer(this,'q0087b')">它省掉了距离像的插值</button>
+          <button data-correct="yes" data-explanation="对。旋转式激光雷达的每个点是排在「第几圈、圈内第几个」这样一个规整网格上的，所以「谁是我邻居」可以直接从预建的查找表里查到——行是 ring、列是圈内序号。邻域搜索这一步被彻底绕开了，插值也就自然不需要了。" onclick="lessonKit.answer(this,'q0087b')">它利用扫描自身的环状结构</button>
+          <button data-correct="no" data-explanation="原文并没有说它只对一部分点算法向然后就近似其余点。它是对扫描里的点做稠密法向估计（dense normal estimation），只是每个点的估计都是靠查表完成的。" onclick="lessonKit.answer(this,'q0087b')">它只对少数几个点算法向</button>
+        </div>
+        <div class="quiz-feedback" id="q0087b"></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LOG-LIO/c6132056351d655d3aea097db46784a929f164c3873357f067e040cbe103e7f1.jpg" alt="LOG-LIO Fig.1 LiDAR observation model and multi-scale surfel association">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Illustration of the LiDAR observation model and multi-scale surfel association. (a) The magenta line indicates the ray of the red point. The eight points are the neighborhoods that Ring FALS uses to estimate the normal of the red point. (b) The orange ellipses represent the large-scale surfel merged by the five blue small-scale surfels.<br>
+          （中译：激光观测模型与多尺度面元关联的示意。(a) 洋红色线表示红点的那条射线，另外八个点是 Ring FALS 用来估计红点法向的邻域点。(b) 橙色椭圆表示由五个蓝色小尺度面元合并而成的大尺度面元。）<br>
+          <b>怎么看这张图：</b>① 先看 <b>(a)</b>：从雷达到红点有一条射线，而用来估法向的邻居是<b>它周围那 8 个点</b>——这正是「利用扫描结构找邻居」的具体样子，邻居不是用三维距离搜出来的，而是从扫描的环状排布里直接给出的；② 再看 <b>(b)</b>：五个蓝色小椭圆合并成了一个橙色大椭圆，这就是「大尺度面元」，它代表了更大一块表面的分布，对噪声更不敏感；③ <b>按原文的字母顺序推断</b>，这张图的 (a) 在左侧、(b) 在右侧。把 (a) 与 (b) 连起来看，就是这一节的全部逻辑：<b>先靠结构拿到法向，再把分布合并成面元，最后用面元去关联</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LOG-LIO/5548692a9da9cde8870b8687fb703c5444dce76e597f893d5b8c1cb5a7cb898e.jpg" alt="LOG-LIO Fig.3 normals from Ring FALS at M2DGR gate03">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Starting position of the sequence gate03 of M2DGR dataset. The white lines represent normalized normals from Ring FALS estimation.<br>
+          （中译：M2DGR 数据集 gate03 序列的起始位置。白色线段表示 Ring FALS 估计出的单位法向。）<br>
+          <b>怎么看这张图：</b>① 这张图值得慢慢看，因为它是「法向估计到底靠不靠谱」最直观的体检报告——<b>地面上几乎所有的点，白色法向都是竖直朝上的</b>，这说明估计是对的；② 再看原文特别点出的两个盒子：<b>黄框里的柱子</b>，它的角点处的法向会平滑地过渡到相邻侧面的法向上——这是好现象；③ <b>绿框里的假边缘</b>附近，因为遮挡，点的邻域距离差异很大，Ring FALS 的假设不成立，法向就估错了；④ 但原文马上补了一句：这类估错法向的点在整帧里<b>只占少数</b>，会在后续的可见性与一致性检查（原文 Section V-B2）里被当作离群点剔除掉。<b>这张图同时展示了方法的有效范围与失效边界。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>5. 两篇并排看：一张对比表当主干</h2>
+
+      <p>前面几节是分头讲的，这一节把两篇放回同一个画框里。请把这张表当作本课的主干来记——组课的读法就是「先有个统一框架，再看每个人在框架的哪一格上用力」。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.55rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.55rem .7rem;text-align:left">iG-LIO（2024）</th>
+            <th style="border:1px solid #e0d5c8;padding:.55rem .7rem;text-align:left">LOG-LIO（2024）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>解决什么</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem">让 GICP 的<b>分布配准</b>第一次以紧耦合的方式进入实时 LIO；同时解决 k-d 树最近邻 $O(m\log n)$ 与稀疏／小视场扫描下协方差不准的问题</td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>法向</b>与<b>分布</b>这两个局部几何量的实时估计，以及它们的合理使用（分层关联）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>核心机制</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem">GICP 残差 + 惯性先验，一并放入 <b>MAP</b> 求解（高斯–牛顿）；<b>VSCE</b> 用 26 个邻域体素估协方差；协方差不足 5 个近邻时置 $\Sigma_i=\mathbf{0}$ 退化为点到面；卡方检验剔外点</td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>Ring FALS</b>：预建 ring×方位查找表，只靠距离读数估法向，近 $O(1)$；把 ikd-Tree <b>扩展为按体素管理分布</b>并增量更新，收敛后固定；<b>分层关联</b>（面元优先于点面、大面元优先于小面元）；iEKF 优化</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>与点到面残差的关系</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>替代它</b>：默认用分布到分布；只有在协方差估不出来时才<b>退回</b>点到面。原文给出实测的比例——平均有相当一部分点的关联用的是「面对平」度量</td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>augment（扩充）它</b>：迭代卡尔曼滤波的 MAP 里在原来的点到面项之外，<b>再加入点到面元项</b>；点到面仍作为「体素不构成面元时」的兜底</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>地图结构</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>增量体素地图</b>：体素坐标经哈希（大素数异或取模）索引，最近邻查询 $O(1)$ 并可并行；用 <b>LRU</b> 淘汰旧体素控制内存</td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>扩展的 ikd-Tree</b>：把 <b>0084</b> 课的 ikd-Tree 从「存点」升级为「按体素存分布」，保留原来的增量插入与重平衡能力</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>状态里有什么</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem">姿态、位置、速度、加速度计偏置、陀螺仪偏置（<b>不含雷达–IMU 外参</b>）</td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem">姿态、位置、速度、陀螺仪偏置、加速度计偏置、<b>重力</b>（同样不含外参）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem"><b>原文承认的短板</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem">原文<b>没有专设局限小节</b>。可如实指出：①「面对平」只在协方差可估时成立，否则退化；② 在两个 100 Hz 的小视场序列（avia_2／avia_3）上，Faster-LIO 比它<b>略快</b>；③ 精度上与最好方法「可比」，并非全面最优</td>
+            <td style="border:1px solid #e0d5c8;padding:.55rem .7rem">① 平均每帧 <b>28.101 ms</b>，比 FAST-LIO2 的 <b>20.523 ms</b> 慢约 8 ms（多出的是 Ring FALS 与体素内分布维护）；② Ring FALS 的假设在<b>墙角、遮挡、距离读数缺失</b>处不成立，靠法向翻转＋中值模糊＋可见性／一致性检查兜底；③ 它的查找表是按<b>旋转式激光的 ring 结构</b>定义的，对固态非重复扫描是否适用，<b>原文没有讨论</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 250" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="32" text-anchor="middle" font-size="15" font-weight="700" fill="#2b2b2b">一帧的时间都花在哪（各段占比为示意）</text>
+
+          <text x="120" y="88" font-size="10" fill="#8a786f">一帧开始</text>
+          <text x="780" y="88" text-anchor="end" font-size="10" fill="#8a786f">一帧结束</text>
+
+          <rect x="120" y="100" width="140" height="46" fill="#90a4ae"/>
+          <rect x="260" y="100" width="160" height="46" fill="#c0392b"/>
+          <rect x="420" y="100" width="140" height="46" fill="#e6a23c"/>
+          <rect x="560" y="100" width="220" height="46" fill="#2e9e6b"/>
+          <rect x="120" y="100" width="660" height="46" rx="6" fill="none" stroke="#b0bec5" stroke-width="1.4"/>
+          <text x="190" y="128" text-anchor="middle" font-size="11" fill="#ffffff">预处理</text>
+          <text x="340" y="128" text-anchor="middle" font-size="10.5" fill="#ffffff">Ring FALS 估法向</text>
+          <text x="490" y="128" text-anchor="middle" font-size="10.5" fill="#4a3a1a">体素内分布维护</text>
+          <text x="670" y="128" text-anchor="middle" font-size="11" fill="#ffffff">iEKF 优化</text>
+
+          <text x="450" y="188" text-anchor="middle" font-size="11.5" fill="#5a4a42">LOG-LIO 平均每帧 28.101 ms，FAST-LIO2 平均 20.523 ms，多出约 8 ms</text>
+          <text x="450" y="212" text-anchor="middle" font-size="11" fill="#8a786f">多出来的主要来自法向估计与分布维护；各段占比为示意，原文未给出细分</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一帧的计算时间被切成几段的样子，用来说明「实时算法向」这笔账到底花在哪里。<br>
+          <b>怎么看这张图：</b>① 整条横条代表一帧的总耗时，颜色不同的几段分别是预处理、法向估计、分布维护与最终的位姿优化；② 请重点看<b>红色与橙色两段</b>——它们对应 Ring FALS 的法向估计和体素内的分布维护，正是 LOG-LIO 相对 FAST-LIO2 多出来的那部分工作量；③ <b>各段的宽度比例是示意，不是原文给出的数字</b>；能确定的是总量：原文 Table IV 里 LOG-LIO 的全部序列平均是 28.101 ms，FAST-LIO2 是 20.523 ms，差约 8 ms，原文把这 8 ms 归因于 Ring FALS 与体素内分布的增量维护。<br>
+          <b>要记住的一句话：</b>「实时算法向」不是免费的——它换来的是一整套更精细的几何约束，代价是每帧多花大约 8 毫秒。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>6. 数字与各自短板</h2>
+
+      <h3>iG-LIO 的效率</h3>
+
+      <p>原文的做法是：把 iG-LIO 与三个当代 LIO（Faster-LIO、FAST-LIO2、DLIO）在同样的平台上跑同样的序列，比较<b>每帧平均耗时</b>与<b>有效特征点数／其中「面对平」度量所占比例</b>。原文里还有一个对照组 <b>iG-LIO\*</b>——它沿用 iG-LIO 的框架，但<b>协方差改回用 k-d 树做半径搜索来估计</b>，用来验证 VSCE 的价值。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">每帧耗时（ms，原文 Table II 节选）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">iG-LIO</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">iG-LIO*</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">Faster-LIO</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">FastLIO2</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>nclt_1</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>8.524</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">13.716</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">10.070</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">22.536</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>avia_2</b>（100 Hz 小视场）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">0.869</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1.250</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>0.650</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">0.901</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>avia_3</b>（100 Hz 小视场）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">0.930</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1.257</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>0.690</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1.164</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>原文的总评是：在其他数据集上，iG-LIO 比 Faster-LIO <b>快 1.2–1.5 倍</b>、比 FastLIO2 <b>快 2.3–2.7 倍</b>、比 DLIO <b>快 1.5–3.5 倍</b>；<b>但在 avia_2 与 avia_3 这两个 100 Hz 的序列上，Faster-LIO 反而略快于 iG-LIO</b>——这一点原文自己如实写出来了，我们在表里也照实列出。这正是「短板」栏里第三条的来源。</p>
+
+      <p>至于精度，原文的措辞是 <b>comparable accuracy</b>（可比精度），而不是「最优」。举个例子：nclt_1 上 iG-LIO 是 1.673，Faster-LIO 1.855、FastLIO2 1.734、DLIO 2.104；但在 nclt_5 上 iG-LIO 是 0.956，而 FastLIO2 是 0.890——<b>互有胜负</b>。原文最终的说法是：在<b>所有序列保持同一套参数</b>的前提下，它拿到了与最好方法几乎相同的精度，但速度更快。</p>
+
+      <h3>LOG-LIO 的两笔账</h3>
+
+      <p><b>第一笔是法向估计的账。</b>这是它最漂亮的数字：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">单帧法向估计耗时（ms，原文 Table I）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">点数</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">Ring FALS</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">PCL（单线程）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">PCL（OMP 10 线程）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Velodyne-32</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">57600</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>7.784</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">79.811</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">26.355</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Ouster-16</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">16384</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>2.597</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">155.972</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">39.664</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>原文的总结是：在 M2DGR 上（每帧约 57600 点），Ring FALS <b>只花掉 PCL 大约十分之一的时间</b>，比 PCL 的 OpenMP 并行版本还快约 4 倍。还有一个反直觉的细节值得注意：<b>Ouster-16 每帧的点数比 Velodyne-32 少，但 PCL 花的时间反而更多</b>——原文解释，这是 k-d 树邻域搜索的代价造成的，而且这个代价还会受环境空间结构的影响。这恰好说明：<b>Ring FALS 快，不是因为「点少」，而是因为它跳过了搜索这件事。</b></p>
+
+      <p><b>第二笔是精度与总耗时的账。</b>原文在 M2DGR 与 NTU VIRAL 共 21 个序列上比较了三个系统：LOG-LIO、只用到点对面关联的消融版本 LOG-C、以及 FAST-LIO2。结果是：</p>
+
+      <ul>
+        <li><b>平均 ATE（绝对轨迹误差）：LOG-LIO 0.330 m，LOG-C 0.379 m，FAST-LIO2 0.423 m。</b>原文说 LOG-LIO 在 21 个<b>序列中拿下 10 个的最优</b>，并且拿到了最低的平均误差。</li>
+        <li>有意思的是 <b>LOG-C 也已经略优于 FAST-LIO2</b>——这说明「只换关联策略、不带分层」本身就有收益，而分层关联（面元优先、大尺度优先）又在此基础上继续改进。</li>
+        <li>原文也解释了差异出现的场合：在室内这类平面上很多的受限空间里，三者误差接近（因为点到面关联本身就能被很好地约束住）；真正的差别出现在 <b>spms</b> 这类「无人机飞出建筑群、升到高空、激光点变稀疏」的序列上——有限的点云重叠会让点到面关联出错，而 LOG-LIO 靠体素内准确的局部几何信息把这个误差压住了。</li>
+        <li><b>耗时代价：</b>正如上一张自绘图所示，LOG-LIO 每帧平均 28.101 ms，比 FAST-LIO2 的 20.523 ms 慢约 8 ms，原文说这仍然满足实时要求。</li>
+      </ul>
+
+      <div class="callout">
+        <h4>我们的判断（注意：这是判断，不是原文自评）</h4>
+        <p>如果把这两篇放在「它们各自声称的新颖性」这个尺子上量：<b>真正新的是「怎么把它做快」这一层，而不是度量本身。</b>GICP 是十几年前就有的东西（原文自己也是引用 [19]），法向估计更是一个古老的话题；两篇的贡献分别落在「用 26 个邻域体素代替 20 个最近点，把降采样与协方差估计合并」和「把环状结构做成查找表、绕掉邻域搜索与插值」上——这是<b>工程与数据结构层面的贡献</b>，而且是实打实的贡献，因为正是这两步让它们从「论文里的度量」变成了「能实时跑的系统」。</p>
+        <p>如果按「新问题」这个尺子量，两篇都<b>偏增量</b>：它们都在上一课 <b>0084／0085／0086</b> 铺好的那条路上（不提特征 + 增量地图 + 更精细的几何量），把「残差用什么度量」和「几何量从哪来」这两个螺丝各拧紧了一格。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请用自己的话说清「点到面」与「分布到分布」在<b>信息量</b>上的差别，并说明为什么后者对「部分重叠」更宽容。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>信息量的差别：</b>点到面只用两样东西——「这个点在哪」和「那块面在哪、朝哪边」（一个法向加一个平面上的点）。分布到分布则把每个点表示成一个<b>带形状的小椭球</b>（均值 + 协方差），于是它不只携带位置，还携带「<b>这一小块局部面的形状</b>」——是平的还是乱的、朝哪个方向压扁。</p>
+              <p><b>为什么对部分重叠更宽容：</b>在部分重叠的场景里，总会有些点的对应关系是模糊甚至错误的。点到面残差对这类错误很敏感：一个错配的点会给出一个不小的垂直距离，直接往优化里注入错误信息。而 GICP 的信息矩阵是两边的协方差之和的逆（原文 Eq. 10 的第二式），<b>当某一块点云本身就很「不确定」或形状很「圆」时，这个方向上的残差会自动被压小</b>。原文对 GICP 的评价也是这个意思：表面协方差能让它<b>减少错误对应带来的影响</b>。</p>
+              <p>另外要注意一点：iG-LIO 并不是「无脑用分布」。它的协方差估计在点数不足 5 个时根本不成立，这时会把 $\Sigma_i$ 置零，<b>自动退化回点到面</b>。所以它的实际行为是「能用手法更精细的时候就用，用不了就退回经典做法」。</p>
+            </div></details>
+          </li>
+          <li>iG-LIO 说自己的优势之一是「在退化场景下把不可观的状态交给 IMU 约束住」。请解释这句话的含义，并说明它和第一季 0006 课里的「退化」是不是同一个概念。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>是同一个概念。</b>第一季 <b>0006</b> 课讲的「退化」，指的是在长走廊、隧道、开阔地这类环境里，几何约束在某个方向上消失了——比如一条长走廊里，只有两片平行的墙，激光雷达根本分不清自己「沿走廊方向」挪了多少。这时配准问题的信息矩阵在某些方向上特征值趋近于零，那个方向的解就不可观（unobservable），配准结果会沿那个方向乱飘。</p>
+              <p><b>iG-LIO 的处理方式：</b>它把「GICP 残差」与「IMU 先验残差」放在同一个 MAP 里一起解。GICP 那一项在几何信息缺失的方向上提供不了约束；而 IMU 那一项——因为它携带了加速度与角速度的积分信息——<b>在这些方向上是有效的</b>。所以不可观的状态不会失控。</p>
+              <p><b>原文对松耦合的批评正好是这里的反面：</b>如果只是「用 IMU 给个初值，然后做纯 GICP 配准」，那么退化方向上 GICP 会把你收敛到一个很差的解上，而 IMU 的信息在这个过程中被丢掉了。原文说紧耦合模式改善了退化场景（例如 100 Hz 采样的激光雷达）下的鲁棒性与精度——注意这里提到 100 Hz，因为采样率越高、相邻帧之间的几何变化越小、退化越容易被触发。</p>
+            </div></details>
+          </li>
+          <li>LOG-LIO 的 Ring FALS 和传统的「邻域搜索 + 最小二乘」在流程上的根本区别是什么？为什么原文能用 Ouster-16 点数更少却更慢这个例子来说明它快的原因？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>流程上的根本区别：</b>传统做法是「<b>先找到邻居，再算</b>」——给定一个点，要到三维空间（或用 k-d 树、体素）里去搜出它最近的若干个点，然后用这些点算协方差、做特征分解取最小特征向量。<b>搜索本身就是要花钱的</b>，而且树结构的搜索代价和地图的空间分布有关。</p>
+              <p>Ring FALS 是「<b>查表取代搜索</b>」——它预先建一张行数为 ring 数、列数为每圈点数的查找表，把每个点的结构性信息（方向向量）存好。新扫描到来时，每个点在扫描结构中的「上下左右」邻居是谁是<b>已知的</b>，靠距离读数就能算出法向。既然不搜，就没有搜索的代价；也不需要像 FALS 那样在球面距离像上做空像素插值。</p>
+              <p><b>为什么 Ouster-16 的例子有说服力：</b>Ouster-16 每帧只有 16384 点，比 Velodyne-32 的 57600 点<b>少得多</b>。如果「快」只是「点少」的结果，那 Ouster-16 应该更快才对。但原文 Table I 显示，PCL 在 Ouster-16 上花的时间反而<b>更长</b>（单线程 155.972 ms vs 79.811 ms）——原文把原因归到 k-d 树邻域搜索的耗时上，并指出它还受环境空间结构的影响。这就说明：<b>慢的根源是「搜索」这个动作，而不是点的数量</b>；而 Ring FALS 恰恰把搜索整个去掉了，所以它在两套数据上都稳定地快（2.597 ms 与 7.784 ms）。</p>
+            </div></details>
+          </li>
+          <li>LOG-LIO 在 21 个序列上的平均 ATE 优于 FAST-LIO2，但每帧耗时比它多约 8 毫秒。请说明这个取舍在什么场景下是划算的、在什么场景下不划算。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>划算的场景：稀疏、退化、大范围、结构不是那么规整的地方。</b>原文自己给了最好的线索：在室内这类平面上很多的受限空间里，三个系统（LOG-LIO、LOG-C、FAST-LIO2）的误差都差不多——因为到处是平面，点到面关联本来就能把位姿约束得很好，多花 8 ms 去买更精细的几何信息，收益不明显。而在 <b>spms</b> 这类「无人机飞出建筑群、升到高空、激光点变得稀疏、地图重叠有限」的序列里，点到面关联开始出错，而 LOG-LIO 靠体素内的局部几何信息把误差压住了。<b>几何信息越稀缺，这 8 ms 花得越值。</b></p>
+              <p><b>不划算的场景：算力已经很紧张、且环境结构良好。</b>比如 <b>0086</b> 课里 Point-LIO 跑的那台机载计算机（DJI Manifold 2-C、1.8 GHz 四核），预算本来就紧；如果场景是结构规整的走廊或房间，点到面已经够用，那额外 8 ms 换来的精度提升可能不足以补偿。</p>
+              <p>另外要注意，这 8 ms 只是<b>平均</b>值。原文说这个差异要结合「点数与环境复杂度」来看——在某些序列上差距会比 8 ms 大（例如 M2DGR 的 gate 序列上 LOG-LIO 是 46.563 ms、FAST-LIO2 是 31.378 ms）。所以真正做工程选型时，应该看<b>你的目标序列</b>上的数字，而不是只看平均值。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0086-Point-LIO2023-逐点处理与高带宽.html">← Point-LIO（2023）：逐点处理与高带宽</a>
+        <a class="next" href="0088-KISS-ICP2023-反工程化的极简之作.html">KISS-ICP（2023）：反工程化的极简之作 →</a>
+      </div>
+      <p class="foot-note">第二季埋下的 GICP 与「点到面」，到这里终于被两篇 2024 年的工作各接走了一半 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>强度与鲁棒：反射率这条额外通道 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0090</div>
+      <h1>强度与鲁棒：反射率这条额外通道</h1>
+      <p class="subtitle">几何不够用了怎么办？有人去翻激光的第二个输出通道，有人回头补上被跳过的第一步 🔦</p>
+      <div class="hero-meta">
+        <span>🎯 主题：反射强度 · 光度误差 · 强度边缘 · 激光惯性初始化 · PCA 特征</span>
+        <span>👥 作者：COIN-LIO（Pfreundschuh、Oleynikova、Cadena、Siegwart、Andersson）；固态强度 SLAM（Li、Tian、Shen、Lu）；LI-Init（Zhu、Ren、Zhang）；PCA-SLAM（Guo、Rong、Wang、Wu）</span>
+        <span>📅 2022–2024 · <i>COIN-LIO（ICRA 2024）· Intensity-Augmented SLAM（TIM 2022）· LI-Init（IROS 2022）· PCA-Based LiDAR SLAM（TIM 2022）</i></span>
+      </div>
+      <div class="toc">
+        <a href="#frame">这四篇为什么能放在一起</a>
+        <a href="#coin">强度当照片：COIN-LIO</a>
+        <a href="#solid">强度当线：固态激光篇</a>
+        <a href="#contrast">两种用法并排看</a>
+        <a href="#init">初始化的空白：LI-Init</a>
+        <a href="#pca">PCA-SLAM：换个判据</a>
+        <a href="#result">数字、短板与判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="frame">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「反射强度」这一个物理量为什么能长出两种完全不同的用法；解释 COIN-LIO 的互补选择与固态那篇的强度边点分别解决哪一类退化；说出激光惯性初始化为什么非要「充分激励」不可；并且能解释 PCA 的特征值比为什么比 LOAM 的曲率更抗视角变化。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一课是四条线的汇合处。<b>强度那条线</b>接第一季 <b>0007</b>（固态雷达的小视场与非重复扫描）与 <b>0009</b>（DARPA 地下挑战赛里那些真实失败）；<b>初始化那条线</b>要接第二季 <b>0029／0030</b>——那两课讲预积分时，原文<b>明确没有初始化章节</b>，这个空白一直挂着；第三季 <b>0057</b>（VINS-Mono 的四步松对齐）与 <b>0064</b>（纯惯性初始化）给了<b>视觉侧</b>的答案，本课这篇 <b>LI-Init</b> 是<b>激光侧</b>的答案；<b>特征那条线</b>接第一季 <b>0006</b>（特征法 vs 直接法）与 <b>0074</b>（LOAM 的曲率公式），也接第 <b>0079</b> 课（BALM 的自适应体素化）。</p>
+        </div>
+      </div>
+
+      <h2>1. 这四篇为什么能放在一起</h2>
+
+      <p>先说清楚为什么把这四篇凑成一节——它们的主题看上去差得挺远：两篇讲强度、一篇讲初始化、一篇讲 PCA 特征。凑在一起的理由是：<b>它们都在问同一类问题——主干已经搭好了，还有哪些「补丁」能把系统做稳？</b></p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>补丁一：多开一条传感器通道</b>
+          <p><b>COIN-LIO</b> 与<b>固态强度激光惯性 SLAM</b>。它们的想法一样——几何信息不够的时候，激光还有一个输出通道没用上：<b>反射强度</b>。但同样是「用强度」，这两篇的用法<b>截然相反</b>，这是本节最好看的一处对照。</p>
+        </div>
+        <div class="mini-card">
+          <b>补丁二：补上被跳过的第一步</b>
+          <p><b>LI-Init</b>。所有激光惯性系统都默认「外参已知、时间已同步、重力已知、零偏已知」——可这些都是<b>初始化</b>要解决的事。这一篇把这一步补上了，而且不需要任何标定板。</p>
+        </div>
+        <div class="mini-card">
+          <b>补丁三：给老办法换个更稳的判据</b>
+          <p><b>PCA-SLAM</b>。特征法这条路本身没错，问题是 LOAM 那个「向量加法曲率」不够抗视角变化。它用 PCA 的特征值比换掉这个判据，再配两阶段匹配与 NDT 回环。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>一个必须交代的诚实说明</h4>
+        <p>我手上的精读材料对这两篇的定位说得很直接：<b>PCA-SLAM 若课时紧，可以并进「特征法综述」小节，不必单独成节</b>；<b>LI-Init 体量小、与其它四篇没有强耦合</b>，可以「作为前置条件一句话带过」。<br>
+        本课仍然把它们合在一节里认真讲，理由是：<b>它们各自补的洞，恰好是前面几季反复欠下的债</b>——初始化是第二季 0029／0030 明说没有的那一章；特征判据是 LOAM（0074）留下、BALM（0079）已经在用同一个想法的那一处。把它们摊开讲，比一句话带过更有价值。<br>
+        <b>但请记住它们的体量确实偏小</b>：读的时候不必给它们和 COIN-LIO 同等的注意力。</p>
+      </div>
+
+      <p>还有一层共同的背景值得先摆出来：<b>退化</b>。这几篇里有两篇是直接冲着退化去的，另外两篇是间接地让系统更不容易被退化打垮。关于「退化」的严格定义，下一节 <b>0091</b> 课会用一整套篇幅去讲（Switch-SLAM 那篇）。这里先给一个够用的直觉：</p>
+
+      <div class="callout">
+        <h4>退化：某个方向上「没有信息」</h4>
+        <p>在一条长走廊里，沿走廊方向的墙是平行的两片。你沿走廊往前走一米，激光看到的图案几乎没变——<b>「往前走」这件事在数据上留不下痕迹</b>，于是这个方向就估不准了。第一季 <b>0009</b> 课里那些地下赛的失败案例（黑暗、烟雾、自相似、尘埃），本质都是这个问题的不同外衣。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="coin">
+      <h2>2. 强度当「照片」：COIN-LIO</h2>
+
+      <p>一句话招式：<b>把激光反射强度投影成一张灰度图像，用直接法那套光度误差去比图案，专门救几何退化。</b></p>
+
+      <h3>它想解决的问题</h3>
+
+      <p>原文的动机很朴素：<b>几何上没有信息的场景（隧道、空旷平地）里，纯几何配准会发散。</b>那能不能用相机补纹理？可以，但相机需要光照、需要标定与时间同步。而激光的反射强度是一条更省事的通道——它相当于一台<b>自带时间同步、自带已知外参的主动相机</b>。</p>
+
+      <p>已有的强度方法呢？原文说它们要么不做图像滤波、要么不与几何<b>互补</b>地结合。所以 COIN-LIO 的三条创新是：强度图像的滤波流水线 + 几何互补的特征选择、用强度提升退化场景的鲁棒性、以及一个新的数据集 ENWIDE。</p>
+
+      <h3>它是怎么做的</h3>
+
+      <ol>
+        <li><b>把点投影成图像。</b>用球面投影把每个点按方位角与仰角投到一张强度图上。这就是「点云变成照片」的那一步。</li>
+        <li><b>把亮度归一。</b>原始强度图的曝光极不均匀（中间过曝、两侧欠曝），还有很强的横向线伪影。原文用一张大窗口的平均亮度图当背景，相除之后亮度就一致了。</li>
+        <li><b>只挑互补的 patch。</b>这一步是它的精华：先用几何配准的雅可比找出<b>「几何上不提供信息的那些方向」</b>，然后专门去挑在这些方向上有强图像梯度的特征。</li>
+        <li><b>把两个残差叠起来进滤波器。</b>几何残差（点到面）与光度残差（当前帧强度图与地图强度图的差）堆在一起，进 FAST-LIO2 那个迭代扩展卡尔曼滤波里联合更新，中间用一个系数 $\lambda$ 去平衡两种量的量纲。</li>
+      </ol>
+
+      <p>第 3 步值得多说一句，因为它是「互补」两个字的全部含义。还是那条隧道：沿隧道轴往前走，两片平行的墙加一片平地，<b>几何上完全给不出沿轴方向的约束</b>——因为你走多远，看到的几何图案都一样。但隧道壁上的标线、瓷砖缝、反光条，在<b>强度图上有横向的纹理</b>；你一沿轴移动，这些纹理在图像里就平移了，于是「沿轴走了多少」这件事被强度纹理补上了。</p>
+
+      <div class="callout">
+        <h4>一句话记住 COIN-LIO</h4>
+        <p><b>几何管不住的那个方向，交给强度纹理来管。</b>它不是「用强度替代几何」，而是「用强度补几何的盲区」——这也是它名字里 Complementary（互补）的来源。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_COIN-LIO__Complementary_Intensity-Augmented_LiDAR_Inerti/df23348ffb95769e9cce93e8d163dd86613a7295063e0a372a17b789af81b18e.jpg" alt="COIN-LIO Fig.2 system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System Overview: The input point cloud is used geometrically (green) for map registration and as a projected image (blue) for photometric error minimization. Both residuals are combined in an iterated update (orange). We use the registration Jacobian to find uninformative directions in the geometry and select features with complementary image information (right bottom).<br>
+          （中译：系统总览。输入点云在几何上（绿色）用于地图配准，同时作为投影图像（蓝色）用于光度误差最小化。两种残差在迭代更新（橙色）中合并。我们用配准的雅可比找出几何上无信息的方向，并选择在图像信息上互补的特征（右下角）。）<br>
+          <b>怎么看这张图：</b>① 这张图的读法是<b>顺着颜色走</b>——绿色那条是几何、蓝色那条是强度图像、橙色是两股汇到一起的地方；② 请特别找到右下角那一小块，图注说的「找出几何无信息方向、选互补特征」就发生在那里，<b>本节自绘的第二张图正是把那一小块放大</b>；③ 注意它是在 FAST-LIO2 那个迭代扩展卡尔曼滤波上做的——也就是说，<b>这不是一个新滤波器，而是在一个成熟滤波器上多喂了一路观测</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_COIN-LIO__Complementary_Intensity-Augmented_LiDAR_Inerti/a2601e79f6a835a9fb7d5150717b095f3353c9535be4c92d2b194fadc926c381.jpg" alt="COIN-LIO Fig.4 raw vs filtered intensity image">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>(1): The intensity image is over- (center) and under-exposed (sides). (2): Our filtered image has consistent brightness across the image. (3) &amp; (4): Detail views from a grass field (3) and tunnel (4). The reflectivity image is under-exposed and does not show the ground markings (4). The intensity suffers from strong line artefacts that dominate the texture (3). Our filter removes the line …<br>
+          （中译：(1) 强度图中间过曝、两侧欠曝；(2) 我们滤波后的图在整幅上亮度一致；(3) 与 (4) 分别是草地的细节视图与隧道的细节视图。反射率图欠曝，看不到地面标线 (4)；强度图受强线伪影支配，纹理被淹没 (3)。我们的滤波去掉了这些线……）<br>
+          <b>怎么看这张图：</b>① 先比 (1) 和 (2)：<b>同一张图，一张斑斑驳驳、一张干干净净</b>；② 再看 (3) 的草地——原始强度图上那些横向线条就是「线伪影」，它们强烈到会把真正的纹理盖住；③ 最后看 (4) 的隧道：图注说反射率图<b>欠曝、看不到地面标线</b>——而地面标线正是 COIN-LIO 最需要的那个纹理。<b>这张图解释了为什么「滤波」不是可选项，而是前提。</b>
+        </figcaption>
+      </figure>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>数字</b>
+          <p>Newer College 的 Stairs 段上，几乎所有基线都发散了（FAST-LIO2 直接给出一个离谱的数量级），<b>COIN-LIO 是 0.102 / 0.74，最稳</b>；Park 段 0.287 / 0.54，略优于 FAST-LIO2 的 0.310 / 0.59。在自建的 ENWIDE 数据集上，几何退化的那几段（隧道、跑道）FAST-LIO2、RI-LIO、KISS-ICP、MD-SLAM、Du 全部发散，<b>只有 COIN-LIO 在全部 10 段都存活</b>。速度上，Park 段平均 29.7 ms 一帧（约 33 Hz），其中<b>光度部分只占 6.2 ms</b>——主要开销还是在几何那一边。</p>
+        </div>
+        <div class="mini-card">
+          <b>原文承认的短板</b>
+          <p>① <b>依赖高分辨率的旋转式激光</b>——只有 Ouster 那种多线雷达才投得出足够稠密的强度图，对固态或少数线的雷达不友好；② 它只在「几何退化但强度有纹理」时才显神威，<b>极均匀、完全无纹理的表面仍然受限</b>；③ 强度图本身信噪比低、有滚动快门效应，投影模型也和针孔相机不同。</p>
+        </div>
+      </div>
+
+      <p>第 ② 条特别值得留意：它和第一季 <b>0009</b> 课里那些真实失败案例正好对得上。<b>COIN-LIO 靠的是反射强度，所以它不解决「连反射率也没有差异」的纯黑、无纹理场景。</b>这是它能力边界的诚实画线。</p>
+    </section>
+
+    <section class="section-card" id="solid">
+      <h2>3. 强度当「线」：固态激光那一篇</h2>
+
+      <p>一句话招式：<b>把强度的局部突变成当作「线特征」，用点-线配准去补固态激光在小视场下的退化。</b></p>
+
+      <h3>它面对的是一个不同的敌人</h3>
+
+      <p>这一篇的传感器是固态激光（Livox AVIA）。固态雷达有两个硬伤（第一季 <b>0007</b> 课讲过）：<b>水平视场小</b>，而且是<b>非重复扫描</b>——每一帧的扫描图案都不一样。这样一来，在室内很容易出现这些退化：沿长廊转弯时、或者无人机正对着天花板时，<b>几乎没有几何边特征可提</b>，于是偏航、俯仰、高度这几个自由度没有约束，就开始漂。</p>
+
+      <p>注意这里的退化类型和 COIN-LIO 面对的不一样：COIN-LIO 面对的是「<b>几乎任何结构都没有</b>」（隧道、平地）；而这一篇面对的是「<b>缺的是边和线，不是全部结构</b>」（长廊里有墙、天花板上有面，但就是没有棱）。<b>敌人不同，所以武器也不同。</b></p>
+
+      <h3>它是怎么做的</h3>
+
+      <p>它把特征分成三类：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>GeP（几何平面点）</b>
+          <p>常规做法，找平的面。</p>
+        </div>
+        <div class="mini-card">
+          <b>GeE（几何边点）</b>
+          <p>常规做法，找棱。</p>
+        </div>
+        <div class="mini-card">
+          <b>InE（强度边点）</b>
+          <p>这一篇的新东西。判断依据是<b>经过距离与入射角校准之后的强度差</b>：相邻两点之间如果强度跳变超过一个阈值，就判为强度边点，并给它一个权重。权重形式是「阈值差越大、权重越接近上限」的那种 S 形曲线。</p>
+        </div>
+      </div>
+
+      <p>然后做配准：平面点配到面（点到面），几何边点和强度边点都配到线（点到线）。地图也相应地分成<b>平面地图</b>与<b>线地图</b>两张。此外它还做了两件工程上的事：给每个点算一个<b>多权重</b>（残差大小、几何一致性、强度可靠性三样相乘），以及给线地图做<b>管理</b>——本质上是把明显跑偏的强度边点剔掉。</p>
+
+      <p>这里有个非常直观的例子：一面白墙，几何上就是一整块平面，传统方法只能提出平面点；但墙上贴了一条深色广告牌的边框，沿着边框方向<b>反射率突变了</b>，强度图上那里就是一条线，于是被当成<b>线特征</b>用起来，重新给系统提供了滚转、俯仰、高度的约束。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_An_Intensity-Augmented_LiDAR-Inertial_SLAM_for_Solid-Sta/9d7c462334e16ce7178f77a2189722491de9912a3ed49c9de0a2a2da2d25ce2e.jpg" alt="Intensity-augmented SLAM Fig.1 overview long corridor and indoor lab">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Overview of the proposed intensity-augmented LiDAR-inertial SLAM. Long-Corridor scenario: the colored points and black points in (a) are plane and line map respectively and (b) is real-world snapshot. Indoor lab scenario: the colored points in (c) are line map and (d) is real-world snapshot. It can be observed that there are lots of linelike points extracted by proposed intensity-augmented …<br>
+          （中译：本文提出的强度增强激光惯性 SLAM 的总览。长廊场景：(a) 中的彩色点与黑色点分别是平面地图与线地图，(b) 是实景照片。室内实验室场景：(c) 中的彩色点是线地图，(d) 是实景照片。可以看出，本文的强度增强方法提取出了大量的线状点……）<br>
+          <b>怎么看这张图：</b>① 这张图左右两半是<b>两个不同的退化场景</b>：左边是长廊、右边是室内实验室；② 请对照 (a) 与 (b)——把点云里的黑点（线地图）和实景照片里的物体对上，你会看到黑点<b>主要挂在高差边、招牌边这类反射率突变的位置上</b>；③ 图注最后那句话是全篇的卖点：<b>这些线状点是传统几何方法提不出来的</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_An_Intensity-Augmented_LiDAR-Inertial_SLAM_for_Solid-Sta/f33df1c35bd38c0a6a01ad3b338672ae3158dbb86e41738b3023112325d1aab0.jpg" alt="Intensity-augmented SLAM Fig.7 long corridor features and real snapshot">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Long-Corridor experiment: (a) extracted features within a scan and (b) the real-world snapshot when making a turn: the colored points in (a) are intensity edge points and red points are filtered planar points.<br>
+          （中译：长廊实验。(a) 是单次扫描中提取出的特征，(b) 是转弯时的实景照片。(a) 中的彩色点是强度边点，红色点是经过滤的平面点。）<br>
+          <b>怎么看这张图：</b>① 这是一张<b>「单帧里提了什么」</b>的特写——请把 (a) 里的彩色点在 (b) 的实景里找出来；② 关键观察是：这些彩色点集中在<b>广告牌边缘、白墙与其它物体的交界</b>——正是反射率跳变的地方；③ 想一想如果没有强度这条通道，这些位置在几何上只是一片连续的白墙，提不出任何东西来，<b>这就是「补丁」两个字的具体含义</b>。
+        </figcaption>
+      </figure>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>长廊：端到端误差 0.72 m</b>
+          <p>同一段数据上，LiLi-OM 是 2.19 m、FAST-LIO 1.96 m、FAST-LIO2 1.39 m。<b>本文最小。</b>另一段室内主楼场景本文为 0.04 m，最佳。</p>
+        </div>
+        <div class="mini-card">
+          <b>★ 正对天花板：只有它活下来</b>
+          <p>室内实验室序列分两段：先 260 秒的精度段，再是正对天花板的鲁棒段。结果：LiLi-OM 在 170 秒失败、FAST-LIO 与 FAST-LIO2 在 270 秒失败、<b>本文去掉线地图管理之后在 320 秒失败</b>，<b>只有完整版本存活</b>，平移 RMSE 0.11 m、旋转 4.65°。</p>
+        </div>
+        <div class="mini-card">
+          <b>代价：时间</b>
+          <p>单帧总计约 <b>38.8 ms</b>（约 25 Hz），而 FAST-LIO2 只要 <b>3.98 ms</b>——<b>差不多十倍</b>。原文自己承认时间效率不及 FAST-LIO2，需要靠 CUDA 加速地图模块。</p>
+        </div>
+        <div class="mini-card">
+          <b>线地图管理不是可选项</b>
+          <p>上面那组「去掉线地图管理就失败」的对比正是重点：<b>强度边点里混着大量外点</b>，不剔掉它们，长时间跑下来误差会一直累积到崩掉。</p>
+        </div>
+      </div>
+
+      <p>还有一条边界要记：<b>它主要针对固态激光</b>，因为固态的非重复扫描恰好能提供稠密点；对机械旋转激光它没有展开讨论。</p>
+    </section>
+
+    <section class="section-card" id="contrast">
+      <h2>4. 两种用法并排看</h2>
+
+      <p>现在是本节的高潮：<b>同样是「用强度」，这两篇的用法在每一个维度上都不一样。</b>先把它们画出来。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同样是反射率，一个当像素、一个当边</text>
+
+          <!-- 左格 -->
+          <rect x="18" y="48" width="414" height="330" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="225" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">① 当照片用（COIN-LIO）</text>
+          <text x="225" y="94" text-anchor="middle" font-size="11" fill="#7a8a99">把点云投影成一张灰度图</text>
+
+          <rect x="60" y="110" width="330" height="200" fill="#cfcfcf" stroke="#a8a8a8" stroke-width="1"/>
+          <rect x="60" y="180" width="330" height="10" fill="#8c8c8c"/>
+          <rect x="180" y="110" width="12" height="200" fill="#9a9a9a"/>
+          <rect x="60" y="255" width="330" height="8" fill="#a5a5a5"/>
+
+          <rect x="150" y="160" width="90" height="100" fill="none" stroke="#c0392b" stroke-width="2.5"/>
+          <g stroke="#c0392b" stroke-width="0.9" opacity="0.65">
+            <line x1="168" y1="160" x2="168" y2="260"/><line x1="186" y1="160" x2="186" y2="260"/>
+            <line x1="204" y1="160" x2="204" y2="260"/><line x1="222" y1="160" x2="222" y2="260"/>
+            <line x1="150" y1="180" x2="240" y2="180"/><line x1="150" y1="200" x2="240" y2="200"/>
+            <line x1="150" y1="220" x2="240" y2="220"/><line x1="150" y1="240" x2="240" y2="240"/>
+          </g>
+          <text x="268" y="152" font-size="11.5" fill="#c0392b">直接比这一小块图案</text>
+
+          <text x="225" y="350" text-anchor="middle" font-size="11.5" fill="#a8563a">亮度就是反射率，比的是图案</text>
+
+          <!-- 右格 -->
+          <rect x="468" y="48" width="414" height="330" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="675" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">② 当线用（固态强度篇）</text>
+          <text x="675" y="94" text-anchor="middle" font-size="11" fill="#7a8a99">把强度的突变当成一条边</text>
+
+          <rect x="510" y="110" width="330" height="200" fill="#eeeeee" stroke="#cccccc" stroke-width="1"/>
+          <rect x="580" y="150" width="170" height="100" fill="#7a8a99" stroke="#5c6b78" stroke-width="1"/>
+          <line x1="580" y1="150" x2="750" y2="150" stroke="#c0392b" stroke-width="3.5"/>
+          <line x1="580" y1="250" x2="750" y2="250" stroke="#c0392b" stroke-width="3.5"/>
+          <line x1="580" y1="150" x2="580" y2="250" stroke="#c0392b" stroke-width="3.5"/>
+          <line x1="750" y1="150" x2="750" y2="250" stroke="#c0392b" stroke-width="3.5"/>
+
+          <text x="675" y="132" text-anchor="middle" font-size="11.5" fill="#c0392b">反射率在这里跳变</text>
+          <text x="675" y="288" text-anchor="middle" font-size="11.5" fill="#c0392b">就成了一条线特征</text>
+
+          <text x="675" y="350" text-anchor="middle" font-size="11.5" fill="#3b4a5e">点-线配准，跟几何边一样用</text>
+
+          <text x="450" y="420" text-anchor="middle" font-size="12" fill="#5a4a42">同一路信号，一个当像素、一个当边 —— 分岔点就在这里</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一份反射强度数据，在两种不同的技术路线下被当成什么用。<br>
+          <b>怎么看这张图：</b>① 左格是 COIN-LIO——把整个点云<b>投影成一张灰度图</b>（灰度的深浅就是反射率），然后用红框圈出的那个 5×5 小块，和地图里对应的那一小块<b>比图案亮不亮、像不像</b>；② 右格是固态那一篇——同一处场景，但只关心<b>反射率发生跳变的那几条边</b>（红色线段），把它们当成一条条线特征去做点-线配准；③ 两格最要紧的差别是：左格把强度当作<b>整幅图的纹理</b>（直接法那一路的做法），右格把强度当作<b>局部的突变</b>（特征法那一路的做法）。<br>
+          <b>要记住的一句话：</b>同样叫「强度增强」，<b>一个把强度当照片、一个把强度当线</b>——这就是为什么它们面对的是两类不同的退化。
+        </figcaption>
+      </figure>
+
+      <p>把两篇的差别逐条摆成表格，这一张表就是本节的主干：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">COIN-LIO</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">固态强度激光惯性 SLAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>传感器</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">高分辨率<b>旋转式</b>多线激光（Ouster OS0 128 线）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>固态</b>激光（Livox AVIA），小视场、非重复扫描</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>强度被当成</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">一张<b>灰度图像</b>（整幅的亮度纹理）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">局部<b>突变的位置</b>（一条条边）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>怎么用</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>直接法</b>式的光度误差：比 5×5 patch 的亮度差，进 iEKF 与几何残差联合更新</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>特征法</b>：强度边点 InE 当线特征，做点-线配准，另配线地图管理去外点</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>对付哪种退化</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>大尺度几何退化</b>：隧道、空旷平地，几何几乎没有结构</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>小视场室内退化</b>：长廊转弯、正对天花板，缺的是边与线</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>融合方式</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">几何残差 <b>与</b> 光度残差并列叠加，用系数平衡量纲</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">把强度边的残差<b>并入</b>几何点-线残差，是同一类残差</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>原文承认短板</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">需要高分辨率旋转式激光才够稠密；无纹理仍受限；强度图信噪比低、有滚动快门</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">时间效率不及 FAST-LIO2（38.8 ms vs 3.98 ms）；线地图不剔外点会在长序列失败；只讨论了固态激光</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>一句话板书：<b>同样叫 intensity-augmented，一个把强度当「照片」（直接法），一个把强度当「线」（特征法）。</b>记住这条分岔，比记住任何单个数字都有用。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么 COIN-LIO 特别依赖<b>高分辨率的旋转式激光</b>，而固态那一篇反而离不开<b>固态雷达的非重复扫描</b>？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。COIN-LIO 要做的是「比 5×5 的小块图案」，这要求投影出来的强度图足够稠密、像素之间能连成纹理，多线旋转雷达才做得到；固态那篇要的是「相邻点之间的强度跳变」，非重复扫描恰好让点密而连续地铺开，跳变才提得出来。两边都是被自己的用法决定了传感器口味。" onclick="lessonKit.answer(this,'q0090a')">用法决定了点云要多稠密</button>
+          <button data-correct="no" data-explanation="两篇都能用 IMU，这不是差别所在。COIN-LIO 用 FAST-LIO2 的 iEKF，固态那篇把优化扩到 200 Hz，两者都紧耦合。" onclick="lessonKit.answer(this,'q0090a')">只有一篇用得上惯性单元</button>
+          <button data-correct="no" data-explanation="这跟计算平台无关，两篇的瓶颈都不在算力，而在「数据形态够不够支撑它们的用法」。" onclick="lessonKit.answer(this,'q0090a')">算力预算整整差一个量级</button>
+        </div>
+        <div class="quiz-feedback" id="q0090a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="init">
+      <h2>5. 初始化的空白：LI-Init 补上激光侧</h2>
+
+      <p>接下来这两篇的体量比前面小，但它们补的洞很关键。先说初始化。</p>
+
+      <div class="callout">
+        <h4>★ 一条欠了很久的债</h4>
+        <p>第二季 <b>0029／0030</b> 课讲预积分时，原文<b>明确没有初始化章节</b>——这个空白当时就挂在那里了。后来第三季给了两个<b>视觉侧</b>的答案：<b>0057</b>（VINS-Mono 的四步松对齐初始化）与 <b>0064</b>（纯惯性初始化）。<br>
+        <b>本课这一篇 LI-Init，是激光侧的答案。</b>它已经被集成进 FAST-LIO2。三者摆在一起，正好凑齐「初始化三件套」。</p>
+      </div>
+
+      <h3>不初始化会出什么事</h3>
+
+      <p>原文把难处归成三条：</p>
+
+      <ol>
+        <li><b>自组的设备，激光与 IMU 常常没有时间同步，外参也是未知的</b>——通常得先做一次离线标定。</li>
+        <li><b>激光点是在不同瞬间被采到的</b>，所以有运动畸变；而要用 IMU 辅助去畸变，就必须知道那个时间偏移。时间偏移未知时，<b>你等于在用「昨天」的位姿去摆「今天」的点</b>。</li>
+        <li><b>IMU 的原始测量噪声大</b>，而且线加速度、角速度是和未知的零偏耦合在一起的。</li>
+      </ol>
+
+      <h3>它分几步做</h3>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 互相关定时间偏移</b>
+          <p>把激光估计出的角速度模长序列，和 IMU 的角速度模长序列做<b>互相关</b>——两条曲线相对左右滑，重合得最好的那个滑动量，就是时间偏移（先求出整数步）。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 统一优化外参旋转</b>
+          <p>在粗偏移的基础上，把<b>外参旋转、陀螺零偏、亚采样间隔的时间残差</b>放进同一个优化问题里一起解。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 加速度约束解平移与重力</b>
+          <p>固定前面的结果，用加速度约束去估<b>外参平移、加速度计零偏、重力方向</b>。原文特意把约束写在激光坐标系下，为的是避开陀螺零偏被放大的问题。</p>
+        </div>
+      </div>
+
+      <p>它还有一步很实用的设计：<b>激励度评估</b>。判断方法是看那几个雅可比矩阵的<b>奇异值够不够大</b>——如果不够大，系统就知道现在的运动「信息不足、解不出来」，于是直接提示用户该怎么动设备。<b>这比默默给出一个错的初始化要好得多。</b></p>
+
+      <p>而这也正是它最重要的一条前提：</p>
+
+      <div class="callout">
+        <h4>★ 前提：必须「充分激励」</h4>
+        <p>这篇的方法是 <b>motion-based</b>（靠运动）的：<b>如果设备基本不动，就没有足够的数据去解出那些量。</b>原文明确把这一点写成了局限。它还提到对机械旋转激光的额外限制——为了把帧拆成子帧，会降低每个子帧的视场，从而降低鲁棒性，所以不能动得太快。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">初始化为什么非做不可</text>
+
+          <!-- 面板 1 -->
+          <rect x="18" y="50" width="272" height="280" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="154" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 只有 IMU 的那几秒</text>
+          <text x="154" y="96" text-anchor="middle" font-size="10.5" fill="#a8846f">重力朝哪？一米有多长？</text>
+
+          <rect x="114" y="140" width="80" height="56" rx="6" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+          <circle cx="154" cy="168" r="20" fill="#90a4ae"/>
+          <line x1="124" y1="138" x2="184" y2="198" stroke="#c0392b" stroke-width="3"/>
+          <line x1="184" y1="138" x2="124" y2="198" stroke="#c0392b" stroke-width="3"/>
+          <text x="154" y="216" text-anchor="middle" font-size="10" fill="#8a969e">相机还没法用</text>
+
+          <rect x="114" y="230" width="80" height="46" rx="6" fill="#7fc4a0" stroke="#2f6d51" stroke-width="1.4"/>
+          <text x="154" y="259" text-anchor="middle" font-size="12" font-weight="700" fill="#1f4a36">IMU</text>
+
+          <text x="154" y="305" text-anchor="middle" font-size="11.5" fill="#a8563a">还不知道重力与尺度</text>
+
+          <!-- 面板 2 -->
+          <rect x="314" y="50" width="272" height="280" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="450" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 动起来之后</text>
+          <text x="450" y="96" text-anchor="middle" font-size="10.5" fill="#5f8a72">互相关定时间偏移</text>
+
+          <text x="450" y="130" text-anchor="middle" font-size="11.5" fill="#2f6d51">加速度约束解重力与尺度</text>
+
+          <line x1="370" y1="238" x2="370" y2="156" stroke="#2c5f8a" stroke-width="3"/>
+          <path d="M370 144 L363 160 L377 160 Z" fill="#2c5f8a"/>
+          <text x="382" y="172" font-size="11" fill="#2c5f8a">重力方向</text>
+
+          <rect x="440" y="228" width="110" height="14" fill="#ffe0b2" stroke="#b28704" stroke-width="1.2"/>
+          <line x1="462" y1="228" x2="462" y2="242" stroke="#b28704" stroke-width="1"/>
+          <line x1="484" y1="228" x2="484" y2="242" stroke="#b28704" stroke-width="1"/>
+          <line x1="506" y1="228" x2="506" y2="242" stroke="#b28704" stroke-width="1"/>
+          <line x1="528" y1="228" x2="528" y2="242" stroke="#b28704" stroke-width="1"/>
+          <text x="495" y="266" text-anchor="middle" font-size="11" fill="#8a6d00">一米</text>
+
+          <text x="450" y="305" text-anchor="middle" font-size="11.5" fill="#2f6d51">重力与米制尺度定下来了</text>
+
+          <!-- 面板 3 -->
+          <rect x="610" y="50" width="272" height="280" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="746" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">③ 之后</text>
+          <text x="746" y="96" text-anchor="middle" font-size="10.5" fill="#5f8a72">激光与视觉来了就能用</text>
+
+          <path d="M706 180 L733 208 L792 148" stroke="#2f6d51" stroke-width="7" fill="none"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="706" y="232" width="80" height="46" rx="6" fill="#eef4fa" stroke="#2c5f8a" stroke-width="1.4"/>
+          <text x="746" y="261" text-anchor="middle" font-size="12" font-weight="700" fill="#2c5f8a">激光</text>
+
+          <text x="746" y="305" text-anchor="middle" font-size="11.5" fill="#2f6d51">立刻能用上</text>
+
+          <text x="450" y="372" text-anchor="middle" font-size="12" fill="#5a4a42">初始化就是先把重力方向和一米有多长定下来</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个激光惯性系统从「只有 IMU 数据」到「可以正常跑」所经历的三个阶段。<br>
+          <b>怎么看这张图：</b>① 左格是<b>起点</b>——相机用不上（红叉），只有 IMU 在输出；此刻系统不知道两件最基本的事：<b>重力朝哪、一米有多长</b>（注意这里的「一米」是米制尺度，IMU 单独是给不出绝对尺度的）；② 中格是<b>动起来之后</b>——靠运动，系统能用互相关把时间偏移定出来，用加速度约束把重力方向和尺度解出来；③ 右格是<b>收货</b>——激光与视觉一旦进来，立刻就能用，因为它们需要的那些前提条件已经被摆好了。<br>
+          <b>要记住的一句话：</b>初始化就是先把「重力方向」和「一米有多长」这两件事定下来；<b>而这两件事都要靠动起来才能定</b>——这就是原文说的「必须充分激励」。
+        </figcaption>
+      </figure>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>数字</b>
+          <p>时间标定：人为加 0.05／0.1／0.5 秒的偏移，估计误差都在<b>微秒级</b>（例如 Avia 上人为加 0.5 秒时，均值 0.4989、RMSE 0.0018）。外参：旋转误差小于 <b>1°</b>、平移误差在 <b>厘米级</b>。横向对比中本文 <b>0.6208° / 0.0162 m / 10.2 秒</b>，而 LI-Calib 是 1.0375° 但不收敛、332.6 秒，Target-Free 是 0.8483° / 0.0187 m / 115.7 秒——<b>又快又准</b>。实时性：数据收集够之后，初始化求解 <b>500 毫秒以内</b>，子帧处理约 8 毫秒。</p>
+        </div>
+        <div class="mini-card">
+          <b>原文承认的短板</b>
+          <p>① <b>依赖充分的运动激励</b>，基本不动就没法初始化；② 对机械旋转激光，帧拆分会降低子帧视场、降低鲁棒性，所以不能快动，于是激励与信噪比都会下降；③ 还是要用户按提示「晃设备」来达成可观测性。<b>换句话说，它把「需要标定」换成了「需要动一动」，但没有把这一条也省掉。</b></p>
+        </div>
+      </div>
+
+      <p>回到本节的大框架：LI-Init 是本模块很多篇的<b>前置条件</b>。COIN-LIO、固态那一篇、PCA-SLAM 都默认「外参与时间已经同步好了」。<b>而 D-LIOM（上一课）明确承认自己没估时间偏移——这篇恰好是那个洞的补丁。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>一台自组的激光惯性设备刚开机，操作员把它<b>稳稳放在桌上一动不动</b>，等着看初始化结果。按 LI-Init 的说法，接下来会发生什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="静止并不等于「读数准」。恰恰相反，静止时加速度计读数里的重力和自身加速度是缠在一起的，没有变化就分不开；而互相关那条曲线也会是一条平线，找不到峰。它给不出更准的结果，只会给不出结果。" onclick="lessonKit.answer(this,'q0090b')">静止不动时解得更准</button>
+          <button data-correct="yes" data-explanation="对。它是 motion-based 的方法：时间偏移靠两路角速度序列的互相关来定，重力与尺度靠加速度的变化来分离——两个环节都要求设备真的在动。激励不足时，激励度评估会亮红灯并提示该怎么晃设备，而不是硬解出一个错的值。" onclick="lessonKit.answer(this,'q0090b')">静止不动就解不出来</button>
+          <button data-correct="no" data-explanation="静止与否和「要不要标定板」不是一回事。这一篇的核心卖点正是「不需要任何标定板或额外传感器」——它需要的是运动，不是器材。" onclick="lessonKit.answer(this,'q0090b')">静止不动要加标定板</button>
+        </div>
+        <div class="quiz-feedback" id="q0090b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="pca">
+      <h2>6. PCA-SLAM：给特征法换一个更稳的判据</h2>
+
+      <p>最后一个补丁。一句话招式：<b>用 PCA 的特征值比判断「这是边还是面」，再配两阶段匹配与 NDT 回环。</b></p>
+
+      <h3>它想修的问题</h3>
+
+      <p>LOAM（<b>0074</b> 课）判断一个点是「边缘点」还是「平面点」，用的是<b>曲率</b>：把同一个点周围邻居的差向量加起来，取模长。这个判据有个不大不小的毛病——<b>它不抗视角变化</b>。原文的解释很具体：激光在同一根扫描线上的点是<b>等角度分布而不是等距离分布</b>的，所以同一个场景点从两个不同位置看过去，算出来的曲率不一样。结果就是平面点可能被误判成边缘点。</p>
+
+      <p>这个错判会一路传下去：特征分错了类，它就去配错了东西，帧间匹配的误差变大，大场景里漂移就更明显。</p>
+
+      <h3>它换的判据</h3>
+
+      <p>PCA（主成分分析）的思路是：<b>不看「邻居差多少」，而看「这些点朝哪几个方向铺开、各铺多开」。</b>具体做法是对同一根激光通道上一段邻域点求协方差矩阵，做特征值分解，得到三个从大到小排列的特征值，每个特征值配一个方向（主方向）。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>如果这是平面上的点</b>
+          <p>点会沿着两个方向铺得很开，<b>第三个方向几乎为零</b>（因为同一通道的点基本贴在平面里）。于是「最大的两个特征值都很大、第三个极小」。原文用的是<b>第一与第二特征值的比</b>，这个比值会很大。</p>
+        </div>
+        <div class="mini-card">
+          <b>如果这是棱上的点</b>
+          <p>点主要沿一条线铺开，另外两个方向都很小。于是「一个极大、另两个都很小」，比值接近 1，<b>比平面那一侧小得多</b>。原文用固定阈值 <b>20</b> 来分界。</p>
+        </div>
+      </div>
+
+      <p>为什么这个判据更抗视角？因为它描述的是<b>点云自身的形状</b>（铺开的程度），而不是「邻居差向量的合成长度」那种受采样疏密影响的量。原文把这一点作为它最主要的贡献之一。</p>
+
+      <div class="callout">
+        <h4>★ 和 BALM 用的是同一个想法</h4>
+        <p>「用协方差的特征值来判断局部几何是边、是面、还是柱面」这件事，你在第 <b>0079</b> 课（BALM）里已经见过一次——BALM 正是用它来做平面判定与自适应体素化的。本课这一篇把这个想法挪到了特征提取这一步。同一个数学工具，在两条不同的路上各用了一次。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">用主方向判断：这是平面，还是一条棱</text>
+
+          <!-- 左格 -->
+          <rect x="18" y="50" width="414" height="250" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="225" y="76" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2c5f8a">① 落在墙面上</text>
+          <text x="225" y="96" text-anchor="middle" font-size="10.5" fill="#7a8a99">前两根主方向长、第三根极短</text>
+
+          <rect x="60" y="126" width="330" height="136" fill="#eef2f6" stroke="#c3d2de" stroke-width="1"/>
+          <line x1="60" y1="172" x2="390" y2="172" stroke="#dfe6ec" stroke-width="1"/>
+          <line x1="60" y1="218" x2="390" y2="218" stroke="#dfe6ec" stroke-width="1"/>
+
+          <g fill="#2c5f8a">
+            <circle cx="85" cy="140" r="3"/><circle cx="120" cy="143" r="3"/><circle cx="155" cy="140" r="3"/>
+            <circle cx="190" cy="144" r="3"/><circle cx="225" cy="140" r="3"/><circle cx="260" cy="144" r="3"/>
+            <circle cx="295" cy="141" r="3"/><circle cx="330" cy="145" r="3"/><circle cx="365" cy="142" r="3"/>
+            <circle cx="90" cy="190" r="3"/><circle cx="125" cy="193" r="3"/><circle cx="160" cy="190" r="3"/>
+            <circle cx="195" cy="194" r="3"/><circle cx="230" cy="191" r="3"/><circle cx="265" cy="194" r="3"/>
+            <circle cx="300" cy="190" r="3"/><circle cx="335" cy="194" r="3"/><circle cx="370" cy="191" r="3"/>
+            <circle cx="95" cy="236" r="3"/><circle cx="130" cy="239" r="3"/><circle cx="165" cy="236" r="3"/>
+            <circle cx="200" cy="240" r="3"/><circle cx="235" cy="237" r="3"/><circle cx="270" cy="239" r="3"/>
+            <circle cx="305" cy="236" r="3"/><circle cx="340" cy="240" r="3"/><circle cx="375" cy="237" r="3"/>
+          </g>
+
+          <line x1="225" y1="190" x2="342" y2="170" stroke="#455a64" stroke-width="3"/>
+          <path d="M344 170 L332 163 M344 170 L336 180" stroke="#455a64" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <line x1="225" y1="190" x2="266" y2="240" stroke="#455a64" stroke-width="3"/>
+          <path d="M268 242 L254 238 M268 242 L262 228" stroke="#455a64" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <line x1="225" y1="190" x2="212" y2="180" stroke="#c0392b" stroke-width="3"/>
+          <path d="M212 180 L221 174 M212 180 L218 189" stroke="#c0392b" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+          <text x="352" y="162" font-size="10.5" fill="#455a64">长</text>
+          <text x="278" y="254" font-size="10.5" fill="#455a64">长</text>
+          <text x="198" y="172" text-anchor="end" font-size="10.5" fill="#c0392b">极短</text>
+
+          <text x="225" y="284" text-anchor="middle" font-size="11.5" fill="#2f6d51">判成平面点</text>
+
+          <!-- 右格 -->
+          <rect x="468" y="50" width="414" height="250" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="675" y="76" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a8563a">② 落在这条棱上</text>
+          <text x="675" y="96" text-anchor="middle" font-size="10.5" fill="#7a8a99">一根极长、另两根极短</text>
+
+          <rect x="510" y="126" width="150" height="136" fill="#eef2f6" stroke="#c3d2de" stroke-width="1"/>
+          <rect x="660" y="126" width="150" height="136" fill="#e2eaf2" stroke="#c3d2de" stroke-width="1"/>
+          <line x1="660" y1="126" x2="660" y2="262" stroke="#c0392b" stroke-width="3"/>
+
+          <g fill="#2c5f8a">
+            <circle cx="660" cy="134" r="3"/><circle cx="660" cy="147" r="3"/><circle cx="660" cy="160" r="3"/>
+            <circle cx="660" cy="173" r="3"/><circle cx="660" cy="186" r="3"/><circle cx="660" cy="199" r="3"/>
+            <circle cx="660" cy="212" r="3"/><circle cx="660" cy="225" r="3"/><circle cx="660" cy="238" r="3"/>
+            <circle cx="660" cy="251" r="3"/>
+          </g>
+          <text x="672" y="116" font-size="10" fill="#c0392b">棱</text>
+
+          <line x1="690" y1="196" x2="696" y2="138" stroke="#455a64" stroke-width="3"/>
+          <path d="M696 136 L689 147 M696 136 L703 147" stroke="#455a64" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <line x1="690" y1="196" x2="717" y2="206" stroke="#455a64" stroke-width="3"/>
+          <path d="M719 207 L705 210 M719 207 L711 194" stroke="#455a64" stroke-width="3" fill="none" stroke-linecap="round"/>
+          <line x1="690" y1="196" x2="703" y2="183" stroke="#455a64" stroke-width="3"/>
+          <path d="M704 182 L696 188 M704 182 L701 192" stroke="#455a64" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+          <text x="712" y="148" font-size="10.5" fill="#455a64">极长</text>
+          <text x="734" y="218" font-size="10.5" fill="#455a64">都很短</text>
+
+          <text x="675" y="284" text-anchor="middle" font-size="11.5" fill="#2f6d51">判成边缘点</text>
+
+          <text x="450" y="362" text-anchor="middle" font-size="12" fill="#5a4a42">和 BALM 用的是同一个想法（第 0079 课）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个墙角附近的两类点——墙上的一点与棱上的一点——的三根主方向各有多长。<br>
+          <b>怎么看这张图：</b>① 左格是<b>墙面上的一个点</b>：蓝色小点铺满整面墙（相当于是放大之后的样子），三根主方向里<b>前两根很长（沿墙面）、第三根极短（戳出墙面）</b>——比值很大，判成平面；② 右格是<b>墙角那条棱上的点</b>：点主要沿竖直的棱排成一条线，只有<b>一根主方向极长、另外两根都很短</b>——比值接近 1，判成边缘；③ 「主方向」这三个字的意思就是<b>点云在哪个方向铺得最开</b>，三根主方向就是从最开排到最不开。<br>
+          <b>要记住的一句话：</b>这就是第 0079 课 BALM 用的同一个想法——<b>用协方差的特征值去看局部几何，比「邻居差多少」这种量更稳、更不随视角变</b>。
+        </figcaption>
+      </figure>
+
+      <h3>两阶段匹配与回环</h3>
+
+      <p>除了换特征判据，它还把匹配拆成两个阶段：<b>先做「当前帧 ↔ 稀疏局部图」的帧跟踪</b>（快），<b>再做「关键帧 ↔ 局部图」的建图精配</b>（准）。这样既能跟上帧率，又能在建图那一步把精度提上去。回环则用 <b>NDT</b> 检测、以位姿图的形式把回环因子加进去。</p>
+
+      <p>NDT 这一支在第二季 <b>0023</b> 课（PCL 里的 ICP／GICP／NDT 家族）和 <b>0076</b> 课（NDT 与 EKF 那条变体路线）都出现过，这里算是它在回环环节的一次落地。</p>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>数字</b>
+          <p>最有说服力的一组是「<b>只换特征、不换别的</b>」的对照：把 LOAM 的特征换成它的特征之后（记为 LOAM+F），seq00 的 ATE 从 4.510 降到 3.412，seq02 从失败变成 12.21。在 KITTI 全部 11 段上，带环回的完整版在多数段最优（例如 seq00 为 2.903，LOAM 4.510、LeGo-LOAM 4.121；seq01 为 10.01，LOAM 18.78）。实时性上：特征提取 51.6 ms、跟踪 45.1 ms、建图 97.7 ms，<b>整体仍满足 10 Hz</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>原文承认的短板</b>
+          <p>① <b>激烈运动或动态环境下性能退化</b>——因为它没有 IMU、也没有视觉来兜底；② 在小场景里地图比较稀疏，关键帧-局部图的匹配精度反而<b>略低于 LOAM</b>；③ 特征提取要做特征值分解，<b>计算偏贵</b>（这一点在耗时表里看得很清楚）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>7. 数字、短板与判断</h2>
+
+      <p>四篇并排，用一张表收口。照旧：<b>「额外用的信息」与「怎么用」是它们的主张，「原文承认短板」是它们自己写的边界。</b></p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">篇</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">额外用了什么信息</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">怎么用</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">解决什么场景</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">原文承认短板</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>COIN-LIO</b><br>（ICRA 2024）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">反射强度（投影成图像）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>直接法</b>：5×5 patch 的光度误差与几何残差一起进 iEKF；只挑几何无信息方向上的互补 patch</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">大尺度几何退化（隧道、平地），几何几乎没有任何结构</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">需高分辨率旋转式激光才够稠密；完全无纹理仍受限；强度图信噪比低、有滚动快门</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>固态强度 SLAM</b><br>（TIM 2022）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">反射强度（局部突变）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>特征法</b>：强度边点 InE 当线特征做点-线配准，配线地图管理去外点</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">固态激光小视场与非重复扫描导致的室内退化（长廊转弯、正对天花板）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">时间效率不及 FAST-LIO2（38.8 ms vs 3.98 ms）；线地图无外点剔除会在 320 秒失败；只讨论固态激光</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>LI-Init</b><br>（IROS 2022）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">（不用额外传感器）激光角速度 + IMU 测量</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">互相关定时间偏移 → 统一优化外参旋转与陀螺零偏 → 加速度约束估平移、重力、加计零偏；配激励度评估</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">自组激光-IMU 系统的时间同步／外参／重力／零偏全都未知</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">需充分激励，基本不动就无法初始化；机械旋转激光帧拆分降视场；仍需用户按提示晃设备</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>PCA-SLAM</b><br>（TIM 2022）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">（不用额外信息）点云局部几何的 PCA</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">特征值比判边／面（抗视角）；两阶段匹配 + NDT 回环</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">特征法 SLAM 的视角不变性问题与大场景漂移</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">激烈运动／动态环境退化；小场景地图稀疏精度略低；特征值分解偏贵</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>把四篇的关键数字再压缩成一句话版本：</p>
+
+      <ul>
+        <li><b>COIN-LIO</b>：ENWIDE 的退化段上，所有对比方法全发散，<b>只有它 10 段全活</b>；Park 段 29.7 ms 一帧，其中光度部分只占 6.2 ms。</li>
+        <li><b>固态强度 SLAM</b>：长廊端到端误差 <b>0.72 m</b>（FAST-LIO2 1.39 m）；正对天花板的鲁棒段里，对手全部超时失败，<b>只有它跑完</b>，平移 RMSE 0.11 m；代价是 38.8 ms 对 FAST-LIO2 的 3.98 ms。</li>
+        <li><b>LI-Init</b>：时间偏移估计到<b>微秒级</b>、外参旋转误差小于 1°、平移厘米级；初始化求解 <b>500 ms 以内</b>；横向对比里比 LI-Calib 快 30 倍以上。</li>
+        <li><b>PCA-SLAM</b>：只换特征这一项，就让 seq00 的 ATE 从 4.510 降到 3.412、seq02 从失败变成有结果；完整版在 KITTI 多数段最优。</li>
+      </ul>
+
+      <h3>★ 我们的判断（注意：这是判断，不是原文自评）</h3>
+
+      <div class="callout">
+        <h4>请把下面这段当作读者视角</h4>
+        <p>四篇里，<b>COIN-LIO 的「互补」思路最有想法</b>——它没有简单地说「我加了一路观测」，而是先问「几何在哪几个方向上没有信息」，再专门去那几个方向上找图像证据。这个「先诊断、再补药」的结构，比盲目多加一路残差要高明。而且它敢把「需要高分辨率旋转式激光」写进结论当成全行业的呼吁，这个态度是诚实的。<br>
+        <b>固态那一篇是另一个维度的聪明</b>：它面对的是完全不同的敌人（小视场、非重复扫描），于是把同一路信号掰成了另一种形状（边而不是图）。它最值得记的不是精度数字，而是那个消融——<b>去掉线地图管理就在 320 秒失败</b>，说明「怎么剔掉强度边点里的外点」和「怎么提强度边点」一样重要。<br>
+        <b>LI-Init 的价值在它补的是别人都假设好的前提</b>，而且补得干净：不需要标定板、不需要额外传感器、500 ms 内出结果，还配了「激励够不够」的评估。它的贡献不在算法新鲜度，而在<b>把一整条流水线从「假设已标定」拉回了「可以真的跑起来」</b>。<br>
+        <b>PCA-SLAM 相对最像增量</b>：PCA 判边／面这个想法在 BALM（0079 课）里已经出现过，它做的是把这个工具从「建图时的体素化」搬到「特征提取」，再配上两阶段匹配与 NDT 回环。作为特征法这条线的收尾，它很扎实；但就「新想法」的浓度而言，它确实比前面三篇低一档。<br>
+        <b>一句话总结：</b>这四篇合在一起看，讲的是同一件事——<b>主干大家都搭得差不多了，接下来拼的是谁更清楚自己缺什么</b>。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>COIN-LIO 说自己是「互补」的。请具体说明：<b>补的是什么方向的信息，为什么那个方向上几何给不出约束</b>。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>补的是「几何上无信息的那几个方向」，典型例子就是沿隧道轴的方向。</b></p>
+              <p>① <b>先看几何为什么给不出约束。</b>一条笔直的隧道，横截面是「两片平行的墙 + 一片平地」。你沿隧道轴往前挪一米，激光扫到的几何图案<b>几乎原封不动</b>——同一片墙、同一片地，只是被你从稍前一点的地方又看了一遍。配准算法要找的是「点对点的对应关系」，可这个方向上根本没有能区分「走了多远」的特征，所以<b>沿轴方向上的平移估不出来</b>。</p>
+              <p>② <b>再看强度为什么能给。</b>隧道壁上并不是均匀的：有标线、有瓷砖缝、有反光条。这些在几何上只是一点点起伏（甚至完全平），但在<b>反射强度图上有明显的一横一竖的纹理</b>。你一沿轴移动，这些纹理在图像里就整体平移了一段——平移多少，就代表你走了多远。于是「沿轴走了多少」这件事被强度纹理补上了。</p>
+              <p>③ <b>它的做法不止于此。</b>它先用几何配准的雅可比找出「哪几个方向没有信息」，然后<b>专门去挑在这些方向上有强梯度的图像特征</b>（图注里说的「互补特征选择」）。所以它是「先诊断，再定向补」，而不是把所有图像特征一股脑塞进去。</p>
+              <p>④ <b>它的边界也随之而来：</b>如果连强度都均匀（完全无纹理的表面），那这条补丁也就无处可下——原文明确承认了这一点。</p>
+            </div></details>
+          </li>
+          <li>同样是「用反射强度」，COIN-LIO 与固态那一篇在<b>传感器选择、强度的用法、对付的退化类型</b>上分别有什么不同？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>① 传感器：</b>COIN-LIO 用<b>高分辨率旋转式多线激光</b>（Ouster OS0 128 线），因为要投出一张足够稠密的强度图；固态那一篇用<b>固态激光</b>（Livox AVIA），特点是水平视场小、非重复扫描。</p>
+              <p><b>② 强度的用法：</b>COIN-LIO 把强度当成<b>整幅灰度图像的亮度纹理</b>，做<b>直接法</b>式的光度误差——比 5×5 小块图案的亮度差，与几何残差一起进迭代扩展卡尔曼滤波联合更新。固态那一篇把强度当成<b>局部的突变位置</b>，做<b>特征法</b>——强度跳变超过阈值就判为强度边点 InE，然后按「点到线」的方式去配准，另外还配一张线地图并做管理来剔外点。</p>
+              <p><b>③ 对付的退化：</b>COIN-LIO 对付的是<b>大尺度几何退化</b>——隧道、空旷平地，几何上几乎没有任何结构可用；固态那一篇对付的是<b>室内小视场退化</b>——长廊转弯、正对天花板，结构其实有（有墙有顶），缺的只是<b>边和线</b>这一类特征。</p>
+              <p><b>一句话板书：</b>同样叫 intensity-augmented，<b>一个把强度当「照片」（直接法），一个把强度当「线」（特征法）</b>；而且正因为用法不同，它们连该配什么雷达都是被自己决定的。</p>
+            </div></details>
+          </li>
+          <li>LI-Init 说「如果设备基本不动，就没法初始化」。请解释这句话背后的道理，并说明它的激励度评估是干什么用的。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>为什么不动就解不出来：</b>这篇方法要估的四个量——时间偏移、外参、重力方向、IMU 零偏——<b>都不是靠「看一眼」能读出来的数，而是靠「比较两路信号随运动的变化」反推出来的</b>。</p>
+              <p>① <b>时间偏移</b>靠互相关：把激光估的角速度模长序列和 IMU 的角速度模长序列做互相关，找重合最好的滑动量。<b>如果两条曲线都是平的（不转），互相关就没有峰</b>，偏移就定不出来。</p>
+              <p>② <b>重力方向</b>靠加速度约束：设备静止时，加速度计读数里世界系的重力加速度和「哪边是下」是缠在一起的，你分不清哪个分量来自重力、哪个来自自身的加速度。<b>只有真的动起来，加速度出现变化，才能把这两者分开。</b></p>
+              <p>③ <b>外参与零偏</b>更是如此——它们描述的是「两路传感器的读数之间怎么对应」，没有变化就没有可比较的对应关系。</p>
+              <p><b>激励度评估是干什么的：</b>它去看那几个雅可比矩阵的<b>奇异值够不够大</b>。奇异值大，说明当前这段运动对要估的量「敏感、有区分度」，可以解；奇异值太小，说明信息不足，硬解出来的数就是不可信的。这时系统不会默默给一个错的结果，而是<b>提示用户该怎么动设备</b>，让可观测性提上去。<b>这相当于给这个「先天的前提条件」装了一个仪表盘。</b></p>
+              <p><b>顺带记一句：</b>它把「需要一块标定板」换成了「需要动一动设备」——这是进步，但<b>没有把前提条件整个免掉</b>。原文也老老实实把这一条写成了局限。</p>
+            </div></details>
+          </li>
+          <li>PCA-SLAM 用「特征值比」替换了 LOAM 的「向量加法曲率」。请说明这个替换修好了什么毛病，以及这个想法你在本课程的哪一课里已经见过。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>修好的毛病是「不抗视角变化」。</b>LOAM 的曲率是把周围邻居点的差向量加起来取模长。原文给出的具体解释是：同一根激光线上的点是<b>等角度分布而不是等距离分布</b>的，所以同一个场景点从 p1、p2 两个不同位置观测时，算出来的曲率不一样——平面点有可能被误判成边缘点。特征分错了类，它就会去配错的东西，帧间匹配误差变大，在大场景里就变成明显的漂移。</p>
+              <p><b>PCA 的做法：</b>对同一通道上一段邻域点求协方差矩阵，做特征值分解，得到三个从大到小排列的特征值与对应的主方向。<b>「主方向」就是点云在哪个方向铺得最开。</b></p>
+              <p>· 平面上的点：点沿两个方向铺得很开，第三个方向几乎为零（因为同一通道的点基本贴在平面里）→ 前两个特征值都大，<b>比值很大</b>；<br>
+              · 棱上的点：点主要沿一条线铺开，另外两个方向都很小 → <b>比值接近 1</b>。原文用固定阈值 <b>20</b> 分界。</p>
+              <p>这个判据描述的是<b>点云自身铺开的程度</b>，是一个和「采样疏密」解耦的几何形状量，因此比「邻居差向量加起来有多长」要稳。<b>这就是它抗视角变化的来源。</b></p>
+              <p><b>在哪儿见过：</b>第 <b>0079</b> 课（BALM）。BALM 正是用协方差的特征值来判断局部几何、做平面判定与自适应体素化的。同一个数学工具，在 BALM 里用在建图阶段的体素划分上，在 PCA-SLAM 里用在特征提取上——<b>两条不同的路，同一个想法</b>。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0089-直接法LIO群-连续时间运动补偿.html">← 直接法 LIO 群：连续时间运动补偿</a>
+        <a class="next" href="0091-退化环境与配准-可切换方案与低重叠对齐.html">退化环境与配准：可切换方案与低重叠对齐 →</a>
+      </div>
+      <p class="foot-note">这一课的四篇体量都不大，但它们补的洞一个比一个关键——尤其是那个被欠了两季的「初始化」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

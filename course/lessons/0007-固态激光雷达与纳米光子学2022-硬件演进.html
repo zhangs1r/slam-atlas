@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>固态激光雷达与纳米光子学（2022）— SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0007</div>
+      <h1>固态激光雷达与纳米光子学：SLAM 的“眼睛”是怎么进化的</h1>
+      <p class="subtitle">前面几节课我们把 LiDAR 当成一个“已知存在的传感器”来用。这节课钻进它的肚子里，看机械旋转为什么被淘汰、三种测距原理差在哪、以及硬件变化怎么反过来卡住算法的脖子 📡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：固态 LiDAR 硬件分类与演进</span>
+        <span>👥 作者：Nanxi Li, Chong Pei Ho, Jin Xue 等</span>
+        <span>📅 2022 · <i>A Progress Review on Solid-State LiDAR and Nanophotonics-Based LiDAR Sensors</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 这篇综述在讲什么</a>
+        <a href="#b">2. 三种测距原理</a>
+        <a href="#c">3. 四类固态方案演进</a>
+        <a href="#d">4. 机械旋转为何被取代</a>
+        <a href="#e">5. 硬件线索如何反推算法</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说出 TOF / AMCW / FMCW 各自“测的是什么信号特征”；把 flash、MEMS、OPA、超表面四类方案按“有没有机械运动”排个序；讲清为什么工业界要甩掉旋转电机。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>第 0005（动态环境）、第 0006（LiDAR 里程计综述）都默认“有一台 LiDAR 在吐点云”。本节课补上这半截——那台 LiDAR 本身长什么样、有哪些技术路线。硬件特性（是否扫描、能否测速）会直接决定第 0006 讲的配准该怎么做。</p></div>
+      </div>
+
+      <h2>1. 这篇综述的定位：它不谈算法，只谈“光学部分”</h2>
+      <p>这是一篇 <strong>硬件综述</strong>（发表在 Laser &amp; Photonics Reviews）。作者开门见山：传统 LiDAR 用机械旋转机构做光束扫描，带来三个老毛病——<strong>reliability（可靠性）、size（体积）、cost（成本）</strong>。固态（solid-state）方案就是用来干掉这套笨重旋转机构的。作者特别声明（正文第 17 行附近）：本综述只聚焦系统的<strong>光学部分（optics part）</strong>，不展开讲电子学。</p>
+      <p>全文结构被作者画成了一张总览图（Figure 1）：先讲测距原理（第 2 节），再讲三类传统固态 LiDAR（第 3 节），最后讲新兴的纳米光子学 LiDAR（第 4 节）。下面这张图就是整篇课文的“地图”，建议先把它看熟。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/91a32fe6cd6979dd9578152f9d1fc6296d2db54ebff27d823cf92ff9188bd8bd.jpg" alt="Figure 1 综述总览图">
+        <figcaption>
+          <strong>原图注（Fig. 1）：</strong> Overview of review article, including conceptual organization of different LiDAR sensors. TOF: time of flight. AMCW: amplitude-modulated continuous wave. FMCW: frequency-modulated continuous wave. MEMS: microelectromechanical system. OPA: optical phased array. 插图：左上 = flash LiDAR 示意；中上 = MEMS LiDAR 示意；右上 = 集成光源与放大器的固态 OPA 光束扫描器；左下 = 由光学开关实现顺序照明、外差 PD 像素组成的接收（RX）模块；中下 = 用于并行感知的光频梳（OFC）LiDAR；右下 = 超表面 LiDAR 装置。<br>
+          <strong>怎么看这张图：</strong> 这是全文的“地图”。主干把 LiDAR 拆成两大支——<em>测距原理</em>（TOF / AMCW / FMCW，对应第 2 节）和 <em>硬件形态</em>（flash / MEMS / OPA / 纳米光子，对应第 3–4 节）。周围六张小图是后面每一类传感器的“预告片”，读正文时把它们当缩略图对照即可。记住五个缩写：TOF 飞行时间、AMCW 调幅连续波、FMCW 调频连续波、MEMS 微机电系统、OPA 光学相控阵。
+        </figcaption>
+      </figure>
+
+      <div class="callout" style="border-left-color:#e0a23c;">
+        <h4>🛠 助教批注：这篇 OCR 有几个反复出现的错字，我在课里统一修正了</h4>
+        <p>① “eficiency” → <strong>efficiency（效率）</strong>；② “diferent” → <strong>different（不同）</strong>；③ “sufer” → <strong>suffer（遭受）</strong>；④ “efect” → <strong>effect（效应）</strong>；⑤ “Li-DAR” 这种被断开的连字符 → 统一写作 <strong>LiDAR</strong>；⑥ 公式 (1) 里本该是反射率符号 ρ 的地方被 OCR 成了乱码 “�”，已补回 <strong>ρ</strong>；⑦ 公式 (5) 里 f<sub>u</sub> 前面多了一个乱码 “·”，且角度项被 OCR 成 “cos(�)”，已修正为 <strong>cos θ</strong>（θ 为目标速度方向与激光视线的夹角）。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 三种测距原理：脉冲看时间、调幅看相位、调频看拍频</h2>
+      <p>作者把最常见的三种测距方案分成两派：<strong>pulsed TOF 和 AMCW TOF 都是“调制光强”</strong>，而 <strong>FMCW 是“调制光频率”</strong>。它们都要解同一个未知数——距离 d，但用的“尺子”完全不同。先给一个系统的功率预算公式（公式 1），它告诉你为什么“远”和“亮”是矛盾的：</p>
+
+      <div class="formula-box">
+        $$ P_{\mathrm{RX}} = P_{\mathrm{in}}\; \eta_{\mathrm{TX}}\, \frac{\rho\, A_{\mathrm{RX}}}{4\pi R^{2}}\, \eta_{\mathrm{RX}} $$
+        <p style="margin:.4rem 0 0;color:#777;font-size:.9rem;">接收功率 ∝ 反射率 ρ × 接收孔径面积 A<sub>RX</sub> ÷ 距离的平方 R²。所以距离翻倍，回波功率只剩 1/4；要看得远，就得把发射功率或接收孔径做大——但发射峰值功率受“人眼安全”限制。</p>
+      </div>
+
+      <h3>2.1 脉冲 TOF（pulsed TOF）</h3>
+      <p>最简单：发出一个光脉冲，量“发出 → 反射回来”的时延 Δt，距离就是光速乘时间再除 2：</p>
+      <div class="formula-box">$$ d = c\,\frac{\Delta t}{2} $$</div>
+      <p>因为可以用很高的峰值功率，它能在“平均功率仍符合人眼安全”的前提下看得最远。分辨率受限于计时电路的精度。</p>
+
+      <h3>2.2 调幅连续波 TOF（AMCW TOF）</h3>
+      <p>不发光脉冲，而是发一束<strong>强度被正弦/方波调制的光</strong>，比发射波和接收波的<strong>相位差 Δφ</strong>：</p>
+      <div class="formula-box">$$ d = c\,\frac{\Delta t}{2} = c\,\frac{\Delta\varphi}{2(2\pi f)} = \frac{c\,\Delta\varphi}{4\pi f} $$</div>
+      <p>它适合中距离，不是长距离（原文明确说 “suitable for moderate range sensing rather than long range”）。</p>
+
+      <h3>2.3 调频连续波 FMCW</h3>
+      <p>发一束<strong>频率被线性调频（chirp）的光</strong>，把回波和原信号混频得到“拍频（beat frequency）”。神奇的是，它<strong>一次性能同时解出距离和速度</strong>：</p>
+      <div class="formula-box">
+        $$ d = \frac{c\,T}{4B}\,\frac{f_{\mathrm{u}}+f_{\mathrm{d}}}{2}, \qquad \nu = \frac{c}{2f_{\mathrm{c}}}\,\frac{f_{\mathrm{u}}-f_{\mathrm{d}}}{2} $$
+        <p style="margin:.4rem 0 0;color:#777;font-size:.9rem;">T=调制周期，B=调频带宽，c=光速；f<sub>u</sub>、f<sub>d</sub> 分别是上扫、下扫时的拍频（已包含多普勒频移）；f<sub>c</sub> 是起始光载波频率。速度公式默认目标速度方向与视线夹角为 0，若考虑夹角 θ，分母要乘 cos θ（原文被 OCR 成 cos(�)，已修正）。</p>
+      </div>
+      <p>相比 TOF，FMCW 有三个硬优势（正文第 66 行）：① 相干探测，<strong>不怕隔壁 LiDAR 串扰</strong>；② 能靠多普勒效应<strong>直接测速度</strong>；③ 深度精度更高，且所需峰值功率比脉冲 TOF 低。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/b39abc6783679339a9856ebc6c273598161c3a7d23d4f5136fbdd5ea92f7c1b6.jpg" alt="Figure 2a 脉冲TOF信号">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/9087ec2dc578de4d1f09d0946c8e203e962946d005820ad16b94362443e8987a.jpg" alt="Figure 2b AMCW信号">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/69dda93712f7b191a1d0b5fa4ec9dff1aea02a6fca8f29ac191aecfbd870e151.jpg" alt="Figure 2c FMCW三角调频">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/9ff5127ade38ceae90dc343196d0a8b416db6a4783adc5b2147355042f872d11.jpg" alt="Figure 2d FMCW正弦调频">
+        <figcaption>
+          <strong>原图注（Fig. 2）：</strong> Working principles of pulsed TOF, AMCW TOF, and FMCW LiDAR. a) 脉冲 TOF 的发射（蓝）与接收（红）脉冲；b) AMCW 的发射/接收强度图（上/下）；c) FMCW 三角线性调频的发射与接收信号（上），以及二者的拍频信号（下）；d) 啁啾正弦形的 TX/RX 信号，时延 Δt 来自目标运动。<br>
+          <strong>怎么看这张图：</strong> 三行信号图把三种原理放一起对比——<em>脉冲 TOF 看的是两个脉冲之间的时间差</em>（图 a）；<em>AMCW 看的是调制波的相位差</em>（图 b）；<em>FMCW 看的是发射与回波的差频“拍频”</em>（图 c、d），并且还能从差频里解出速度。记忆口诀：<strong>脉冲看时间、调幅看相位、调频看拍频</strong>。图 d 里那条时延就是目标在动导致的多普勒效应。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下列哪种测距原理能“仅靠一次回波”就同时得到目标的距离 <em>和</em> 速度？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="脉冲 TOF 只量时间差 Δt，只能算出距离，速度要靠多次采样估计。错。" onclick="lessonKit.answer(this,'q0007')">脉冲 TOF（pulsed TOF）</button>
+          <button data-correct="no" data-explanation="AMCW 比的是相位差，得到的是距离；它不携带多普勒信息，无法直接得速度。错。" onclick="lessonKit.answer(this,'q0007')">调幅连续波 AMCW TOF</button>
+          <button data-correct="yes" data-explanation="正确！FMCW 用差频 f_u、f_d 分别解出距离和速度，相干探测还能抗串扰、测多普勒。对。" onclick="lessonKit.answer(this,'q0007')">调频连续波 FMCW</button>
+        </div>
+        <div class="quiz-feedback" id="q0007"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 四类固态方案的演进：谁能彻底不“动”</h2>
+      <p>作者把固态 LiDAR 分成 <strong>flash（闪光）型</strong> 和 <strong>scanning（扫描）型</strong> 两大类。扫描型（MEMS、OPA）因为把激光能量集中到单点，信噪比更高；flash 型用一整面探测器阵列“一炮拍全场景”，没有扫描机构，长期可靠性最好、采集率最高。下面按“机械运动从多到无”的顺序讲。</p>
+
+      <h3>3.1 Flash 式：最可靠，但分辨率被像素卡死</h3>
+      <p>flash 用一个 2D 探测器阵列（常是 SPAD 单光子雪崩二极管）一次曝光拿到整幅深度图。正文给了个例子：Zhang 等人的 SPAD flash 传感器 252×144 像素、30 帧/秒；后来 Hutchings 做到 256×256、最远 50 m；Padmanabhan 用光子符合计数把背景光压下，最远做到 100 m。缺点也直说：<strong>分辨率受探测器阵列物理尺寸限制，很难堆像素</strong>。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/9a71a3d22db1ef582384b5506bda690fccab8e1732ffa5a2e0fd0deecc7191ed.jpg" alt="Figure 3 flash LiDAR">
+        <figcaption>
+          <strong>原图注（Fig. 3）：</strong> Flash-based LiDAR sensors. a) 带 SPAD 图像传感器的 flash LiDAR 示意；b) 手抓握动作 3D 电影六帧（30 帧/秒，手距 0.7 m）；c) flash LiDAR 示意（M=镜，PD=光电探测器，L1/L2=准直透镜，MCCD=微偏振 CCD）；d) 左：目标 2D 图，右：LiDAR 得到的 3D 图。<br>
+          <strong>怎么看这张图：</strong> flash 的精髓是“一炮打全场景”——没有扫描机构，所以最可靠（图 b 能连续拍 3D 视频就是证据）。代价看图 d：整幅只有 200×200 像素，分辨率被探测器阵列的物理尺寸卡死；而且远距离需要很高的峰值光功率。这是它和扫描型最大的权衡点。
+        </figcaption>
+      </figure>
+
+      <h3>3.2 MEMS 振镜：用一片小镜子代替整台电机</h3>
+      <p>MEMS（微机电系统）用一片可微动的小镜子做光束转向，把系统做小做轻，能塞进小型无人机。设计上有个权衡：<strong>镜面越大（光束越粗）扫描越慢，镜面小则速度快</strong>。MEMS 又分 1D（只水平扫，竖直靠多束激光排成线，见图 4a）和 2D（快轴水平、慢轴竖直，帧率被慢轴限制）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/aef1ca440485c8c8a2962c12e142bfaf78f14dd458ed337d0c49a02d9b1ca9e3.jpg" alt="Figure 4 MEMS 振镜">
+        <figcaption>
+          <strong>原图注（Fig. 4）：</strong> 1D and 2D MEMS mirrors for LiDAR sensing. a) 多光束组成竖线 + 1D MEMS 水平扫描；b) 2D MEMS 扫描镜组件（PZT=锆钛酸铅压电陶瓷底座）；c) 封装 MEMS 扫描器的 2D 扫描图案；d) 竖直 MEMS 镜 SEM；e) 大口径 2D MEMS 镜 SEM（FOV 15°×12°）；f) 装在微型机器人上的 MEMS 镜用于放大 3D 扫描。<br>
+          <strong>怎么看这张图：</strong> 图 a 最直观：<em>竖直方向靠多束激光排成一条线，水平方向只靠这一片镜子左右摆</em>来扫。优点是体积小、轻、便宜；缺点是镜子摆角有限（FOV 往往只有十几度），而且它<strong>仍有微动机械部件</strong>，长期可靠性不如完全无移动件的设计——所以它只是“半固态”。
+        </figcaption>
+      </figure>
+
+      <h3>3.3 OPA 光学相控阵：扫描靠“加相位”，彻底无机械运动</h3>
+      <p>OPA（optical phased array）建在集成光子芯片上，靠给不同天线加不同相位，让光像相控阵雷达那样<strong>电子式地转向</strong>。作者特别点出：相比 MEMS，OPA <strong>没有机械活动部件，速度快好几个数量级，且不怕机械冲击</strong>，还能和 CMOS 工艺兼容、降价。图 5a 的 TX/RX 两个 OPA 配合 FMCW，能同时拿距离和速度。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/adefa42d7c3127bbfe275e1f0a78cf6a32ebcac5213503d9bea58ea69b6f606f.jpg" alt="Figure 5a OPA FMCW LiDAR 示意">
+        <figcaption>
+          <strong>原图注（Fig. 5a）：</strong> Schematic of FMCW LiDAR sensor with TX and RX OPA.（整套图还含：b) 通过 TX/RX OPA 波束指向得到三个目标的距离结果；c) OPA 芯片封装在电路板上的光学照片。）<br>
+          <strong>怎么看这张图：</strong> 这是 OPA 路线的“招牌图”。两边各一个 OPA（发射 TX、接收 RX），扫描不再靠任何机械运动，而是芯片上控制相位数组让光束电子转向（正文提到波束指向速度可达 ≈30 μs 量级）。配合 FMCW，一个 OPA 系统就能同时输出距离和速度——这正是第 0006 课里“紧耦合/特征法”最想拿到的额外观测。
+        </figcaption>
+      </figure>
+
+      <h3>3.4 超表面 / 光频梳：纳米光子学带来的新玩法</h3>
+      <p>第 4 节讲“新兴纳米光子学 LiDAR”，三类代表器件：① <strong>光学开关（optical switch）</strong>做顺序照明/flash，避免移动件就能空间扫描（如 Rogers 等人 512 像素相干接收阵列，能拍旋转篮球并上色显示速度）；② <strong>光频梳（OFC）</strong>当并行光源，一个微环谐振器出几十路独立调频光源，实现“大规模并行 3D 感知”（Riemensberger 等人做到 30 路并行测距+测速）；③ <strong>超表面（metasurface）</strong>做空间光调制器（SLM），一层亚波长纳米结构就能调控相位，CMOS 兼容、体积小、可主动调相。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics/04fba927ebeeb7df14d2a23eab1e564e9e56f852e12f035a543f5830f86106db.jpg" alt="Figure 13a 超表面">
+        <figcaption>
+          <strong>原图注（Fig. 13a）：</strong> Microscopy image of metasurface mounted in the center of fan-outs (scale bar 1 mm); zoom-in of metasurface nanoantenna array (scale bar 100 μm).（整套图还含：b) 3D LiDAR 装置示意；c) 人模/车模/屏的 2D 与 3D 深度图。）<br>
+          <strong>怎么看这张图：</strong> 左边那块小方片就是“超表面”，右边放大看是密密麻麻的纳米天线阵列。它把传统笨重的透镜/棱镜压成了一层薄片，能在亚波长尺度直接操控光的相位/振幅。用标准光刻就能造、体积小、可主动调相，是“全固态、大视角、高帧率”LiDAR 的有力候选——也呼应了本综述“往全集成光子芯片走”的展望。
+        </figcaption>
+      </figure>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>flash</h4>
+          <p><strong>原理：</strong>探测器阵列一次曝光全场景。<br><strong>优点：</strong>无扫描机构、最可靠、采集率高。<br><strong>缺点：</strong>分辨率受像素数限制、远距需高峰值功率。</p>
+        </div>
+        <div class="mini-card">
+          <h4>MEMS</h4>
+          <p><strong>原理：</strong>微动小镜子转向光束（半固态）。<br><strong>优点：</strong>体积小、轻、便宜。<br><strong>缺点：</strong>摆角有限（FOV 小）、仍有微动件。</p>
+        </div>
+        <div class="mini-card">
+          <h4>OPA</h4>
+          <p><strong>原理：</strong>芯片上控相位电子式转向（全固态）。<br><strong>优点：</strong>无机械件、速度快、抗冲击、CMOS 兼容。<br><strong>缺点：</strong>工艺难度高、FOV/功耗权衡仍在攻关。</p>
+        </div>
+        <div class="mini-card">
+          <h4>超表面 / 光频梳</h4>
+          <p><strong>原理：</strong>纳米结构调控相位 / 多路并行光源。<br><strong>优点：</strong>极薄、可主动调相、可并行感知。<br><strong>缺点：</strong>最前沿，离大规模量产尚有距离。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 为什么机械旋转要被取代：作者原话</h2>
+      <p>综述引言里把传统机械旋转 LiDAR 的弊端说得很直白。下面两句是<strong>原文原话</strong>（已把 OCR 断字 Li-DAR 修正为 LiDAR，错字 eficiency→efficiency 已顺手修正）：</p>
+      <div class="callout" style="border-left-color:#c0392b;">
+        <p>“In traditional LiDAR sensors, <strong>mechanical rotator is used for optical beam scanning, which brings about limitations on their reliability, size, and cost</strong>.”（传统 LiDAR 用机械旋转做光束扫描，带来可靠性、体积、成本三方面限制。）</p>
+        <p>“Traditional LiDAR sensors make use of a mechanical rotation mechanism to achieve wide FOV scanning, <strong>which places limitations on reliability, size, and cost</strong>.”（机械旋转机制实现大视场扫描，同样在可靠性、体积、成本上受限。）</p>
+      </div>
+      <p>注意作者用的词是 <strong>reliability / size / cost</strong> 三件套：旋转电机有轴承和磨损 → 长期可靠性差；整套机构体积大 → 装不上小车；精密电机贵 → 成本下不来。固态方案（尤其 OPA、超表面）就是要同时扳倒这三座大山。这也是为什么今天车规级 LiDAR 几乎都在往 MEMS / 转镜 / 纯固态 OPA 走。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 这条硬件线索如何影响算法（给你埋个伏笔）</h2>
+      <p>硬件不是孤立的——它直接决定第 0006 课讲的“配准”该怎么做。给你三个最直白的例子：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 非重复扫描 → 配准更难</h4><p>机械旋转和很多 MEMS 是“重复扫描”（同一地方每次打到差不多），而某些固态/OPA 是“非重复扫描”（每次略错开，慢慢攒密点云）。非重复扫描建出的点云更密，但<strong>相邻两帧之间的重叠区域变小、配准对应更稀疏</strong>，对 scan-to-scan 配准的挑战更大。</p></div>
+        <div class="mini-card"><h4>② FMCW 能测多普勒 → 抑制退化</h4><p>普通 TOF 只给距离，FMCW 额外给<strong>径向速度</strong>。在“退化场景”（如长直走廊，沿前进方向约束不足）里，这个速度观测能补上缺失的自由度，帮助抑制位姿估计的退化——这正是第 0005/0006 反复提到的痛点。</p></div>
+        <div class="mini-card"><h4>③ flash 无运动 → 没有“帧间”可配</h4><p>flash 一次出整幅深度图、没有扫描时序，传统靠“逐帧扫描配准”的里程计思路对它不直接适用，更偏向“深度图→特征→直接位姿”的路线。硬件形态决定了算法范式。</p></div>
+      </div>
+      <p>记住一句话：<strong>你看懂了传感器“怎么发光、怎么收光、扫不扫”，就大概能猜出它适合哪类 SLAM 算法。</strong>下一节我们就回到算法侧，看一堆 LiDAR SLAM 方法在真实室内被“拉出来溜”的结果。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>
+            为什么 FMCW 测距原理在“退化场景”里特别有价值？请结合第 0006 课讲的“退化环境”定义来回答。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>退化环境（长走廊、隧道）的核心问题是<b>几何约束不足</b>：两侧墙面提供的约束无法确定“沿走廊方向”的位移，因为几何上看不出你在墙上“滑”了多远。这是信息层面的缺失，换更聪明的几何算法也造不出信息。而 FMCW 与脉冲 TOF 的差别在于它通过<b>频率差（拍信号）</b>同时测出距离与<b>径向速度</b>——多出一个与几何无关的量测维度，正好补上缺失的那一维。这就是第 0006 课里 DICP 用多普勒速度目标项、在 900 米长隧道序列上仍能高精度的原因。一句话：<b>几何的缺口要靠新的观测维度来补，而不是靠更好的几何算法。</b></div>
+            </details>
+          </li>
+          <li>
+            为什么“非重复扫描”会让配准（scan matching）变难？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>因为配准本质上是“在两帧点云之间找对应点”。重复扫描时，每一帧的光束都打在完全相同的位置上，同一物理点在不同帧里的落点几乎一致，帧与帧天然容易对齐；非重复扫描时，每一帧的光束路径都在变（比如 Livox Mid-70 用 Risley 棱镜形成的莲花状轨迹），于是同一块墙面在两帧里被采样的位置<b>系统性错开</b>，相邻帧之间“同时被打到”的点更少、对应关系更稀疏，配准的约束数量下降。优点是长时间累积后点云更密、覆盖更完整，缺点是单帧两两配准更吃力——所以它更适合“累积成子图再配准”的路线，而不是纯 scan-to-scan。</div>
+            </details>
+          </li>
+          <li>
+            flash 式 LiDAR 一次出整幅深度图，请说说这给算法设计带来的是便利还是麻烦。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>两边都有，取决于你沿用什么范式。麻烦在于：传统激光里程计最基本的假设是“一次扫描内光束按时间顺序扫过，我可以按时间戳给每个点做运动补偿、并靠相邻两帧的扫描结构做配准”——flash 没有这个扫描时序，“帧内畸变”和“scan-to-scan”的概念都不直接适用。便利在于：它输出的是<b>整幅同步的深度图</b>，形态上更像一个深度相机，于是可以直接借用视觉那一整套成熟工具（特征提取、光流、直接法光度/深度对齐、甚至把深度图当成图像送进网络）。所以它更偏“深度图 → 特征/直接位姿”的路线。这也再次印证本节的结论：<b>传感器的成像形态决定了算法范式。</b></div>
+            </details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0006-LiDAR里程计综述2024-算法分类与九大挑战.html">← LiDAR 里程计综述（2024）</a>
+        <a class="next" href="0008-激光SLAM室内导航横评2022.html">激光 SLAM 室内导航横评（2022）→</a>
+      </div>
+      <p class="foot-note">硬件和算法是一枚硬币的两面，今天你拿下了硬币的反面，继续往前 🚀</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

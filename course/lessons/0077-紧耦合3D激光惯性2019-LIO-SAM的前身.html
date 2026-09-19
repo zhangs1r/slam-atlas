@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>紧耦合 3D 激光惯性（2019）：把 IMU 请进优化 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0077</div>
+      <h1>紧耦合 3D 激光惯性（2019）：把 IMU 请进优化</h1>
+      <p class="subtitle">🧭 这一课解决一个疑问：IMU 到底怎么用，才算「激光惯性紧耦合」？</p>
+      <div class="hero-meta">
+        <span>🎯 主题：激光惯性里程计（紧耦合入门）</span>
+        <span>👥 作者：Ye, Chen, Liu（HKUST）</span>
+        <span>📅 2019 · <i>Tightly Coupled 3D Lidar Inertial Odometry and Mapping</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">本文在讲什么</a>
+        <a href="#b">IMU 的三种用法</a>
+        <a href="#c">紧耦合在哪实现</a>
+        <a href="#d">固定滞后平滑</a>
+        <a href="#e">旋转约束精化</a>
+        <a href="#f">实验数字</a>
+        <a href="#g">与 LIO-SAM 的关系</a>
+        <a href="#h">局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能说清：IMU 在 SLAM 里有三种用法；只做前两种是松耦合，三种都做进同一个最小二乘才是紧耦合；并看懂固定滞后平滑与边缘化怎么让紧耦合既能实时又能一致。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 接第一季 <b>0006</b>（松耦合 vs 紧耦合的二分，本篇就是「紧耦合」范例）；② 接第二季 <b>0029/0030</b>（IMU 预积分，本篇的预积分残差即其落地）；③ 接第一季 <b>0008</b>（LOAM 的 scan-to-map 与 IMU 背景）；④ 边缘化回链第二季 <b>0032</b>（边缘化＝Schur 补成先验因子）。</p></div>
+      </div>
+
+      <h2>1. 本文在讲什么：第一个开源的紧耦合激光惯性里程计</h2>
+      <p>这篇论文（ICRA 2019，香港科大团队）做了一个系统，作者自己管它叫 <b>LIO-mapping</b>，缩写 <b>LIOM</b>。先说一句重要的事：它<b>不叫 VLOAM</b>——VLOAM 是另一篇视觉+激光的工作（Zhang &amp; Singh 2015），和本篇无关。论文里通篇写的是「a tightly coupled lidar-IMU odometry algorithm」「LIO-mapping」，请以正文为准。</p>
+      <p>它的出发点很朴素：LOAM 只靠激光，会碰到几个老毛病——垂直分辨率低、特征稀疏、运动畸变、更新率低，尤其在窄走廊这种「激光退化」场景里约束不够。作者的主意是：把 IMU 请进来，补偿这些缺陷。于是方案分成两路并行：</p>
+      <ul>
+        <li><b>Odometry（里程计）</b>：一个局部窗口里的紧耦合联合优化；</li>
+        <li><b>Refinement（精化）</b>：用旋转约束做一次全局配准，把长时漂移掰掉。</li>
+      </ul>
+      <p>一句话定位：<b>首个开源的紧耦合激光-IMU 里程计</b>，把 IMU 的去畸变、初值、约束三件事都做进了同一个非线性最小二乘。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_Tightly_Coupled_3D_Lidar_Inertial_Odometry_and_Mapping/87c20d1b6c36ecf9118c8515d85ea39d3f7951fb0ff02eff98dfa122d90163ad.jpg" alt="Lidar-IMU odometry framework">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Lidar-IMU odometry framework. The subsection that discussed each block is given after the circular number.（里程计总框架，每个方块旁标了对应小节编号。）
+          <br><b>怎么看这张图：</b>这张图就是全篇的总纲。从左到右串起「IMU 预测 → 预积分 → 去畸变 → 特征提取 → 建局部图 → 联合优化」一整条链路；注意圈号①到⑥，它们正好对应后面每一小节的功能。读者盯住这条从左到右的箭头链，就能知道 IMU 在每一环出现在哪里。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ IMU 的三种用法：从松耦合到紧耦合</h2>
+      <p>先讲人话。IMU（惯性测量单元，就是手机里那个陀螺仪+加速度计的组合）在激光 SLAM 里一共能派三种用场，论文把它们都点了出来：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.95rem;">
+        <tr style="background:#f4f6fb;">
+          <td style="padding:.6rem;border:1px solid #d7dce8;font-weight:700;">用法</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;font-weight:700;">它在干什么</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;font-weight:700;">算不算「约束」</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">① 去畸变</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">用 IMU 估计扫描期间的运动，把一帧里不同时刻的激光点校正到同一时刻</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">不算，只是数据预处理</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">② 给初值</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">用 IMU 积分先猜一个位姿，作为激光配准的起点，让匹配更快收敛</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">不算，只是猜测</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">③ 作为约束</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">把 IMU 预积分残差写进优化问题，和激光残差一起被求解器联合调整</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">算，这才是真正的紧耦合</td>
+        </tr>
+      </table>
+      <p><b>关键区分：</b>只做①和②，IMU 只是「帮激光打打下手」——这种叫<b>松耦合</b>。第一季 <b>0006</b> 课已经把松/紧二分讲过了：松耦合时激光和 IMU 各算各的，IMU 只当先验或预处理；<b>把③也做了，让 IMU 的残差和激光的残差在同一个方程里被一起解，才是紧耦合</b>。本篇的贡献，正是把③也真正落进了优化问题。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="430" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <!-- 左联 松耦合 -->
+          <text x="225" y="55" text-anchor="middle" font-size="20" font-weight="700" fill="#b4453b">松耦合（只做 ① ②）</text>
+          <rect x="70" y="90" width="180" height="46" rx="8" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+          <text x="160" y="119" text-anchor="middle" font-size="15" fill="#243049">激光里程计</text>
+          <rect x="70" y="158" width="180" height="46" rx="8" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+          <text x="160" y="187" text-anchor="middle" font-size="15" fill="#243049">IMU 积分</text>
+          <rect x="70" y="226" width="180" height="46" rx="8" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+          <text x="160" y="255" text-anchor="middle" font-size="15" fill="#243049">轮式里程计</text>
+          <line x1="160" y1="136" x2="160" y2="158" stroke="#8a96ad" stroke-width="2"/>
+          <line x1="160" y1="204" x2="160" y2="226" stroke="#8a96ad" stroke-width="2"/>
+          <rect x="95" y="300" width="150" height="50" rx="8" fill="#fbe9c8" stroke="#c9962f" stroke-width="2"/>
+          <text x="170" y="330" text-anchor="middle" font-size="15" font-weight="700" fill="#7a5a14">加权平均</text>
+          <line x1="160" y1="272" x2="160" y2="300" stroke="#8a96ad" stroke-width="2"/>
+          <line x1="160" y1="350" x2="170" y2="300" stroke="#8a96ad" stroke-width="2"/>
+          <text x="225" y="390" text-anchor="middle" font-size="14" fill="#555">各算各的，最后投票</text>
+          <!-- 右联 紧耦合 -->
+          <text x="675" y="55" text-anchor="middle" font-size="20" font-weight="700" fill="#2f7a4b">紧耦合（① ② ③ 全做）</text>
+          <line x1="470" y1="110" x2="860" y2="110" stroke="#9aa6bd" stroke-width="2" stroke-dasharray="6 5"/>
+          <line x1="470" y1="170" x2="860" y2="170" stroke="#3f6fd0" stroke-width="3"/>
+          <line x1="470" y1="230" x2="860" y2="230" stroke="#9aa6bd" stroke-width="2" stroke-dasharray="6 5"/>
+          <circle cx="500" cy="170" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="590" cy="170" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="680" cy="170" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="770" cy="170" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <line x1="514" y1="170" x2="576" y2="170" stroke="#3f6fd0" stroke-width="3"/>
+          <line x1="604" y1="170" x2="666" y2="170" stroke="#3f6fd0" stroke-width="3"/>
+          <line x1="694" y1="170" x2="756" y2="170" stroke="#3f6fd0" stroke-width="3"/>
+          <text x="500" y="200" text-anchor="middle" font-size="12" fill="#243049">x1</text>
+          <text x="590" y="200" text-anchor="middle" font-size="12" fill="#243049">x2</text>
+          <text x="680" y="200" text-anchor="middle" font-size="12" fill="#243049">x3</text>
+          <text x="770" y="200" text-anchor="middle" font-size="12" fill="#243049">x4</text>
+          <text x="500" y="100" text-anchor="middle" font-size="11" fill="#6b7488">激光边（灰）</text>
+          <text x="620" y="160" text-anchor="middle" font-size="11" fill="#2f5bb0">IMU 预积分边（蓝）</text>
+          <rect x="560" y="270" width="220" height="52" rx="8" fill="#dff0e4" stroke="#2f7a4b" stroke-width="2"/>
+          <text x="670" y="301" text-anchor="middle" font-size="14" font-weight="700" fill="#1f5636">联合高斯-牛顿求解器</text>
+          <line x1="670" y1="222" x2="670" y2="270" stroke="#2f7a4b" stroke-width="2"/>
+          <text x="675" y="390" text-anchor="middle" font-size="14" fill="#555">同一个方程里一起解，谁也不好单独说了算</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是松耦合——激光、IMU、轮式三个盒子各自算出位姿，再用一根箭头汇到「加权平均」，相当于各算各的、最后投票；右边是紧耦合——同一张因子图里既有灰色的激光边、也有蓝色的 IMU 预积分边，所有变量交给一个联合求解器一起解。
+          <br><b>怎么看这张图：</b>① 左联的三种传感器互不干预，IMU 只给个结果；② 右联的蓝边代表 IMU 残差真正参与了优化，不是事后投票；③ 这正是第一季 <b>0006</b> 课「松/紧二分」的具象版。
+          <br><b>要记住的一句话：</b>松耦合是「各算各的再合并」，紧耦合是「在同一个最小二乘里一起被改」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 「紧耦合」到底在哪一个方程里实现</h2>
+      <p>光说「一起解」不够，得看到公式。本篇把整个紧耦合写成了下面这个联合代价函数（论文 Eq.6，用 Ceres 高斯-牛顿求解）：</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ \min_{X}\; \tfrac{1}{2}\Bigl\{ \|r_P(X)\|^2 + \sum_{m\in\mathcal{M}_{L_\alpha}}\|r_L(m,X)\|_{C_{L_\alpha}^m}^2 + \sum_{\beta}\|r_B(z_{\beta+1}^\beta,X)\|_{C_{B_{\beta+1}}^{B_\beta}}^2 \Bigr\} $$
+      </div></div>
+      <p>三项加起来一起最小化，这就是「紧耦合」的数学证据：</p>
+      <ul>
+        <li><b>$r_P(X)$</b>：边缘化得到的先验残差（旧帧被推出窗口后留下的约束，第 4 节细讲）；</li>
+        <li><b>$r_L(m,X)$</b>：激光相对约束残差（点-面距离，Eq.4：$r_L=\omega^T(R_{L_\alpha}^{L_p}x+p_{L_\alpha}^{L_p})+d$）；</li>
+        <li><b>$r_B(z,X)$</b>：IMU 预积分约束残差（Eq.2 由离散积分得到）。</li>
+      </ul>
+      <p>注意：$X$ 是<b>同一个</b>状态向量（Eq.1：$X=[p,\;v,\;q,\;b_a,\;b_g]^T$，包含位置、速度、姿态和 IMU 偏置）。$r_L$ 和 $r_B$ 都是关于这同一个 $X$ 的函数，被同一个求解器同时调整——<b>这就是「IMU 与激光在同一个非线性最小二乘问题里联合优化」</b>。如果说松耦合是「两本账各记各的」，紧耦合就是「一本账，激光和 IMU 的误差一起算总账」。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>IMU 只负责去畸变、给激光配准当初值，但不把预积分残差写进优化问题。这种做法属于松耦合还是紧耦合？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确。紧耦合要求 IMU 预积分残差与激光残差在同一个最小二乘里被联合优化；只做去畸变和给初值，IMU 没成为真正的约束，仍是松耦合。" onclick="lessonKit.answer(this,'q0077a')">仍然算松耦合</button>
+          <button data-correct="no" data-explanation="不对。本文把『约束』定义为把预积分残差写进优化问题一起解。只当预处理/初值，IMU 没有参与求解，这正是 Related Work 里松耦合的定义。" onclick="lessonKit.answer(this,'q0077a')">已经是紧耦合</button>
+        </div>
+        <div class="quiz-feedback" id="q0077a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 固定滞后平滑与边缘化：窗口怎么滑、旧帧去哪了</h2>
+      <p>紧耦合有个现实麻烦：激光点越来越多，要是一直把所有历史帧都塞进优化，算不动。本篇用了<b>固定滞后平滑（fixed-lag smoother）</b>——只保留最近一小段「优化窗口」内的帧联合优化，更老的帧推出窗外。</p>
+      <p>被推出窗口的最老那一帧，并不是直接扔掉，而是先做一次<b>边缘化（marginalization）</b>：用第二季 <b>0032</b> 课讲过的机制——Schur 补把这一帧与它邻居之间的耦合「压缩」成一个<b>先验因子</b> $r_P(X)$，拴在剩下的变量上。这样历史信息没有凭空消失，只是被折叠成一根「弹簧」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_Tightly_Coupled_3D_Lidar_Inertial_Odometry_and_Mapping/50b16e7b56413409c2ea1875d49cb0f5ba289e66ce0ce1f9d2bd588cfae55369.jpg" alt="Local window">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Local window. The local map consists of the previous point-clouds before $j$ and starting from $o$. The optimization window contains the frame between $p$ and $j$.（局部图＝从 $o$ 到 $j$ 之前的旧点云；优化窗口＝帧 $p$ 到 $j$ 之间。）
+          <br><b>怎么看这张图：</b>这张图把两个窗口分开画——下面那条长带是「局部地图窗口（$o$ 到 $p$ 的旧点云，用来配准用）」，上面那条短带是「优化窗口（$p$ 到 $j$，真正参与联合优化的帧）」。窗口随帧推进而滑动，就是固定滞后平滑的直观样子。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="390" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <text x="450" y="50" text-anchor="middle" font-size="18" font-weight="700" fill="#243049">固定滞后平滑：窗口滑动 + 最老帧被边缘化成先验</text>
+          <line x1="80" y1="150" x2="820" y2="150" stroke="#9aa6bd" stroke-width="2"/>
+          <text x="80" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t1</text>
+          <text x="200" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t2</text>
+          <text x="320" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t3</text>
+          <text x="440" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t4</text>
+          <text x="560" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t5</text>
+          <text x="680" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t6</text>
+          <text x="800" y="178" text-anchor="middle" font-size="12" fill="#6b7488">t7</text>
+          <g>
+            <rect x="60" y="120" width="44" height="44" rx="6" fill="#fcd9d4" stroke="#b4453b" stroke-width="2"/>
+            <text x="82" y="148" text-anchor="middle" font-size="18" fill="#b4453b">▣</text>
+            <rect x="180" y="120" width="44" height="44" rx="6" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+            <rect x="300" y="120" width="44" height="44" rx="6" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+            <rect x="420" y="120" width="44" height="44" rx="6" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+            <rect x="540" y="120" width="44" height="44" rx="6" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+            <rect x="660" y="120" width="44" height="44" rx="6" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+            <rect x="780" y="120" width="44" height="44" rx="6" fill="#e8edf6" stroke="#5b6f9c" stroke-width="1.5"/>
+          </g>
+          <rect x="160" y="105" width="500" height="74" rx="10" fill="none" stroke="#2f7a4b" stroke-width="2.5" stroke-dasharray="7 4"/>
+          <text x="410" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#2f7a4b">当前优化窗口（最近 N 帧）</text>
+          <line x1="82" y1="164" x2="82" y2="250" stroke="#b4453b" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="82" y="272" text-anchor="middle" font-size="12" fill="#b4453b">最老帧被抽走</text>
+          <rect x="300" y="300" width="300" height="52" rx="8" fill="#dce7f7" stroke="#3f6fd0" stroke-width="2"/>
+          <text x="450" y="332" text-anchor="middle" font-size="14" font-weight="700" fill="#23447f">先验弹簧 r_P（边缘化所得）</text>
+          <line x1="104" y1="290" x2="450" y2="300" stroke="#3f6fd0" stroke-width="2"/>
+          <text x="450" y="380" text-anchor="middle" font-size="13" fill="#555">弹簧只在小范围内有效：线性化点被固定了，移太远就不可信</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条时间轴上排着一串关键帧（小方块）；绿色虚线框住「当前优化窗口」即最近 N 帧；最老那帧（红框）被抽走时，它和其他变量之间的所有连线被压成一根「先验弹簧」拴在剩余变量上。
+          <br><b>怎么看这张图：</b>① 虚线框随帧右移，窗口大小固定，这就是「固定滞后」；② 红框帧离开窗口前先被边缘化（Schur 补），所以不是丢信息而是压成先验；③ 底部那句话点出代价：先验弹簧只在它被线性化的那一点附近有效，偏离太远会失真——这正是第二季 <b>0032</b> 课强调的。
+          <br><b>要记住的一句话：</b>边缘化＝把旧帧折叠成一根先验弹簧，保住历史约束，但也锁定了线性化点。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 旋转约束精化：把全局地图掰回水平</h2>
+      <p>紧耦合里程计只用「局部窗口」，长时会慢慢漂。本篇的第二路 <b>Refinement</b> 用来兜底：把里程计给出的位姿当先验，再把其中的<b>旋转分量</b>当成一条「虚拟测量」加进全局配准，专门约束滚转和俯仰（释放 z 轴航向，因为航向在激光里不可观）。</p>
+      <p>为什么需要它？想象车在一条长走廊里走，z 轴滚转会一点点累积，地图越画越歪。旋转约束就像有人把地图「掰回和重力对齐」。论文 Eq.8 给出雅可比修正 $J_{\theta_z}^C=J_\theta^C(\tilde R)^T\tilde\Omega_z$，其中 $\tilde\Omega_z=\mathrm{diag}(\varepsilon_x,\varepsilon_y,1)$，即只保留横滚、俯仰约束。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_Tightly_Coupled_3D_Lidar_Inertial_Odometry_and_Mapping/c2e32efd7361715477ca9c9f9e6e244adbabaf9fc6d542a3c1fe78b52c4a6390.jpg" alt="Rotationally constrained mapping">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Rotationally constrained mapping. The odometry pose first serves as a prior for the global point-cloud registration. Then the rotational component from the odometry is applied as a virtual measurement to constrain the optimization.（里程计位姿先当全局配准的先验，再把旋转分量当虚拟测量去约束优化。）
+          <br><b>怎么看这张图：</b>左半是「里程计位姿作先验」的全局配准，右半强调把旋转分量单独抽出来当虚拟测量。读者盯住「virtual measurement」那根线，就知道精化阶段真正约束的是姿态中的旋转部分，而不是整个位姿。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字：准不准、快不快</h2>
+      <p><b>传感器：</b>Velodyne VLP-16（16 线，10 Hz）+ Xsens MTi-100 IMU（400 Hz），用动捕真值对比。平台 Intel i7-7700K 4.2 GHz。</p>
+      <ul>
+        <li><b>精度：</b>Table I 六个序列（fast/med/slow × 1/2）的平移/旋转 RMSE，LIO-mapping 全部最佳。例如 fast1 平移误差 0.0529 m。</li>
+        <li><b>速度（重点）：</b>Table II 运行时间——室内：预测 0.0127 ms、里程计 128.7 ms、映射 108.3 ms；室外：0.0102 / 213.5 / 167.6 ms。里程计约 5–8 Hz，<b>没到 10 Hz 实时</b>（里程计与映射分两个线程跑）。</li>
+        <li><b>对比：</b>Fig.5 轨迹显示，快速运动时 LOAM 和 LOAM+IMU 都失效，LIO-mapping 靠全局一致地图消除了漂移。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_Tightly_Coupled_3D_Lidar_Inertial_Odometry_and_Mapping/070076a13bb40041ef7580fcd042994c0e7349aa32c91c8ecd5b477e6f43a987.jpg" alt="Trajectories of different methods">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Trajectories from different methods. LIO can provide relatively accurate poses... Neither LOAM nor LOAM+IMU can work when the motion becomes rapid.（各方法轨迹；LIO 较准；快速运动时 LOAM 与 LOAM+IMU 都失效。）
+          <br><b>怎么看这张图：</b>对比几条轨迹谁贴合真值。后半段（快速运动）里 LOAM 类明显跑飞，而 LIO-mapping（深绿）沿真值走。这正是「把 IMU 请进优化」在退化/快速场景下的回报。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_Tightly_Coupled_3D_Lidar_Inertial_Odometry_and_Mapping/5ee6d666ee1fa2206b88b04cc4cf115cbb8d666fddc93bb1eb93fb39a5a026de.jpg" alt="Translation and rotational errors">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>(a) Translation errors. (b) Rotational errors. In general, our methods can provide much smoother results than their counterparts.（平移/旋转误差；本文方法更平滑。）
+          <br><b>怎么看这张图：</b>两张误差随时间曲线，LIO-mapping 的曲线比 LOAM 类更平滑、更不发散。配合 Fig.5 一起看，说明紧耦合+旋转约束精化带来的是「长时间一致性」，而不只是单点准。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 它的位置：不是 LIO-SAM 的前身，而是平行对照</h2>
+      <p>很多读者会以为「2019 这篇是 LIO-SAM 的前身」。按精读材料，要如实说清：<b>它们不是前后继承关系</b>。2019 这篇是香港科大（Ye, Chen, Liu）的工作，LIO-SAM（2020）是 MIT（Shan 等）的独立工作，两个团队、两条线。LIO-SAM 论文把 2019 篇缩写成 <b>LIOM</b>，并把它当作<b>对照基线</b>来比——而且测出 LIOM 只有 <b>0.56× 实时</b>（即跑不到实时，10 Hz 的 0.56 倍 ≈ 5.6 Hz）。所以本篇是「紧耦合的早期开源实现」，LIO-SAM 是「把紧耦合架到因子图上、还能回环融 GPS 的更完整系统」，二者是同一思想下的平行作品，不是师徒。</p>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 局限逐条（原文承认的失败边界）</h2>
+      <ul>
+        <li><b>需要初始化：</b>先用 LOAM 的激光里程计跑出位姿，再反过来初始化 IMU 状态（Sec.VI-B）。</li>
+        <li><b>慢速会漂：</b>原文明说「motion is slow 时 suffer from drift」，因为局部地图相对稀疏，约束不够。</li>
+        <li><b>仅局部窗口的 LIO 长时会漂：</b>必须靠精化阶段兜底，单独里程计不够。</li>
+        <li><b>需要足够 IMU 激励：</b>快速运动才准，慢悠悠走反而误差大。</li>
+      </ul>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>固定滞后平滑把最老的关键帧推出窗口时，它与其他变量之间的连接变成了什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确。最老帧先被边缘化（Schur 补），它与邻居的耦合被压缩成一个先验因子 r_P 拴在剩余变量上，历史信息得以保留。" onclick="lessonKit.answer(this,'q0077b')">一个先验因子</button>
+          <button data-correct="no" data-explanation="不对。直接丢弃会丢失历史约束，导致窗口内优化失去一致性。本文的做法是先边缘化成先验弹簧，再推出窗口。" onclick="lessonKit.answer(this,'q0077b')">直接丢弃不管</button>
+        </div>
+        <div class="quiz-feedback" id="q0077b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用你自己的话区分「松耦合」和「紧耦合」，并举出 IMU 的三种用法里哪一种是紧耦合的标志。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>松耦合：激光与 IMU 各算各的，IMU 只做去畸变、给初值等预处理/先验，最后合并结果。紧耦合：把 IMU 预积分残差和激光残差写进同一个最小二乘一起解。三种用法中，只有③「作为约束（写进优化）」是紧耦合的标志；①去畸变和②给初值都只是松耦合的辅助。</div></details>
+        </li>
+        <li>写出本文联合代价函数三项 $r_P$、$r_L$、$r_B$ 分别代表什么，并说明为什么它证明「紧耦合」。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>$r_P$ 是边缘化先验残差，$r_L$ 是激光点-面相对约束残差，$r_B$ 是 IMU 预积分约束残差。三者都关于同一个状态向量 $X=[p,v,q,b_a,b_g]^T$，在同一个 $\min_X$ 里被同时加权最小化，所以 IMU 与激光是在同一非线性最小二乘中联合优化的，这就是紧耦合。</div></details>
+        </li>
+        <li>什么是固定滞后平滑？边缘化在这里起什么作用？回链第二季 0032 课。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>固定滞后平滑只保留最近 N 帧在优化窗口内，更老的帧随窗口滑动被推出。边缘化用 Schur 补把最老帧与邻居的耦合压缩成一个先验因子 $r_P$，拴在剩余变量上，既保住历史约束又让窗口大小固定。这就是第二季 0032 课讲的「边缘化＝Schur 补成先验因子」，但代价是线性化点被固定，先验只在小范围内有效。</div></details>
+        </li>
+        <li>本文和 LIO-SAM（2020）是什么关系？LIO-SAM 测出它的实时性是多少？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不是前后继承关系，是港科与 MIT 两个团队独立的紧耦合工作。LIO-SAM 把本文缩写为 LIOM 并当对照基线，测得其只有 0.56× 实时（跑不到 10 Hz 实时）。</div></details>
+        </li>
+        <li>本文承认哪四条局限？哪一条和「运动慢」有关？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>四条：①需要先用 LOAM 初始化 IMU 状态；②慢速会漂（局部地图稀疏、约束不足）；③仅局部窗口的 LIO 长时会漂，需精化兜底；④需要足够 IMU 激励。第②条「慢速会漂」就是和运动慢有关的局限。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0076-两条变体路线-NDT与EKF.html">← 两条变体路线：用分布替代特征，用多传感器兜住退化</a>
+        <a class="next" href="0078-LIO-SAM2020-四类因子的因子图.html">LIO-SAM（2020）：四类因子装进一张图 →</a>
+      </div>
+      <p class="foot-note">把 IMU 请进同一个方程，是激光 SLAM 从「只能看」到「敢动起来也看得准」的关键一步 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

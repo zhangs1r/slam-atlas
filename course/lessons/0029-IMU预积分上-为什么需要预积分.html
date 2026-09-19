@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IMU 预积分（上）：为什么需要预积分 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0029</div>
+      <h1>IMU 预积分（上）：为什么需要预积分</h1>
+      <p class="subtitle">这一节只回答一个问题：预积分到底在解决什么？先别急着推公式，把「问题有多致命」和「解法有多漂亮」讲透 🔑</p>
+      <div class="hero-meta">
+        <span>🎯 主题：实时 VIO 里 IMU 的重复积分之痛</span>
+        <span>👥 作者：Forster, Carlone, Dellaert, Scaramuzza</span>
+        <span>📅 2017 · IEEE T-RO · <i>On-Manifold Preintegration for Real-Time Visual–Inertial Odometry</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. VIO 的三难 + IMU 量级问题</a>
+        <a href="#b">2. ★ 核心问题：重复积分</a>
+        <a href="#c">3. 解法思想：搬到 SO(3) 流形</a>
+        <a href="#d">4. ★ 预积分量定义与式 32/33 对比</a>
+        <a href="#e">5. 设计动机与 VIO 可观性</a>
+        <a href="#f">6. 滤波 vs 优化对照表</a>
+        <a href="#g">7. 实验与两条纠偏</a>
+        <a href="#h">8. 结论、局限与 OCR 提醒</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「重复积分（reintegration）」为什么让朴素 IMU 积分在优化里不可行；背出预积分量 $\Delta\mathrm R_{ij},\Delta\mathbf v_{ij},\Delta\mathbf p_{ij}$ 的定义；并用「式 32 vs 式 33」的对比，讲明白为什么预积分能实时。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0028</b>：上一节 MSCKF 是「structureless 滤波」代表，其代价是测量只能被线性化吸收一次、必须延迟处理；这一节讲论文如何把同样的 structureless 思想搬进<b>优化框架</b>，并解决延迟问题。接 <b>0008</b>：第一季提过 IMU 200 Hz，这一节第一次正面解释「高频 IMU 和几十 Hz 相机」的节奏差怎么处理。</p></div>
+      </div>
+
+      <h2>1. VIO 的三难 + IMU 量级问题</h2>
+      <p>视觉-惯性里程计（VIO，用相机 + IMU 推算自身运动）有三重矛盾，原文在引言里摆得很清楚：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 滤波快但不一致</h4><p>滤波（如上一节的 MSCKF）算得快，但线性化误差会累积，导致估计「<b>不一致（inconsistent）</b>」——滤波器对自己的不确定度过于自信，实际却偏了。</p></div>
+        <div class="mini-card"><h4>② 全平滑准但慢</h4><p>全平滑（smoothing，把历史全部一起优化）最准，但「<i>real-time operation quickly becomes infeasible</i>」——历史越长越算不动，实时性很快崩。</p></div>
+        <div class="mini-card"><h4>③ 固定滞后是折中但难调</h4><p>固定滞后（滑窗）是折中，但「<i>it is not clear how to set the length of the estimation window</i>」——窗口取多长才能保证性能，没人说得准。</p></div>
+      </div>
+      <p>而真正把这三难逼到墙角的，是 <b>IMU 的量级问题</b>。IMU 的速率是 <b>100 Hz 到 1 kHz</b>，而相机只有几十 Hz。原文一句话点出痛点：「<i>A naive implementation would require adding a new state at every IMU measurement, which quickly becomes impractically slow</i>」——如果每次 IMU 读数都往状态里加一个新变量，系统会<b>膨胀到不可承受</b>。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia/d7b3ed87b1846a90a5d49944b0fa12376d3954fea6c99e712b97e2ba8b390797.jpg" alt="Fig. 4">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Different rates for IMU and camera.（IMU 与相机的不同频率。）<br>
+          <b>怎么看这张图：</b>这就是预积分存在的最直白理由：IMU 采样极密（上百 Hz），相机关键帧极稀（几 Hz）。中间那一大段没相机、只有 IMU 的时段，必须被「压缩」成一条约束，否则状态向量会被 IMU 撑爆。可接第一季 0008 课的「IMU 200 Hz」一起看。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 核心问题：重复积分（reintegration）</h2>
+      <p>这是本节的题目，也是全篇的「啊哈时刻」。先说朴素做法：在两个相机关键帧 $i$ 和 $j$ 之间，用 IMU 把姿态、速度、位置从 $i$ 积分到 $j$。原文把问题原话摆出来：</p>
+      <div class="callout">
+        <h4>原文原话（请直接引用）</h4>
+        <p>「<i>For standard IMU integration between two frames, the initial condition is given by the state estimate at the first frame. However, at every iteration of the optimization, the state estimate changes, which requires to repeat the IMU integration between all frames.</i>」</p>
+        <p>更具体的一段：「<i>the integration in (32) has to be repeated whenever the linearization point at time $t_i$ changes… intuitively, a change in the rotation $\mathrm R_i$ implies a change in all future rotations $\mathrm R_k$, $k=i,\dots,j-1$, and makes necessary to re-evaluate summations and products in (32).</i>」</p>
+      </div>
+      <p>把「朴素积分」写成公式（式 32），你就明白痛在哪了：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm R_j=\mathrm R_i\prod_{k=i}^{j-1}\mathrm{Exp}\Big((\tilde{\pmb\omega}_k-\mathbf b_k^g-\pmb\eta_k^{gd})\Delta t\Big)$$</div>
+        <div class="flow-formula">$$\mathbf v_j=\mathbf v_i+\mathbf g\Delta t_{ij}+\sum_{k=i}^{j-1}\mathrm R_k(\tilde{\mathbf a}_k-\mathbf b_k^a-\pmb\eta_k^{ad})\Delta t$$</div>
+      </div>
+      <p><b>关键观察：</b>等号右边每一项都含 $\mathrm R_k$，而 $\mathrm R_k$ 又是由 $\mathrm R_i$ 一步步递推来的。优化器每迭代一次，它对 $i$ 时刻状态的估计 $\mathrm R_i$ 就会变一点点——<b>只要 $\mathrm R_i$ 一动，从它递推出来的所有 $\mathrm R_k$ 全作废，整段求和与连乘必须从头重算一遍。</b>这就是「<b>重复积分</b>」：状态一变，全部重来。在实时系统里，这意味着每帧都要把整段历史重新积分，慢到不可行。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么「朴素 IMU 积分」在优化迭代里每步都要重算？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。因为 $\mathrm R_j$ 的递推式里每一项都依赖由 $\mathrm R_i$ 递推出的 $\mathrm R_k$；优化器每迭代一次，对 $\mathrm R_i$ 的估计就变一次，于是所有后续 $\mathrm R_k$ 都得重算，整段积分推倒重来。" onclick="lessonKit.answer(this,'q0029a')">因为 $\mathrm R_j$ 依赖由 $\mathrm R_i$ 递推来的所有 $\mathrm R_k$，$\mathrm R_i$ 一变全作废</button>
+          <button data-correct="no" data-explanation="不对。噪声 $\pmb\eta$ 是固定的传感器读数，不随优化迭代改变；重复积分的根源是「状态估计 $\mathrm R_i$ 在变」而不是噪声在变。" onclick="lessonKit.answer(this,'q0029a')">因为每次迭代传感器噪声 $\pmb\eta$ 都会随机变化</button>
+          <button data-correct="no" data-explanation="不对。相机帧率高低只是「为什么要压缩 IMU」的诱因，真正让单次积分必须重算的是状态 $\mathrm R_i$ 在优化中变化，与帧率无直接因果。" onclick="lessonKit.answer(this,'q0029a')">因为相机帧率太低导致积分步数太多</button>
+        </div>
+        <div class="quiz-feedback" id="q0029a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 解法思想：搬到 SO(3) 流形</h2>
+      <p>出路来自 Lupton &amp; Sukkarieh 的「<b>相对运动约束重参数化</b>」，也就是 IMU 预积分。本文在此基础上做了一件关键升级：<b>把整套理论搬到 SO(3) 流形（旋转群）上</b>，取代他们的欧拉角版本。原文毫不客气地批评欧拉角：</p>
+      <div class="callout">
+        <h4>原文批评欧拉角</h4>
+        <p>「<i>Using Euler angles and applying the usual averaging and smoothing techniques of Euclidean spaces for state propagation and covariance estimation is not properly invariant under the action of rigid transformations. Moreover, Euler angles are known to have singularities.</i>」——用欧拉角 + 欧氏空间的加减技巧，在刚体变换下<b>不是真不变的</b>；而且欧拉角有<b>奇点（万向锁）</b>。</p>
+      </div>
+      <p>这里要先补一个零基础最容易卡死的概念：<b>流形上的扰动 = 右乘一个指数映射。</b></p>
+      <div class="callout">
+        <h4>生活类比：在姿态上做小改动</h4>
+        <p>旋转不是平面上的箭头，不能「加一个向量」来微调。正确做法是<b>右乘一个小旋转</b>：写 $\mathrm R\,\mathrm{Exp}(\delta\pmb\phi)$。其中 $\mathrm{Exp}$ 是把「切空间里的小向量 $\delta\pmb\phi$」翻译成「流形上的小旋转」的指数映射；配套的右雅可比 $\mathrm J_r$ 则负责「把切空间里的加法」准确地翻译成「流形上的乘法」。直觉上就一句话：<b>想给姿态一点点改动，不能加一个数，得乘一个微小旋转。</b>正式的雅可比推导留到下一节。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 预积分量定义与式 32/33 对比</h2>
+      <p>本文的高光公式（式 33）。注意它<b>只定义、不展开推导</b>——推导和雅可比留给下一节：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Delta\mathrm R_{ij}\equiv\mathrm R_i^\top\mathrm R_j=\prod_{k=i}^{j-1}\mathrm{Exp}\Big((\tilde{\pmb\omega}_k-\mathbf b_k^g-\pmb\eta_k^{gd})\Delta t\Big)$$</div>
+        <div class="flow-formula">$$\Delta\mathbf v_{ij}\doteq\mathrm R_i^\top(\mathbf v_j-\mathbf v_i-\mathbf g\Delta t_{ij})=\sum_{k=i}^{j-1}\Delta\mathrm R_{ik}(\tilde{\mathbf a}_k-\mathbf b_k^a-\pmb\eta_k^{ad})\Delta t$$</div>
+        <div class="flow-formula">$$\Delta\mathbf p_{ij}\doteq\mathrm R_i^\top\Big(\mathbf p_j-\mathbf p_i-\mathbf v_i\Delta t_{ij}-\tfrac12\mathbf g\Delta t_{ij}^2\Big)=\sum_{k=i}^{j-1}\Big[\Delta\mathbf v_{ik}\Delta t+\tfrac12\Delta\mathrm R_{ik}(\tilde{\mathbf a}_k-\mathbf b_k^a-\pmb\eta_k^{ad})\Delta t^2\Big]$$</div>
+      </div>
+      <p>三个量分别叫「相对旋转 $\Delta\mathrm R_{ij}$」「相对速度 $\Delta\mathbf v_{ij}$」「相对位置 $\Delta\mathbf p_{ij}$」。它们看起来只是把式 (32) 左右移项、再左乘一个 $\mathrm R_i^\top$。<b>但这一移项，是整篇论文的灵魂。</b></p>
+      <div class="callout">
+        <h4>★ 中心引文（L359，务必记住）</h4>
+        <p>原文说：「<i>in contrast to the 'delta' rotation $\Delta\mathrm R_{ij}$, neither $\Delta\mathbf v_{ij}$ nor $\Delta\mathbf p_{ij}$ correspond to the true physical change in velocity and position but are defined in a way that make the right-hand side of (33) independent from the state at time $i$ as well as gravitational effects. Indeed, we will be able to compute the right-hand side of (33) directly from the inertial measurements between the two keyframes.</i>」</p>
+        <p>翻译：式 (33) 右边<b>既不含 $i$ 时刻的状态（$\mathrm R_i,\mathbf v_i,\mathbf p_i$），也不含重力 $\mathbf g$</b>——它只由两段关键帧之间的 IMU 读数（和旧偏置）决定。所以右边可以<b>直接由惯性测量算出来，固定住，不再随优化摇摆</b>。</p>
+      </div>
+      <p>把式 (32) 和式 (33) <b>并排对比</b>，全部答案都在这里：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>式 32（朴素积分）</h4><p>右端每项含 $\mathrm R_k$，而 $\mathrm R_k$ 由 $\mathrm R_i$ 递推。$\mathrm R_i$ 一改，全部作废，必须重积分。</p></div>
+        <div class="mini-card"><h4>式 33（预积分）</h4><p>右端只剩 IMU 读数与旧偏置。$\mathrm R_i,\mathbf v_i,\mathbf p_i,\mathbf g$ <b>全部消失</b>。算一次，固定，优化怎么动都不用重算。</p></div>
+      </div>
+      <p><b>这就是「为什么能实时」的全部答案：</b>把「依赖全局状态、随优化变」的积分，重参数化成「只依赖 IMU 读数、算一次就固定」的相对量。优化器随便迭代，这段 IMU 数据再也不用重新积分了。</p>
+
+      <h3>两条设计动机（写给读者的「为什么这么定义」）</h3>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 为什么要减重力和初速度</h4><p>$\Delta\mathbf v$、$\Delta\mathbf p$ 的定义里特意扣掉了 $\mathbf g\Delta t_{ij}$ 和 $\mathbf v_i\Delta t_{ij}$ 等项，目的就是把这两个量和「状态」彻底解耦——否则它们仍会依赖 $\mathbf v_i,\mathbf g$。</p></div>
+        <div class="mini-card"><h4>② 为什么左乘 $\mathrm R_i^\top$</h4><p>左乘 $\mathrm R_i^\top$ 把量测「搬」到机体系 / 首帧系，从而不依赖全局朝向 $\mathrm R_i$。这正是让右端摆脱 $\mathrm R_i$ 的关键一步。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 设计动机与 VIO 可观性</h2>
+      <p>顺带讲一个很有用的知识点：<b>VIO 的可观性（observability）</b>。可观性问的是「哪些量理论上能被估计出来」。原文指出 VIO 有 <b>4 个不可观方向</b>：全局位置（3 维）+ 绕重力方向的偏航角 yaw（1 维）。</p>
+      <div class="callout">
+        <h4>可观性带来的好消息</h4>
+        <p>重力方向是<b>可观</b>的，所以 roll / pitch（横滚 / 俯仰）的不确定度是有界的——不会无限发散。更重要的是：<b>引入 IMU 让「尺度（scale）」和「重力」变得可观</b>。这解释了为什么纯单目 VO 会有尺度漂移，而 VIO 能把它压住。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia/1b2df2b2b0080a2aaf79bb38cdf09be8f5f426be3f7bf5908119d30d0095b763.jpg" alt="Fig. 3">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Left: visual and inertial measurements in VIO. Right: factor graph in which several IMU measurements are summarized in a single preintegrated IMU factor and a structureless vision factor constraints keyframes observing the same landmark.（左为 VIO 中的视觉与惯性测量；右为因子图——多条 IMU 测量被汇总为单个预积分 IMU 因子，structureless 视觉因子约束观测到同一路标的关键帧。）<br>
+          <b>怎么看这张图：</b>这是全文的「地图」。右图一次讲清三种边：<b>9 维的预积分 IMU 因子</b>（把中间密密麻麻的 IMU 测量压缩成一条连接两关键帧的边）、<b>structureless 视觉因子</b>（不优化三维点的视觉约束）、以及<b>偏置随机游走因子</b>（连接相邻时刻的偏置）。请记住这张图，下一节还会回来讲 IMU 因子那条边的内部构造。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 滤波 vs 优化对照表</h2>
+      <p>原文 Section II 给了一张很清楚的对照表，我整理成三个维度：</p>
+      <table>
+        <thead><tr><th>轴</th><th>滤波（filter）</th><th>固定滞后平滑（fixed-lag smoother）</th><th>全平滑（full smoother）</th></tr></thead>
+        <tbody>
+          <tr><td><b>参与估计的相机位姿数量</b></td><td>只估最新状态</td><td>滑窗，边缘化旧状态并吸收为高斯先验</td><td>全部历史（批非线性最小二乘）</td></tr>
+          <tr><td><b>不确定性表示</b></td><td>协方差矩阵</td><td>信息矩阵（协方差之逆）或其平方根</td><td>信息矩阵 / 平方根</td></tr>
+          <tr><td><b>测量模型被线性化几次</b></td><td>标准 EKF 只一次（区别于迭代 EKF）</td><td>允许多次</td><td>允许多次</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <h4>一句很重要的话</h4>
+        <p>原文说：「<i>it can be shown that the iterated EKF equations are equivalent to the Gauss–Newton algorithm</i>」——迭代 EKF 的方程等价于高斯-牛顿。所以<b>「滤波」和「平滑」不是两回事</b>，只是「参与估计的历史长度」和「线性化次数」不同。这正好呼应第一季 0003 的「滤波 → 优化」主线。</p>
+      </div>
+      <div class="callout">
+        <h4>★ 上一节到本节的教科书级过渡词</h4>
+        <p>原文讲滤波代表 MSCKF 的代价时写道：「<i>since MSC-KF can only linearize and absorb a measurement once, the processing of measurements needs to be delayed until all measurements of the same landmark are observed. This does not apply to the proposed optimization-based approach, which allows for multiple relinearizations and the incremental inclusion of new measurements.</i>」——因为 MSCKF 只能把测量线性化、吸收一次，所以必须延迟到同一路标的所有测量都到齐；<b>而本文的优化方法允许多次重线性化、还能增量加入新测量，不存在这个限制。</b>这句话把上一节和本节完美接上了。</p>
+      </div>
+      <p>论文还有两条贡献：① 在流形上形式化预积分理论（生成模型、旋转噪声性质、MAP 估计器推导、<b>全部雅可比解析给出</b>）；② 把预积分 IMU 模型接入因子图，配合 <b>iSAM2 增量平滑</b> + <b>structureless 视觉模型</b>（不优化 3D 点）。外加一条教程贡献：Section III 给出流形上不确定性表示的简短总结。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验与两条纠偏</h2>
+      <p>实验在 Section VIII，抄准并注意两条纠偏：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>仿真</h4><p>半径 3 m 圆轨迹 + 正弦垂直运动，总长 <b>120 m</b>；每帧最多 50 个路标；像素噪声 $\sigma_{px}=1$ px；焦距 315 px；相机 <b>2.5 Hz</b>；<b>50 次 Monte Carlo</b>；后端 iSAM2。结果：<b>平均每次更新约 10 ms</b>。</p></div>
+        <div class="mini-card"><h4>一致性（NEES）</h4><p>用 NEES 检验，$\alpha=2.5\%$、$n=6\times50$，接受域 $\bar\eta_k\in[5.0,7.0]$。结论：「<i>the average NEES… remains below the upper bound at 7.0, which assures that the estimator is not overconfident.</i>」——估计器没有过度自信（呼应 0022 的 NEES）。</p></div>
+        <div class="mini-card"><h4>偏置一阶修正</h4><p>对 $\delta b$ 幅度 0.04–0.2 的随机扰动、1000 次 MC，一阶修正误差「negligible」（可忽略）。</p></div>
+        <div class="mini-card"><h4>真实室内</h4><p><b>430 m</b> 室内轨迹；VI-Sensor（ADIS16448 MEMS IMU + 双目 WVGA，只用左目），相机 20 Hz、IMU 800 Hz；Vicon 真值；对比 OKVIS 与 MSCKF。段长 {10,40,90,160,250,360} m 平均：<b>本文 360 m 平均漂移 0.3 m；OKVIS 与 MSCKF 平均误差 0.7 m</b>；后端平均 10 ms/关键帧（Intel i7 2.4 GHz，10 次优化迭代），SVO 前端约 3 ms/帧。</p></div>
+        <div class="mini-card"><h4>真实室外</h4><p>① 300 m 绕楼回原点，本文端到端误差 <b>1.5 m</b>，Tango 2.2 m——<b>⚠️ 但 Fig. 18 图注写的是「The end-to-end error of the proposed approach is 1.0 m」，正文与图注自相矛盾，授课时须点明</b>；② 160 m 三层楼往返，本文 0.5 m，Tango 1.4 m。原文声明 Tango 用不同传感器，「only allow for a qualitative comparison」。</p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia/5b1a383cd7522077ddecf91f6f3eac9c2621a07847dfac2ba86454d24ae063fc.jpg" alt="Fig. 13">
+        <figcaption>
+          <b>原图注（Fig. 13）：</b>KL divergence between the preintegrated rotation covariance—computed using Euler angles (red) and the proposed approach (blue)—and the ground-truth covariance. The Euler angle parametrization degrades close to the singularity at $\theta_{\max}=90^\circ$ while the proposed on-manifold approach is accurate regardless of the motion.（欧拉角法（红）与本文法（蓝）的预积分旋转协方差同真值协方差之间的 KL 散度；欧拉角参数化在接近 $\theta_{\max}=90^\circ$ 奇点时退化，而本文的流形法在任何运动下都准确。）<br>
+          <b>怎么看这张图：</b>这是「为什么非要上流形」的决定性证据。红线在接近 90° 时高高翘起（协方差算错了，因为欧拉角撞上奇点）；蓝线一直贴着底边（准确）。讲这张图比讲十行公式都管用——它直观证明了「欧拉角会翻车，流形不会」。</b>
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>★ 必须纠正的预期</h4>
+        <p><b>本篇（T-RO 2017 版）全文未出现「EuRoC」</b>（已逐字检索确认为 0 次）。EuRoC 是发表在 2015 RSS <b>前作 [6]</b> 上的实验。本篇的真实数据集是上面三条自采数据 + 仿真。<b>绝对不要写「本文在 EuRoC 上评测」。</b></p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 结论、局限与 OCR 提醒</h2>
+      <p>结论：预积分把大量 IMU 测量建模为<b>单一运动约束</b>；与在全局系积分的方法相比，「<i>we do not commit to a linearization point during integration</i>」（积分过程中不绑定某个线性化点）；配合 iSAM2 做到 <b>constant-time 增量平滑</b>。代码最终进了 <b>GTSAM 4.0</b>。</p>
+      <p>原文开放方向：「<i>our approach does not marginalize out past states. Therefore, while the approach is designed for fast VIO, if desired, it could be readily extended to incorporate loop closures.</i>」——<b>本文未边缘化旧状态，所以理论上可接回环（loop closure），但本文没做。</b></p>
+      <div class="callout">
+        <h4>明确局限（逐条）</h4>
+        <p>① <b>积分式本身是近似</b>：「<i>This numeric integration of the velocity and position assumes a constant orientation $\mathrm R(t)$ for the time of integration… which is not an exact solution</i>」——假设两测量间朝向恒定，高帧率 IMU 缓解了误差。② <b>偏置一阶修正只在 $\delta b$ 小时成立</b>。③ <b>忽略地球自转</b>（「assuming that W is an inertial frame」）——<b>与上一节 MSCKF 用 ECEF 恰好相反，务必对照</b>。④ <b>没有初始化 / 重力方向估计章节</b>——它假设前端已给关键帧、外参已标定、时间已同步；<b>这是该论文的空白，要如实说</b>。⑤ 前端会污染对比（三算法用不同特征跟踪前端）。⑥ Tango 对比非同传感器，仅定性。⑦ <b>真实实验无法算 NEES</b>（「<i>difficult</i>」），只能用单次 3σ 图；且只对齐第一帧，400 m 漂移对初始位姿/手眼标定极敏感。⑧ 未做回环、未做长期一致性。</p>
+      </div>
+      <div class="callout">
+        <h4>OCR 提醒（本条很重要）</h4>
+        <p>原始 PDF 文字里，式 (33) 的 <b>$\Delta L$ 共 6 处，全部应为 $\Delta t$</b>——这是本文件最系统性的错误；另有 $\mathbf b_k^\theta$ 应为 $\mathbf b^g_k$、$\pmb\eta^{\mathrm{rd}}_k$ 应为 $\pmb\eta^{gd}_k$、$\mathbf b_k^\alpha$ 应为 $\mathbf b^a_k$；式 (37)、(59)、(61)、(69)、(83) 等处严重错读，<b>不可照抄 md</b>。本课程里写公式时一律用正确形式。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>预积分的核心好处，下面哪个说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。预积分把依赖全局状态 $\mathrm R_i$ 的积分，重参数化成只依赖 IMU 读数的相对量，算一次就固定，优化迭代时无需重积分——这正是「为什么能实时」的本质。" onclick="lessonKit.answer(this,'q0029b')">它让 IMU 约束在优化迭代时无需重复积分</button>
+          <button data-correct="no" data-explanation="不对。预积分并没有「提高 IMU 采样率」，采样率仍是硬件决定的（100 Hz–1 kHz）；它只是把高频数据压缩成一条因子。" onclick="lessonKit.answer(this,'q0029b')">它让 IMU 的物理采样率提高到了 1 kHz 以上</button>
+          <button data-correct="no" data-explanation="不对。预积分仍假设世界系是惯性系、忽略地球自转（与 0028 的 ECEF 相反），并没有「显式处理地球自转」；那是上一节 MSCKF 的做法。" onclick="lessonKit.answer(this,'q0029b')">它显式处理了地球自转，所以比 MSCKF 更准</button>
+        </div>
+        <div class="quiz-feedback" id="q0029b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>用一句话说明「重复积分（reintegration）」为什么让朴素做法在优化里不可行。</p>
+          <p><b>答：</b>朴素积分的 $\mathrm R_j$ 依赖由 $\mathrm R_i$ 递推来的所有 $\mathrm R_k$；优化每次迭代都微调对 $\mathrm R_i$ 的估计，导致后续所有 $\mathrm R_k$ 作废、整段积分必须重算，历史越长越算不动。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>式 (33) 相对式 (32) 做了什么关键改动，使得右端不再依赖 $i$ 时刻状态？</p>
+          <p><b>答：</b>把相对量定义成「全局量之差再左乘 $\mathrm R_i^\top$」，并特意扣掉重力与初速度项（$\mathbf g\Delta t_{ij}$、$\mathbf v_i\Delta t_{ij}$ 等）。这样右端只剩 IMU 读数和旧偏置，状态（$\mathrm R_i,\mathbf v_i,\mathbf p_i$）和重力 $\mathbf g$ 全部消失。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>为什么本文要批评欧拉角、坚持搬到 SO(3) 流形？</p>
+          <p><b>答：</b>欧拉角用欧氏空间加减做传播/协方差估计，在刚体变换下不是真不变的；且欧拉角有奇点（万向锁），接近 90° 时协方差传播会退化（见 Fig. 13）。流形 + 指数映射避免了这两点。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>VIO 有几个不可观方向？引入 IMU 让哪些量变得可观？</p>
+          <p><b>答：</b>4 个不可观方向：全局位置（3）+ 绕重力轴的偏航 yaw（1）。重力方向可观，所以 roll/pitch 不确定度有界；IMU 还让「尺度」和「重力」变得可观，这正是单目 VO 会尺度漂移、VIO 能压住它的原因。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0028-MSCKF2007-不把路标放进状态向量.html">← 上一课：MSCKF（2007）</a>
+        <a class="next" href="0030-IMU预积分下-流形上的推导与雅可比.html">下一课：IMU 预积分（下） →</a>
+      </div>
+      <p class="foot-note">把「为什么需要预积分」嚼碎，下一节我们钻进推导和雅可比 🔧</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

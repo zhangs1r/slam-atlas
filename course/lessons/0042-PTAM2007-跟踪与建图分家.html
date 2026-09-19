@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PTAM（2007）：跟踪与建图分家 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0042</div>
+      <h1>PTAM（2007）：跟踪与建图分家</h1>
+      <p class="subtitle">把「跟踪」和「建图」拆成两个线程，是视觉 SLAM 最天才的架构革命 🧵</p>
+      <div class="hero-meta">
+        <span>🎯 主题：双线程架构 + 关键帧 + 实时 BA</span>
+        <span>👥 作者：Klein &amp; Murray</span>
+        <span>📅 2007 · <i>Parallel Tracking and Mapping for Small AR Workspaces</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">为什么要分两个线程</a>
+        <a href="#b">怎么解决规模问题</a>
+        <a href="#c">关键帧与初始化</a>
+        <a href="#d">跟踪的鲁棒性技巧</a>
+        <a href="#e">Bundle Adjustment 与稀疏性</a>
+        <a href="#f">局限与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 PTAM 为什么把「跟踪」和「建图」拆成两个线程；讲出它用「地图点＋关键帧」替代状态向量里的路标；解释由粗到细的金字塔搜索；并点出它的 BA 怎么靠稀疏性把复杂度从 $O((N+M)^3)$ 降到 $O(N^3)$。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>本篇与 <b>0028 MSCKF</b> 形成最尖锐对照：MSCKF 用零空间投影把路标移出状态向量，PTAM 更彻底——把<b>整个建图</b>移出实时循环。它直接接 <b>0019 BA 教程</b>：Schur 消元与 gauge freedom 在这里第一次走进实时。也和 <b>0027 COLMAP</b>（离线 SfM）对照——PTAM 是把同一套 BA 塞进异步线程。</p></div>
+      </div>
+
+      <h2>1. 为什么要分两个线程</h2>
+      <p>上一节 MonoSLAM 把「跟踪相机」和「更新地图」塞在同一个 EKF 循环里，每帧都要一起算，于是地图一大就崩。PTAM 的第一个洞见是：<b>这两件事的时间尺度根本不是一个量级。</b></p>
+      <p>论文的论证是功能性的，原话很直白：</p>
+      <ul>
+        <li>摘要里说手持相机运动「erratic hand-held motion」（ erratic＝飘忽不定、乱晃），跟踪必须每帧都稳稳跟上；</li>
+        <li>§2 说两个任务可以「processed in parallel threads」（并行线程处理），而且建图「need not be processed within strict real-time limits」（不必受严格实时限制约束）。</li>
+      </ul>
+      <p>翻译成人话：<b>跟踪要几十赫兹、帧帧不能掉；建图可以慢吞吞地在后台做。</b>既然节奏不同，硬把它们绑在一帧里就是浪费。于是 PTAM 把系统劈成两条并行线程——</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{Tracking 线程（每帧几十 Hz）}\;\parallel\;\text{Mapping 线程（后台慢慢 BA）}$$</div></div>
+      <p>注意：论文<b>没有</b>把「30 Hz vs 慢」写成一个精确数字对比，它的说服力来自功能分工本身。下面这张自绘图把「频率不同」画成一条时间轴。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 370" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 时间轴 -->
+          <line x1="60" y1="190" x2="860" y2="190" stroke="#9aa7ad" stroke-width="2"/>
+          <text x="60" y="355" fill="#9aa7ad" font-size="13">时间 →</text>
+          <!-- 上泳道：Tracking 帧（密密的小相机画面） -->
+          <text x="120" y="55" fill="#1565c0" font-size="15" font-weight="700">Tracking 线程（18–20 ms / 帧）</text>
+          <g>
+            <!-- 一排小相机缩略 -->
+            <rect x="80" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="120" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="160" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="200" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="240" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="280" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="320" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="360" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="400" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="440" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="480" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="520" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="560" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="600" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="640" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="680" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="720" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="760" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+            <rect x="800" y="70" width="26" height="20" rx="3" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5"/>
+          </g>
+          <text x="450" y="108" fill="#1565c0" font-size="12" text-anchor="middle">密集帧流：每帧都跑，不能掉</text>
+
+          <!-- 下泳道：Mapping 方块（稀疏） -->
+          <text x="120" y="215" fill="#2e7d32" font-size="15" font-weight="700">Mapping 线程（后台整理地图）</text>
+          <!-- 新关键帧事件 -->
+          <rect x="150" y="230" width="22" height="22" fill="#ef6c00" stroke="#e65100" stroke-width="1.5"/>
+          <rect x="430" y="230" width="22" height="22" fill="#ef6c00" stroke="#e65100" stroke-width="1.5"/>
+          <rect x="700" y="230" width="22" height="22" fill="#ef6c00" stroke="#e65100" stroke-width="1.5"/>
+          <text x="161" y="272" fill="#e65100" font-size="11" text-anchor="middle">新关键帧</text>
+          <text x="441" y="272" fill="#e65100" font-size="11" text-anchor="middle">新关键帧</text>
+          <text x="711" y="272" fill="#e65100" font-size="11" text-anchor="middle">新关键帧</text>
+          <!-- Local BA 条 -->
+          <rect x="180" y="232" width="60" height="18" fill="#a5d6a7" stroke="#2e7d32" stroke-width="1.5"/>
+          <text x="210" y="245" fill="#1b5e20" font-size="10" text-anchor="middle">Local BA 170–440 ms</text>
+          <!-- Global BA 长条 -->
+          <rect x="455" y="232" width="210" height="18" fill="#ef9a9a" stroke="#c62828" stroke-width="1.5"/>
+          <text x="560" y="245" fill="#8e0000" font-size="10" text-anchor="middle">Global BA 380 ms – 6.9 s（可被新关键帧打断）</text>
+
+          <!-- 交换箭头 -->
+          <line x1="120" y1="120" x2="120" y2="225" stroke="#6a1b9a" stroke-width="2.5" marker-end="url(#down)"/>
+          <line x1="250" y1="225" x2="250" y2="120" stroke="#6a1b9a" stroke-width="2.5" marker-end="url(#up)"/>
+          <text x="135" y="178" fill="#6a1b9a" font-size="11" transform="rotate(-90 135 178)">当前位姿↓</text>
+          <text x="284" y="120" fill="#6a1b9a" font-size="11" transform="rotate(90 284 120)">当前地图↑</text>
+          <defs>
+            <marker id="down" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#6a1b9a"/></marker>
+            <marker id="up" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#6a1b9a"/></marker>
+          </defs>
+          <text x="700" y="305" fill="#888" font-size="12" text-anchor="middle">两条泳道频率完全不同：上一行密、下一行疏</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条时间轴，上泳道是 Tracking 线程（一排密集的小相机画面，每帧 18–20 ms），下泳道是 Mapping 线程（稀疏的「新关键帧」事件 + Local/Global BA 长条）。紫色箭头表示两者交换「当前位姿」与「当前地图」。<br>
+          <b>怎么看这张图：</b>① 上泳道一格接一格，几乎不停；② 下泳道只在偶尔出现新关键帧时才干活，且 Global BA 那条能拖到几秒；③ 紫色双向箭头说明两线程通过「位姿↓ / 地图↑」耦合，但各自节奏独立。<br>
+          <b>要记住的一句话：</b>频率不同的两件事，拆开才能各跑各的最优节奏——这是 PTAM 的魂。
+        </figcaption>
+      </figure>
+
+      <p>论文还给了建图线程自己的状态机流程图（异步、无限循环、偶尔从跟踪器收新帧）：</p>
+      <figure class="figure">
+        <img src="../../md/images/2007_Parallel_Tracking_and_Mapping_for_Small_AR_Workspaces/1bc9548f40d74a8713b7af62a3bb8dbb24cf8e4dd19b36df57c309f1bee201e6.jpg" alt="The asynchronous mapping thread state machine">
+        <figcaption>
+          <b>原图注（Figure 2）：</b>The asynchronous mapping thread. After initialisation, this thread runs in an endless loop, occasionally receiving new frames from the tracker.（异步建图线程；初始化后无限循环，偶尔从跟踪器接收新帧。）<br>
+          <b>怎么看这张图：</b>① 从左上「Stereo initialisation」开始；② 然后进入「New keyframe? → Locally converged? → Globally converged? → Update data association → Sleep 5ms」的循环；③ 里面有 Local bundle adjust 与 Global bundle adjust 两个分支——这正是我们上面自绘图里那两条 BA 长条在论文里的正式出处。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它怎么解决 MonoSLAM 的规模问题</h2>
+      <p>PTAM 解决规模问题的办法，一句话：<b>不在状态向量里放路标。</b></p>
+      <p>MonoSLAM 把相机和所有路标塞进一个状态向量，导致 $O(N^2)$ 矩阵。PTAM 换个思路：地图不再是一堆「当前状态」，而是<b>持久的数据结构</b>——</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{地图} = \underbrace{M\ \text{个地图点}}_{\text{point features}} + \underbrace{N\ \text{个关键帧}}_{\text{keyframes}}$$</div></div>
+      <ul>
+        <li>每个<b>地图点</b>只存：它来自哪个关键帧（source keyframe）、在那一层金字塔（source pyramid level）、以及一个 8×8 像素的 <b>patch</b>（小图块）。</li>
+        <li>每个<b>关键帧</b>是一张被选出来的、有代表性的相机视角。</li>
+      </ul>
+      <p>关键差别：路标不再「活在滤波器状态里随时被更新」，而是作为「历史观测的副产品」被 bundle adjustment 一次性整体优化。于是地图规模从 MonoSLAM 的约 100 点，一跃到数千点（实测桌面视频 4997 点、57 关键帧；最大办公室图 11000 点、280 关键帧）。</p>
+      <p>这正好和 0028 MSCKF 形成「状态缩减」家族：MSCKF 用零空间投影把路标边缘化出状态向量；PTAM 更彻底，把<b>整个建图</b>搬出实时循环，只留一个轻量的跟踪线程在每帧跑。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2007_Parallel_Tracking_and_Mapping_for_Small_AR_Workspaces/1ed310cadf0c969d231dc78e954f89e87ac126980437d5e6ad0a8696dc564f66.jpg" alt="Typical operation of the PTAM system">
+        <figcaption>
+          <b>原图注（Figure 1）：</b>Typical operation of the system: a desktop is tracked. The on-line generated map contains close to 3000 point features, of which the system attempted to find 1000 in the current frame. The 660 successful observations are shown as dots. Also shown is the map's dominant plane, drawn as a grid. This frame was tracked in 18ms.（系统典型运行；在线地图约 3000 点，本帧尝试找 1000 个、成功 660 个；并画出主导平面网格；本帧跟踪 18 ms。）<br>
+          <b>怎么看这张图：</b>① 满屏小点就是「点特征地图」，数量远超 MonoSLAM 的 100 点上限；② 网格是作者用平面拟合出的「桌面」；③ 右下角标了 18 ms——跟踪这一帧很快，建图在别处慢慢做。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 关键帧选择策略与地图初始化</h2>
+      <h3>关键帧怎么插</h3>
+      <p>不是每一帧都值得存进地图。PTAM 只在满足若干条件时才把当前帧存为「关键帧」，例如：跟踪质量好、距离上一个关键帧已超过约 20 帧、且相机离最近的关键帧点足够远（阈值还随平均深度自适应）。这样地图里只保留「信息丰富、彼此有视差」的视角，避免冗余。</p>
+      <h3>地图初始化（两阶段）</h3>
+      <p>PTAM 的初始化很有名，分两步：</p>
+      <ol>
+        <li>先让用户拿着相机在一个<b>平面</b>或<b>非平面</b>上移动一点；</li>
+        <li>用<b>五点法立体</b>＋RANSAC 求本质矩阵并三角化，得到初始结构；</li>
+        <li>假设相机在两帧之间<b>平移了 10 cm</b>，由此取得公制尺度（这正是单目尺度不可观的工程解法，和 MonoSLAM 用已知靶标异曲同工）；</li>
+        <li>RANSAC 拟合一个主导平面并令其 $z=0$。</li>
+      </ol>
+      <p>整个初始化含用户交互约 <b>3 秒</b>。注意：论文自己限定场景是「mostly static、small workspace」，并明确说「Exploratory tasks such as running around a city are not supported」（不支持满城乱跑式探索）。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 跟踪的鲁棒性技巧</h2>
+      <p>拆成两条线程后，跟踪线程必须又准又稳。PTAM 用了一整套技巧：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 由粗到细的图像金字塔</h4><p>先在最粗层（小图）用少量特征粗定位，再逐层细化。金字塔层级 640×480 → 80×60，越往上图越小。</p></div>
+        <div class="mini-card"><h4>② 运动模型预测</h4><p>用上一帧的位姿＋速度，预测这一帧相机在哪，缩小搜索范围。</p></div>
+        <div class="mini-card"><h4>③ patch 搜索</h4><p>只在预测位置附近搜那个 8×8 的小图块（patch），不在全图乱找。</p></div>
+        <div class="mini-card"><h4>④ 分数阈值 + 极线搜索</h4><p>用零均值 SSD（减去均值抗光照变化）打分，超过阈值才算找到；搜索沿极线进行，并用深度先验截断极线长度。</p></div>
+      </div>
+      <p>论文用的匹配分数是<b>零均值 SSD</b>（不是 ZNCC），做法是把 patch 减去自身均值后再比较，以抵抗整体光照变化；低于分数阈值的匹配被丢弃。当跟踪质量变差，系统进入 poor 状态（禁止再投新关键帧）；若彻底 lost，则触发重定位（采用论文引用的 [30] 方法）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 三档分辨率：书架一角（示意） -->
+          <!-- 面板1：最粗（小图，模糊） -->
+          <text x="150" y="36" fill="#37474f" font-size="15" text-anchor="middle">第1轮：金字塔顶层（80×60，模糊）</text>
+          <rect x="60" y="50" width="180" height="135" fill="#d7c9a7" stroke="#8a7a5c" stroke-width="2"/>
+          <!-- 书架横线（少而粗，示意模糊） -->
+          <line x1="60" y1="85" x2="240" y2="85" stroke="#6b5b3e" stroke-width="6" opacity="0.5"/>
+          <line x1="60" y1="120" x2="240" y2="120" stroke="#6b5b3e" stroke-width="6" opacity="0.5"/>
+          <line x1="60" y1="155" x2="240" y2="155" stroke="#6b5b3e" stroke-width="6" opacity="0.5"/>
+          <!-- 待匹配 patch（小） -->
+          <rect x="135" y="100" width="22" height="22" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <!-- 大搜索框 -->
+          <rect x="100" y="70" width="92" height="92" fill="none" stroke="#1565c0" stroke-width="2.5" stroke-dasharray="6 4"/>
+          <text x="150" y="210" fill="#1565c0" font-size="12" text-anchor="middle">大搜索半径（粗找 50 点）</text>
+
+          <!-- 面板2：中层 -->
+          <text x="450" y="36" fill="#37474f" font-size="15" text-anchor="middle">第2轮：中间层（较清晰）</text>
+          <rect x="360" y="50" width="180" height="135" fill="#e3d8bd" stroke="#8a7a5c" stroke-width="2"/>
+          <line x1="360" y1="85" x2="540" y2="85" stroke="#6b5b3e" stroke-width="3" opacity="0.7"/>
+          <line x1="360" y1="105" x2="540" y2="105" stroke="#6b5b3e" stroke-width="3" opacity="0.7"/>
+          <line x1="360" y1="125" x2="540" y2="125" stroke="#6b5b3e" stroke-width="3" opacity="0.7"/>
+          <line x1="360" y1="145" x2="540" y2="145" stroke="#6b5b3e" stroke-width="3" opacity="0.7"/>
+          <line x1="360" y1="165" x2="540" y2="165" stroke="#6b5b3e" stroke-width="3" opacity="0.7"/>
+          <rect x="435" y="110" width="18" height="18" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <rect x="410" y="95" width="68" height="68" fill="none" stroke="#1565c0" stroke-width="2.5" stroke-dasharray="6 4"/>
+          <text x="450" y="210" fill="#1565c0" font-size="12" text-anchor="middle">搜索框收窄（位姿已修正）</text>
+
+          <!-- 面板3：底层（全分辨率，清晰） -->
+          <text x="750" y="36" fill="#37474f" font-size="15" text-anchor="middle">第3轮：全分辨率（清晰）</text>
+          <rect x="660" y="50" width="180" height="135" fill="#f0e8d2" stroke="#8a7a5c" stroke-width="2"/>
+          <line x1="660" y1="82" x2="840" y2="82" stroke="#6b5b3e" stroke-width="1.5"/>
+          <line x1="660" y1="98" x2="840" y2="98" stroke="#6b5b3e" stroke-width="1.5"/>
+          <line x1="660" y1="112" x2="840" y2="112" stroke="#6b5b3e" stroke-width="1.5"/>
+          <line x1="660" y1="128" x2="840" y2="128" stroke="#6b5b3e" stroke-width="1.5"/>
+          <line x1="660" y1="144" x2="840" y2="144" stroke="#6b5b3e" stroke-width="1.5"/>
+          <line x1="660" y1="160" x2="840" y2="160" stroke="#6b5b3e" stroke-width="1.5"/>
+          <line x1="660" y1="176" x2="840" y2="176" stroke="#6b5b3e" stroke-width="1.5"/>
+          <rect x="735" y="118" width="13" height="13" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <rect x="722" y="110" width="40" height="40" fill="none" stroke="#1565c0" stroke-width="2.5" stroke-dasharray="6 4"/>
+          <text x="750" y="210" fill="#1565c0" font-size="12" text-anchor="middle">小搜索框（精找 1000 点）</text>
+
+          <text x="450" y="250" fill="#37474f" font-size="13" text-anchor="middle">同一书架角落，分辨率由模糊到清晰；红框＝待匹配 patch，蓝虚框＝搜索范围，逐层收窄</text>
+          <text x="450" y="275" fill="#e67e22" font-size="13" text-anchor="middle">先在小图上粗找定个位姿，再用修正后的位姿去大图里精细搜——又快又准</text>
+          <text x="450" y="345" fill="#888" font-size="11" text-anchor="middle">（图为简化示意的书架，真实实验是桌面/办公室场景）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一处场景（书架一角，简化示意）的三档分辨率，红框是那个要匹配的 8×8 patch，蓝虚框是搜索范围。<br>
+          <b>怎么看这张图：</b>① 最左是小图，patch 虽小但搜索框很大——因为这时候位姿还不准，得广撒网；② 中间层位姿已被第 1 轮修正，搜索框明显变小；③ 最右全分辨率，搜索框最小，做精细匹配。框的尺寸从大到小逐级收窄。<br>
+          <b>要记住的一句话：</b>先粗后细，用「便宜的小图」先把位姿定个大概，再拿准位姿去「贵的大图」里精修——这是实时跟踪的标配手法。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. Bundle Adjustment：稀疏性把复杂度降下来</h2>
+      <p>PTAM 最硬核的一笔，是让 bundle adjustment（BA，第二季 0019 详讲过）从离线走进实时。它靠的是 <b>Schur 消元</b>。</p>
+      <p>BA 要同时优化所有关键帧位姿和所有地图点。朴素的矩阵分解代价是 $O((N+M)^3)$（N 个关键帧、M 个点）。但 BA 的 Hessian 矩阵极稀疏——每个地图点只被「看到它的少数关键帧」约束。利用这个稀疏性做 Schur 消元（先消去所有点变量，只保留关键帧之间的耦合），复杂度就降到：</p>
+      <div class="formula-box"><div class="flow-formula">$$O((N+M)^3)\ \xrightarrow{\text{Schur 消元（稀疏性）}}\ O(N^3)$$</div></div>
+      <p>论文 §6.3 原话就是：它「exploits the sparseness … to reduce the complexity of cubic-cost matrix factorisations from $O((N+M)^3)$ to $O(N^3)$」。这正是第二季 <b>0019 BA 教程</b> 里 Schur 消元的效果——把「点」边缘化掉，只留下「关键帧之间」那块变稠密的矩阵去分解。</p>
+      <p>★ <b>gauge freedom 的手工固定。</b>优化一个地图时，整体的平移/旋转/尺度有 7 个不可观自由度（单目更是 7 个，包括尺度）。PTAM 的处理很朴素：直接把<b>第一个关键帧固定为一个 datum</b>（不动的基准）。这正好对应 0019 里说的「固定一个基准帧来消去 gauge freedom」——只不过 PTAM 是手工固定，不是用 BA 里的约束自动处理。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 左：地图点列（M个） -->
+          <text x="120" y="36" fill="#37474f" font-size="15" text-anchor="middle">地图点（M 个）</text>
+          <g fill="#c0392b">
+            <circle cx="120" cy="90" r="9"/><circle cx="120" cy="130" r="9"/><circle cx="120" cy="170" r="9"/>
+            <circle cx="120" cy="210" r="9"/><circle cx="120" cy="250" r="9"/><circle cx="120" cy="290" r="9"/>
+          </g>
+          <!-- 右：关键帧列（N个，相机图标） -->
+          <text x="780" y="36" fill="#37474f" font-size="15" text-anchor="middle">关键帧（N 个）</text>
+          <g fill="#1565c0">
+            <rect x="762" y="78" width="36" height="24" rx="4"/><rect x="762" y="118" width="36" height="24" rx="4"/>
+            <rect x="762" y="158" width="36" height="24" rx="4"/><rect x="762" y="198" width="36" height="24" rx="4"/>
+            <rect x="762" y="238" width="36" height="24" rx="4"/><rect x="762" y="278" width="36" height="24" rx="4"/>
+          </g>
+          <!-- 点-关键帧 观测连线（稀疏） -->
+          <g stroke="#9aa7ad" stroke-width="1.5" opacity="0.8">
+            <line x1="129" y1="90" x2="762" y2="90"/>
+            <line x1="129" y1="90" x2="762" y2="130"/>
+            <line x1="129" y1="130" x2="762" y2="118"/>
+            <line x1="129" y1="130" x2="762" y2="158"/>
+            <line x1="129" y1="170" x2="762" y2="158"/>
+            <line x1="129" y1="210" x2="762" y2="198"/>
+            <line x1="129" y1="210" x2="762" y2="238"/>
+            <line x1="129" y1="250" x2="762" y2="238"/>
+            <line x1="129" y1="250" x2="762" y2="278"/>
+            <line x1="129" y1="290" x2="762" y2="278"/>
+          </g>
+          <!-- Schur 消元箭头 -->
+          <line x1="450" y1="180" x2="450" y2="180" stroke="#e67e22" stroke-width="3" marker-end="url(#sarr)"/>
+          <text x="450" y="60" fill="#e67e22" font-size="14" text-anchor="middle" font-weight="700">Schur 消元：删掉「点」</text>
+          <defs><marker id="sarr" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#e67e22"/></marker></defs>
+          <!-- 右下半：消元后关键帧之间变稠密 -->
+          <text x="780" y="330" fill="#37474f" font-size="13" text-anchor="middle">消元后：关键帧之间耦合变稠密</text>
+          <g stroke="#1565c0" stroke-width="2" opacity="0.7">
+            <line x1="780" y1="90" x2="780" y2="130"/>
+            <line x1="780" y1="90" x2="780" y2="158"/>
+            <line x1="780" y1="90" x2="780" y2="198"/>
+            <line x1="780" y1="130" x2="780" y2="158"/>
+            <line x1="780" y1="130" x2="780" y2="238"/>
+            <line x1="780" y1="158" x2="780" y2="198"/>
+            <line x1="780" y1="158" x2="780" y2="278"/>
+            <line x1="780" y1="198" x2="780" y2="238"/>
+            <line x1="780" y1="198" x2="780" y2="278"/>
+            <line x1="780" y1="238" x2="780" y2="278"/>
+          </g>
+          <text x="450" y="345" fill="#888" font-size="11" text-anchor="middle">（简化为 6 点 / 6 帧示意；真实 N 可达数百、M 可达数千）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是地图点（红），右边是关键帧（蓝相机），灰线是「哪个点被哪个关键帧看到」的稀疏观测。橙色箭头表示 Schur 消元把「点」整列删掉。<br>
+          <b>怎么看这张图：</b>① 原始 BA 要同时优化点（M）和关键帧（N），代价 $O((N+M)^3)$；② 消元后只留下关键帧之间的耦合（蓝线变稠密）；③ 于是只需分解「关键帧块」，代价降到 $O(N^3)$。<br>
+          <b>要记住的一句话：</b>稀疏性＝免费午餐——PTAM 靠它把本该离线的 BA 塞进了实时后台线程。
+        </figcaption>
+      </figure>
+
+      <p>论文还用一张双轴曲线证明：地图从 0 涨到数千点，跟踪耗时基本保持在 ~20 ms——这就是双线程架构的核心卖点：</p>
+      <figure class="figure">
+        <img src="../../md/images/2007_Parallel_Tracking_and_Mapping_for_Small_AR_Workspaces/e20e22b919c2961b7789eb310d67ddf07704908c4c248187808358714e257cc6.jpg" alt="Map size and tracking timings for the desk video">
+        <figcaption>
+          <b>原图注（Figure 4）：</b>Map size (right axis) and tracking timings (left axis) for the desk video… The timing spike occurs when tracking is lost and is attempting relocalisation.（桌面视频的地图规模与跟踪耗时双轴曲线；尖峰出现在跟踪丢失并尝试重定位时。）<br>
+          <b>怎么看这张图：</b>① 蓝线（右轴）地图从 0 一路涨到几千点；② 红线（左轴）跟踪耗时基本贴着 ~20 ms，只有「丢失→重定位」时才窜起一个尖峰；③ 这正是「建图在后台慢慢长、跟踪不受影响」的实物证据。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2007_Parallel_Tracking_and_Mapping_for_Small_AR_Workspaces/034934e35ddf274bbab5893e31f4086521b22aba91df37cd5cfddf818b9b41d0.jpg" alt="Comparison with EKF-SLAM on a synthetic sequence">
+        <figcaption>
+          <b>原图注（Figure 5）：</b>Comparison with EKF-SLAM on a synthetic sequence. The left image shows the map produced by the system described here, the centre image shows the map produced by an up-to-date implementation of EKF-SLAM [30].（与 EKF-SLAM 的合成序列对比；左为本篇地图，中为 EKF-SLAM 地图。）<br>
+          <b>怎么看这张图：</b>① 本篇产出约 6600 点（含少量外点），EKF-SLAM 只产出 114 点（全内点但稀疏）；② 对真值标准差 EKF-SLAM 135 mm vs 本篇 6 mm；③ 同一场景，两种架构的规模与精度差距一目了然。注意图注提到 z 轴尺度不同（真值在 z=3）。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PTAM 把 BA 的复杂度从 $O((N+M)^3)$ 降到 $O(N^3)$，靠的是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="靠 BA 的 Hessian 稀疏性做 Schur 消元：先消去地图点，只保留关键帧之间的耦合去分解，代价从 O((N+M)³) 降到 O(N³)。" onclick="lessonKit.answer(this,'q0042a')">Schur 消元</button>
+          <button data-correct="no" data-explanation="不是简单少算点。本质是稀疏性让「点」可被解析消去，剩下关键帧块分解。少算点是结果，不是原因。" onclick="lessonKit.answer(this,'q0042a')">只是少放点</button>
+        </div>
+        <div class="quiz-feedback" id="q0042a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 局限与衔接</h2>
+      <p>PTAM 很天才，但论文自己（§8）承认了不少边界：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 依赖角点</h4><p>快速运动导致运动模糊会「decimate most corners」（消灭大部分角点），跟踪失败；作者设想引入边缘特征。</p></div>
+        <div class="mini-card"><h4>② 重复纹理脆弱</h4><p>重复结构产生大量外点；若跟踪陷入局部极小又插了关键帧，整张地图可能被污染。</p></div>
+        <div class="mini-card"><h4>③ 不设计为大范围闭环</h4><p>论文明说「the system is not designed to close large loops」，且跟踪器的 M-estimator 不感知地图不确定度。</p></div>
+        <div class="mini-card"><h4>④ 尺度/光照/重定位</h4><p>尺度是任意的（靠假设平移 10 cm 钉住）；对光照变化敏感；丢失后重定位能力有限（lost 时耗时可达 90 ms）。</p></div>
+      </div>
+      <p>这些洞，正是下一节 <b>ORB-SLAM</b> 要补的：它把「双线程」扩成「三线程＋四张图」，加上回环、重定位、自动初始化，把单目 SLAM 从小房间 AR 推到大场景终身运行。</p>
+      <p>★ <b>收束一条线：</b>本课与 0019 BA 教程直接接上——Schur 消元让 BA 实时化、固定第一帧消 gauge freedom，这两点在 PTAM 里第一次落地进产品级系统。下一节 ORB-SLAM 会把 BA 再拆成 local / full 两档，并让回环模块独立成线程。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PTAM 固定「第一个关键帧」作为不动基准，是为了解决什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="是为了消去地图整体的平移/旋转/尺度这 7 个不可观自由度（gauge freedom），给 BA 一个确定的参考系。这正是 0019 讲的固定基准帧。" onclick="lessonKit.answer(this,'q0042b')">消去 gauge 自由度</button>
+          <button data-correct="no" data-explanation="不是加速。固定基准是为了让优化有唯一解，否则地图可以整体平移旋转缩放而证据不变。加速靠的是 Schur 消元，不是固定帧。" onclick="lessonKit.answer(this,'q0042b')">为了让 BA 更快</button>
+        </div>
+        <div class="quiz-feedback" id="q0042b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>PTAM 把「跟踪」和「建图」拆成两个线程，论文给出的功能性理由是什么？（请引用原文式表述）
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>摘要说手持相机运动「erratic hand-held motion」，跟踪必须每帧稳稳跟上；§2 说两任务可「processed in parallel threads」，且建图「need not be processed within strict real-time limits」。即：跟踪要几十 Hz 帧帧不掉，建图可慢，节奏不同故应拆开。</div></details>
+          </li>
+          <li>PTAM 的地图由哪两部分组成？相比 MonoSLAM 把路标放进状态向量，这解决了什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>地图 = M 个地图点 + N 个关键帧。路标不再活在滤波器状态里，而是作为持久数据结构被 BA 整体优化，从而避开了 MonoSLAM 全协方差的 O(N²) 瓶颈，地图规模从约 100 点跃升到数千点。</div></details>
+          </li>
+          <li>由粗到细（coarse-to-fine）金字塔搜索的思路是什么？为什么要「先在小图上粗找」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>先在金字塔最粗层用少量特征（约 50 个）在大搜索半径内粗定位、修正位姿；再用修正后的位姿在全分辨率图上对约 1000 个特征做小半径精细搜索。先粗找便宜又能把位姿定个大概，避免在全图大范围内做昂贵匹配。</div></details>
+          </li>
+          <li>PTAM 初始化时如何取得公制尺度？这和 MonoSLAM 有何异同？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>PTAM 假设相机在两帧之间平移了 10 cm，用这个外部长度把地图钉到公制。MonoSLAM 则是放一个已知尺寸的靶标来定尺度。本质都是「用外部已知长度绕开单目尺度不可观」，只是手段不同（假设平移 vs 已知靶标）。</div></details>
+          </li>
+          <li>论文 §6.3 说 BA 复杂度从 $O((N+M)^3)$ 降到 $O(N^3)$。这对应第二季 0019 BA 教程里的哪个概念？固定第一关键帧又对应哪个概念？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>复杂度下降对应 Schur 消元（利用 Hessian 稀疏性，先消去地图点，只分解关键帧块）；固定第一关键帧对应 gauge freedom 的手工固定（给地图一个不动基准，消去整体 7 自由度不可观）。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0041-MonoSLAM2007-EKF时代的单目SLAM.html">← MonoSLAM（2007）：把路标放进状态向量</a>
+        <a class="next" href="0043-ORB-SLAM2015-一套特征服务所有任务.html">ORB-SLAM（2015）：一套特征服务所有任务 →</a>
+      </div>
+      <p class="foot-note">PTAM 用「分家」这一招，把视觉 SLAM 从约 100 点推到数千点。但它不闭环、重定位弱、要人工初始化——这些洞，留给 ORB-SLAM 来填 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

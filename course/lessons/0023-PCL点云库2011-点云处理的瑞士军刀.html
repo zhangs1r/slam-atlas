@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PCL（2011）：点云处理的瑞士军刀 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0023</div>
+      <h1>PCL（2011）：点云处理的瑞士军刀</h1>
+      <p class="subtitle">全季唯一的「软件系统论文」——打地基中的工程底座，读后面所有激光论文都绕不开它 🧰</p>
+      <div class="hero-meta">
+        <span>🎯 主题：点云处理开源库 PCL 的架构与生态</span>
+        <span>👥 作者：Radu Bogdan Rusu、Steve Cousins（Willow Garage）</span>
+        <span>📅 2011 · ICRA（正文仅 2 页短文）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 这一节接在哪里</a>
+        <a href="#b">2. 它想解决什么</a>
+        <a href="#c">3. 九块分层库与统一接口</a>
+        <a href="#d">4. 后端依赖</a>
+        <a href="#e">5. ROS 集成与 nodelet</a>
+        <a href="#f">6. n-D 点云与可视化</a>
+        <a href="#g">7. §V 四个实例</a>
+        <a href="#h">8. 诚实的两条与对课程用处</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 PCL 为什么出现、它的九块分层库各管什么、统一接口四步是什么；并诚实记住「这篇 2 页短文没有 limitations 小节、也没有任何量化性能数字」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 0022：上一节基线用的 ICP/GICP/NDT 就来自 PCL，这节把那个「黑箱」打开。接 0006/0008：LOAM 的 scan-to-map 里「降采样、法向估计、最近邻搜索」这些零件都来自 PCL 这一层。接 0021：g²o 是后端库，PCL 是前端/数据处理库，共同构成后端+前端的工程底座。</p></div>
+      </div>
+
+      <h2>1. 这一节接在哪里：为什么需要 PCL</h2>
+      <p>前面 0022 那篇点云 BA，正文 §VI-B 原话提到：它的基线用了「classic pairwise registration methods, including <b>ICP, generalized-ICP (GICP), and NDT offered in PCL library</b>」。也就是说，<b>ICP/GICP/NDT 这套「点云怎么配准」的工具，就住在 PCL 里</b>。你读激光论文时，几乎每篇都会撞见 PCL 这个名字。</p>
+      <p>这一节要讲的，是全季唯一的<b>软件系统论文</b>（不是算法论文）。它的作用像「打地基里的工程底座」：不发明新算法，而是把点云处理的一堆常用算法，打包成一个可复用的 C++ 库。注意：它是 2 页短文，<b>很多学生期待的东西它并没有给</b>——这一节要诚实地讲清楚。</p>
+      <div class="callout">
+        <h4>一个生活类比：点云是什么</h4>
+        <p><b>点云</b>就是「一堆带三维坐标的点」的集合，像把现实世界用无数小点采样出来。激光雷达转一圈，得到的是一面墙、一根柱子在大空间里散落的点。处理点云，就是对这些点做降噪、算法向、抽平面、配准拼接等操作。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它想解决什么：传感器便宜了，处理机制缺位</h2>
+      <p>§I 的动机很朴素：机器人要在非结构化环境工作，就得「看」世界。过去 Velodyne 旋转激光、PR2 的俯仰激光能给出高质量点云，但价格「<i>costing thousands or tens of thousands of dollars</i>」，多数项目用不起。</p>
+      <p>转折点是 <b>Kinect</b> 出现——原文一句关键话：</p>
+      <div class="callout">
+        <h4>★ 动机金句</h4>
+        <p>Kinect「<i>can be purchased for <b>under \$150</b></i>」，对比以往传感器「costing thousands or tens of thousands of dollars」。三维感知的门槛被一夜拉低。于是「<b>缺的不是传感器，而是高效处理点云的机制</b>」——PCL 补这个缺口。</p>
+      </div>
+      <p>写作动机还隐含一条：此前 3D 处理代码各自为政、不可复用。PCL 把自己定位为「<i>a comprehensive free, BSD licensed, library for n-D Point Clouds and 3D geometry processing</i>」，并且<b>完全集成进 ROS</b>。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 九块分层库与统一接口</h2>
+      <p>§II 把 PCL 拆成一串可单独编译的小库（以下是原文列出的九块，以及每块的<b>代表算法</b>，这些代表算法都在原文里点名）：</p>
+      <table>
+        <tr><th>库（libpcl …）</th><th>负责什么</th><th>代表算法（原文点名）</th></tr>
+        <tr><td>filters</td><td>降采样、外点移除、索引提取、投影</td><td>VoxelGrid 降采样、StatisticalOutlierRemoval 统计外点移除</td></tr>
+        <tr><td>features</td><td>特征估计</td><td>法向与曲率、PFH/FPFH、NARF、RIFT、RSD、VFH、SIFT（强度图）</td></tr>
+        <tr><td>io</td><td>文件读写</td><td>PCD（Point Cloud Data）格式</td></tr>
+        <tr><td>segmentation</td><td>聚类、模型拟合</td><td>RANSAC 拟合平面/圆柱/球/直线、多边形棱柱提取</td></tr>
+        <tr><td>surface</td><td>曲面重建</td><td>网格化、凸包、Moving Least Squares (MLS)</td></tr>
+        <tr><td>registration</td><td>点云配准</td><td>ICP 等</td></tr>
+        <tr><td>keypoints</td><td>关键点提取</td><td>各类关键点（作为特征提取的前处理）</td></tr>
+        <tr><td>range image</td><td>深度图支持</td><td>由点云生成的深度图</td></tr>
+        <tr><td>visualization（§IV）</td><td>可视化</td><td>基于 VTK 的 n-D 点云可视化层</td></tr>
+      </table>
+
+      <h3>3.1 统一接口范式</h3>
+      <p>每个算法都长成同一副模样（§II 原话四步）：① 建对象（filter / feature estimator / segmentation…）；② <code>setInputCloud</code> 传入点云；③ 设参数；④ <code>compute</code>（或 <code>filter</code> / <code>segment</code>）取输出。</p>
+      <div class="callout">
+        <h4>★ 设计要点</h4>
+        <p>算法实现成「<b>基类 + 模板</b>」，共用功能收进基类，具体算法保持简洁；数据用 <b>Boost shared pointers</b>（智能指针）传递，<b>避免拷贝</b>已经存在系统里的数据。一个类负责一件事，可以自由串联——这就是后面 §V 实例能「拼积木」的原因。</p>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_3D_is_here__Point_Cloud_Library__PCL_/8f61736a78f501a096fde69873cfbc4215911b9e698b27bff02833500e7469b3.jpg" alt="Fig. 2 PCL implementation pipeline for FPFH estimation">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b><i>An example of the PCL implementation pipeline for Fast Point Feature Histogram (FPFH) estimation.</i>（PCL 实现 FPFH 估计的流水线示例。）</p>
+          <p><b>怎么看这张图：</b>它把「先建 NormalEstimation 对象 → 喂入点云算法向 → 把法向连同原始点云一起喂给 FPFH 估计器」画成数据流。这正是理解 PCL 统一接口与类型系统的最小例子：每个模块吃一个点云、吐一个点云/特征，可一路串下去。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 后端依赖</h2>
+      <p>PCL 自己不重造轮子，底层靠几个成熟库（§II 原话）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>Eigen</h4><p>开源模板化线性代数库，绝大多数矩阵运算基于它。</p></div>
+        <div class="mini-card"><h4>FLANN</h4><p><b>Fast Library for Approximate Nearest Neighbors</b>，快速<b>近似</b>最近邻，是 k-NN 搜索的骨干。注意是「近似」——这条后面要埋钩子。</p></div>
+        <div class="mini-card"><h4>SSE 优化</h4><p>底层数据结构大量用 SSE 指令，在现代 CPU 上提速。</p></div>
+        <div class="mini-card"><h4>OpenMP / Intel TBB</h4><p>多核并行，把大点云分摊到多个线程。</p></div>
+      </div>
+      <div class="callout">
+        <h4>生活类比：k 近邻与 k-d 树</h4>
+        <p><b>k 近邻（k-NN）</b>就是「给一个点，找出离它最近的 k 个点」。<b>k-d 树</b>是一种把空间一分为二地组织、加速这个查找的数据结构（FLANN 内部就是 k-d 树族）。激光 SLAM 前端几乎每步都要「找最近邻」来配准，所以这是地基中的地基。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ROS 集成与 nodelet</h2>
+      <p>§III 的核心概念是 <b>PPG（Perception Processing Graphs，感知处理图）</b>。原文一句很好用的话：</p>
+      <div class="callout">
+        <h4>★ PPG 金句</h4>
+        <p>「<i>there is no algorithmic difference between a wall detection algorithm, or a door detection, or a table detection – all of them share the same building block, which is … a constrained planar segmentation algorithm. What changes … is a subset of the parameters.</i>」即<b>墙检测 / 门检测 / 桌检测在算法上没有区别，只是参数不同</b>。于是每个算法都做成可独立连接的积木，像 ROS 节点那样拼成处理图。</p>
+      </div>
+      <p>但点云极大，若每个积木都跨进程序列化/反序列化会很贵。于是作者造了 <b>nodelets</b>：动态加载的插件，<b>看起来像 ROS 节点、但跑在同一进程里（单进程多线程）</b>，从而避免不必要的拷贝与序列化开销。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2011_3D_is_here__Point_Cloud_Library__PCL_/5dc0dfb93ec984ad0f73ea1b49b8d9f67f097c7ceb293bff4dd5afcd5885fa73.jpg" alt="Fig. 3 A ROS nodelet graph for object clustering on planar surfaces">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b><i>A ROS nodelet graph for the problem of object clustering on planar surfaces.</i>（「平面支撑上的物体聚类」问题的 ROS nodelet 图。）</p>
+          <p><b>怎么看这张图：</b>它把「感知任务」拆成一串可连接的积木（节点），直观展示 PPG 思想：每个方块是一个处理模块，数据在方块间流动。这也是「模块拼接」这件事最直白的图画。</p>
+        </figcaption>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PCL 的 nodelet 和普通的 ROS 节点，主要区别是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。原文说 nodelet 看起来像 ROS 节点、但跑在同一进程里（单进程多线程），目的是避免大点云跨进程的序列化/拷贝开销。" onclick="lessonKit.answer(this,'q0023a')">nodelet 同进程多线程，省掉序列化/拷贝开销</button>
+          <button data-correct="no" data-explanation="不对。nodelet 正是为了减少跨进程通信开销才设计的，它不靠网络传数据。" onclick="lessonKit.answer(this,'q0023a')">nodelet 必须跨网络与其他节点通信</button>
+          <button data-correct="no" data-explanation="不对。nodelet 与 ROS 节点在「算法能力」上没有本质不同，区别只在部署方式（同进程 vs 跨进程）。" onclick="lessonKit.answer(this,'q0023a')">nodelet 能做的事普通 ROS 节点做不到</button>
+        </div>
+        <div class="quiz-feedback" id="q0023a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. n-D 点云与可视化</h2>
+      <p>PCL 把自己定位为「<i>library for n-D Point Clouds and 3D geometry processing</i>」，可视化层提供「<i>a comprehensive visualization layer for n-D point cloud structures</i>」。它用 <b>geometry handler / color handler</b> 让用户自选「哪几维当 XYZ 坐标、哪几维当颜色」——换句话说，一个点除了 x/y/z，还可以挂法向、强度、曲率等额外维度，渲染时由 handler 决定怎么用。</p>
+      <p>可视化库基于 <b>VTK</b>（§IV），支持渲染点云/曲面、画基本 3D 形状（圆柱、球、线、多边形）、直方图模块，以及 range image 显示。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. §V 四个实例：模块怎么串起来</h2>
+      <p>这是「模块怎么拼」的最好例子。四个例子分别落到哪些库（原文给出）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 法向 + FPFH 估计</h4><p>→ <b>features</b>。先 NormalEstimation 算每个点法向，再喂给 FPFH 估计器（见 Fig. 2）。</p></div>
+        <div class="mini-card"><h4>② 统计外点移除</h4><p>→ <b>filters</b>。参数 $k=50$（邻域点数）、$1.0\sigma$（保留距均值 1 倍标准差内的点）。左中右三图见 Fig. 7。</p></div>
+        <div class="mini-card"><h4>③ RANSAC 平面分割</h4><p>→ <b>segmentation</b>。随机抽 3 个不共线点拟合平面，内点阈值 <b>1 cm</b>。结果见 Fig. 8。</p></div>
+        <div class="mini-card"><h4>④ 门把手识别</h4><p>→ <b>segmentation / surface</b>。constrained planar segmentation + region growing + convex hull + polygonal prism；抓取任务则是 segmentation + registration。见 Fig. 9。</p></div>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_3D_is_here__Point_Cloud_Library__PCL_/9f77b2a77a05ca511c8d189dc87ef9939a101ce0495cffa2b98475f5e0cf8b0a.jpg" alt="Fig. 7 raw, filtered inliers, rejected outliers">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b><i>Left: raw point cloud; middle: filtered inliers; right: rejected outliers.</i>（左为原始点云，中为滤波后的内点，右为被剔除的外点。）</p>
+          <p><b>怎么看这张图：</b>这是点云进任何算法前的第一步降噪长什么样——飞散的离群点被滤掉、留下贴着物体表面的内点。<b>这正是所有激光 SLAM 前端都要做的 VoxelGrid / 外点剔除的祖先</b>。</p>
+        </figcaption>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_3D_is_here__Point_Cloud_Library__PCL_/63a6d25d4094c9b9b96abfa0809a6dbcb76fbc92513cb6a86c628fb1bdd63eab.jpg" alt="Fig. 8 segmented plane marked with purple">
+        <figcaption>
+          <p><b>原图注（Fig. 8）：</b><i>Left: the input point cloud; right: the segmented plane represented by the inliers of the model marked with purple color.</i>（左为输入点云，右为以紫色标出的模型内点所表示的已分割平面。）</p>
+          <p><b>怎么看这张图：</b>RANSAC 从一片乱点里抽出一个平面、把属于它的点染成紫色。这是激光 SLAM 提取面特征的经典做法，相当于「从点云里认出墙/地面」这条路线的起点。</p>
+        </figcaption>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_3D_is_here__Point_Cloud_Library__PCL_/afd7866920bc915f1271c9deb2ad318f0c829cbadbd6a7a645e18ea4b2e98215.jpg" alt="Fig. 9 door/handle identification and NARF object recognition">
+        <figcaption>
+          <p><b>原图注（Fig. 9）：</b><i>Left: door and handle identification during a navigation and mapping experiment with the PR2; right: object recognition (chair, person sitting down, cart) using NARF.</i>（左为 PR2 导航建图实验中的门与门把手识别，右为用 NARF 做物体识别（椅子、正在坐下的人、推车）。）</p>
+          <p><b>怎么看这张图：</b>左边把「constrained planar segmentation + region growing + convex hull」落到真机器人任务（找门和门把手）；右边用 NARF 特征在复杂场景里认出椅子、人、推车。这就是「模块拼接」从算法到真实应用的落地。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 诚实的两条与对课程的用处</h2>
+      <p>这一节的可信度，靠下面两条诚实说明撑着。请务必记住：<b>这是 2 页短文，性质决定了它给不出算法论文那种评测</b>。</p>
+
+      <h3>8.1 必须诚实说明的两件事</h3>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 没有 limitations 小节</h4><p>原文<b>没有任何「limitations」或「失败边界」</b>小节。能当作承认的局限只在 §VI 的未来计划：文档、单元测试、教程尚不完善，1.0 版本尚未发布，跨平台只到 Windows/MacOS/Linux（Android 在计划中），<b>GPU 加速（CUDA/OpenCL）尚不支持</b>。</p></div>
+        <div class="mini-card"><h4>② 没有任何量化性能</h4><p>原文<b>没有给出任何点数、帧率、算法耗时或精度的量化数字</b>。全文数字只出现三处且都是参数或价格：Kinect「under \$150」、滤波用 $k=50$ / $1.0\sigma$、RANSAC 内点阈值 1 cm。<b>「PCL 有多快」这篇论文回答不了。</b></p></div>
+      </div>
+
+      <h3>8.2 对课程的用处：读激光论文最常被引用的 PCL 模块</h3>
+      <p>本季第 0022 课那篇点云 BA 已经给了跨篇证据——它的基线 ICP/GICP/NDT 就来自 PCL 的 <code>registration</code>。综合起来，<b>读激光论文时最常被引用的 PCL 模块</b>至少包括：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>registration</h4><p>ICP / GICP / NDT 配准——0022 的基线就在这里。</p></div>
+        <div class="mini-card"><h4>filters</h4><p>降采样（VoxelGrid）、外点剔除——所有前端的第一步。</p></div>
+        <div class="mini-card"><h4>segmentation</h4><p>RANSAC 抽平面——提取面特征的起点。</p></div>
+        <div class="mini-card"><h4>features</h4><p>法向估计、FPFH/NARF——几何描述子的来源。</p></div>
+        <div class="mini-card"><h4>surface</h4><p>Moving Least Squares（MLS）等曲面平滑/重建。</p></div>
+      </div>
+      <div class="callout">
+        <h4>★ 不要夸大</h4>
+        <p>原文只点到「ICP、平面/圆柱/球/直线拟合、FPFH/NARF、MLS、PCD」这一层。本文是库的总览，<b>没有给这些算法的性能对比或精度数字</b>，别把后面论文的实测成绩算到它头上。</p>
+      </div>
+
+      <h3>8.3 埋下悬念③：为什么激光 SLAM 后来需要「能动态插入删除」的树</h3>
+      <p>第 4 节提过，PCL 底层最近邻搜索靠 <b>FLANN 的近似最近邻</b>（k-d 树族）。k-d 树适合「建好之后反复查」，但<b>不擅长边查边高效地插入/删除大量点</b>。后面你会看到，激光 SLAM 的实时前端需要的是「能随扫描不断增删点的动态结构」。</p>
+      <div class="callout">
+        <h4>★ 悬念留到阶段 D</h4>
+        <p><b>为什么激光 SLAM 后来需要「能动态插入删除」的树？</b>这个问题本文不给答案——它要留到阶段 D 的 FAST-LIO2（2022）和它的 <b>ikd-Tree</b> 才揭晓。第一季第 0006 课埋的悬念③，在这里只是把问题立起来。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PCL 这篇论文，性质上属于哪一类工作？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。它是软件系统论文（库的总览），介绍架构与生态，不提出新算法，也没有 limitations 小节和量化性能数字。" onclick="lessonKit.answer(this,'q0023b')">软件系统论文（开源库总览），不是算法论文</button>
+          <button data-correct="no" data-explanation="不对。原文没有任何量化性能或规模数字，2 页短文性质决定了它给不出「PCL 有多快」的实测。" onclick="lessonKit.answer(this,'q0023b')">提出新 SLAM 算法并给出速度实测的算法论文</button>
+          <button data-correct="no" data-explanation="不对。它没讲怎么动态维护最近邻树，ikd-Tree 是阶段 D 的另一篇工作；本文只是用 FLANN 的近似最近邻。" onclick="lessonKit.answer(this,'q0023b')">提出 ikd-Tree 动态树结构的论文</button>
+        </div>
+        <div class="quiz-feedback" id="q0023b"></div>
+      </div>
+
+      <h3>8.4 收尾</h3>
+      <p>下一模块我们换话题：从「点云怎么处理」（前端/数据底座）转到「<b>图像怎么变成几何约束</b>」——进入 VO（视觉里程计）教程，先看相机模型与对极几何。</p>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：用 Kinect 的价格对比，说清 PCL 的出现动机</summary>
+          <div>
+            <p>过去激光/深度传感器要数千到数万美元，多数项目用不起；Kinect 出现后「under \$150」就能实时出点云，3D 感知门槛被拉低。于是「缺的不是传感器，而是高效处理点云的机制」——PCL 就是来补这个机制的 BSD 开源库。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：九块分层库各负责什么，举一个激光 SLAM 会用到的</summary>
+          <div>
+            <p>filters（降采样/外点移除）、features（法向/FPFH/NARF）、io（PCD）、segmentation（RANSAC 平面/圆柱）、surface（MLS）、registration（ICP）、keypoints、range image、visualization。激光 SLAM 必用：filters 做降采样与外点剔除、features 算法向、registration 做 ICP 配准。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：写出 PCL 统一接口的四步，并说明为什么要智能指针</summary>
+          <div>
+            <p>四步：建对象 → <code>setInputCloud</code> 传点云 → 设参数 → <code>compute/filter/segment</code> 取输出。用 Boost shared pointers 传数据是为了<b>避免拷贝</b>已经存在于系统里的点云，省内存也省时间。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：FLANN 的「近似最近邻」为后面埋下了什么悬念</summary>
+          <div>
+            <p>FLANN 内部是 k-d 树族，擅长建好后反复查，但不擅长边查边高效增删大量点。激光 SLAM 实时前端需要「能随扫描不断增删点的动态结构」——这就是悬念③，答案在阶段 D 的 FAST-LIO2（ikd-Tree）。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：为什么这篇论文回答不了「PCL 有多快」</summary>
+          <div>
+            <p>它是 2 页系统总览短文，原文没有任何点数、帧率、算法耗时或精度的量化数字（仅有的数字都是参数或价格：\$150、k=50、1.0σ、1 cm 阈值）。所以「速度/精度」这类问题本文给不出，要靠引用了 PCL 的具体算法论文来回答。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0022-点云BA2023-高效与一致.html">← 上一课：点云上的高效一致 BA（BALM2.0 2023）</a>
+        <a class="next" href="0024-VO教程上-相机模型与对极几何.html">下一课：VO 教程（上）相机模型与对极几何 →</a>
+      </div>
+      <p class="foot-note">PCL 不性感，但它是你读激光论文时绕不开的底座。记住它九块库的名字，后面每篇激光 SLAM 你都能认出「这一行用的是 PCL 的哪个模块」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

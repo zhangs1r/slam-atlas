@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D 高斯泼溅全景（2025）：从"是什么"到 SLAM 专章 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0015</div>
+      <h1>3D 高斯泼溅全景（2025）：从"是什么"到 SLAM 专章</h1>
+      <p class="subtitle">🎨 两篇综述一起读：先用 2024 这篇打地基讲"它到底是什么"，再用 2025 这篇铺开"过去一年到底发生了什么"，最后落到 SLAM 这条专线上。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：3D Gaussian Splatting（3DGS）全景与 SLAM 应用</span>
+        <span>👥 作者：Wu 等（2024）/ Fei、Xu、Zhang、Zhou、Yang、He（2025）</span>
+        <span>📅 年份 · <i>Recent advances in 3D Gaussian splatting</i> &amp; <i>3D Gaussian Splatting as a New Era: A Survey</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 为什么会有 3DGS</a>
+        <a href="#b">2. 显式 vs 隐式</a>
+        <a href="#c">3. 铺垫：从"点"到"椭球泼溅"</a>
+        <a href="#d">4. 关键公式</a>
+        <a href="#e">5. 一年路线图：六分类</a>
+        <a href="#f">6. SLAM 专章</a>
+        <a href="#g">7. "卡在哪"与九开放方向</a>
+        <a href="#h">8. 四表示对比</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你能说清：NeRF 为什么慢、3DGS 为什么快、高斯为什么是"椭球"、像素颜色怎么算出来，以及 2025 那篇把整个方向切成了哪六块。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>前面我们讲过 NeRF、SDF、点/线 SLAM。3DGS 是 2023 年冒出来的"显式辐射场"新表示，它把 SLAM 从"隐式神经场"又拉回了"显式几何"——这正是本季"建立坐标系"的落脚点。</p></div>
+      </div>
+      <h2>1. 为什么会有 3DGS：NeRF 的两根软肋</h2>
+      <p>2024 这篇综述（Wu 等）在引言里把问题说得很直白。NeRF 把场景建模成"密度场 + 颜色场"，新视角合成质量很高，但训练和渲染都慢。原文原话是：</p>
+      <div class="formula-box">"it is still hard to find a robust method that can both <b>train a NeRF quickly enough (under 1 h)</b> on a consumer-level GPU and <b>render a 3D scene at an interactive frame rate (about 30 FPS)</b> on common devices."</div>
+      <p>而 3D Gaussian Splatting（Kerbl 等，2023）给出的答案是：用一堆"高斯椭球"去近似场景外观，通过<strong>光栅化（rasterization）</strong>把椭球泼（splat）到图像上。原文紧接着写道，它不仅新视角合成质量和 NeRF 相当，而且：</p>
+      <div class="formula-box">"achieves comparable novel view synthesis quality but also allows <b>fast convergence (in about 30 min)</b> and <b>realtime rendering (at least 30 FPS) at 1080p resolution</b>."</div>
+      <p>一句话：训练从"按小时计"压到"约 30 分钟"，渲染从"勉强交互"变成"1080p 下至少 30 FPS"。这就是 3DGS 出现的全部动机——<strong>快</strong>。下一节我们讲它到底快在哪。</p>
+      <figure class="figure">
+        <img src="../../md/images/2025_3DGS-Survey/546a72ceaca79cb82f5a0d999d1a784d1c0695584ea67711ac5cc08cd758d973.jpg" alt="2025 综述 Fig.1 (Top) 结构图">
+        <figcaption>
+          <p><b>原图注（Fig. 1, Top）：</b> "The structure of this survey. We begin by introducing the optimization of 3D-GS in terms of efficiency, photorealism, costs, and physics. Then, we review 3D-GS on reconstruction, manipulation, perception, generation, and virtual human applications."</p>
+          <p><b>怎么看这张图：</b> 这是 2025 综述给自己画的"地图"——先用"效率 / 真实感 / 成本 / 物理"四条线改进表示（III 章），再依次铺开重建、编辑、感知、生成、虚拟人几大应用（IV–VIII 章）。把这张图当成整篇课的目录即可。⚠️ 诚实说明：本张图片与同页另一张（hash 以 <code>f47e2d35…</code> 开头）分别对应 Fig.1 的 (Top) 结构与 (Bottom) 月度发文量；OCR 没有明确标注哪张是 Top、哪张是 Bottom，这里按它们在正文中的出现顺序推断——<code>546a72ce…</code> 在前、紧挨"结构"文字，判为 Top，(Bottom) 月度发文量图（<code>f47e2d35…</code>）放在第 7 节"热点"处另行引用。</p>
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 显式 vs 隐式：两条核心差别</h2>
+      <p>3DGS 和 NeRF 都走"体渲染 → 沿光线累加密度/颜色"的路子，但 2024 与 2025 两篇都强调了<strong>两个根本性不同</strong>。下面这段是中英对照的原文（2025 综述 II 节）：</p>
+      <div class="formula-box">
+        <p>"The rendering process of 3D-GS exhibits similarities to NeRF, yet there exist two fundamental distinctions between them."</p>
+        <p><b>(1)</b> "3D-GS directly models <b>opacity values</b>, whereas NeRF converts <b>density values into opacity</b> values."（3DGS 直接建模不透明度；NeRF 先把密度转成不透明度。）</p>
+        <p><b>(2)</b> "3D-GS employs <b>rasterization-based rendering</b>, eliminating the need for sampling points, whereas NeRF necessitates <b>dense sampling throughout the 3D space</b>."（3DGS 用基于光栅化的渲染、无需采样点；NeRF 必须在 3D 空间里密集采样。）</p>
+      </div>
+      <p>把第 (2) 条翻译成人话：NeRF 要沿着每条光线在 3D 空间里<strong>密集采样</strong>很多个点，再拿神经网络逐个点预测颜色和密度；3DGS 则直接把现成的高斯椭球投影到 2D 再用传统图形学的光栅化画出来，<strong>既不用采样、也不用跑神经网络</strong>。2024 篇给了一句总结：</p>
+      <div class="formula-box">"Without sampling points and querying the neural network, 3DGS is extremely fast and achieves about 30 FPS on a common device with comparable rendering quality to NeRFs."</div>
+      <p>一个具体数字：NeRF 通常每条光线需要约 <strong>128 个采样点</strong>（"NeRFs typically require 128 sample points along a single ray"），这 128 次网络前向就是它慢的根源；3DGS 把这个开销整个省掉了。这就是"显式表示"对抗"隐式神经场"的本质。</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_Recent_advances_in_3D_Gaussian_splatting/2c233c83b8a48d301be8f5d4aab1a6fc1b8d79c58afc8b9351834747483ee197.jpg" alt="2024 综述 Fig.2 时间线">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b> "A brief timeline of representative work using the 3D Gaussian splatting representation."（使用 3DGS 表示的代表性工作简明年表。）</p>
+          <p><b>怎么看这张图：</b> 横轴是时间（从 2023 年 3DGS 原作开始），纵轴是不同任务方向（重建 / 编辑 / 动态 / 生成 / 数字人……）。它想告诉你一件事：3DGS 不是一篇论文，而是一整个在一年内爆炸式生长的生态。后面的六分类就是给这张时间线做的"系统归类"。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 铺垫：从"一个点"到"一个椭球泼溅"</h2>
+      <p>要理解"高斯为什么是椭球"，得先回到更早的<strong>基于点的渲染（point-based rendering）</strong>。2024 篇 2.1 节讲得很清楚：</p>
+      <ul>
+        <li><strong>Grossman &amp; Dally（1998）的纯点方案</strong>：每个点只影响屏幕上的<strong>一个像素</strong>（"each point only influences one pixel on the screen"）。问题很明显——点太稀疏，画面会"漏风"、出现孔洞。</li>
+        <li><strong>Zwicker 等（2001）的 splat（泼溅）方案</strong>：不再渲染孤立的点，而是渲染<strong>椭球（ellipsoids）</strong>。每个 splat 能占住多个像素，椭球之间互相重叠，比纯点方案更容易拼出<strong>无孔洞（hole-free）</strong>的图像。</li>
+      </ul>
+      <p>这个"用会重叠的椭球填补空隙"的想法，正是 3DGS 的灵魂：3DGS 里的每个高斯就是一个 3D 椭球，它天生比单纯的点更能覆盖空间。下一节我们看到，为了让椭球能贴合任意形状，3DGS 还给每个高斯加上了<strong>各向异性缩放（anisotropic scale）</strong>——也就是在三个轴上拉长或压扁，这正是"椭球"而非"球"的关键。</p>
+      <div class="callout"><h4>助教划重点</h4><p>"splat" 这个词的字面意思就是"啪地泼开一团颜料"。3DGS 的渲染，本质上就是把成千上万个半透明椭球"泼"到图像平面上再按深度叠起来——所以叫 <em>Gaussian Splatting</em>。</p></div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 关键公式：从体渲染到高斯泼溅</h2>
+      <p>下面这些公式两篇综述都有（NeRF 的体量渲染在 2024 公式(1)，3DGS 的表示与投影在 2025 公式(2)(3)，像素颜色在 2025 公式(4)）。注意：这些公式里混着一个需要你留意的<strong>同源笔误</strong>，我会在公式后单独点出。</p>
+
+      <h3>4.1 NeRF 的体渲染（沿光线累加密度）</h3>
+      <div class="formula-box">
+        $$C = \sum_{i=1}^{N} c_i \alpha_i T_i \tag{1}$$
+        <p>其中 $N$ 是单条光线上的采样点数；$\alpha_i$ 是第 $i$ 个点的不透明度，$c_i$ 是其颜色，$T_i$ 是"累积透射率"（前面所有点没挡住的比例）。</p>
+      </div>
+
+      <h3>4.2 一个必须指出的同源错误（α 与 T 的定义）</h3>
+      <div class="formula-box" style="border-color:#c0392b;">
+        <p>⚠️ <b>原文（2024 与 2025 两篇都这么写）把下面两个式子标反了/写错了：</b></p>
+        <p>原文写法：$\alpha_i = \exp\!\big(-\sum_{j=1}^{i-1} \sigma_j \delta_j\big)$ 被叫作"不透明度"，而 $T_i = \prod_{i=1}^{i-1}(1-\alpha_j)$ 被叫作"累积透射率"，且乘积下标还用了 $i$。</p>
+        <p>✅ <b>按 NeRF 原作（Mildenhall 等，2020）的标准形式应为：</b></p>
+        <p>$$\alpha_i = 1 - \exp(-\sigma_i \delta_i), \qquad T_i = \prod_{j=1}^{i-1}(1-\alpha_j)$$</p>
+        <p>即：第 $i$ 个采样点的不透明度由<strong>它自己</strong>的密度 $\sigma_i$ 与步长 $\delta_i$ 决定（不是前面所有点的累加）；累积透射率 $T_i$ 是<strong>前面</strong> $j=1\ldots i-1$ 所有点"透过比例" $(1-\alpha_j)$ 的连乘，乘积下标应当是 $j$ 而非 $i$。两篇综述把"不透明度"和"透射率"的物理意义也写反了——这里以 NeRF 原作为准，请你以本课件为准。</p>
+      </div>
+
+      <h3>4.3 一个 3D 高斯的密度函数（注意原文献写法）</h3>
+      <div class="formula-box">
+        $$G(X) = e^{-\frac{1}{2}\mathcal{M}^{\top}\Sigma^{-1}\mathcal{M}} \tag{2}$$
+        <p>原文用 $\mathcal{M}\in\mathbb{R}^3$ 表示均值（mean），$\Sigma$ 为协方差。⚠️ <b>识别并修正：</b>标准 3D 高斯应写成 $G(\mathbf{X})=e^{-\frac12(\mathbf{X}-\mathcal{M})^{\top}\Sigma^{-1}(\mathbf{X}-\mathcal{M})}$，即指数里应是<strong>相对均值 $(\mathbf{X}-\mathcal{M})$</strong> 的二次型，而非原文直接写的 $\mathcal{M}^{\top}\Sigma^{-1}\mathcal{M}$。两篇综述（2025 公式(2)）把 $\mathbf{X}-\mathcal{M}$ 简写成了 $\mathcal{M}$，属于明显的漏写/记号歧义，本课件已补全标准形式。$\Sigma$ 进一步分解为：</p>
+        $$\boldsymbol{\Sigma} = \mathbf{R}\mathbf{S}\mathbf{S}^{\top}\mathbf{R}^{\top} \tag{3}$$
+        <p>实际存储时，$\mathbf{R}$ 用四元数 $r\in\mathbb{R}^4$ 表示旋转，$\mathbf{S}$ 用缩放因子 $s\in\mathbb{R}^3$ 表示——这正是"椭球"的来源：旋转矩阵决定方向，三个不同的缩放决定长短轴（各向异性）。</p>
+      </div>
+
+      <h3>4.4 投影到 2D 图像平面</h3>
+      <div class="formula-box">
+        $$\Sigma' = J W \Sigma W^{\mathrm{T}} J^{\mathrm{T}} \tag{投影}$$
+        <p>$\Sigma'$ 是高斯投影到 2D 图像后的协方差；$W$ 是视角变换矩阵（把世界坐标转到相机坐标），$J$ 是投影变换的 Jacobian（雅可比）。把 3D 椭球压扁成 2D 椭圆，就得到了屏幕上每个"泼溅斑"的形状。</p>
+      </div>
+
+      <h3>4.5 一个像素的颜色（3DGS 的 α 混合）</h3>
+      <div class="formula-box">
+        $$C = \sum_{i\in N_{\mathrm{cov}}} c_i \alpha_i \prod_{j=1}^{i-1}\left(1-\alpha_j\right) \tag{4}$$
+        <p>$N_{\mathrm{cov}}$ 是覆盖该像素的所有高斯；$\alpha_i$ 是该高斯在像素处的不透明度（= 高斯自身不透明度 × 投影后 2D 高斯分布在该像素的密度）；按<strong>深度从近到远</strong>依次 α 混合。对比 4.1 你会发现：结构一模一样，区别只是 $\alpha_i$ 和颜色 $c_i$ 的<strong>来源</strong>——NeRF 靠采样+网络，3DGS 靠投影+球谐，且 $T_i$ 这里被就地写成了连乘形式。</p>
+      </div>
+
+      <h3>4.6 光栅化流程（2025 综述 II 节，最完整的一段）</h3>
+      <p>2025 综述把一次渲染拆成三步描述（注意：这是 2025 综述<strong>描述</strong>的渲染过程，不是它的"方法论框架"——见下框警告）：</p>
+      <div class="formula-box">
+        <p>"all Gaussian balls in the scene are first <b>projected onto the 2D image plane</b>, and their color is computed from <b>spherical harmonic parameters</b>. Then, for every <b>16×16</b> pixel patch of the final image, the projected Gaussians that intersect with the patch are <b>sorted by depth</b>. For every pixel in the patch, its color is computed by alpha compositing the opacity and color of all the Gaussians covering this pixel by depth order, as in (4)."</p>
+      </div>
+      <div class="callout"><h4>⚠️ OCR 修正 + "三步"说法澄清</h4>
+        <p>① 原文写 "<b>16 16</b> pixel patch"，这是 OCR 把乘号"×"吃掉了，应为 <b>16×16</b> 像素块（tile）。② 两篇综述并<strong>没有</strong>把 3DGS 形式化为"初始化 / 投影与可微光栅化 / 自适应密度控制"这三步方法论。原文只在各处零散引用了这些概念：初始化（SfM 点，在 Scaffold-GS 处顺带提到；2024 篇 III.C 挑战里说 "The performance of 3D-GS heavily relies on the quantity and accuracy of initial sparse points"）；投影与可微光栅化（即上面 II 节这段）；自适应密度控制（只作为已知概念被引用，如 VII.D 的 "an adaptive strategy for efficiently expanding 3D-GS"、VI.C 的 "It is non-trivial to adapt the adaptive density control operation in the original 3D-GS to the generation framework"）。<strong>所以，"三步框架"属于 3DGS 原始论文（Kerbl 等 2023）的归纳，不是这两篇综述自己的表述</strong>——若课程需要提"三步"，请明确标注出处。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2024_Recent_advances_in_3D_Gaussian_splatting/4df7a5da818a2eb17a352bf38f3c83ebc2e73f7ebb183c2e21b1644905a00262.jpg" alt="2024 综述 Fig.1 结构分类">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b> "Structure of our literature review and taxonomy of current 3D Gaussian splatting methods."（本综述的文献结构与方法分类。）</p>
+          <p><b>怎么看这张图：</b> 这是 2024 篇自己的"三分法"总览——按<strong>功能</strong>把工作切成 3D 重建 / 3D 编辑 / 下游应用（数字人等）三大块。它和下一节 2025 篇的"六分法"是<strong>两种不同视角</strong>：2024 按"能拿来干什么"分，2025 按"怎么把表示做得更好 + 用在哪些任务"分。读全景时把两张分类图叠在一起看最清楚。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 一年路线图：2025 综述的六分类</h2>
+      <p>2025 综述（Fei 等）开篇就说自己的贡献是 "a unified &amp; practical framework … divides the field into <strong>six main aspects</strong>"（统一框架，把领域切成六大方面）。这六块就是整篇的骨架：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>III. 表示 / 优化（Representation）</h4>
+          <p><b>A. 效率</b>：Scaffold-GS、CompGS、EAGLES、LightGaussian、Octree-GS</p>
+          <p><b>B. 真实感</b>：Mip-Splatting、Relightable 3D Gaussian、GaussianShader、GS-IR</p>
+          <p><b>C. 成本（少视图）</b>：FSGS、SparseGS、DNGaussian</p>
+          <p><b>D. 物理</b>：4D-GS、MD-Splatting、3DGMS、PhysGaussian</p></div>
+        <div class="mini-card"><h4>IV. 重建（Reconstruction）</h4>
+          <p><b>A. 静态</b>：SuGaR、NeuSG、pixelSplat、Splatting Image</p>
+          <p><b>B. 动态</b>：Gaussian-Flow、Deformable 3D-GS、VastGaussian、DrivingGaussian</p></div>
+        <div class="mini-card"><h4>V. 编辑（Manipulation）</h4>
+          <p><b>A. 3D</b>：文本/图像引导、非刚性、省时编辑</p>
+          <p><b>B. 4D</b>：动态场景的可交互编辑</p></div>
+        <div class="mini-card"><h4>VI. 生成（Generation）</h4>
+          <p><b>A. 物体级</b>　<b>B. 场景级</b>　<b>C. 4D 生成</b></p></div>
+        <div class="mini-card"><h4>VII. 感知（Perception）</h4>
+          <p><b>A. 检测</b>　<b>B. 分割</b>　<b>C. 跟踪</b>　<b>D. SLAM</b></p></div>
+        <div class="mini-card"><h4>VIII. 虚拟人（Virtual Humans）</h4>
+          <p><b>A. 身体</b>　<b>B. 头部</b></p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2025_3DGS-Survey/8b914793ad7f0328677e952b6b27ae1533802f3b90422a0902b7cbd31ae35838.jpg" alt="2025 综述 Fig.2 六分类">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b> "Taxonomy of existing 3D Gaussian splatting derived methods."（现有 3DGS 衍生方法的分类。）</p>
+          <p><b>怎么看这张图：</b> 这就是上面"六块"的树状图版本。从根（3DGS）分叉到 III–VIII 六根大枝，每根再细分。看图时重点记两件事：<strong>(1)</strong> 方向一是"把表示本身打磨得更好"（III 的效率/真实感/成本/物理）；<strong>(2)</strong> 方向二三四五六是"把表示用到具体任务"（重建/编辑/生成/感知/虚拟人）。SLAM 就挂在 VII.D 这根小枝上。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. SLAM 专章：5 个代表工作</h2>
+      <p>3DGS 进 SLAM 的逻辑在 2024 篇 4.2.2 说得很透："The explicit geometry representation provided by 3DGS enables flexible reprojection to alleviate misalignment of viewpoints, thus leading to better reconstruction than NeRF-based methods. The real-time rendering feature of 3DGS also makes neural-based SLAM methods more applicable."（显式几何让重投影更灵活、缓解视角错位 → 比 NeRF 重建更好；实时渲染让神经 SLAM 真正可用。）</p>
+      <p>2025 综述 VII.D 则点名了 5 个代表工作，逐个讲：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>GS-SLAM（Yan 等）</h4><p>实时<strong>可微 splatting 渲染管线</strong>；引入<strong>自适应策略高效扩展</strong> 3D-GS 以重建新观测到的几何；用 <strong>coarse-to-fine</strong>（由粗到细）挑选可靠高斯，提升定位精度。</p></div>
+        <div class="mini-card"><h4>Gaussian Splatting SLAM（Matsuki 等）</h4><p>支持移动的<strong>单目与 RGB-D</strong> 相机、近实时；"formulates camera tracking for 3D-GS through direct optimization against the 3D Gaussians"（直接对着 3D 高斯做优化来跟踪相机），<strong>收敛域大</strong>；利用高斯的显式性引入<strong>几何校验与正则化</strong>。</p></div>
+        <div class="mini-card"><h4>Photo-SLAM（Huang 等）</h4><p>用 <strong>hyper primitives map</strong>：显式几何特征做定位 + 隐式光度特征表纹理，二者分工。</p></div>
+        <div class="mini-card"><h4>SplaTAM（Keetha 等）</h4><p>单目 RGB-D <strong>稠密</strong> SLAM；<strong>silhouette-guided（轮廓引导）</strong>可微渲染估位姿，渲染剪影+深度扩图；可微渲染更新高斯地图。</p></div>
+        <div class="mini-card"><h4>Gaussian-SLAM（Yugay 等）</h4><p>把 3D-GS 扩展到<strong>单目 RGB-D</strong> 设置，增强<strong>几何编码</strong>（不只用辐射场）。</p></div>
+      </div>
+      <div class="callout"><h4>共同点与敏感因素</h4>
+        <p>五个工作都共享三件事：<strong>①</strong> 用显式高斯当地图；<strong>②</strong> 用可微 splatting 渲染做跟踪/建图闭环；<strong>③</strong> 追求实时/近实时。该小节 Challenges 第四条点出 SLAM 的敏感因素：对 <b>motion blur（运动模糊）、substantial depth noise（大幅深度噪声）、aggressive rotation（剧烈旋转）</b> 都很敏感。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2025_3DGS-Survey/729b766df5f0b5218f0975eb6d317681850ba7d31308f21602cea7fc6f2557bd.jpg" alt="2025 综述 Fig.7 感知谱">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b> "An illustration of 3D-GS on perception: (a) Detection, (b) segmentation, (c) tracking, and (d) SLAM."（3DGS 在感知上的示意：检测/分割/跟踪/SLAM。）</p>
+          <p><b>怎么看这张图：</b> 这是 2025 综述里<strong>唯一把 SLAM 放进"任务谱系"的图</strong>。它想说明：3DGS 不再只是"渲染新视角"，而是能当成一个统一的场景表示，去支撑检测、分割、跟踪、SLAM 一整条感知流水线。讲 SLAM 专章时，把它和 VII.D 那五个方法对照看，就能明白"SLAM 只是 3DGS 感知版图的其中一角"。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. "卡在哪"：逐节挑战汇总 + 九大开放方向</h2>
+      <p>两篇综述每节末尾都有 Challenges/Opportunities。把 2025 各节 Challenges 摊开，就是一张"整条赛道卡在哪"的表：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>显存 / 压缩</h4><p>额外压缩流程拖长训练；还没找到"能最大化表达力的最小高斯集合"；静态压缩方法向动态场景扩展仍欠探索。</p></div>
+        <div class="mini-card"><h4>真实感</h4><p>投影到 2D 加速渲染却让<strong>遮挡计算变复杂</strong>→光照估计差；对精确几何/法线欠正则；过建高斯导致 aliasing 与伪影；镜面/复杂反射差；位姿不准或运动模糊的图像重建是新挑战。</p></div>
+        <div class="mini-card"><h4>成本 / few-shot</h4><p>性能严重依赖初始稀疏点的数量与精度；稀疏视图 → 初始化不足 → 塌缩、过拟合、过平滑。</p></div>
+        <div class="mini-card"><h4>物理 / 动态</h4><p>输入点云内在稀疏使忠实动态重建困难；大运动在无物理约束下仍是开放问题；现有方法多限室内物体级且需多视角+精确位姿。</p></div>
+        <div class="mini-card"><h4>重建</h4><p>难捕捉精细几何、提取网格困难；约束高斯贴合表面会降渲染质量，融合 SDF 会降速度。</p></div>
+        <div class="mini-card"><h4>感知 / SLAM</h4><p>高反光/半透明物体建模有限；一个高斯可关联多个物体使特征匹配分割困难；难跟踪可变形物体如行人；对运动模糊、大深度噪声、剧烈旋转敏感。</p></div>
+      </div>
+      <p>2025 综述 Section IX 还汇总了 <strong>9 个开放方向</strong>：Handling Floating Elements（漂浮物）、Trade-off Between Rendering and Reconstruction（渲染↔重建权衡）、Rendering Realism、Real-time Rendering、Few-shot 3D-GS、Integration of Physics、Accurate Reconstruction、Realistic Generation、Combining 3D-GS with Large Foundation Models（与大模型结合）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2025_3DGS-Survey/3e518c597d2f965cb79bd028fe1f5b9ad13ba1cc4127915b7bbd527637671e8b.jpg" alt="2025 综述 Fig.3 表示改进">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b> "An illustration of refining the representation of 3D-GS: (a) Efficiencies, (b) photorealism, (c) costs, and (d) physics."（改进 3DGS 表示的四类方向：效率/真实感/成本/物理。）</p>
+          <p><b>怎么看这张图：</b> 这是讲"卡在哪"最直观的一张——它把 III 章那四个改进维度（效率/真实感/成本/物理）各给了一组对照渲染结果。看图时盯住每一组的"左（原版问题）vs 右（改进后）"，就能把上面那张挑战表从文字变成画面。例如 (b) 真实感那组就在展示反射、法线、抗锯齿的改进。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 四种 3D 表示对比（2024 篇 5.2）</h2>
+      <p>2024 篇 5.2 把常见 3D 表示摆在一起比，结论对 SLAM 选表示很有参考价值：</p>
+      <table>
+        <thead><tr><th>表示</th><th>优点</th><th>缺点 / 关键结论</th></tr></thead>
+        <tbody>
+          <tr><td><b>Mesh</b><br>(网格)</td><td>存储低、工业最广；配合 PBR 材质可实时出好效果。</td><td>大多由艺术家手工制作，<b>耗时</b>。</td></tr>
+          <tr><td><b>SDF / NeRF</b><br>(隐式神经场)</td><td>可自动从多视图学习；便于逆渲染 / 表面提取（marching cube）。</td><td>"due to the dense sampling in 3D space, rendering is inefficient, limiting their applicability on consumer-level devices"；且 "SDFs and NeRFs are less successful for dynamic scene reconstruction due to their implicit representation"（隐式表示不利于动态重建）。</td></tr>
+          <tr><td><b>3DGS</b><br>(显式高斯)</td><td>有显式几何，但<strong>没有边与面</strong>连接高斯，靠各向异性缩放填补空隙；光栅化可实时。</td><td>⚠️ <b>关键结论</b>："due to the discrete geometry representation, the geometry reconstruction quality of current 3DGS-based methods is only comparable to previous SDF-based methods like NeuS"——即当前 3DGS 的<strong>几何重建质量只和 NeuS 这种 SDF 方法持平</strong>，并未碾压。要高质量表面，仍需和 SDF/网格结合。</td></tr>
+        </tbody>
+      </table>
+      <figure class="figure">
+        <img src="../../md/images/2024_Recent_advances_in_3D_Gaussian_splatting/1216c1f9a176f975c6ded10ef7a7f5787087468ff343a63b86699770b73fe554.jpg" alt="2024 综述 Fig.3 各任务代表工作">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b> "Representative works based on the 3DGS representation, for different tasks."（基于 3DGS 表示、面向不同任务的代表性工作。）</p>
+          <p><b>怎么看这张图：</b> 一张图把 3DGS 在重建、编辑、生成、数字人等任务上的代表结果拼在一起。它和 5.2 的"四表示对比"互补：前者告诉你"3DGS 能做什么"，后者告诉你"和老表示比它强在哪、弱在哪"。把本节表格里"几何质量只和 NeuS 持平"这句话，对着这张图里那些漂亮的渲染结果看，会更清楚——<strong>渲染好 ≠ 几何好</strong>。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断 1</h3>
+        <p>3DGS 比 NeRF 快，根本原因是"它用更大的神经网络去预测密度"？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。3DGS 恰恰是把神经网络去掉：它直接用现成高斯椭球做光栅化，既不需要沿光线密集采样点，也不需要查询神经网络。NeRF 才依赖神经网络逐点预测密度/颜色，且每条光线约需 128 个采样点，这正是慢的根源。" onclick="lessonKit.answer(this,'q0015')">错，是更大的神经网络</button>
+          <button data-correct="yes" data-explanation="对。3DGS 抛弃了神经网络与 3D 空间密集采样，改用基于光栅化的渲染，把椭球直接投影到 2D 再 α 混合，因此无需采样点、无需查网络，才达到约 30 FPS。" onclick="lessonKit.answer(this,'q0015')">对，是去掉了神经网络与采样</button>
+        </div>
+        <div class="quiz-feedback" id="q0015"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 2</h3>
+        <p>"初始化 / 投影与可微光栅化 / 自适应密度控制"这三步方法论，是 2025 这篇综述自己提出的框架？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。2025 综述并没有把 3DGS 形式化为这三步；它只在各处零散引用了这些概念。'三步框架'属于 3DGS 原始论文（Kerbl 等，2023）的归纳。讲'三步'时必须标注这是原始论文的框架，而非本综述表述。" onclick="lessonKit.answer(this,'q0015b')">不是，是原始 3DGS 论文的框架</button>
+          <button data-correct="yes" data-explanation="对，就是这个意思——但注意题干是反问，正确结论是：'三步'不属于 2025 综述的框架。这里选'是'表示'确实是 2025 综述提出的'，那就不对了。" onclick="lessonKit.answer(this,'q0015b')">是，2025 综述自己提的</button>
+        </div>
+        <div class="quiz-feedback" id="q0015b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>写出 NeRF 体渲染公式 $C=\sum c_i\alpha_i T_i$ 与 3DGS 像素颜色公式 $C=\sum_{i\in N_{\mathrm{cov}}} c_i\alpha_i\prod_{j=1}^{i-1}(1-\alpha_j)$，并指出两篇综述在 $\alpha_i$、$T_i$ 定义上的同源错误，给出 NeRF 原作的标准形式。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两篇综述把 $\alpha_i=\exp(-\sum_{j=1}^{i-1}\sigma_j\delta_j)$ 误称为"不透明度"、把 $T_i=\prod_{i=1}^{i-1}(1-\alpha_j)$（下标还写错成 $i$）误称为"累积透射率"。标准形式应为 $\alpha_i=1-\exp(-\sigma_i\delta_i)$，$T_i=\prod_{j=1}^{i-1}(1-\alpha_j)$：$\alpha_i$ 由<strong>自身</strong>密度决定，透射率是<strong>前面</strong>各点透过比例的连乘。</div></details></li>
+        <li>为什么 3DGS 里的高斯是"椭球"而不是"球"？结合协方差分解 $\Sigma=\mathbf{R}\mathbf{S}\mathbf{S}^{\top}\mathbf{R}^{\top}$ 与"各向异性缩放"解释。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>$\Sigma$ 分解为旋转 $\mathbf{R}$ 与缩放对角阵 $\mathbf{S}$。$\mathbf{S}$ 的对角线是三个<strong>可不同</strong>的缩放因子（各向异性），配合 $\mathbf{R}$ 决定方向，于是高斯在三维里被拉成任意朝向、长短轴不等的椭球——这比各向同性球更能贴合复杂表面、填补空隙。实际存储用四元数 $r\in\mathbb{R}^4$ 表旋转、缩放 $s\in\mathbb{R}^3$ 表三轴长度。</div></details></li>
+        <li>对比 2024 篇（三分法：重建/编辑/应用）与 2025 篇（六分法：III–VIII）的分类视角差异，各适合回答什么问题？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>2024 篇按<strong>功能</strong>三分，适合快速回答"3DGS 能拿来干什么"；2025 篇先按"怎么把表示做得更好"（效率/真实感/成本/物理）再按"用在哪些任务"（重建/编辑/生成/感知/虚拟人）六分，适合回答"这个方向内部是怎么演进、卡在哪"。两图叠看可得全貌。</div></details></li>
+        <li>SLAM 专章点名的 5 个工作（GS-SLAM、Gaussian Splatting SLAM、Photo-SLAM、SplaTAM、Gaussian-SLAM）有什么共同点？SLAM 对哪些因素敏感？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>共同点：都用<strong>显式高斯当地图</strong>、都用<strong>可微 splatting 渲染</strong>做跟踪/建图闭环、都追求实时/近实时。敏感因素（VII.D Challenges）：motion blur（运动模糊）、substantial depth noise（大幅深度噪声）、aggressive rotation（剧烈旋转）。</div></details></li>
+        <li>2024 篇 5.2 关于 3DGS 几何质量的关键结论是什么？它对"用 3DGS 做 SLAM 建图"意味着什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>结论："current 3DGS-based methods is only comparable to previous SDF-based methods like NeuS"——几何重建质量只和 NeuS 这类 SDF 方法持平，并未碾压。意味着：3DGS 的<strong>渲染/定位</strong>很强，但若要<strong>高精度网格表面</strong>，仍要融合 SDF 或网格，且会牺牲一些速度或渲染质量。SLAM 建图时别指望高斯地图直接给出干净 mesh。</div></details></li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0014-回环检测综述2022-指标与假阳性铁律.html">← 回环检测综述（2022）</a>
+        <a class="next" href="0016-事件相机-从原理到SLAM.html">事件相机：从原理到 SLAM →</a>
+      </div>
+      <p class="foot-note">两篇综述帮你把 3DGS 从"一个快方法"升级成"一张领域地图"。下一节我们换个传感器视角——事件相机，看另一种"快"是怎么来的 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

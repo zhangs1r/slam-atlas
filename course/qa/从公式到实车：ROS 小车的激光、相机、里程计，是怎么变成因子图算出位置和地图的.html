@@ -1,0 +1,1158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>从公式到实车：ROS 小车里的 MAP 与非线性最小二乘</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+<style>
+  :root{
+    --ink:#4a342c; --ink-soft:#6a554d; --muted:#8b786f;
+    --accent:#cc785c; --accent-deep:#b15d44; --accent-soft:#e0a389;
+    --paper:#fffdfa; --bg:#f7f2ec; --line:#e6dcd2;
+    --green:#4f9a63; --blue:#7aa3cc;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:Inter,"Noto Sans SC",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.78; font-size:16.5px; -webkit-font-smoothing:antialiased;
+  }
+  .page{max-width:1080px; margin:0 auto; padding:26px 18px 70px;}
+
+  /* ---------- hero ---------- */
+  .hero{
+    background:linear-gradient(150deg,#fff8f1 0%,#fbeee2 55%,#f6e3d3 100%);
+    border:1px solid #ecd9c8; border-radius:26px; padding:34px 34px 26px;
+    box-shadow:0 6px 30px rgba(150,110,85,.10);
+  }
+  .eyebrow{
+    display:inline-block; font-size:.8rem; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--accent-deep); font-weight:700; background:rgba(204,120,92,.12);
+    padding:.32rem .8rem; border-radius:999px; margin-bottom:.9rem;
+  }
+  .hero h1{
+    font-family:"Noto Serif SC",serif; font-weight:900; font-size:clamp(1.5rem,3.4vw,2.15rem);
+    line-height:1.35; margin:.2rem 0 .7rem; color:#3d2a22;
+  }
+  .hero .subtitle{font-size:1.02rem; color:var(--ink-soft); margin:0 0 1rem;}
+  .hero-meta{display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:.6rem;}
+  .hero-meta span{
+    font-size:.85rem; background:#fffdfa; border:1px solid #ecd9c8;
+    padding:.3rem .75rem; border-radius:999px; color:var(--ink-soft);
+  }
+  .toc{display:flex; flex-wrap:wrap; gap:.45rem; margin-top:1.1rem;}
+  .toc a{
+    font-size:.86rem; text-decoration:none; color:var(--accent-deep);
+    background:#fffdfa; border:1px solid #ecd9c8; padding:.32rem .7rem;
+    border-radius:999px; transition:.15s;
+  }
+  .toc a:hover{background:var(--accent); color:#fff; border-color:var(--accent);}
+
+  /* ---------- cards ---------- */
+  .section-card{
+    background:var(--paper); border:1px solid var(--line); border-radius:22px;
+    padding:26px 30px 30px; margin:22px 0;
+    box-shadow:0 3px 18px rgba(140,105,80,.055);
+  }
+  .section-card h2{
+    font-family:"Noto Serif SC",serif; font-weight:700; font-size:1.42rem;
+    margin:.2rem 0 1rem; color:#3d2a22; padding-bottom:.55rem;
+    border-bottom:2px solid #f0e2d5;
+  }
+  .section-card h3{
+    font-size:1.08rem; font-weight:700; margin:1.6rem 0 .6rem; color:var(--accent-deep);
+  }
+  .section-card h4{font-size:.98rem; margin:.2rem 0 .5rem; color:var(--accent-deep);}
+  .section-card p{margin:.65rem 0;}
+  ul,ol{padding-left:1.35rem;}
+  li{margin:.35rem 0;}
+
+  /* ---------- formula ---------- */
+  .formula-box{
+    background:#fbf6f0; border:1px solid #efe2d6; border-left:4px solid var(--accent-soft);
+    border-radius:12px; padding:12px 18px; margin:14px 0; overflow-x:auto;
+  }
+  .flow-formula{text-align:center; margin:.2rem 0;}
+
+  /* ---------- callout ---------- */
+  .callout{
+    background:#fdf7f2; border:1px dashed #e2c9b8; border-radius:14px;
+    padding:14px 18px; margin:16px 0;
+  }
+  .callout h4{margin-top:0;}
+  .callout p:last-child{margin-bottom:0;}
+
+  .lead-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:1rem;}
+  @media(max-width:760px){.lead-grid{grid-template-columns:1fr;}}
+
+  /* ---------- table ---------- */
+  table{
+    width:100%; border-collapse:collapse; margin:14px 0; font-size:.94rem;
+    background:#fffdfa; border-radius:12px; overflow:hidden;
+    box-shadow:0 1px 8px rgba(140,105,80,.06);
+  }
+  th,td{border:1px solid #eee2d6; padding:.55rem .7rem; text-align:left; vertical-align:top;}
+  th{background:#f8efe6; color:#5a4136; font-weight:700; font-size:.9rem;}
+  tbody tr:nth-child(even){background:#fdfaf6;}
+
+  /* ---------- figure ---------- */
+  .figure{
+    margin:18px 0; padding:14px 14px 6px; background:#fffdfa;
+    border:1px solid #efe2d6; border-radius:16px;
+  }
+  .figure svg{display:block; width:100%; height:auto; border-radius:10px; background:#fdfaf6;}
+  .figure figcaption{font-size:.88rem; color:var(--muted); padding:.7rem .4rem .4rem; line-height:1.7;}
+  .figure figcaption b{color:var(--ink-soft);}
+
+  /* ---------- code ---------- */
+  pre.code{
+    background:#2f2a28; color:#f2e9e1; border-radius:14px; padding:18px 20px;
+    overflow-x:auto; font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+    font-size:13.2px; line-height:1.72; margin:14px 0;
+  }
+  pre.code .c{color:#9c8d80;}
+  pre.code .k{color:#e0a389;}
+  pre.code .s{color:#a8cfa0;}
+  pre.code .n{color:#f0c987;}
+  code{
+    background:#f5ece3; border:1px solid #eaded1; border-radius:5px;
+    padding:.1rem .35rem; font-family:"JetBrains Mono",monospace; font-size:.87em;
+    color:#8a4b34;
+  }
+
+  /* ---------- quiz ---------- */
+  .interactive-card{
+    background:#fdf9f5; border:1px solid #eedfd1; border-radius:16px;
+    padding:16px 20px; margin:18px 0;
+  }
+  .interactive-card h3{margin-top:.1rem;}
+  .quiz-options{display:flex; flex-wrap:wrap; gap:.6rem; margin:.7rem 0 .3rem;}
+  .quiz-options button{
+    font:inherit; font-size:.92rem; cursor:pointer; padding:.45rem 1rem;
+    border-radius:999px; border:1.5px solid #e2cbb9; background:#fffdfa;
+    color:var(--ink-soft); transition:.15s;
+  }
+  .quiz-options button:hover{border-color:var(--accent); color:var(--accent-deep);}
+  .quiz-options button.right{background:#e6f2e7; border-color:#8dc09a; color:#2f6b41;}
+  .quiz-options button.wrong{background:#fbe9e4; border-color:#e0a389; color:#a8452a;}
+  .quiz-feedback{font-size:.9rem; min-height:1.2em; margin-top:.5rem; line-height:1.65;}
+  .quiz-feedback.ok{color:#2f6b41;}
+  .quiz-feedback.bad{color:#a8452a;}
+
+  /* ---------- details / exercise ---------- */
+  .exercise-box{
+    background:#fbf7f2; border:1px solid #efe0d2; border-radius:16px;
+    padding:16px 20px; margin:18px 0;
+  }
+  .exercise-box h3{margin-top:.2rem;}
+  details.exercise-answer{
+    margin:.5rem 0 0; background:#fffdfa; border:1px dashed #e2cbb9;
+    border-radius:10px; padding:.5rem .8rem;
+  }
+  details.exercise-answer summary{
+    cursor:pointer; font-weight:600; color:var(--accent-deep); font-size:.92rem;
+  }
+  details.exercise-answer div{font-size:.92rem; padding-top:.5rem; color:var(--ink-soft);}
+
+  .summary-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:14px 0;}
+  @media(max-width:760px){.summary-grid{grid-template-columns:1fr;}}
+  .mini-card{
+    background:#fdf7f2; border:1px solid #eedfd1; border-radius:14px; padding:14px 18px;
+  }
+  .mini-card h4{margin-top:0;}
+  .mini-card p{font-size:.93rem;}
+
+  /* ---------- footer ---------- */
+  footer.section-card{text-align:center;}
+  .nav-links{display:flex; flex-wrap:wrap; gap:.7rem; justify-content:center; margin-bottom:1rem;}
+  .nav-links a{
+    text-decoration:none; font-size:.93rem; padding:.5rem 1.1rem; border-radius:999px;
+    background:#fbf2e9; border:1px solid #ecd9c8; color:var(--accent-deep); transition:.15s;
+  }
+  .nav-links a:hover{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .foot-note{font-size:.88rem; color:var(--muted); margin-top:.6rem;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ================= HERO ================= -->
+  <header class="hero">
+    <div class="eyebrow">追问答疑 · 从公式到实车 ｜ 独立答疑页</div>
+    <h1>从公式到实车：ROS 小车的激光、相机、里程计，是怎么变成因子图算出位置和地图的</h1>
+    <p class="subtitle">
+      你的理解<b>大方向完全正确</b>——不同传感器提供不同的"证据"，证据变成因子，因子连成图，解图得到位姿和地图。
+      这一页把这句话拆成看得见的东西：<b>先画一台真车（SVG），再把公式里每个符号按到车上的一个零件上，然后给你两个层次的伪代码，最后手算一遍三个传感器互相拉扯的过程。</b>🧭
+    </p>
+    <div class="hero-meta">
+      <span>🚗 场景：走廊里的 ROS 小车（激光 + 相机 + 里程计）</span>
+      <span>🧩 变量对照表：𝒳、zₖ、hₖ、Ωₖ 分别是车上的什么</span>
+      <span>💻 伪代码：概念版 + ROS/GTSAM 版</span>
+      <span>🧮 手算：三个因子拉一个答案</span>
+    </div>
+    <div class="toc">
+      <a href="#scene">1. 先看车</a>
+      <a href="#vars">2. 符号对照表</a>
+      <a href="#factors">3. 一种传感器 = 一类因子</a>
+      <a href="#pipeline">4. 一帧一帧怎么跑</a>
+      <a href="#code">5. 伪代码</a>
+      <a href="#hand">6. 手算</a>
+      <a href="#pitfalls">7. 实车上的坑</a>
+      <a href="#quiz">8. 自测</a>
+    </div>
+  </header>
+
+  <!-- ================= 1. 先看车 ================= -->
+  <section class="section-card" id="scene">
+    <h2>1. 先看车：它身上到底挂了什么</h2>
+
+    <p>假设你有一台最典型的 ROS 差速小车，跑在一条直走廊里。它身上至少有这三样东西：</p>
+
+    <table>
+      <thead>
+        <tr><th>硬件</th><th>ROS 话题</th><th>它给的是什么"证据"</th><th>它靠不靠谱</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>2D 激光雷达</b>（RPLIDAR 之类）</td>
+          <td><code>/scan</code></td>
+          <td>一圈距离读数：每个角度上，墙在多远</td>
+          <td>单帧很准（厘米级），但<b>它不知道自己在地图的哪里</b>——只知道"周围长这样"</td>
+        </tr>
+        <tr>
+          <td><b>相机</b>（单目 / 双目 / RGB-D）</td>
+          <td><code>/camera/image_raw</code>、<code>/camera/camera_info</code></td>
+          <td>图像里的一堆特征点像素坐标 $(u,v)$</td>
+          <td>信息丰富、能认路标，但受光照影响、单目还有尺度问题</td>
+        </tr>
+        <tr>
+          <td><b>轮式编码器</b>（里程计）</td>
+          <td><code>/odom</code></td>
+          <td>两个相邻时刻之间"我大概移动了多少"：$\Delta x, \Delta y, \Delta\theta$</td>
+          <td>短期平滑连续，<b>但长期一定漂移</b>——轮子打滑、地面不平、轮胎磨损</td>
+        </tr>
+        <tr>
+          <td><b>IMU</b>（常有）</td>
+          <td><code>/imu</code></td>
+          <td>角速度、加速度</td>
+          <td>高频、短期准，但积分两次噪声爆炸</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <figure class="figure">
+      <svg viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans SC',system-ui,sans-serif">
+        <!-- 地板 -->
+        <rect x="60" y="100" width="800" height="240" fill="#fdf9f4"/>
+        <!-- 上下墙 -->
+        <rect x="60" y="80" width="800" height="20" rx="5" fill="#e6d3bf" stroke="#d9c3ab"/>
+        <rect x="60" y="340" width="800" height="20" rx="5" fill="#e6d3bf" stroke="#d9c3ab"/>
+
+        <!-- 激光扫描射线 -->
+        <line x1="240" y1="220" x2="380" y2="100" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+        <line x1="240" y1="220" x2="560" y2="100" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+        <line x1="240" y1="220" x2="740" y2="100" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+        <line x1="240" y1="220" x2="380" y2="340" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+        <line x1="240" y1="220" x2="560" y2="340" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+        <line x1="240" y1="220" x2="740" y2="340" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+        <line x1="240" y1="220" x2="836" y2="220" stroke="#e0a389" stroke-width="1.3" stroke-dasharray="5 4"/>
+
+        <!-- 相机视野 -->
+        <path d="M268 220 L520 152 L520 288 Z" fill="#7aa3cc" fill-opacity="0.13" stroke="#7aa3cc" stroke-width="1.6" stroke-dasharray="6 5"/>
+        <text x="440" y="188" font-size="12.5" fill="#4d7099">相机视野</text>
+
+        <!-- 路标 -->
+        <circle cx="430" cy="180" r="9" fill="#d5e8da" stroke="#7cb08a" stroke-width="2.5"/>
+        <text x="446" y="174" font-size="14" fill="#2f5238" font-weight="700">l₁</text>
+        <circle cx="660" cy="300" r="9" fill="#d5e8da" stroke="#7cb08a" stroke-width="2.5"/>
+        <text x="676" y="306" font-size="14" fill="#2f5238" font-weight="700">l₂</text>
+
+        <!-- 小车 -->
+        <rect x="212" y="198" width="56" height="44" rx="14" fill="#cc785c"/>
+        <rect x="224" y="190" width="34" height="9" rx="4" fill="#3a3230"/>
+        <rect x="224" y="241" width="34" height="9" rx="4" fill="#3a3230"/>
+        <circle cx="240" cy="220" r="5.5" fill="#3a3230"/>
+        <circle cx="268" cy="220" r="4" fill="#fffdfa" stroke="#8a4b34" stroke-width="1.6"/>
+
+        <!-- 起点 -->
+        <line x1="120" y1="200" x2="120" y2="240" stroke="#b9a99c" stroke-width="2.5" stroke-dasharray="6 4"/>
+        <text x="120" y="262" font-size="12.5" fill="#8b786f" text-anchor="middle">起点 / map 原点</text>
+
+        <!-- 坐标轴 -->
+        <line x1="100" y1="130" x2="150" y2="130" stroke="#8b786f" stroke-width="2"/>
+        <path d="M150 130 L141 126 L141 134 Z" fill="#8b786f"/>
+        <line x1="100" y1="130" x2="100" y2="180" stroke="#8b786f" stroke-width="2"/>
+        <path d="M100 180 L96 171 L104 171 Z" fill="#8b786f"/>
+        <text x="156" y="135" font-size="12" fill="#8b786f">x</text>
+        <text x="94" y="196" font-size="12" fill="#8b786f">y</text>
+
+        <!-- 图例 -->
+        <line x1="70" y1="398" x2="104" y2="398" stroke="#e0a389" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <text x="114" y="403" font-size="13" fill="#6a554d">激光雷达：量到墙的距离（/scan）</text>
+
+        <rect x="70" y="416" width="34" height="12" fill="#7aa3cc" fill-opacity="0.18" stroke="#7aa3cc" stroke-dasharray="4 3"/>
+        <text x="114" y="427" font-size="13" fill="#6a554d">相机：看到路标 / 特征点（/camera）</text>
+
+        <circle cx="87" cy="452" r="8" fill="#d5e8da" stroke="#7cb08a" stroke-width="2.2"/>
+        <text x="114" y="457" font-size="13" fill="#6a554d">路标：视觉三角化的 3D 点 / 反光柱 / 二维码</text>
+
+        <rect x="470" y="392" width="34" height="9" rx="4" fill="#3a3230"/>
+        <text x="514" y="403" font-size="13" fill="#6a554d">车轮编码器：给出两帧之间的相对位移（/odom）</text>
+
+        <text x="470" y="430" font-size="13" fill="#b15d44">注意：激光和相机都只能看到"<tspan font-weight="700">相对</tspan>"的东西，</text>
+        <text x="470" y="450" font-size="13" fill="#b15d44">它们自己回答不了"我在世界坐标系的哪里"。</text>
+      </svg>
+      <figcaption>
+        <b>这张图在画什么：</b>一台 ROS 小车停在走廊里。橙色虚线是激光雷达打出去的距离射线，蓝色扇形是相机视野，绿色圆点是路标，车轮上的黑色小块是编码器。
+        <br><b>怎么看这张图：</b>盯住"每个传感器只能看到一部分真相"这件事——
+        ① 激光知道"墙离我 3.2 m"，但不知道"我在哪"；② 相机看到"路标 l₁ 在我右前方"，同样不知道"我在哪"；③ 里程计说"我从起点往前挪了 5 m"，但它会累积误差。
+        <b>没有哪个传感器单独能给出答案，所以必须把它们"合起来解"——这就是因子图要干的事。</b>
+        <br><b>要记住的一句话：</b>每个传感器都是一条<b>约束</b>，不是一条<b>答案</b>。
+      </figcaption>
+    </figure>
+
+    <div class="callout">
+      <h4>你说的那句话，修正一下措辞就完全对了</h4>
+      <p>你说："不同传感器收集不同的证据，形成因子图，根据公式算出小车位置和地图。"<br>
+      <b>✅ 完全对。</b>只补两个精确说法：</p>
+      <p>① 传感器给的是<b>量测 $z_k$</b>，不是因子。因子 = <b>量测 + 观测模型 + 信息矩阵</b>（即"这条证据说的是哪几个变量之间的什么关系、它有多可信"）。<br>
+      ② 公式算出来的不是"位置和地图"两个东西，而是<b>同一个东西</b>：所有未知量 $\mathcal{X}$ 联合最优的那一组值。位姿和地图在数学上是<b>平权</b>的，都被塞在同一个 $\mathcal{X}$ 里一起解——这正是 SLAM 和"先定位再建图"的根本区别。</p>
+    </div>
+  </section>
+
+  <!-- ================= 2. 符号对照表 ================= -->
+  <section class="section-card" id="vars">
+    <h2>2. 把公式里每个符号，按到车上的一个具体零件上</h2>
+
+    <p>上一页那四行公式，符号看着抽象。现在把它们一个个"钉"到实车上：</p>
+
+    <table>
+      <thead>
+        <tr><th style="width:12%">符号</th><th style="width:20%">数学名字</th><th style="width:40%">实车上的具体东西</th><th>典型数值 / 来源</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>$\mathcal{X}$</b></td>
+          <td>全部未知量</td>
+          <td><b>机器人位姿序列</b> $x_1,\dots,x_T$ + <b>地图里所有路标</b> $l_1,\dots,l_L$</td>
+          <td>跑 5 分钟 @10 Hz → $T\approx 3000$ 个位姿；地图里 $L\approx 2000$ 个路标。合计约 5000 个变量</td>
+        </tr>
+        <tr>
+          <td><b>$x_t$</b></td>
+          <td>第 $t$ 帧位姿</td>
+          <td><code>base_link</code> 在 <code>map</code> 坐标系下的位姿。2D 是 $(x,y,\theta)$，3D 是 $\mathrm{SE}(3)$</td>
+          <td>$(3.2\ \mathrm{m},\ 1.5\ \mathrm{m},\ 30^\circ)$，由 <code>/tf</code> 里的 <code>map→base_link</code> 给出</td>
+        </tr>
+        <tr>
+          <td><b>$l_j$</b></td>
+          <td>第 $j$ 个路标</td>
+          <td>视觉三角化出的 3D 地图点 / 反光柱 / 二维码 / 激光里的角点，在 <code>map</code> 下的坐标</td>
+          <td>$(5.0\ \mathrm{m},\ 2.1\ \mathrm{m})$；一开始不知道，是<b>要解出来的未知量</b></td>
+        </tr>
+        <tr>
+          <td><b>$z_k$</b></td>
+          <td>第 $k$ 个量测</td>
+          <td><code>/odom</code> 的两帧位移、<code>/scan</code> 的一个距离读数、相机上某个特征点的像素 $(u,v)$</td>
+          <td>$(u,v)=(320,240)$ 像素；里程计 $\Delta=(0.52\ \mathrm{m}, 0.01\ \mathrm{m}, 3^\circ)$</td>
+        </tr>
+        <tr>
+          <td><b>$\mathcal{X}_k$</b></td>
+          <td>这个量测涉及的变量子集</td>
+          <td>第 100 帧看到路标 7 → $\mathcal{X}_k=\{x_{100},\,l_7\}$。<b>只这两个，别的 4998 个变量跟它无关</b></td>
+          <td>这就是因子图稀疏性的来源，也是后端能算几万变量的原因</td>
+        </tr>
+        <tr>
+          <td><b>$h_k(\cdot)$</b></td>
+          <td>观测模型</td>
+          <td>"给定候选位姿和候选路标，<b>应该</b>看到什么"。相机是投影：$h=\pi(K,\,T_{cam}^{-1}l_j)$；激光是距离：$h=\|l_j - t_i\|$</td>
+          <td>代码里就是一个函数，吃进去变量、吐出来预测值</td>
+        </tr>
+        <tr>
+          <td><b>$\Omega_k$</b></td>
+          <td>信息矩阵（$=\Sigma_k^{-1}$）</td>
+          <td><b>这个传感器有多准</b>。由标定 / 出厂手册给出。$\Omega=1/\sigma^2$</td>
+          <td>激光 $\sigma=0.02\ \mathrm{m}\Rightarrow\Omega=2500$；相机 $\sigma=1.5\ \mathrm{px}\Rightarrow\Omega\approx 0.44$</td>
+        </tr>
+        <tr>
+          <td><b>$\epsilon_k$</b></td>
+          <td>噪声</td>
+          <td>轮子打滑、墙面反光、特征点误匹配、时间戳不同步</td>
+          <td>我们假设它服从高斯（或拉普拉斯）分布</td>
+        </tr>
+        <tr>
+          <td><b>$p(\mathcal{X})$</b></td>
+          <td>先验</td>
+          <td>开机时给的初始位姿（<code>/initialpose</code>）、GPS 一次性读数、或"机器人不会瞬移"</td>
+          <td>通常只在 $x_0$ 上加一个先验因子把整个图"钉住"</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <h4>★ 最重要的一句话：位姿和路标是<b>同一类东西</b></h4>
+      <p>很多人第一次看这个表会以为"位姿"是状态、"路标"是输出。不是的。<br>
+      在 $\mathcal{X}$ 里，$x_t$ 和 $l_j$ 完全平权——都是未知量、都要被优化、都有初值、都会被修正。<br>
+      <b>这就是为什么 SLAM 能做到"边定位边建图"：因为它从来没把这两件事分开过。</b></p>
+    </div>
+
+    <h3>那"位姿"为什么不能当成普通向量？</h3>
+    <p>因为 $\theta$ 不是普通数字。比如 $179^\circ$ 和 $-179^\circ$ 只差 $2^\circ$，但数字上差了 $358$。你要是直接对角度做算术平均，会得到 $0^\circ$——彻底错了。</p>
+    <p>所以工程上约定：<b>位姿存成 $T\in\mathrm{SE}(2)$（旋转矩阵+平移），更新的时候用"李代数增量" $\delta\in\mathbb{R}^3$</b>：</p>
+    <div class="formula-box">
+      <div class="flow-formula">$$T_{t}\leftarrow T_{t}\cdot\exp(\hat{\delta}),\qquad \delta\in\mathbb{R}^3\ \text{（就是一个普通向量，可以随便加减）}$$</div>
+    </div>
+    <p>公式里那些 $\mathrm{Log}(\cdot)$、$\mathrm{Exp}(\cdot)$ 就是干这个的：<b>把"位姿的差"翻译成一个普通 3 维向量</b>，好写残差、好求导。你暂时只需要知道"有这么个翻译层"就够了。</p>
+  </section>
+
+  <!-- ================= 3. 因子 ================= -->
+  <section class="section-card" id="factors">
+    <h2>3. 一种传感器 = 一类因子（这是全篇最实用的一张表）</h2>
+
+    <p>公式 (4) 是 $\mathcal{X}^\star=\arg\min_{\mathcal{X}}\sum_k\|h_k(\mathcal{X}_k)-z_k\|^2_{\Omega_k}$。那个 $\sum_k$ 里的每一项，在实车上就是一个<b>因子</b>。四大类：</p>
+
+    <table>
+      <thead>
+        <tr><th style="width:16%">因子类型</th><th style="width:16%">连接哪些变量</th><th style="width:30%">残差（代码里真正算的东西）</th><th>来源</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>先验因子</b><br>PriorFactor</td>
+          <td>只连 $x_0$（或某一个 $x_t$）</td>
+          <td>$e = \mathrm{Log}\big(x_0^{-1}T_{\text{init}}\big)$</td>
+          <td><code>/initialpose</code>、GPS、AMCL 给的初值。<b>没有它，整个图可以整体平移/旋转，解不唯一</b></td>
+        </tr>
+        <tr>
+          <td><b>里程计因子</b><br>BetweenFactor</td>
+          <td>连 $x_{t-1}$ 和 $x_t$</td>
+          <td>$e = \mathrm{Log}\Big(\big(T_{t-1}^{-1}T_t\big)^{-1}\,\Delta_{\text{odom}}\Big)$<br><span style="font-size:.85em;color:#8b786f">"预测的相对位姿"和"里程计测到的相对位姿"差多少</span></td>
+          <td><code>/odom</code>。相邻两帧的相对位移 $\Delta$</td>
+        </tr>
+        <tr>
+          <td><b>视觉观测因子</b><br>ProjectionFactor</td>
+          <td>连 $x_t$ 和 $l_j$</td>
+          <td>$e = \begin{pmatrix}u\\v\end{pmatrix} - \pi\big(K,\ T_{\text{cam}}^{-1}\,l_j\big)$<br><span style="font-size:.85em;color:#8b786f">"路标应该投到哪个像素"和"实际看到哪个像素"差多少（单位：像素）</span></td>
+          <td><code>/camera</code> + 特征提取 + 数据关联</td>
+        </tr>
+        <tr>
+          <td><b>激光观测因子</b><br>RangeFactor / ScanMatch</td>
+          <td>连 $x_t$ 和 $l_j$（或 $x_t$ 和一小段局部地图）</td>
+          <td>$e = r_{\text{measured}} - \|l_j - t_t\|$<br><span style="font-size:.85em;color:#8b786f">"测到的距离"和"预测的距离"差多少（单位：米）</span></td>
+          <td><code>/scan</code>。距离读数或扫描匹配的位姿增量</td>
+        </tr>
+        <tr>
+          <td><b>回环因子</b><br>LoopFactor</td>
+          <td>连 $x_i$ 和 $x_j$（$i\ll j$，隔得很远）</td>
+          <td>和里程计因子长一模一样：$e=\mathrm{Log}\big((T_i^{-1}T_j)^{-1}\Delta_{\text{loop}}\big)$<br><b>但"隔得远"这三个字才是关键</b></td>
+          <td>回环检测：视觉词袋（DBoW）、Scan Context、激光直方图…</td>
+        </tr>
+        <tr>
+          <td><b>IMU 因子</b><br>PreintegratedIMU</td>
+          <td>连 $x_{t-1},x_t,v_{t-1},v_t$</td>
+          <td>预积分量测与状态预测之差</td>
+          <td><code>/imu</code>。给姿态和速度提供高频约束</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <figure class="figure">
+      <svg viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans SC',system-ui,sans-serif">
+        <!-- 回环曲线 -->
+        <path d="M670 150 C 710 40, 90 40, 130 150" fill="none" stroke="#b15d44" stroke-width="2" stroke-dasharray="8 6"/>
+
+        <!-- 里程计连线 -->
+        <line x1="149" y1="150" x2="291" y2="150" stroke="#b9a99c" stroke-width="2"/>
+        <line x1="329" y1="150" x2="471" y2="150" stroke="#b9a99c" stroke-width="2"/>
+        <line x1="509" y1="150" x2="651" y2="150" stroke="#b9a99c" stroke-width="2"/>
+        <!-- 视觉连线 -->
+        <line x1="130" y1="150" x2="220" y2="320" stroke="#b9a99c" stroke-width="2"/>
+        <line x1="310" y1="150" x2="220" y2="320" stroke="#b9a99c" stroke-width="2"/>
+        <line x1="490" y1="150" x2="580" y2="320" stroke="#b9a99c" stroke-width="2"/>
+        <line x1="670" y1="150" x2="580" y2="320" stroke="#b9a99c" stroke-width="2"/>
+
+        <!-- 位姿节点 -->
+        <circle cx="130" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+        <text x="130" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₁</text>
+        <circle cx="310" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+        <text x="310" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₂</text>
+        <circle cx="490" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+        <text x="490" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₃</text>
+        <circle cx="670" cy="150" r="19" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+        <text x="670" y="156" font-size="14" fill="#2f4a66" text-anchor="middle">x₄</text>
+
+        <!-- 路标节点 -->
+        <circle cx="220" cy="320" r="19" fill="#d5e8da" stroke="#7cb08a" stroke-width="2"/>
+        <text x="220" y="326" font-size="14" fill="#2f5238" text-anchor="middle">l₁</text>
+        <circle cx="580" cy="320" r="19" fill="#d5e8da" stroke="#7cb08a" stroke-width="2"/>
+        <text x="580" y="326" font-size="14" fill="#2f5238" text-anchor="middle">l₂</text>
+
+        <!-- 先验因子 -->
+        <rect x="80" y="140" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="90" y="132" font-size="12.5" fill="#3a3230" text-anchor="middle">先验</text>
+
+        <!-- 里程计因子 -->
+        <rect x="210" y="140" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="220" y="132" font-size="12.5" fill="#3a3230" text-anchor="middle">里程计</text>
+        <rect x="390" y="140" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="400" y="132" font-size="12.5" fill="#3a3230" text-anchor="middle">里程计</text>
+        <rect x="570" y="140" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="580" y="132" font-size="12.5" fill="#3a3230" text-anchor="middle">里程计</text>
+
+        <!-- 视觉因子 -->
+        <rect x="165" y="225" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="175" y="218" font-size="12.5" fill="#3a3230" text-anchor="middle">视觉</text>
+        <rect x="255" y="225" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="265" y="218" font-size="12.5" fill="#3a3230" text-anchor="middle">视觉</text>
+        <rect x="525" y="225" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="535" y="218" font-size="12.5" fill="#3a3230" text-anchor="middle">视觉</text>
+        <rect x="615" y="225" width="21" height="21" rx="4" fill="#3a3230"/>
+        <text x="625" y="218" font-size="12.5" fill="#3a3230" text-anchor="middle">视觉</text>
+
+        <!-- 回环因子 -->
+        <rect x="390" y="58" width="21" height="21" rx="4" fill="#b15d44"/>
+        <text x="400" y="50" font-size="12.5" fill="#b15d44" text-anchor="middle" font-weight="700">回环</text>
+
+        <!-- 图例 -->
+        <circle cx="90" cy="400" r="12" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2"/>
+        <text x="112" y="405" font-size="13" fill="#4a342c">位姿节点 xₜ（要解出来的未知量）</text>
+        <circle cx="90" cy="434" r="12" fill="#d5e8da" stroke="#7cb08a" stroke-width="2"/>
+        <text x="112" y="439" font-size="13" fill="#4a342c">路标节点 lⱼ（同样是未知量，和位姿平权）</text>
+        <rect x="450" y="392" width="18" height="18" rx="4" fill="#3a3230"/>
+        <text x="478" y="406" font-size="13" fill="#4a342c">因子：一条证据 = 量测 + 观测模型 + Ω</text>
+        <rect x="450" y="426" width="18" height="18" rx="4" fill="#b15d44"/>
+        <text x="478" y="440" font-size="13" fill="#4a342c">回环因子：连的是<b>隔得很远</b>的两个位姿</text>
+      </svg>
+      <figcaption>
+        <b>这张图在画什么：</b>刚才那台小车的因子图。蓝圆是位姿，绿圆是路标，黑方块是因子，红色方块是回环因子。
+        <br><b>怎么看这张图：</b>数一数<b>每个方块连了几个圆</b>——里程计方块连 2 个位姿，视觉方块连 1 个位姿 + 1 个路标，回环方块连 2 个位姿（但这两个位姿在时间上隔了很远）。<b>没有任何一个方块同时连着所有圆</b>。
+        再加一个关键观察：$x_1$ 和 $x_4$ 之间<b>只通过回环因子相连</b>——没有回环，这个图就是一条链，误差会一路累积；有了回环，链变成了环，误差才有机会被摊平。
+        <br><b>要记住的一句话：</b>因子图的形状 = 你的传感器配置 + 你的回环策略。<b>改图就是改系统。</b>
+      </figcaption>
+    </figure>
+
+    <div class="interactive-card">
+      <h3>互动判断 ①</h3>
+      <p>你的小车上，<code>/odom</code> 是 50 Hz，<code>/scan</code> 是 10 Hz，相机是 30 Hz。如果每收到一帧 <code>/odom</code> 就加一个里程计因子，会发生什么？</p>
+      <div class="quiz-options">
+        <button data-correct="yes" data-explanation="对。因子图规模直接和量测条数成正比。50 Hz 跑 10 分钟就是 3 万个里程计因子，而且相邻位姿之间位移极小、信息量很低。工程上的标准做法是：只对关键帧（keyframe）加位姿节点和因子——比如每移动 0.2 m 或每转过 10° 才建一个新节点，中间的 /odom 用来做初值预测。">
+          图会迅速膨胀，需要只对关键帧建节点
+        </button>
+        <button data-correct="no" data-explanation="不对。因子越多约束越多，解的精度不会因此下降（反而略有提升），问题是计算量：图越大，每次优化要解的线性方程组越大，实时性就崩了。所以问题不是“解不准”，而是“算不动”。">
+          精度会显著下降，因为里程计噪声被反复累加
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+  </section>
+
+  <!-- ================= 4. 流水线 ================= -->
+  <section class="section-card" id="pipeline">
+    <h2>4. 一帧一帧怎么跑：从传感器数据到 map→odom 的 tf</h2>
+
+    <p>实车程序不是"攒够所有数据再解一次"，而是<b>增量地</b>跑一个循环。用一张图看清楚：</p>
+
+    <figure class="figure">
+      <svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans SC',system-ui,sans-serif">
+        <!-- 上层：数据来源 -->
+        <rect x="30" y="30" width="150" height="52" rx="12" fill="#fdf0e8" stroke="#e0c8b8"/>
+        <text x="105" y="52" font-size="13.5" fill="#8a4b34" text-anchor="middle" font-weight="700">/odom 50Hz</text>
+        <text x="105" y="70" font-size="12" fill="#8b786f" text-anchor="middle">相对位移 Δ</text>
+
+        <rect x="30" y="105" width="150" height="52" rx="12" fill="#eef4fa" stroke="#b9cfe6"/>
+        <text x="105" y="127" font-size="13.5" fill="#4d7099" text-anchor="middle" font-weight="700">/scan 10Hz</text>
+        <text x="105" y="145" font-size="12" fill="#8b786f" text-anchor="middle">距离读数 / 点云</text>
+
+        <rect x="30" y="180" width="150" height="52" rx="12" fill="#eef4fa" stroke="#b9cfe6"/>
+        <text x="105" y="202" font-size="13.5" fill="#4d7099" text-anchor="middle" font-weight="700">/camera 30Hz</text>
+        <text x="105" y="220" font-size="12" fill="#8b786f" text-anchor="middle">图像 / 特征点</text>
+
+        <!-- 箭头 -->
+        <path d="M186 56 L250 118" stroke="#b9a99c" stroke-width="1.8" fill="none" marker-end="url(#ar)"/>
+        <path d="M186 131 L250 131" stroke="#b9a99c" stroke-width="1.8" fill="none" marker-end="url(#ar)"/>
+        <path d="M186 206 L250 144" stroke="#b9a99c" stroke-width="1.8" fill="none" marker-end="url(#ar)"/>
+        <defs>
+          <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+            <path d="M0 0 L9 4.5 L0 9 z" fill="#b9a99c"/>
+          </marker>
+          <marker id="ar2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+            <path d="M0 0 L9 4.5 L0 9 z" fill="#cc785c"/>
+          </marker>
+        </defs>
+
+        <!-- 前端 -->
+        <rect x="256" y="92" width="168" height="78" rx="14" fill="#fffdfa" stroke="#cc785c" stroke-width="2"/>
+        <text x="340" y="118" font-size="14" fill="#b15d44" text-anchor="middle" font-weight="700">前端 Front-end</text>
+        <text x="340" y="138" font-size="12" fill="#6a554d" text-anchor="middle">特征提取 / 数据关联</text>
+        <text x="340" y="155" font-size="12" fill="#6a554d" text-anchor="middle">扫描匹配 / 回环检测</text>
+
+        <path d="M430 131 L492 131" stroke="#cc785c" stroke-width="2.2" fill="none" marker-end="url(#ar2)"/>
+
+        <!-- 后端 -->
+        <rect x="498" y="86" width="176" height="90" rx="14" fill="#fdf7f2" stroke="#cc785c" stroke-width="2"/>
+        <text x="586" y="112" font-size="14" fill="#b15d44" text-anchor="middle" font-weight="700">后端 Back-end</text>
+        <text x="586" y="133" font-size="12" fill="#6a554d" text-anchor="middle">加因子 → 线性化</text>
+        <text x="586" y="150" font-size="12" fill="#6a554d" text-anchor="middle">→ 解正规方程 → 更新</text>
+        <text x="586" y="167" font-size="12" fill="#6a554d" text-anchor="middle">(iSAM2 / LM / GN)</text>
+
+        <path d="M680 131 L742 131" stroke="#cc785c" stroke-width="2.2" fill="none" marker-end="url(#ar2)"/>
+
+        <!-- 输出 -->
+        <rect x="748" y="66" width="126" height="52" rx="12" fill="#eaf5ec" stroke="#8dc09a"/>
+        <text x="811" y="88" font-size="13" fill="#2f6b41" text-anchor="middle" font-weight="700">map→odom tf</text>
+        <text x="811" y="106" font-size="12" fill="#6a554d" text-anchor="middle">全局修正</text>
+
+        <rect x="748" y="140" width="126" height="52" rx="12" fill="#eaf5ec" stroke="#8dc09a"/>
+        <text x="811" y="162" font-size="13" fill="#2f6b41" text-anchor="middle" font-weight="700">轨迹 + 地图</text>
+        <text x="811" y="180" font-size="12" fill="#6a554d" text-anchor="middle">发布到 /map</text>
+
+        <!-- 反馈回路 -->
+        <path d="M586 180 C 586 240, 340 246, 340 178" stroke="#cc785c" stroke-width="1.8" stroke-dasharray="6 5" fill="none" marker-end="url(#ar2)"/>
+        <text x="463" y="258" font-size="12.5" fill="#b15d44" text-anchor="middle">优化结果反馈：更新初值，下一次线性化从这里开始</text>
+
+        <!-- 底部说明 -->
+        <text x="30" y="286" font-size="12.5" fill="#8b786f">注：前端和后端可以不在同一个进程 —— 前端在车上跑，后端可以异步跑、甚至放到上位机/云端。</text>
+      </svg>
+      <figcaption>
+        <b>这张图在画什么：</b>实车 SLAM 的标准流水线：传感器 → 前端（产生量测）→ 后端（加因子、优化）→ 输出 tf 和地图 → 反馈回前端。
+        <br><b>怎么看这张图：</b>从左往右看数据流，再从下往上看那条虚线反馈——<b>后端的结果会变成前端的初值</b>，所以这是一个闭环，不是单向流水线。
+        还要注意：图里没有"建图"这个独立模块。<b>轨迹和地图是从同一次优化里一起掉出来的两个副产品。</b>
+        <br><b>要记住的一句话：</b>前端负责"产生约束"，后端负责"平衡约束"。前端错了，后端再强也救不回来。
+      </figcaption>
+    </figure>
+
+    <h3>为什么最后发布的是 <code>map→odom</code>，而不是 <code>map→base_link</code>？</h3>
+    <p>这是 ROS 里一个特别容易搞混、但面试常问的点。标准做法是让 tf 树长这样：</p>
+
+    <div class="formula-box">
+      <div class="flow-formula">$$\texttt{map}\ \xrightarrow{\ \text{SLAM 全局修正（低频、会跳变）}\ }\ \texttt{odom}\ \xrightarrow{\ \text{里程计递推（高频、连续）}\ }\ \texttt{base\_link}\ \xrightarrow{\ \text{外参标定}\ }\ \texttt{laser / camera}$$</div>
+    </div>
+
+    <p>为什么要在中间插一个 <code>odom</code>？两个理由：</p>
+    <ul>
+      <li><b><code>odom→base_link</code> 必须连续、不能跳</b>：它是用编码器递推出来的，任何时候都在平滑更新（50 Hz）。如果直接用它做局部导航，不会因为后端优化而"瞬移"。</li>
+      <li><b><code>map→odom</code> 可以有跳变</b>：后端每次优化完，会给出一个"全局修正量"，这个量就发布成 <code>map→odom</code>。回环闭合时，你会看到这个变换突然变化一下——<b>那一下就是"漂移被摊平"的瞬间</b>。</li>
+    </ul>
+    <p>所以代码里通常这么算：</p>
+    <pre class="code"><span class="c"># 后端给出 map 下的位姿，里程计给出 odom 下的位姿</span>
+T_map_base  = result.<span class="k">atPose2</span>(X(t))        <span class="c"># 优化后的全局位姿</span>
+T_odom_base = latest_odom_pose()            <span class="c"># 纯里程计推出来的</span>
+
+<span class="c"># 中间那一环：map -> odom</span>
+T_map_odom  = T_map_base * T_odom_base.<span class="k">inverse</span>()
+tf.<span class="k">sendTransform</span>(T_map_odom, <span class="s">"map"</span>, <span class="s">"odom"</span>)</pre>
+
+    <h3>优化前 vs 优化后：回环到底做了什么</h3>
+    <figure class="figure">
+      <svg viewBox="0 0 900 340" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans SC',system-ui,sans-serif">
+        <!-- 左：优化前 -->
+        <text x="60" y="36" font-size="14.5" fill="#b15d44" font-weight="700">优化前：里程计一路累积，回不到起点</text>
+        <path d="M90 110 L300 110 L300 260 L90 260 Z" fill="none" stroke="#d9c3ab" stroke-width="2" stroke-dasharray="7 6"/>
+        <text x="196" y="292" font-size="12" fill="#8b786f" text-anchor="middle">灰色虚线 = 真实路径（闭环）</text>
+
+        <polyline points="90,110 292,120 306,266 104,272" fill="none" stroke="#cc785c" stroke-width="2.6"/>
+        <circle cx="90" cy="110" r="7" fill="#fffdfa" stroke="#cc785c" stroke-width="2.6"/>
+        <circle cx="292" cy="120" r="7" fill="#fffdfa" stroke="#cc785c" stroke-width="2.6"/>
+        <circle cx="306" cy="266" r="7" fill="#fffdfa" stroke="#cc785c" stroke-width="2.6"/>
+        <circle cx="104" cy="272" r="7" fill="#fffdfa" stroke="#cc785c" stroke-width="2.6"/>
+        <line x1="90" y1="110" x2="104" y2="272" stroke="#b15d44" stroke-width="2" stroke-dasharray="4 4"/>
+        <text x="150" y="200" font-size="13" fill="#b15d44" font-weight="700">缺口 ≈ 1.2 m</text>
+
+        <!-- 右：优化后 -->
+        <text x="500" y="36" font-size="14.5" fill="#2f6b41" font-weight="700">优化后：回环因子把缺口拉平</text>
+        <path d="M520 110 L730 110 L730 260 L520 260 Z" fill="none" stroke="#d9c3ab" stroke-width="2" stroke-dasharray="7 6"/>
+        <polyline points="520,112 728,116 724,262 522,258 520,112" fill="none" stroke="#4f9a63" stroke-width="2.8"/>
+        <circle cx="520" cy="112" r="7" fill="#fffdfa" stroke="#4f9a63" stroke-width="2.6"/>
+        <circle cx="728" cy="116" r="7" fill="#fffdfa" stroke="#4f9a63" stroke-width="2.6"/>
+        <circle cx="724" cy="262" r="7" fill="#fffdfa" stroke="#4f9a63" stroke-width="2.6"/>
+        <circle cx="522" cy="258" r="7" fill="#fffdfa" stroke="#4f9a63" stroke-width="2.6"/>
+        <circle cx="520" cy="112" r="13" fill="none" stroke="#4f9a63" stroke-width="1.6" stroke-dasharray="3 3"/>
+        <text x="614" y="296" font-size="12" fill="#8b786f" text-anchor="middle">起点被回环因子"拽"回来了</text>
+
+        <line x1="400" y1="60" x2="400" y2="310" stroke="#ede0d3" stroke-width="1.6"/>
+        <text x="450" y="180" font-size="14" fill="#cc785c" font-weight="700">+ 回环因子</text>
+        <path d="M412 180 L488 180" stroke="#cc785c" stroke-width="2.2"/>
+        <path d="M480 172 L492 180 L480 188 Z" fill="#cc785c"/>
+      </svg>
+      <figcaption>
+        <b>这张图在画什么：</b>小车绕一个方块走一圈回到出发点。左边是只靠里程计的结果——因为累计漂移，走完一圈落点偏了 1.2 m；右边是加了一条回环因子后的结果——轨迹被拉回闭合。
+        <br><b>怎么看这张图：</b>对比左右两张图的<b>四个角点</b>：左边第四个点明显落在起点外面（缺口），右边第四个点被拉回起点上。注意右边的轨迹<b>也不是完美贴合灰色虚线的</b>——因为里程计和回环因子各自都有噪声，最小二乘是在它们之间找平衡，不是无条件服从回环。
+        <br><b>要记住的一句话：</b>回环不会"纠正"过去，它是在<b>整段一起重新优化</b>——所有位姿都动了，只是离回环越近的动得越多。
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ================= 5. 伪代码 ================= -->
+  <section class="section-card" id="code">
+    <h2>5. 伪代码：从 20 行看懂原理，到真正能抄的 ROS 骨架</h2>
+
+    <h3>版本 A：概念版（把 (4) 式原样翻译成代码）</h3>
+    <p>先别管 ROS，就看看"最小化加权平方和"这件事在代码里长什么样：</p>
+
+    <pre class="code"><span class="c"># ================= 概念版：20 行看懂整个后端 =================</span>
+
+<span class="c"># 1) 未知量：轨迹 + 地图，都是"待求的数"</span>
+X = { x_0, x_1, ..., x_T,        <span class="c"># 位姿（SE(2) 或 SE(3)）</span>
+      l_0, l_1, ..., l_L }      <span class="c"># 路标（世界坐标下的点）</span>
+
+<span class="c"># 2) 因子列表：每条证据一项</span>
+factors = []
+
+<span class="k">def</span> add_factor(h, var_ids, z, Omega):
+    <span class="c">#   h       : 观测模型（吃变量，吐预测值）</span>
+    <span class="c">#   var_ids : 这条证据涉及哪几个变量（就是 X_k）</span>
+    <span class="c">#   z       : 实际量测</span>
+    <span class="c">#   Omega   : 信息矩阵，越大表示越信这个传感器</span>
+    factors.<span class="k">append</span>((h, var_ids, z, Omega))
+
+<span class="c"># 3) 代价函数：这就是 (4) 式</span>
+<span class="k">def</span> cost(X):
+    J = 0.0
+    <span class="k">for</span> (h, var_ids, z, Omega) <span class="k">in</span> factors:
+        e = h(X, var_ids) - z          <span class="c"># 残差 e = h_k(X_k) - z_k</span>
+        J += e.T @ Omega @ e           <span class="c"># ‖e‖²_Ω</span>
+    <span class="k">return</span> J
+
+<span class="c"># 4) 求解：一般没有闭式解，只能迭代线性化</span>
+<span class="k">def</span> solve(X_init):
+    X = X_init
+    <span class="k">for</span> it <span class="k">in</span> <span class="k">range</span>(20):        <span class="c"># 高斯-牛顿 / LM 的迭代</span>
+        H, b = linearize(cost, X)     <span class="c"># 在当前估计处一阶展开</span>
+        dX   = solve_linear(H, b)     <span class="c"># 解正规方程 H·dX = b</span>
+        X    = retract(X, dX)         <span class="c"># 位姿要在流形上更新，不能直接加</span>
+    <span class="k">return</span> X
+
+<span class="c"># 5) 用起来</span>
+add_factor(h_odom,  [0, 1], delta_odom_01, Omega_odom)
+add_factor(h_proj,  [1, <span class="s">'l7'</span>], uv_of_l7_at_t1, Omega_pixel)
+add_factor(h_range, [2, <span class="s">'l7'</span>], range_to_l7_at_t2, Omega_laser)
+
+X_star = solve(X_init)   <span class="c"># ← 轨迹和地图同时出来了</span></pre>
+
+    <div class="callout">
+      <h4>看这三行 <code>add_factor</code>，把第 3 节的表对上了</h4>
+      <p>· 第一行：<b>里程计因子</b>，涉及 $x_0,x_1$，量测是相对位移，用 <code>Omega_odom</code> 加权。<br>
+      · 第二行：<b>视觉因子</b>，涉及 $x_1$ 和路标 7，量测是像素坐标，用 <code>Omega_pixel</code> 加权。<br>
+      · 第三行：<b>激光因子</b>，涉及 $x_2$ 和同一个路标 7，量测是距离，用 <code>Omega_laser</code> 加权。<br>
+      <b>同一个路标 $l_7$ 被两个不同传感器"看"到，这就是多传感器融合在代码里的真实样子</b>——不是什么高级技巧，就是把两条因子加进同一个列表。</p>
+    </div>
+
+    <h3>版本 B：ROS 版（GTSAM 风格，能直接对着改）</h3>
+
+    <pre class="code"><span class="c"># ============ ROS + GTSAM 后端节点骨架 ============</span>
+<span class="k">import</span> gtsam
+
+graph   = gtsam.NonlinearFactorGraph()
+initial = gtsam.Values()          <span class="c"># 迭代初值（用里程计累积出来）</span>
+iSAM    = <span class="k">None</span>
+
+<span class="c"># ---- 1) 噪声模型：这里填的是 σ，不是 Ω！----</span>
+<span class="c">#      GTSAM 内部会转成 Ω = Σ⁻¹ = diag(1/σ²)</span>
+prior_noise = gtsam.noiseModel.Diagonal.Sigmas([<span class="n">0.01</span>, <span class="n">0.01</span>, <span class="n">0.005</span>])   <span class="c"># m, m, rad</span>
+odom_noise  = gtsam.noiseModel.Diagonal.Sigmas([<span class="n">0.05</span>, <span class="n">0.05</span>, <span class="n">0.02</span>])
+pixel_noise = gtsam.noiseModel.Isotropic.Sigma(<span class="n">2</span>, <span class="n">1.5</span>)                    <span class="c"># 1.5 像素</span>
+laser_noise = gtsam.noiseModel.Diagonal.Sigmas([<span class="n">0.02</span>])                   <span class="c"># 2 cm</span>
+loop_noise  = gtsam.noiseModel.Diagonal.Sigmas([<span class="n">0.10</span>, <span class="n">0.10</span>, <span class="n">0.03</span>])
+
+<span class="c"># 符号：X(t) 是第 t 帧位姿，L(j) 是第 j 个路标</span>
+X = <span class="k">lambda</span> t: gtsam.symbol(<span class="s">'x'</span>, t)
+L = <span class="k">lambda</span> j: gtsam.symbol(<span class="s">'l'</span>, j)
+
+t = 0
+
+<span class="c"># ---- 2) 先验因子：把整个图"钉"在世界坐标系里 ----</span>
+<span class="k">def</span> on_initial_pose(msg):
+    pose0 = gtsam.Pose2(msg.x, msg.y, msg.theta)
+    graph.<span class="k">add</span>(gtsam.PriorFactorPose2(X(<span class="n">0</span>), pose0, prior_noise))
+    initial.<span class="k">insert</span>(X(<span class="n">0</span>), pose0)
+
+<span class="c"># ---- 3) 里程计因子：连相邻两帧 ----</span>
+<span class="k">def</span> on_odom(msg):
+    <span class="k">global</span> t
+    t += <span class="n">1</span>
+    delta = gtsam.Pose2(msg.dx, msg.dy, msg.dtheta)
+
+    graph.<span class="k">add</span>(gtsam.BetweenFactorPose2(X(t-<span class="n">1</span>), X(t), delta, odom_noise))
+
+    <span class="c"># 用里程计累积一个初值（只是迭代起点，不是最终答案）</span>
+    guess = initial.<span class="k">atPose2</span>(X(t-<span class="n">1</span>)).<span class="k">compose</span>(delta)
+    initial.<span class="k">insert</span>(X(t), guess)
+
+<span class="c"># ---- 4) 视觉观测因子：连位姿和路标 ----</span>
+<span class="k">def</span> on_landmark_obs(j, u, v):
+    <span class="c"># uv 是该路标在图像中的像素坐标，K 是相机内参</span>
+    factor = gtsam.GenericProjectionFactorCal3_S2(
+        gtsam.Point2(u, v), pixel_noise, X(t), L(j), K)
+    graph.<span class="k">add</span>(factor)
+
+    <span class="k">if</span> <span class="k">not</span> initial.<span class="k">exists</span>(L(j)):
+        initial.<span class="k">insert</span>(L(j), triangulate(u, v, t))   <span class="c"># 给个初值</span>
+
+<span class="c"># ---- 5) 激光因子：位姿 ↔ 路标（或扫描匹配得到的位姿增量）----</span>
+<span class="k">def</span> on_laser_obs(j, r):
+    factor = gtsam.RangeFactor2D(X(t), L(j), r, laser_noise)
+    graph.<span class="k">add</span>(factor)
+
+<span class="c"># ---- 6) 回环因子：连隔得很远的两个位姿 ----</span>
+<span class="k">def</span> on_loop_closure(prev_t, rel_pose):
+    graph.<span class="k">add</span>(gtsam.BetweenFactorPose2(X(prev_t), X(t), rel_pose, loop_noise))
+
+<span class="c"># ---- 7) 定时优化 + 发布 ----</span>
+<span class="k">def</span> on_timer():                       <span class="c"># 每 1 秒触发一次</span>
+    <span class="k">global</span> iSAM
+    <span class="k">if</span> iSAM <span class="k">is</span> <span class="k">None</span>:
+        params = gtsam.ISAM2Params()
+        params.<span class="k">setRelinearizeThreshold</span>(<span class="n">0.1</span>)
+        iSAM = gtsam.ISAM2(params)
+
+    iSAM.<span class="k">update</span>(graph, initial)          <span class="c"># 增量更新，不重解全图</span>
+    result = iSAM.<span class="k">calculateEstimate</span>()    <span class="c"># ← 这就是 X*</span>
+
+    <span class="c"># 发布 map -> odom（全局修正），不是 map -> base_link</span>
+    T_map_base  = result.<span class="k">atPose2</span>(X(t))
+    T_odom_base = latest_odom_pose()
+    T_map_odom  = T_map_base.<span class="k">compose</span>(T_odom_base.<span class="k">inverse</span>())
+    tf.<span class="k">sendTransform</span>(T_map_odom, <span class="s">"map"</span>, <span class="s">"odom"</span>)
+
+    <span class="c"># 顺便把地图点和轨迹也发出去</span>
+    publish_cloud(result, L)
+    publish_path(result, X)</pre>
+
+    <div class="callout">
+      <h4>对照一下：伪代码和公式的对应关系</h4>
+      <table style="margin-top:.6rem;">
+        <thead><tr><th>公式里的东西</th><th>代码里的东西</th></tr></thead>
+        <tbody>
+          <tr><td>$\mathcal{X}=\{x_t\}\cup\{l_j\}$</td><td><code>initial</code> 这个 <code>Values</code> 容器</td></tr>
+          <tr><td>因子 $k$</td><td><code>graph.add(...)</code> 加进去的一个对象</td></tr>
+          <tr><td>$\Omega_k$</td><td><code>noiseModel</code>（注意填的是 $\sigma$）</td></tr>
+          <tr><td>$h_k(\mathcal{X}_k)$</td><td>因子内部固定的观测模型，比如 <code>GenericProjectionFactor</code> 里的相机投影</td></tr>
+          <tr><td>$\sum_k\|\cdot\|^2_{\Omega_k}$</td><td>求解器内部的误差函数，你不需要手写</td></tr>
+          <tr><td>$\mathcal{X}^\star$</td><td><code>iSAM.calculateEstimate()</code> 的返回值</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>用 g2o / Ceres 的话，会有什么不同？</h3>
+    <p>思路完全一样，只是 API 换了个壳：</p>
+    <ul>
+      <li><b>g2o</b>：你要自己继承 <code>BaseEdge</code> 写残差和雅可比矩阵，然后 <code>optimizer.addVertex()</code> / <code>addEdge()</code>。比 GTSAM 低层，但能看到线性化过程。</li>
+      <li><b>Ceres</b>：你要写一个 <code>CostFunctor</code>，在里面实现 <code>operator()</code> 算残差（可选地给出雅可比），然后 <code>problem.AddResidualBlock()</code>。自动求导很方便。</li>
+      <li><b>GTSAM</b>：因子库最全，用起来最像在写数学——上面那段伪代码就是这个风格。</li>
+    </ul>
+    <p><b>面试时可以说的一句话：</b>"这三个库都是同一件事的不同外壳——把 (4) 式的求和拆成一个个因子，用高斯-牛顿或 LM 迭代求解。"</p>
+  </section>
+
+  <!-- ================= 6. 手算 ================= -->
+  <section class="section-card" id="hand">
+    <h2>6. 手算：三个传感器，四个因子，最后落在哪</h2>
+
+    <p>光看代码不够。我们把上一页那个 1 维算例升级一下，加进<b>一个路标</b>，让它真的像一台小车在做 SLAM。</p>
+
+    <h3>设定：小车走了一小步</h3>
+    <p>小车沿直线前进，我们要求三个未知量：</p>
+    <ul>
+      <li>$x_1$：起始位置（未知，但有个先验说它大概在 0）</li>
+      <li>$x_2$：走了一步之后的位置</li>
+      <li>$l_1$：路上那个路标的位置</li>
+    </ul>
+
+    <p>四个因子（每条证据一个）：</p>
+
+    <table>
+      <thead><tr><th>因子</th><th>类型</th><th>残差</th><th>量测 $z_k$</th><th>$\Omega_k$</th></tr></thead>
+      <tbody>
+        <tr><td>F0</td><td>先验</td><td>$x_1 - z_0$</td><td>$z_0 = 0$</td><td><b>100</b>（非常自信）</td></tr>
+        <tr><td>F1</td><td>里程计</td><td>$(x_2 - x_1) - z_1$</td><td>$z_1 = 5.0$ m</td><td>1（一般）</td></tr>
+        <tr><td>F2</td><td>视觉（在 $x_1$ 处看路标）</td><td>$(l_1 - x_1) - z_2$</td><td>$z_2 = 3.0$ m</td><td>4（比较准）</td></tr>
+        <tr><td>F3</td><td>视觉（在 $x_2$ 处看同一个路标）</td><td>$(l_1 - x_2) - z_3$</td><td>$z_3 = -1.9$ m</td><td>4</td></tr>
+      </tbody>
+    </table>
+
+    <p>注意 F1 和（F2、F3 合起来）是<b>冲突的</b>：里程计说走了 5.0 m，两个视觉读数推出来的位移是 $3.0-(-1.9)=4.9$ m，差了 0.1 m。<b>最小二乘的工作，就是在这 0.1 m 的分歧里找一个最合理的平衡点。</b></p>
+
+    <h3>写出代价函数</h3>
+    <div class="formula-box">
+      <div class="flow-formula">$$J = 100\,x_1^2 \;+\; \big(x_2-x_1-5\big)^2 \;+\; 4\big(l_1-x_1-3\big)^2 \;+\; 4\big(l_1-x_2+1.9\big)^2$$</div>
+    </div>
+    <p>（正好就是 (4) 式：$\sum_k\|h_k(\mathcal{X}_k)-z_k\|^2_{\Omega_k}$。）</p>
+
+    <h3>三个未知量分别求导，令零</h3>
+    <p>对 $x_1$、$x_2$、$l_1$ 各求一次偏导，令它们为 0，整理后得到三个方程：</p>
+
+    <div class="formula-box">
+      <div class="flow-formula">$$
+      \begin{cases}
+      210\,x_1 - 2\,x_2 - 8\,l_1 = -34 & (\text{对 }x_1)\\[3pt]
+      -2\,x_1 + 10\,x_2 - 8\,l_1 = 25.2 & (\text{对 }x_2)\\[3pt]
+      -\,x_1 - x_2 + 2\,l_1 = 1.1 & (\text{对 }l_1)
+      \end{cases}
+      $$</div>
+    </div>
+
+    <p>解出来：</p>
+    <div class="formula-box">
+      <div class="flow-formula">$$\boxed{\;x_1^\star = 0.000\ \mathrm{m},\qquad x_2^\star = 4.933\ \mathrm{m},\qquad l_1^\star = 3.017\ \mathrm{m}\;}$$</div>
+    </div>
+
+    <h3>看残差：谁被"迁就"了</h3>
+    <table>
+      <thead><tr><th>因子</th><th>预测值</th><th>量测值</th><th>残差</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>F0 先验</td><td>$x_1=0$</td><td>$0$</td><td><b>0.000</b></td><td>$\Omega=100$，太大了，谁都拉不动它</td></tr>
+        <tr><td>F1 里程计</td><td>$4.933$</td><td>$5.0$</td><td>$-0.067$</td><td>$\Omega=1$，被"牺牲"得最多</td></tr>
+        <tr><td>F2 视觉</td><td>$3.017$</td><td>$3.0$</td><td>$+0.017$</td><td>$\Omega=4$，动了很少</td></tr>
+        <tr><td>F3 视觉</td><td>$-1.917$</td><td>$-1.9$</td><td>$-0.017$</td><td>同上</td></tr>
+      </tbody>
+    </table>
+
+    <p>三件事值得注意：</p>
+    <ul>
+      <li><b>$x_1$ 精确等于 0。</b>因为先验的 $\Omega=100$，比别的因子大两个数量级——<b>权重压倒性的时候，它就是硬约束</b>。这也解释了为什么工程上总要在 $x_0$ 上加一个强先验把图钉住。</li>
+      <li><b>残差没有一个是 0</b>（除了被钉死的先验）。最小二乘从来不是"让每条证据都成立"，而是<b>找让总冲突最小的那一点</b>。</li>
+      <li><b>位移被分成了 $4.933$</b>，正好在里程计说的 5.0 和视觉说的 4.9 之间，但因为 $\Omega$ 不同，它没停在正中间——偏向 4.9 一侧更多一点。</li>
+    </ul>
+
+    <figure class="figure">
+      <svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="Inter,'Noto Sans SC',system-ui,sans-serif">
+        <line x1="70" y1="170" x2="840" y2="170" stroke="#8b786f" stroke-width="2"/>
+        <g stroke="#8b786f" stroke-width="2">
+          <line x1="70" y1="170" x2="70" y2="178"/>
+          <line x1="220" y1="170" x2="220" y2="178"/>
+          <line x1="370" y1="170" x2="370" y2="178"/>
+          <line x1="520" y1="170" x2="520" y2="178"/>
+          <line x1="670" y1="170" x2="670" y2="178"/>
+          <line x1="820" y1="170" x2="820" y2="178"/>
+        </g>
+        <g font-size="13" fill="#8b786f" text-anchor="middle">
+          <text x="70" y="196">0</text>
+          <text x="220" y="196">1</text>
+          <text x="370" y="196">2</text>
+          <text x="520" y="196">3</text>
+          <text x="670" y="196">4</text>
+          <text x="820" y="196">5</text>
+        </g>
+
+        <!-- x1 -->
+        <circle cx="70" cy="170" r="9" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2.5"/>
+        <text x="70" y="146" font-size="13.5" fill="#2f4a66" text-anchor="middle" font-weight="700">x₁ = 0.000</text>
+        <text x="70" y="128" font-size="11.5" fill="#8b786f" text-anchor="middle">被先验钉死</text>
+
+        <!-- x2 -->
+        <circle cx="811" cy="170" r="9" fill="#cfe0f2" stroke="#7aa3cc" stroke-width="2.5"/>
+        <text x="811" y="146" font-size="13.5" fill="#2f4a66" text-anchor="middle" font-weight="700">x₂ = 4.933</text>
+
+        <!-- l1 -->
+        <circle cx="523" cy="170" r="9" fill="#d5e8da" stroke="#7cb08a" stroke-width="2.5"/>
+        <text x="523" y="238" font-size="13.5" fill="#2f5238" text-anchor="middle" font-weight="700">l₁ = 3.017</text>
+
+        <!-- 里程计拉力 -->
+        <path d="M70 216 L811 216" stroke="#cc785c" stroke-width="2" stroke-dasharray="6 5"/>
+        <text x="440" y="212" font-size="12.5" fill="#b15d44" text-anchor="middle">里程计：走 5.0 m（Ω=1，说话小声）</text>
+
+        <!-- 视觉拉力 -->
+        <path d="M70 262 L523 262" stroke="#4f9a63" stroke-width="2" stroke-dasharray="6 5"/>
+        <path d="M811 262 L523 262" stroke="#4f9a63" stroke-width="2" stroke-dasharray="6 5"/>
+        <text x="296" y="284" font-size="12.5" fill="#2f6b41" text-anchor="middle">视觉：l₁ 在 x₁ 前 3.0 m</text>
+        <text x="668" y="284" font-size="12.5" fill="#2f6b41" text-anchor="middle">视觉：l₁ 在 x₂ 后 1.9 m</text>
+
+        <text x="70" y="46" font-size="13.5" fill="#4a342c" font-weight="700">四个因子把三个未知量拉到这个位置</text>
+        <text x="70" y="70" font-size="12.5" fill="#8b786f">注意 x₂ 落在 4.933，不在 5.0 也不在 4.9 —— 它在两个传感器的加权平均处</text>
+      </svg>
+      <figcaption>
+        <b>这张图在画什么：</b>把刚才的解画在数轴上。蓝点是需要求的位姿，绿点是需要求的路标，橙色和绿色虚线表示各条证据在"拽"。
+        <br><b>怎么看这张图：</b>数一下残差的大小——<b>视觉的残差（0.017）比里程计的（0.067）小 4 倍，因为它的 Ω 大 4 倍</b>。这就是最小二乘的内在逻辑：$\Omega$ 越大的因子越"硬"，越不容易被别的因子带偏。
+        <br><b>要记住的一句话：</b>解出来的永远不是某一条证据，而是<b>所有证据的加权妥协</b>。
+      </figcaption>
+    </figure>
+
+    <div class="interactive-card">
+      <h3>互动判断 ②</h3>
+      <p>如果把先验的 $\Omega_0$ 从 100 改成 0.01（"我也说不准 x₁ 在哪"），会发生什么？</p>
+      <div class="quiz-options">
+        <button data-correct="yes" data-explanation="对。先验一软，整个图就“漂浮”了——所有 x 会整体平移到一个让里程计和视觉残差更小的位置，x₁ 不再等于 0。极端情况下（完全没有先验），整个图可以整体平移，解不唯一，正规方程奇异。这就是为什么工程上必须至少有一个强先验把参考系钉住。">
+          x₁ 会偏离 0，整条轨迹可能整体漂移
+        </button>
+        <button data-correct="no" data-explanation="不对。先验 Ω 变小，只是让这个约束变“软”，不会影响其他因子本身的权重。里程计和视觉的 Ω 还是 1 和 4，它们之间的关系不变。变化的是整个图相对世界坐标系的位置——会“松掉”。">
+          里程计和视觉的相对权重会跟着改变
+        </button>
+      </div>
+      <div class="quiz-feedback"></div>
+    </div>
+  </section>
+
+  <!-- ================= 7. 坑 ================= -->
+  <section class="section-card" id="pitfalls">
+    <h2>7. 实车上最容易踩的七个坑</h2>
+
+    <h3>坑 1｜没有回环，图就是一条链，漂移一定累积</h3>
+    <p>只加里程计因子和观测因子，因子图是一棵树（或一条链）。链上的误差只能沿着一个方向传递，走一百米之后偏一米是常态。<b>回环因子的唯一作用是"把链变环"</b>——让远处的约束能反过来修正近处。</p>
+    <p>所以工程上：<b>回环检测的召回率比精度更重要</b>（漏掉一个回环只是少一次修正，加错一个回环会让整张地图毁掉）。</p>
+
+    <h3>坑 2｜错误的回环比没有回环更糟</h3>
+    <p>一个假回环（把两个看起来像、实际不同的地方关联起来）会给 (4) 式加进去一个残差极大的因子。因为最小二乘是<b>平方惩罚</b>，这一项会主导整个代价函数，把地图拉歪。</p>
+    <p><b>解法就是上一页 Q5 说的那两条</b>：<br>
+    · 把平方换成 <b>鲁棒核</b>（Huber、Tukey、Cauchy）——残差大到一定程度后，惩罚从平方变成线性；<br>
+    · 或者用 <b>DCS / switchable constraints</b> 这类方法，给每个回环因子加一个自动学习的"开关"。</p>
+
+    <h3>坑 3｜$\Omega$ 不能瞎填</h3>
+    <p>很多人代码里所有 <code>noiseModel</code> 都写成 <code>Sigma(1)</code>，然后奇怪为什么结果不对。<b>$\Omega$ 是权重的物理含义，填错了就是"让不准的传感器说了算"。</b></p>
+    <p>正规做法：激光用出厂精度或标定值（$\sigma\approx 0.01\sim0.03$ m）；相机用重投影误差统计（$\sigma\approx 0.5\sim2$ 像素）；里程计用轮距和编码器分辨率推，或者干脆用一段时间的数据去拟合。<b>ROS 里很多驱动的 <code>covariance</code> 字段默认是 0，直接拿来用会出大问题。</b></p>
+
+    <h3>坑 4｜时间戳不同步</h3>
+    <p>里程计 50 Hz、激光 10 Hz、相机 30 Hz。如果直接拿"收到激光那一刻"的里程计位姿去当 $x_t$，误差可能有好几厘米。<b>必须用 <code>tf</code> 插值到同一个时间戳，或者用 <code>message_filters</code> 做时间同步。</b></p>
+    <p>更狠的做法是把时间偏移量也当成未知量放进 $\mathcal{X}$ 里一起优化——这就是<b>在线时间标定</b>。</p>
+
+    <h3>坑 5｜外参也是误差源</h3>
+    <p>相机装在车头，激光装在车顶，它们到 <code>base_link</code> 的外参是量出来的，也有误差。而这个误差会<b>直接污染观测模型</b>。</p>
+    <p>高级系统会把外参一起放进 $\mathcal{X}$ 优化（在线外参标定），或者至少把标定残差反映到 $\Omega$ 里。</p>
+
+    <h3>坑 6｜每次都重解全图，实时性崩盘</h3>
+    <p>跑 10 分钟有 3 万个位姿，每次优化都重新线性化+求解，车上那颗 CPU 扛不住。</p>
+    <p>标准解法：<b>① 关键帧</b>（只对关键帧建节点）；<b>② 增量式求解</b>（iSAM2 只更新受影响的局部）；<b>③ 边缘化</b>（把老的路标从状态里消掉）。这些就是第二季"打地基"的正题。</p>
+
+    <h3>坑 7｜把优化当成"绝对正确的真值"</h3>
+    <p>优化出来的只是"在当前所有约束下最自洽的解"。如果所有传感器同时被同一个系统误差影响（比如外参整体偏了 5 cm），优化会把这 5 cm 均匀分摊到所有位姿上，你看不出来。<b>优化不能凭空创造信息，它只能平衡信息。</b></p>
+
+    <div class="callout">
+      <h4>一句话串起来：你在项目里会写到的三种代码</h4>
+      <p>① <b>前端代码</b>：订阅 <code>/scan</code>、<code>/camera</code>、<code>/odom</code>，做特征提取、数据关联、回环检测，输出"量测 + 它涉及哪几个变量"。<br>
+      ② <b>后端代码</b>：把量测包成因子加进图，设定 <code>noiseModel</code>，定时调用优化器，取出 $\mathcal{X}^\star$。<br>
+      ③ <b>输出代码</b>：把结果转成 <code>map→odom</code> 的 tf、<code>/map</code> 点云、<code>/path</code> 轨迹。</p>
+      <p><b>这三件事背后是同一个公式</b>，这就是为什么读懂那四行很重要。</p>
+    </div>
+  </section>
+
+  <!-- ================= 8. 自测 ================= -->
+  <section class="section-card" id="quiz">
+    <h2>8. 自测与练习</h2>
+
+    <div class="summary-grid">
+      <div class="mini-card">
+        <h4>三句话总结</h4>
+        <p><b>①</b> 传感器给的是量测 $z_k$；量测 + 观测模型 + 信息矩阵 $\Omega_k$ 才构成因子。<br>
+        <b>②</b> 位姿和路标在 $\mathcal{X}$ 里平权，一起被优化——这就是 SLAM 不分两步的原因。<br>
+        <b>③</b> 后端做的事只有一件：让 $\sum_k\|h_k(\mathcal{X}_k)-z_k\|^2_{\Omega_k}$ 最小。</p>
+      </div>
+      <div class="mini-card">
+        <h4>三个必答问题</h4>
+        <p>① <code>/odom</code> 和 <code>/scan</code> 在你的代码里分别对应哪一类因子？它们的残差单位分别是什么？<br>
+        ② 为什么发布的是 <code>map→odom</code>，而不是直接发 <code>map→base_link</code>？<br>
+        ③ 如果所有 <code>noiseModel</code> 都填 1，你的小车会出现什么现象？</p>
+      </div>
+    </div>
+
+    <section class="exercise-box">
+      <h3>课后练习（先自己算，再展开对答案）</h3>
+      <ol>
+        <li>
+          一台小车在 1 维里走，两个位姿 $x_1,x_2$。先验 $x_1=0$（$\Omega_0=100$），里程计 $x_2-x_1=2.0$ m（$\Omega_1=1$）。求 $x_2^\star$。
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>
+              $J = 100x_1^2 + (x_2-x_1-2)^2$，对 $x_2$ 求导：$2(x_2-x_1-2)=0 \Rightarrow x_2=x_1+2$。<br>
+              对 $x_1$ 求导：$200x_1 - 2(x_2-x_1-2)=0$，代入 $x_2=x_1+2$，第二项变成 0，所以 $200x_1=0$，即 $x_1=0$。<br>
+              于是 $x_2^\star=2.0$ m。<br>
+              <b>要点：</b>先验极强时，$x_1$ 被钉死在 0，里程计完全说了算。这就是"强先验 + 相对约束"的标准结构。
+            </div>
+          </details>
+        </li>
+        <li>
+          接着上一题，如果再加一个回环因子 $x_2 - x_1 = 1.8$ m（$\Omega_2=4$），$x_2^\star$ 会变成多少？为什么？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>
+              这时 $x_1$ 仍被先验钉死在 0，问题退化成两个关于 $x_2$ 的证据：$z_1=2.0$（$\Omega_1=1$）和 $z_2=1.8$（$\Omega_2=4$）。<br>
+              加权平均：$x_2^\star = \dfrac{1\times 2.0 + 4\times 1.8}{1+4} = \dfrac{2.0+7.2}{5} = \dfrac{9.2}{5} = 1.84$ m。<br>
+              <b>要点：</b>回环的 $\Omega$ 是里程计的 4 倍，所以结果被拉向 1.8 那一侧。这就是"回环修正"在数字上的样子——<b>它不是把轨迹瞬间掰到 1.8，而是在两个说法之间重新加权</b>。
+            </div>
+          </details>
+        </li>
+        <li>
+          你的相机内参标定得不太准，重投影误差比手册上大很多。你应该改代码里的哪个地方？改了之后结果会怎么变？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>
+              改 <code>pixel_noise</code> 对应的 $\sigma$——把它调大（比如从 1.5 像素调到 4 像素）。<br>
+              因为 $\Omega=1/\sigma^2$，$\sigma$ 变大会让 $\Omega$ 变小，也就是<b>相机这个因子在图里的话语权变小</b>。<br>
+              结果：位姿更倾向于相信激光和里程计，视觉对轨迹的"拉扯"变弱。这是正确的做法——<b>承认自己不准，比假装很准要好得多</b>。
+            </div>
+          </details>
+        </li>
+        <li>
+          （串联）如果小车在走廊里跑了一圈，回到起点，但回环检测没触发。此时因子图是什么形状？优化结果会怎样？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>
+              图是一条<b>链（树）</b>：位姿 $x_1 \to x_2 \to \cdots \to x_T$ 依次相连，每个路标挂在某一两个位姿上。<b>没有任何一条因子连接首尾。</b><br>
+              优化结果：整条轨迹会保持"内部自洽"（相邻两帧的里程计残差被摊平），但<b>整体可能相对于真实位置偏移</b>——因为没有任何约束把它拉回真实世界。这就是"漂移"。<br>
+              更麻烦的是：如果链上没有先验，整条轨迹可以整体平移/旋转而代价不变，正规方程是奇异的。
+            </div>
+          </details>
+        </li>
+        <li>
+          为什么说"因子图的形状 = 你的传感器配置 + 你的回环策略"？举两个例子说明改了什么会改变图的形状。
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>
+              因为图的<b>节点是变量、边是因子</b>，而节点和边都是由"你有哪些传感器、以什么频率产生什么量测"直接决定的。<br>
+              <b>例一：</b>加一个 IMU → 每对相邻位姿之间多一个 IMU 因子（还会引入速度和零偏节点），图变得更稠密。<br>
+              <b>例二：</b>从"逐帧建节点"改成"只对关键帧建节点" → 节点数减少一个数量级，里程计因子变成"两个关键帧之间的预积分约束"，图的拓扑完全变了。<br>
+              <b>例三：</b>把回环检测从"只在视觉相似时才触发"改成"每个关键帧都做 Scan Context 匹配" → 回环因子变多，图里出现更多的长边。<br>
+              所以调 SLAM 系统的时候，很多时候你调的<b>不是参数，而是图的形状</b>。
+            </div>
+          </details>
+        </li>
+      </ol>
+    </section>
+
+    <div class="callout">
+      <h4>回到你的问题：你的理解对在哪、可以更精确在哪</h4>
+      <p><b>你说的：</b>"激光、相机、里程计收集不同证据 → 形成因子图 → 根据公式计算小车位置和地图。"</p>
+      <p><b>✅ 完全正确，这就是标准答案。</b>只补三处更精确的说法：</p>
+      <p>① <b>"形成因子图"这一步在代码里是显式的</b>：你要为每条证据决定"它连接哪几个变量、用什么噪声模型、残差怎么定义"。这三件事决定了结果好坏，比选哪个优化库重要得多。<br>
+      ② <b>"计算位置和地图"其实是"一次解出 $\mathcal{X}$"</b>：位姿和路标是同一个向量里的两部分，没有先后。<br>
+      ③ <b>这个计算不是一次性的</b>：它是"来一帧 → 加因子 → 优化 → 发布 → 再来一帧"的无限循环，而且每次优化都是从上一轮的结果出发再做局部线性化。</p>
+    </div>
+  </section>
+
+  <!-- ================= FOOTER ================= -->
+  <footer class="section-card">
+    <div class="nav-links">
+      <a href="../lessons/0002-PastPresentFuture-2016-SLAM的全景纲领.html#q0002-map">← 回到：0002 课（四行公式的推导）</a>
+      <a href="qa-0002-MAP到非线性最小二乘.html">← 回到：追问答疑·从 MAP 到非线性最小二乘</a>
+      <a href="../lessons/0003-SLAM综述2021-从滤波到优化的演进主线.html">接着读：为什么是优化而不是滤波 →</a>
+    </div>
+    <p class="foot-note">
+      公式这东西，看懂一遍是不够的。建议你打开自己的小车工程，
+      翻到后端那几十行代码，把 <code>addFactor</code> / <code>addEdge</code> 的调用一处一处对照第 3 节的表看一遍——
+      你会发现它们全都在做同一件事：往 (4) 式的求和里加一项。🚗
+    </p>
+    <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+  </footer>
+
+</div>
+
+<script>
+  document.querySelectorAll('.quiz-options button').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var card = btn.closest('.interactive-card');
+      var fb = card.querySelector('.quiz-feedback');
+      var ok = btn.dataset.correct === 'yes';
+      card.querySelectorAll('.quiz-options button').forEach(function(b){
+        b.classList.remove('right','wrong');
+      });
+      btn.classList.add(ok ? 'right' : 'wrong');
+      fb.textContent = (ok ? '✅ ' : '❌ ') + (btn.dataset.explanation || '');
+      fb.className = 'quiz-feedback ' + (ok ? 'ok' : 'bad');
+    });
+  });
+</script>
+</body>
+</html>

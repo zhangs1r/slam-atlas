@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>线特征与光照鲁棒（下）：消失点与工程鲁棒 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0070</div>
+      <h1>线特征与光照鲁棒（下）：消失点与工程鲁棒</h1>
+      <p class="subtitle">📐 把「消失点」这种最抽象的概念画明白，再看 RD-VIO 怎么用工程补丁扛住 AR 的三重坑</p>
+      <div class="hero-meta">
+        <span>🎯 主题：消失点 + 移动端工程鲁棒</span>
+        <span>👥 作者：UV-SLAM / DPL-SLAM / RD-VIO 三篇团队</span>
+        <span>📅 2022–2024 · 三篇英文题名见正文</span>
+      </div>
+      <div class="toc">
+        <a href="#a">课程定位</a>
+        <a href="#b">UV-SLAM 消失点</a>
+        <a href="#c">DPL-SLAM</a>
+        <a href="#d">RD-VIO</a>
+        <a href="#e">六篇对比表</a>
+        <a href="#f">收束两条路</a>
+        <a href="#g">诚实提醒</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「unconstrained」是什么意思、消失点在 UV-SLAM 里扮演什么角色、FIM 如何证明线的可观测性；理解 DPL-SLAM 的「点线 + 动态 + 语义」整合；并看清 RD-VIO 的工程鲁棒补丁。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 本季 <b>0041–0045</b> 点特征、<b>0069</b> 线特征三条路——本节 UV-SLAM 把线推向「消失点」这一更结构化的表示。② 第二季 <b>0029–0030</b> 预积分里的<b>可观测性</b>概念——UV-SLAM 用 FIM 秩分析证明 3D 线因 VP 而完全可观测，是同一套语言。③ 第一季 <b>0012</b>「动态 + 光照 + 退化运动」是真实环境鲁棒的三件套，RD-VIO 对应「退化运动」。</p></div>
+      </div>
+      <h2>1. 课程定位：最抽象的概念 + 一条工程对照线</h2>
+      <p>这一节是线特征子组的下半场。上半场（0069）讲了 EPLF / AirVO / AirSLAM「怎么把线用进 SLAM」；下半场我们讲三篇：<b>UV-SLAM</b>（2022，IEEE RA-L）、<b>DPL-SLAM</b>（2024，IEEE 系期刊）、<b>RD-VIO</b>（2024，IEEE 期刊）。</p>
+      <p>其中 UV-SLAM 是<b>本组理论性最强的一篇</b>——它引入「消失点」作为新残差，并用 Fisher 信息矩阵（FIM）证明线因此完全可观测。DPL-SLAM 是「动态 + 点线 + 稠密语义」的<b>工程整合</b>。而 RD-VIO 要特别说明：<b>它不含线特征</b>——它在这节的定位是「工程鲁棒性」的对照样本，用来对比「加线特征」与「改工程实现」两条不同的提升路径。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. UV-SLAM：消失点（最抽象，必须画明白）</h2>
+      <p>先解释「<b>unconstrained</b>」是什么意思。它说的是：UV-SLAM 使用结构规律性，但<b>不施加任何约束</b>——比如不假设 Manhattan world（曼哈顿世界，即室内所有线都平行于三个主轴），也不假设相机运动。它用 J-linkage 发现<b>多个</b>消失点（不止 3 个主轴），是「first optimization-based monocular SLAM using vanishing point measurements … without any restriction such as camera motion and environment」。</p>
+      <p><b>消失点扮演什么角色？</b>三件事：① 作为一个<b>新观测 / 新残差</b>——VP 残差 = 由线算出的观测 VP 与由 3D 线方向向量估计的 VP 之差，用来<b>校正线的方向向量</b>（普通线重投影只用法向量，无法校正方向，于是退化）；② 用 <b>FIM 秩分析</b>证明 VP 测量使 3D 线的秩达到 4、<b>完全可观测</b>；③ 用 J-linkage 把线按消失点聚类（同 VP 同色），判断线是否有结构规律性。</p>
+      <p>一句话：<b>消失点让「线的方向」也能被优化校准，从而治好了线映射退化</b>。这是理论性最强的一篇，值得多花篇幅。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="26" font-size="18" font-weight="700" fill="#1f2937">消失点：平行长直线在图像里汇聚到同一点</text>
+          <rect x="40" y="45" width="820" height="275" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+          <rect x="390" y="150" width="120" height="100" rx="4" fill="#f8fafc" stroke="#94a3b8"/>
+          <line x1="40" y1="45" x2="390" y2="150" stroke="#1d4ed8" stroke-width="2"/>
+          <line x1="860" y1="45" x2="510" y2="150" stroke="#1d4ed8" stroke-width="2"/>
+          <line x1="40" y1="320" x2="390" y2="250" stroke="#1d4ed8" stroke-width="2"/>
+          <line x1="860" y1="320" x2="510" y2="250" stroke="#1d4ed8" stroke-width="2"/>
+          <circle cx="450" cy="195" r="6" fill="#ef4444"/>
+          <text x="450" y="180" font-size="13" fill="#b91c1c" text-anchor="middle">消失点（纵深方向）</text>
+          <text x="120" y="300" font-size="13" fill="#475569">走廊纵深方向的平行线 → 汇聚到中间红点</text>
+
+          <text x="20" y="350" font-size="14" font-weight="700" fill="#1f2937">对照：不同方向的平行线 → 不同的消失点</text>
+          <rect x="40" y="362" width="380" height="60" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+          <line x1="60" y1="392" x2="170" y2="382" stroke="#16a34a" stroke-width="2"/>
+          <line x1="60" y1="410" x2="170" y2="400" stroke="#16a34a" stroke-width="2"/>
+          <circle cx="175" cy="392" r="5" fill="#16a34a"/>
+          <text x="200" y="396" font-size="12" fill="#475569">方向 A → VP2</text>
+          <rect x="480" y="362" width="380" height="60" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
+          <line x1="500" y1="382" x2="730" y2="392" stroke="#8b5cf6" stroke-width="2"/>
+          <line x1="500" y1="400" x2="730" y2="410" stroke="#8b5cf6" stroke-width="2"/>
+          <circle cx="735" cy="402" r="5" fill="#8b5cf6"/>
+          <text x="500" y="420" font-size="12" fill="#475569">方向 B → VP3</text>
+          <text x="20" y="432" font-size="12" fill="#475569">所有互相平行的长直线，在图像里都会汇聚到同一个消失点；方向不同，消失点不同。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上方画一条走廊：纵深方向的踢脚线、门框边、天花边在图像里向远方汇聚到<b>同一个红点</b>（消失点）。下方对照：两个不同方向的平行线组，各汇聚到不同的消失点 VP2 / VP3。<br>
+          <b>怎么看这张图：</b>① 上图所有指向红点的蓝线，在真实 3D 世界里是互相平行的长直线；② 下图说明「方向变了，消失点也变」；③ UV-SLAM 正是利用这种「方向 ↔ 消失点」的对应来校准线的方向。<br>
+          <b>要记住的一句话：</b>所有互相平行的长直线，在图像里都会汇聚到同一个点；不同方向 → 不同消失点。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_UV-SLAM__Unconstrained_Line-Based_SLAM_Using_Vanishing_P/029c9d594e2f0f2465bd726351a778e98f169ea35a248554895fc418059d2545.jpg" alt="UV-SLAM VP clustering">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Image of clustered lines using vanishing points. The lines with the same vanishing point are expressed in the same color. Usually, three or more vanishing points can be extracted using J-linkage.
+          <br><b>怎么看这张图：</b>同一颜色＝同一消失点的线。这正是 UV-SLAM「用 J-linkage 把线按消失点聚类」的结果——有结构规律性的线被聚到一起，无结构的线（非 Manhattan）也能被处理，因为 UV-SLAM 是 unconstrained 的。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="26" font-size="18" font-weight="700" fill="#1f2937">UV-SLAM：把「消失点」当残差</text>
+          <text x="60" y="90" font-size="13" fill="#334155">观测线（红）与重投影线（蓝）各自交于自己的 VP</text>
+          <line x1="80" y1="120" x2="260" y2="280" stroke="#ef4444" stroke-width="3"/>
+          <line x1="200" y1="100" x2="300" y2="270" stroke="#ef4444" stroke-width="3"/>
+          <line x1="120" y1="130" x2="300" y2="270" stroke="#3b82f6" stroke-width="3" stroke-dasharray="6 4"/>
+          <line x1="220" y1="110" x2="320" y2="280" stroke="#3b82f6" stroke-width="3" stroke-dasharray="6 4"/>
+          <circle cx="250" cy="220" r="6" fill="#ef4444"/>
+          <circle cx="290" cy="220" r="6" fill="#3b82f6"/>
+          <text x="150" y="305" font-size="12" fill="#b91c1c">观测 VP</text>
+          <text x="320" y="305" font-size="12" fill="#1d4ed8">估计 VP</text>
+          <line x1="256" y1="220" x2="284" y2="220" stroke="#f59e0b" stroke-width="3" marker-end="url(#c2)"/>
+          <text x="450" y="200" font-size="14" font-weight="700" fill="#1f2937">两者之差 = 消失点残差</text>
+          <text x="450" y="224" font-size="13" fill="#475569">用线的方向向量算 VP；</text>
+          <text x="450" y="246" font-size="13" fill="#475569">这个残差专门校正线的「方向」，</text>
+          <text x="450" y="268" font-size="13" fill="#475569">普通线重投影残差做不到。</text>
+          <defs><marker id="c2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f59e0b"/></marker></defs>
+          <text x="20" y="328" font-size="12" fill="#475569">FIM 秩分析证明：加入 VP 测量后 3D 线秩达 4，完全可观测（普通线测量会退化）。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边两条红线交于「观测 VP」，两条蓝虚线交于「估计 VP」，两者之间的橙色箭头就是<b>消失点残差</b>。右边说明这条残差专门校正线的方向。<br>
+          <b>怎么看这张图：</b>① 普通线残差只用法向量（线的位置），校正不了方向；② UV-SLAM 用 VP 残差补上「方向」这一维；③ FIM 证明这一补，线的秩从不足变满（4），彻底可观测。<br>
+          <b>要记住的一句话：</b>消失点残差 = 观测 VP 与估计 VP 之差，它让线的方向也能被优化校准。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_UV-SLAM__Unconstrained_Line-Based_SLAM_Using_Vanishing_P/1220603abf88554c504cf70ca3fa9960eae712cf834966ac7695f7164c956a66.jpg" alt="UV-SLAM corridor line map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Top views of 3D line mapping results with LiDAR point clouds overlaid in real corridor environment (a) ALVIO. (b) UV-SLAM.
+          <br><b>怎么看这张图：</b>俯视图里 UV-SLAM 的线地图（b）比 ALVIO（a）更贴合 LiDAR 点云。这正是「线方向被 VP 校准后，结构化建图更准」的落地证据。
+        </figcaption>
+      </figure>
+      <p><b>实验与局限：</b>EuRoC MAV 上 UV-SLAM 全序列最佳，平均比 VINS-Mono 低 32.3%、比 PL-VINS 23.8%。速度前端 53.5 ms + 后端 47.1 ms ≈ 100 ms/帧（~10 Hz）。局限：<b>无回环</b>，未来做 mesh / pixel-wise 建图。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. DPL-SLAM：动态 + 点线 + 稠密语义</h2>
+      <p>DPL-SLAM（2024）在 ORB-SLAM3 上融合 PL-SLAM 的线特征 + DS-SLAM 的动态剔除（YOLOv5 80 类 + LK 光流 + 对极约束），做实时动态点线 SLAM。它要解决的是：动态物体破坏数据关联，纯点特征在弱纹理/光照下失败。</p>
+      <p>关于「线在动态场景里怎么用」，按原文如实写：<b>DPL-SLAM 并未主张『线比点更抗动态』</b>。它的做法是<b>用语义 + 几何统一剔除动态点和线</b>——框内按动态点比例删（&gt;40% 全删，否则 15 px 半径局部删），框外直接删；线提供的是结构化地图表达。线检测用 LSD、匹配按 grid ID + 端点 + 余弦角相似 + 重叠度。</p>
+      <p><b>必须诚实标注：DPL-SLAM 未使用 Plücker 坐标。</b>它用「线端点齐次坐标 + 线段 3D 向量」+ Sim3 变换，残差沿用 ORB-SLAM3 / PL-SLAM 的重投影（端点距离），没有引入 Plücker 表示。光照鲁棒主要靠几何（对极）+ 语义，无专门光度机制。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DPL-SLAM__Enhancing_Dynamic_Point-Line_SLAM_Through_Dens/8310bc4cedfdcae1c7331b1634042258ed099c68798ecfc611bcec7cdf6a3dfb.jpg" alt="DPL-SLAM workflow">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Workflow of our DPL-SLAM system. The dynamic object clearing system works in four stages…
+          <br><b>怎么看这张图：</b>四阶段流程——提点线特征 → 物体检测 + 对极约束判潜在动态区 → 按框内动态比例选删 → 更新剩余特征。盯着「动态物体清除」这条主线，它就是 DPL 抗动态的核心。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DPL-SLAM__Enhancing_Dynamic_Point-Line_SLAM_Through_Dens/3570f004529a7dceee15e50e3c1f862eb2b58b73ad35350c1923b266b2fa45ca.jpg" alt="DPL-SLAM outdoor KITTI">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>Schematic of our method in the outdoor KITTI experiment. (a) ORB-SLAM3. (b) Our proposed system. (c) Magnified view.
+          <br><b>怎么看这张图：</b>(b) 比 (a) 多保留了静止车上的特征（线 + 点都还在），动态/无关区域被清掉。这就是它「点线一起、只删动态」的室外证据。
+        </figcaption>
+      </figure>
+      <p><b>实验与局限：</b>TUM RGB-D walking/xyz ATE 0.012 vs ORB-SLAM3 0.275；KITTI 多数序列最佳（00: 0.74 vs O3 0.80）。Tracking 36.3 ms/帧。平台 i5-12600KF + RTX 3070Ti + YOLOv5-s。局限：s/half、s/xyz 因缺面几何信息表现差，依赖 YOLOv5。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. RD-VIO：移动端 AR 的工程鲁棒补丁（⚠ 它不含线特征）</h2>
+      <p><b>重要诚实声明（务必记住）：RD-VIO 不含线特征，是纯点 VIO。</b>它归入本组仅因「鲁棒 VIO / 移动 AR」主题，与线特征无直接关系。把它放在本节，是作为「工程鲁棒性」的对照样本——对比「加线特征」与「改工程实现」两条不同的提升路径。</p>
+      <p>它面向 AR / 移动端的特殊需求：虚拟物体要稳定（纯旋转、长时间静止时不能漂移跳变）、要扛纯旋转和快速运动。它的「鲁棒」来自几个工程补丁：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① IMU-PARSAC</h4><p>两阶段外点去除：3D-2D 阶段用 IMU 预积分预测位姿与视觉 RANSAC 取交集 $S_{VI}=S_{VIS}\cap S_{IMU}$，并用基于 bin 的加权协方差选最分散的内点集，避免被大刚体运动物体劫持；2D-2D 阶段用 PARSAC。还引入时间先验「观测越久越可能是静点」。</p></div>
+        <div class="mini-card"><h4>② 子帧 + 延迟三角化</h4><p>用纯旋转判据 $\theta\le 2\arctan(\|t\|/2D)$ 检测 R-frame（纯旋转帧），不立即估深度；R-frame 挂到最近 N 个关键帧下，滑窗 BA 用 R-frame 链 + 类 ZUPT 正则约束纯旋转，专门扛住纯旋转与长时间静止。</p></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_RD-VIO__Robust_Visual-Inertial_Odometry_for_Mobile_Augme/76b1fca0dce92f65b25e2768924bbc8a657311058f24268f54b8fa622ee6efda.jpg" alt="RD-VIO IMU-PARSAC">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Moving outlier detection and removal strategy… After the IMU-PARSAC algorithm, most outliers are filtered out.
+          <br><b>怎么看这张图：</b>这是 RD-VIO 的核心「鲁棒」机制——IMU 预积分预测的位姿与视觉匹配取交集，把动态物体造成的外点（红）滤掉，只留内点（绿）。它靠的是工程上的「IMU + 视觉共识」，不是线特征。
+        </figcaption>
+      </figure>
+      <p><b>实验与局限：</b>EuRoC 平均 0.133 m（SF-VIO 0.130，Baseline 0.674）；ADVIO 完整性 90–99%（VINS-Fusion 仅 60–73%）；在线 APE A3(行人) 19.6 mm vs ARKit 33.3、ARCore 40.4。运行时间全帧平均 18.38 ms vs VINS-Mono 44.72 ms。平台 i7-7700 / iPhone X（30 Hz 图 + 100 Hz IMU）。局限：长时间无有效视觉必丢跟踪；<b>不含线特征</b>。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>RD-VIO 归入本节的「提升鲁棒性」路线，属于哪一类？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。RD-VIO 是纯点 VIO，不含线特征；它的鲁棒来自 IMU-PARSAC、子帧/延迟三角化等工程实现改进，属于「改工程实现」这条路线。" onclick="lessonKit.answer(this,'q0070a')">走工程实现这条路</button>
+          <button data-correct="no" data-explanation="不对。RD-VIO 是纯点 VIO，没有线特征；它靠的是工程补丁，不是新增特征类型。" onclick="lessonKit.answer(this,'q0070a')">去加新特征这条路</button>
+        </div>
+        <div class="quiz-feedback" id="q0070a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 横向对比表（横跨六篇，采用精读材料）</h2>
+      <p>下面这张表横跨线特征子组全部六篇（含上节的 EPLF / AirVO / AirSLAM），直接采用精读材料给出的对比。注意 RD-VIO 行明确标「不用线（纯点 VIO）」、DPL-SLAM 标「未用 Plücker」——这都是原文事实，照实保留。</p>
+      <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse;width:100%;font-size:12px;">
+        <thead>
+          <tr style="background:#f1f5f9;">
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">指标</th>
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">EPLF-VINS</th>
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">AirVO</th>
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">AirSLAM</th>
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">UV-SLAM</th>
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">DPL-SLAM</th>
+            <th style="border:1px solid #cbd5e1;padding:6px;text-align:left;">RD-VIO</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">线特征用的环节</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">跟踪(LOFT)+建图+初始化+回环</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">跟踪+建图（无回环）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">跟踪+建图+优化+重定位（全链路）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">跟踪+建图+三角化+VP测量（无回环）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">跟踪+建图+局部BA（基于ORB3）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">不用线（纯点 VIO）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">线的参数化</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">Plücker + 正交</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">Plücker + 正交</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">Plücker + 正交</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">Plücker + 正交 o=[ψ,φ]</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">端点齐次 + Sim3（<b>未用 Plücker</b>）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">无</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">残差形式</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">法向量夹角（<b>端点无关</b>）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">端点–线距离</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">端点–线距离</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">端点–线距离 + <b>VP残差</b></td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">重投影（端点，未给式）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">重投影（点）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">光照鲁棒机制</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">无专门（线本身较稳）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">学习点+点线关联</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">学习点+结构线PLNet+光度增强+结构图重定位</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">无专门（线本身较稳）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">几何+语义为主</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">无专门（靠IMU+动态剔除）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">传感器</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">单目+IMU</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">双目</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">双目/双目-IMU</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">单目+IMU</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">RGB-D / 双目</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">单目/双目+IMU（手机）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">平台与实时性</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">Ryzen5-3600；线线程16.98ms</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">Jetson AGX Xavier ~15Hz</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">PC 73Hz / Jetson Orin 40Hz</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">i7-9700K ~10Hz(100ms)</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">i5-12600KF+3070Ti；36.3ms/帧</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">i7-7700 18.38ms / iPhone X 实时</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:6px;font-weight:700;">局限/打不过谁</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">未单列（无光照机制）</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">无回环/重定位</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">重定位依赖离线预建图</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">无回环；~10Hz 偏慢</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">s/half,s/xyz 因缺面几何差</td>
+            <td style="border:1px solid #cbd5e1;padding:6px;">长时间无视觉必丢跟踪；不含线</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 收束：提升 SLAM 鲁棒性的两条路</h2>
+      <p>把本组（线特征子组六篇）并列起来看，能清楚看出提升 SLAM 鲁棒性有<b>两条路</b>：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="26" font-size="18" font-weight="700" fill="#1f2937">提升鲁棒性的两条路</text>
+          <rect x="30" y="60" width="300" height="220" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+          <text x="180" y="86" font-size="14" font-weight="700" fill="#1e40af" text-anchor="middle">路线一：加新类型特征</text>
+          <text x="60" y="130" font-size="13" fill="#334155">· EPLF-VINS（线光流）</text>
+          <text x="60" y="165" font-size="13" fill="#334155">· AirVO / AirSLAM（点线 + 学习）</text>
+          <text x="60" y="200" font-size="13" fill="#334155">· UV-SLAM（线 + 消失点）</text>
+          <text x="180" y="255" font-size="12" fill="#475569" text-anchor="middle">用更丰富的几何表示</text>
+
+          <rect x="570" y="60" width="300" height="220" rx="8" fill="#f0fdf4" stroke="#16a34a"/>
+          <text x="720" y="86" font-size="14" font-weight="700" fill="#166534" text-anchor="middle">路线二：改工程实现</text>
+          <text x="600" y="130" font-size="13" fill="#334155">· RD-VIO（IMU-PARSAC）</text>
+          <text x="600" y="165" font-size="13" fill="#334155">· 子帧 / 延迟三角化</text>
+          <text x="600" y="200" font-size="13" fill="#334155">· 重定位 / 初始化 / 鲁棒估计</text>
+          <text x="720" y="255" font-size="12" fill="#475569" text-anchor="middle">把现有系统做扎实</text>
+
+          <line x1="330" y1="170" x2="430" y2="170" stroke="#64748b" stroke-width="2" marker-end="url(#d2)"/>
+          <line x1="570" y1="170" x2="470" y2="170" stroke="#64748b" stroke-width="2" marker-end="url(#d2)"/>
+          <text x="450" y="160" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">更鲁棒</text>
+          <text x="450" y="200" font-size="13" font-weight="700" fill="#1f2937" text-anchor="middle">的 SLAM</text>
+          <defs><marker id="d2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <text x="20" y="320" font-size="13" fill="#475569">两条路不互斥：AirSLAM 同时走了「加线特征」+「加回环/重定位（工程）」两条。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边「加新类型特征」列了 EPLF / AirVO / AirSLAM / UV-SLAM，右边「改工程实现」列了 RD-VIO，中间两个箭头都指向「更鲁棒的 SLAM」。<br>
+          <b>怎么看这张图：</b>① 左路靠更丰富的几何表示（线、消失点）；② 右路靠把现有系统做扎实（鲁棒估计、重定位、抗退化）；③ 两者是并列的两类提升手段，不是非此即彼。<br>
+          <b>要记住的一句话：</b>提升 SLAM 鲁棒性有两条路——加新类型的特征，与改工程实现。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 给零基础读者的诚实提醒</h2>
+      <p>这一组最容易误会的地方，精读材料已经点名，这里再强调一次：</p>
+      <ul>
+        <li><b>RD-VIO 不含线特征</b>——它是纯点 VIO，放进本节只因「鲁棒 VIO / AR」主题，别把它当成线特征方法；</li>
+        <li><b>DPL-SLAM 的线只是「顺手加回」</b>——它未用 Plücker，线的角色是结构化表达，并非方法创新核心；</li>
+        <li><b>AirSLAM 是 AirVO 续作</b>——同团队同一脉，不是凭空新篇；</li>
+        <li>真正围绕「线特征表示 / 残差 / 光照」深挖的是 <b>EPLF-VINS、UV-SLAM、AirVO</b> 三篇，其余是应用 / 整合。</li>
+      </ul>
+      <p>按原文贡献陈述（不客气地说）：<b>UV-SLAM</b> 理论新（VP 残差 + FIM 可观测性）；<b>EPLF-VINS</b> 有实际新意（线光流 + 端点无关残差）；<b>AirVO</b> 系统设计新意清晰；<b>AirSLAM</b> 是工程整合（PLNet 与多级重定位是真新模块）；<b>DPL-SLAM</b> 是最典型的拼装增量（ORB-SLAM3 + PL-SLAM 线 + DS-SLAM 动态剔除）；<b>RD-VIO</b> 的 IMU-PARSAC + 子帧/延迟三角化是针对移动 AR 的真实新机制（虽无线特征）。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>在 UV-SLAM 里，消失点主要起到了什么作用？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。UV-SLAM 把消失点作为一个新残差，用观测 VP 与由 3D 线方向估计的 VP 之差来校正线的方向向量，并用 FIM 证明线因此完全可观测。" onclick="lessonKit.answer(this,'q0070b')">作为新残差校正线的方向</button>
+          <button data-correct="no" data-explanation="不对。消失点本身不是相机位姿的直接估计量，它服务于线的方向校准与可观测性，不是用来直接估相机位姿的。" onclick="lessonKit.answer(this,'q0070b')">直接估计相机位姿</button>
+        </div>
+        <div class="quiz-feedback" id="q0070b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用自己的话解释 UV-SLAM 里的「unconstrained」是什么意思，并举一个被它放弃的约束。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>unconstrained 指 UV-SLAM 使用结构规律性但不施加任何约束——它放弃了 Manhattan world 假设（不假设室内所有线平行于三个主轴），也不假设相机运动，用 J-linkage 发现多个消失点。因此非 Manhattan 的线也能处理。</div></details>
+        </li>
+        <li>UV-SLAM 用 Fisher 信息矩阵（FIM）证明了什么？这解决了线特征的什么老问题？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>FIM 秩分析证明：加入消失点测量后，3D 线的秩达到 4、完全可观测。它解决的是「线映射退化」——普通线重投影残差只用法向量，无法校正线的方向向量，导致观测线近极点时 3D 线不确定、退化。</div></details>
+        </li>
+        <li>DPL-SLAM 是否主张「线比点更抗动态」？它实际怎么在动态场景里用线？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不主张。原文并未说线比点更抗动态。它用语义+几何统一剔除动态点和线（框内按动态点比例删，框外直接删），线提供的是结构化地图表达，不是用来「抗动态」的特殊武器。且它未用 Plücker 坐标。</div></details>
+        </li>
+        <li>RD-VIO 为什么放在本节？它靠哪些工程补丁扛住移动 AR 的纯旋转与长时间静止？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>RD-VIO 不含线特征，放进本节只是因「鲁棒 VIO / AR」主题，作为「工程鲁棒性」的对照样本。它靠 IMU-PARSAC（IMU 预积分与视觉 RANSAC 取交集去动态外点）和子帧/延迟三角化（纯旋转判据检测 R-frame，不立即估深度、挂到近 N 关键帧下用类 ZUPT 正则约束）来扛纯旋转与长时间静止。</div></details>
+        </li>
+        <li>提升 SLAM 鲁棒性的「两条路」是什么？AirSLAM 走了哪一条（或哪几条）？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两条路：① 加新类型的特征（线、消失点）如 EPLF/AirVO/UV-SLAM；② 改工程实现（重定位、初始化、鲁棒估计）如 RD-VIO。AirSLAM 同时走了两条——既加线特征（PLNet 统一点线），又加回环/全局 BA/多级重定位等工程实现。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0069-线特征与光照鲁棒上-点线融合的三条路.html">← 0069 线特征与光照鲁棒（上）</a>
+        <a class="next" href="0071-神经隐式建图2024-两种组合方式.html">0071 神经隐式建图（2024） →</a>
+      </div>
+      <p class="foot-note">线特征与消失点是「加特征」的路，RD-VIO 是「改工程」的路——两条路都通向更稳的 SLAM 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

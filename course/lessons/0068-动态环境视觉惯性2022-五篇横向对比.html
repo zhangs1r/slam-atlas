@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态环境视觉惯性（2022–2024）：五篇横向对比 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0068</div>
+      <h1>动态环境视觉惯性（2022–2024）：五篇横向对比</h1>
+      <p class="subtitle">🧩 同一个难题（画面里有人在走、椅子被推开），五篇论文各出奇招——这一节把它们摆在一起比</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态环境视觉 SLAM 横向横评</span>
+        <span>👥 作者：DynaVINS / DGM-VINS / RLD-SLAM / CFP-SLAM / SG-SLAM 五篇团队</span>
+        <span>📅 2022–2024 · 五篇英文题名见正文</span>
+      </div>
+      <div class="toc">
+        <a href="#a">课程定位</a>
+        <a href="#b">问题意识</a>
+        <a href="#c">三层策略框架</a>
+        <a href="#d">五篇横向对比表</a>
+        <a href="#e">逐篇招式（上）</a>
+        <a href="#f">逐篇招式（下）</a>
+        <a href="#g">诚实结论</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「动态物体为什么是 SLAM 老大难」，记住「判定 → 处理 → 代价」的三层框架，并在一张表里横向比较 DynaVINS / DGM-VINS / RLD-SLAM / CFP-SLAM / SG-SLAM 五篇的异同。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 第一季 <b>0012</b>《动态环境视觉 SLAM 综述》是本文的目录——它把方法分成「几何法 → 语义法」，并断言「没有任何单一方法被证明普遍更优」。② 第二季 <b>0028</b> MSCKF 用 Mahalanobis 距离剔除动态特征，是本文「几何派」的滤波版祖先。③ 本季 <b>0057–0058</b> VINS-Mono 是 DynaVINS / RLD-SLAM 的直接底座。④ 第一季 <b>0016</b> 事件相机是「绕开动态」的另一条路。</p></div>
+      </div>
+      <h2>1. 课程定位：这是一节「组课」，不是逐篇细讲</h2>
+      <p>这一节和前面「一篇一讲」的课不同。我们把五篇解决<b>同一个问题</b>的论文——画面里有人走动、椅子被推开、车在跑——摆在一起做<b>横向对比</b>。它们招式各不相同：有的靠纯几何，有的靠深度学习语义，有的靠 IMU 救场。摆在一起看，你才会明白「动态环境」这个坑到底有多少种填法，以及为什么<b>没有谁全面胜出</b>。</p>
+      <p>这五篇是：<b>DynaVINS</b>（2022，IEEE RA-L）、<b>DGM-VINS</b>（2023，IEEE 期刊）、<b>RLD-SLAM</b>（2024，IEEE 期刊）、<b>CFP-SLAM</b>（2022，IEEE 期刊）、<b>SG-SLAM</b>（2023，IEEE TIM）。注意 DGM / RLD / CFP 三篇的<b>刊名原文未给出</b>，我们只标为 IEEE 期刊，不替它们补全。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 问题意识：动态物体为什么是 SLAM 的老大难</h2>
+      <p>先建立问题意识。SLAM 整套数学都建立在一个基本假设上：<b>世界是静止的</b>。更具体地说——「同一块表面，在前后两个相机视角下，它上面的特征点应该自洽地对应同一个三维点」。重投影误差、对极几何、三角化，全靠这条假设吃饭。</p>
+      <p>动态物体恰恰砸了这条假设：一个人在走动，他身上的特征点「这一帧在这、下一帧跑到那」，但 SLAM 还以为它们是同一个静止三维点的两个观测——于是算出来的相机位姿（你在哪、往哪转）就歪了。下面这张自绘图把这件事画成你一眼能看懂的场景。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="28" font-size="18" font-weight="700" fill="#1f2937">动态物体为什么破坏 SLAM</text>
+          <rect x="30" y="50" width="380" height="260" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="44" y="74" font-size="13" fill="#475569">相机视角 1</text>
+          <line x1="40" y1="285" x2="400" y2="285" stroke="#94a3b8" stroke-width="2"/>
+          <circle cx="180" cy="120" r="13" fill="#cbd5e1"/>
+          <line x1="180" y1="133" x2="180" y2="220" stroke="#cbd5e1" stroke-width="3"/>
+          <line x1="180" y1="220" x2="160" y2="270" stroke="#cbd5e1" stroke-width="3"/>
+          <line x1="180" y1="220" x2="205" y2="270" stroke="#cbd5e1" stroke-width="3"/>
+          <circle cx="180" cy="150" r="5" fill="#ef4444"/>
+          <circle cx="205" cy="200" r="5" fill="#ef4444"/>
+          <circle cx="160" cy="210" r="5" fill="#ef4444"/>
+          <circle cx="70" cy="278" r="5" fill="#22c55e"/>
+          <circle cx="380" cy="278" r="5" fill="#22c55e"/>
+          <circle cx="120" cy="95" r="5" fill="#22c55e"/>
+          <text x="44" y="308" font-size="13" fill="#b91c1c">动态特征（位置乱窜）</text>
+
+          <rect x="490" y="50" width="380" height="260" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="504" y="74" font-size="13" fill="#475569">相机视角 2（人走动了）</text>
+          <line x1="500" y1="285" x2="860" y2="285" stroke="#94a3b8" stroke-width="2"/>
+          <circle cx="660" cy="120" r="13" fill="#cbd5e1"/>
+          <line x1="660" y1="133" x2="660" y2="220" stroke="#cbd5e1" stroke-width="3"/>
+          <line x1="660" y1="220" x2="640" y2="270" stroke="#cbd5e1" stroke-width="3"/>
+          <line x1="660" y1="220" x2="685" y2="270" stroke="#cbd5e1" stroke-width="3"/>
+          <circle cx="660" cy="150" r="5" fill="#ef4444"/>
+          <circle cx="685" cy="200" r="5" fill="#ef4444"/>
+          <circle cx="640" cy="210" r="5" fill="#ef4444"/>
+          <circle cx="530" cy="278" r="5" fill="#22c55e"/>
+          <circle cx="840" cy="278" r="5" fill="#22c55e"/>
+          <circle cx="570" cy="95" r="5" fill="#22c55e"/>
+          <text x="504" y="308" font-size="13" fill="#15803d">静态特征（位置不变）</text>
+
+          <path d="M 200 170 C 350 120, 480 250, 650 170" fill="none" stroke="#ef4444" stroke-width="2" stroke-dasharray="6 5"/>
+          <text x="350" y="338" font-size="14" font-weight="700" fill="#1f2937">SLAM 默认世界静止，用动态点算位姿会系统性算错</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两格是同一房间、前后两帧的相机画面。红点是「走动的人身上的特征」，绿点是「墙角、地板这些静止物上的特征」。<br>
+          <b>怎么看这张图：</b>① 左格红点（人身）在右格里整体平移了一大段，而绿点在两格里几乎不动；② 红色虚线串起两帧里同一个人的特征，明显「乱窜」；③ 这正是 SLAM 最怕的情形——它以为这些红点是同一个静止点的两次观测，于是位姿被带偏。<br>
+          <b>要记住的一句话：</b>SLAM 的所有方程都默认世界是静止的，动态物体直接违反这个前提。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 三层应对策略：判定 → 处理 → 代价</h2>
+      <p>五篇论文虽然招式不同，但都能套进同一个主干框架。理解了这个框架，你再看任何一篇动态 SLAM 论文都不会乱。这个框架有三层：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>① 判定</h4><p>先回答「哪些特征是动态的」。三条依据：<b>几何依据</b>（运动不一致 / 对极约束违例）、<b>语义依据</b>（深度学习认出「人 / 车」这类会动的物体）、<b>运动依据</b>（多视角统计某点长期在动）。</p></div>
+        <div class="mini-card"><h4>② 处理</h4><p>判定完之后怎么对付：<b>剔除</b>（直接扔掉）、<b>降权</b>（在优化里压低它的话语权）、<b>单独跟踪</b>（把动态物当独立目标跟着）、<b>建成地图元素</b>（把动态物也建成地图）。</p></div>
+        <div class="mini-card"><h4>③ 代价</h4><p>不同招式要付不同代价：要不要用 <b>GPU</b>、要不要<b>预训练模型</b>、实时性能不能上嵌入式平台。精度从来不是唯一的轴。</p></div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="28" font-size="18" font-weight="700" fill="#1f2937">动态物体处理的三层策略</text>
+          <rect x="30" y="150" width="95" height="60" rx="6" fill="#e0f2fe" stroke="#0284c7"/>
+          <text x="77" y="186" font-size="13" font-weight="700" fill="#075985" text-anchor="middle">输入帧</text>
+
+          <rect x="160" y="70" width="200" height="220" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+          <text x="260" y="96" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">判定：哪些特征是动态</text>
+          <rect x="175" y="110" width="170" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="260" y="136" font-size="12" fill="#334155" text-anchor="middle">几何依据</text>
+          <rect x="175" y="162" width="170" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="260" y="188" font-size="12" fill="#334155" text-anchor="middle">语义依据</text>
+          <rect x="175" y="214" width="170" height="42" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="260" y="240" font-size="12" fill="#334155" text-anchor="middle">运动依据</text>
+
+          <rect x="420" y="70" width="240" height="220" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+          <text x="540" y="96" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">处理：怎么对付动态特征</text>
+          <rect x="435" y="110" width="210" height="34" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="540" y="132" font-size="12" fill="#334155" text-anchor="middle">剔除</text>
+          <rect x="435" y="152" width="210" height="34" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="540" y="174" font-size="12" fill="#334155" text-anchor="middle">降权</text>
+          <rect x="435" y="194" width="210" height="34" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="540" y="216" font-size="12" fill="#334155" text-anchor="middle">单独跟踪</text>
+          <rect x="435" y="236" width="210" height="34" rx="5" fill="#ffffff" stroke="#94a3b8"/>
+          <text x="540" y="258" font-size="12" fill="#334155" text-anchor="middle">建成地图元素</text>
+
+          <rect x="720" y="150" width="150" height="60" rx="6" fill="#dcfce7" stroke="#16a34a"/>
+          <text x="795" y="178" font-size="12" font-weight="700" fill="#166534" text-anchor="middle">输出：位姿</text>
+          <text x="795" y="196" font-size="12" font-weight="700" fill="#166534" text-anchor="middle">+ 地图</text>
+
+          <line x1="125" y1="180" x2="158" y2="180" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
+          <line x1="360" y1="180" x2="418" y2="180" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
+          <line x1="660" y1="180" x2="718" y2="180" stroke="#64748b" stroke-width="2" marker-end="url(#arr)"/>
+          <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <text x="20" y="330" font-size="13" fill="#475569">几何法便宜但只认慢动作；语义法认出「人」但贵（要 GPU + 模型）；运动法不用训练但会被相机自运动干扰。</text>
+          <text x="20" y="352" font-size="13" fill="#475569">第三层「代价」决定了这些方法能不能真上机器人 / 手机。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条从左到右的流水线：输入帧，先经过「判定」三依据，再经过「处理」四方式，最后输出位姿与地图。<br>
+          <b>怎么看这张图：</b>① 判定层的三个方块是并行的三条判动态路子，一篇论文可用其中一条或多条；② 处理层的四个方块是判定之后的下游动作，可组合；③ 箭头把三层串成一条因果链。<br>
+          <b>要记住的一句话：</b>读任何动态 SLAM 论文，先问它「怎么判定、怎么处理、付了什么代价」这三问。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>动态物体身上的特征点为什么会让 SLAM 算出来的相机位姿出错？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。动态点违反「同一块表面在两视角下自洽」这个静止世界假设，被当成静止点观测后位姿就被带偏。" onclick="lessonKit.answer(this,'q0068a')">它违反世界静止假设</button>
+          <button data-correct="no" data-explanation="不对。曝光是相机成像问题，和动态点破坏几何一致性无关。" onclick="lessonKit.answer(this,'q0068a')">它让相机曝光过度</button>
+        </div>
+        <div class="quiz-feedback" id="q0068a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 五篇横向对比表（直接采用精读材料）</h2>
+      <p>下面这张表直接采用精读材料给出的五篇横向对比，行是「判定依据 / 处理方式 / 是否建动态地图 / 传感器配置 / 评估数据集 / 计算平台与实时性 / 原文承认打不过谁」。注意 DGM / RLD / CFP 三篇的刊名原文未给，只标 IEEE 期刊。</p>
+      <div style="overflow-x:auto;">
+      <table style="border-collapse:collapse;width:100%;font-size:13px;">
+        <thead>
+          <tr style="background:#f1f5f9;">
+            <th style="border:1px solid #cbd5e1;padding:8px;text-align:left;">行＼论文</th>
+            <th style="border:1px solid #cbd5e1;padding:8px;text-align:left;">DynaVINS (2022)</th>
+            <th style="border:1px solid #cbd5e1;padding:8px;text-align:left;">DGM-VINS (2023)</th>
+            <th style="border:1px solid #cbd5e1;padding:8px;text-align:left;">RLD-SLAM (2024)</th>
+            <th style="border:1px solid #cbd5e1;padding:8px;text-align:left;">CFP-SLAM (2022)</th>
+            <th style="border:1px solid #cbd5e1;padding:8px;text-align:left;">SG-SLAM (2023)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">判定依据</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">几何：重投影误差 vs IMU 预积分先验（无语义）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">几何（向量一致性+对极+DBSCAN）+ 时序语义（CenterTrack+CondInst）+ IMU</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">语义（YOLOv5 检测）+ 运动（多视角贝叶斯概率）+ IMU</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">语义（YOLOv5）+ 几何（对极+投影+DBSCAN 深度聚类）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">几何（对极约束偏移距离）为主 + 语义（SSD 检测，动态权重 w 放宽阈值）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">处理方式</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">降权（权重→0 抑制，非硬删）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">剔除（DBSCAN 离群动态点消除）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">降权（静态概率作信息矩阵权重）+ 速度为 0 的语义动态物加回路标</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">降权（静态概率作 BA 权重）+ 高动态前景点置 0 + 地图点 &lt;0.3 删</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">剔除（只保留静态特征点；动态区域特征点删）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">是否建动态地图</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">否</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">否（MOT 跟踪但不建持久动态地图）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">否（实时 Kalman 跟踪动态物辅助 VO/避障）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">否（只建静态轻量地图）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">否（动态物体排除出语义物体地图）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">传感器配置</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">单目/双目 + IMU（VIO）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">RGB-D（D435i 含 IMU）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">立体/单目/RGB-D + IMU</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">RGB-D + YOLOv5s（无 IMU）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">RGB-D（无 IMU，纯视觉+语义）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">评估数据集</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">VIODE（仿真）+ 自建 4 序列</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">OpenLORIS-Scene + TUM RGB-D + 真实</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">TUM RGB-D + KITTI tracking + KAIST + 自采校园</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">TUM RGB-D 8 序列</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">TUM RGB-D + Bonn RGB-D + OpenLORIS-Scene</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">计算平台与实时性</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">硬件未明确；BA 53–61 ms</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">i7-10870H+GTX3070；语义掩码 136.5 ms/帧</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">i7+GTX1050Ti+8GB；29.5 ms/帧</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">i7+3060+16GB；42.7 ms/帧（23 FPS）</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">Jetson AGX Xavier 主；65.71 ms/帧</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">原文承认打不过谁</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">未明说；自承速度待改进</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">TUM 上 DS-SLAM 略好；旋转下几何区分差</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">KITTI 0005/0014/0018 略输；DynaSLAM 个别序列略领先</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">rpy 序列稍差；未与最新分割法全面比</td>
+            <td style="border:1px solid #cbd5e1;padding:8px;">Bonn synchronous 输 YOLO-SLAM；DynaSLAM 个别序列略领先</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p>这张表最该记住的一行是<b>「是否建动态地图」——五篇全是「否」</b>。它们都把动态物体当成「该丢掉的噪声」，而不是「该建出来的地图元素」。这正好印证第一季 0012 的说法：语义建图质量无法定量评估，于是大家干脆只建静态地图。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 逐篇招式（上）：DynaVINS 与 DGM-VINS</h2>
+      <h4>DynaVINS（2022，IEEE RA-L）——不用任何语义网络的「纯几何 + IMU」</h4>
+      <p>DynaVINS 走的是最「苦行」的一条路：<b>完全不碰语义网络</b>，只靠重投影误差相对 IMU 预积分先验的大小关系来判断动态。它的核心是一套「鲁棒 BA（Bundle Adjustment）」：每个特征带一个权重 $w_j \in [0,1]$，重投影误差大的特征权重自动趋零，被 BA 抑制，但又不像传统鲁棒核那样一开始就硬删。再配一个「权重动量」防止相机剧烈运动时把静态特征误降权，以及一个「选择性全局优化」来拒绝临时静止物体造成的错误回环。</p>
+      <p>一句话招式：<b>给每个特征一个连续权重，让动态点自动「闭嘴」而不被硬删</b>。它属于 0012 框架里的「几何法」一支，是第二季 0028 MSCKF（用 Mahalanobis 距离剔除动态特征）的「优化框架版」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DynaVINS__A_Visual-Inertial_SLAM_for_Dynamic_Environment/bc815eb31269b408b047f804ff590e336e7360e8432a56cedf57a695ce44d464.jpg" alt="DynaVINS pipeline">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The pipeline of our robust visual inertial SLAM. Features are tracked… then the robust BA is applied to discard tracked features from dynamic objects… Keyframes are grouped… loop closures detected.
+          <br><b>怎么看这张图：</b>这张是 DynaVINS 的总览管线。盯住「前端的鲁棒 BA（把动态特征权重压到零）」和「后端的关键帧分组 + 多假设回环」这两段——前者是它日常抗动态的机制，后者是它专门对付「临时静止物体」的杀招。
+        </figcaption>
+      </figure>
+
+      <h4>DGM-VINS（2023，IEEE 期刊）——几何 + 时序语义 + IMU 三线程并行</h4>
+      <p>DGM-VINS 的招式是「双判定」：一边用<b>联合几何动态特征提取（JGDFE）</b>——把每个特征点的帧间位移向量距离 $d_v$ 和对极约束距离 $d_i$ 投影到二维空间做 DBSCAN，离群点就是动态点；另一边用<b>时序实例分割（TISM）</b>——CenterTrack 点跟踪 + CondInst 实例分割，给动态物体加时间相关性，解决单帧分割在快速运动下漏检的问题。两者松耦合进后端，只用稳定静态特征 + IMU 预积分做位姿。</p>
+      <p>一句话招式：<b>几何认慢动作、语义认物体类别，两条判定并行互补</b>。它相对 0012「语义法」支更偏「组合式创新」。注意它的「几何」指的是特征点的运动向量与对极距离，不是线/面特征。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_DGM-VINS__Visual_Inertial_SLAM_for_Complex_Dynamic_Envir/67bf58e37ffc6d0f59b218ebac486868da4ca89dfef77191af2f65c49992e700.jpg" alt="DGM-VINS framework">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>DGM-VINS framework consists of three threads, namely, geometric feature extraction, temporal instance segmentation, and back-end state optimization threads, which are performed in parallel and synchronously.
+          <br><b>怎么看这张图：</b>看清三条并行的线程——几何线程、时序语义线程、后端优化线程。前两条都是「判定动态」的输入，后端只拿两线程都认可的静态特征 + IMU 来做位姿，这就是它「两条判定并行」的结构图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 逐篇招式（下）：RLD-SLAM、CFP-SLAM、SG-SLAM</h2>
+      <h4>RLD-SLAM（2024，IEEE 期刊）——把「检测」换「分割」来减肥</h4>
+      <p>RLD-SLAM 的核心卖点是<b>轻量</b>。它用 YOLOv5 目标检测（bounding box）替代像素级语义分割——检测远快于分割（DynaSLAM 350 ms/帧 vs 本文 29.5 ms/帧）。语义给物体类别先验，再用<b>多视角贝叶斯概率</b>融合多帧观测算每个点的动态概率；IMU 三重配合——图像校正、高度动态时恢复 VO、与 VO 紧耦合消除漂移。一个贴心补丁：被语义判为动态但速度为 0（路边停着的车）的特征，会自适应加回当路标。</p>
+      <p>一句话招式：<b>用便宜的检测头 + IMU 救场，把动态环境 VIO 做轻</b>。注意它的公式 (15) 在原文里被误标成了 (5)，引用时以 (15) 为准。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_RLD-SLAM__A_Robust_Lightweight_VI-SLAM_for_Dynamic_Envir/30b65eeefa8056424a27bd46a91cff1a6abbd94a964b0b8bdd626e4ca463cb3e.jpg" alt="RLD-SLAM framework">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overall framework of RLD-SLAM. The front end involves extracting image feature points and tracking dynamic objects in 2D. The back end assists… by identifying keyframes with a co-visibility relationship…
+          <br><b>怎么看这张图：</b>四线程（检测 / 跟踪 / 局部建图 / 回环）总览。重点看「前端检测 + 2D 跟踪动态物体」和「后端靠共视关键帧辅助判动静」这两块——前者是轻量判定的来源，后者是运动/共视判定的落点。
+        </figcaption>
+      </figure>
+
+      <h4>CFP-SLAM（2022，IEEE 期刊）——粗到细两级「静态概率」</h4>
+      <p>CFP-SLAM 基于 ORB-SLAM2 + YOLOv5，把每个关键点 / 地图点属于「静态」的概率算出来当权重参与 BA。它的核心是<b>粗到细两级静态概率</b>：第一级（粗）用物体框 + DBSCAN 深度聚类给背景点较高概率、高动态框内前景点直接置 0；第二级（细）用投影约束与对极约束分别算概率再融合。还做了<b>漏检补偿</b>（EKF 预测框补 YOLO 漏检）和<b>高/低动态区分</b>（解决「人坐着只有手在动」这种非刚体局部运动）。</p>
+      <p>一句话招式：<b>用概率权重平滑地「压低动态、保留静态」，还区分高/低动态</b>。注意其论文表格里大量「1」其实是缺失数据的占位符（OCR 把原文的「未提供」误识成数字 1），本节不引用那些数字。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_CFP-SLAM__A_Real-time_Visual_SLAM_Based_on_Coarse-to-Fin/f6d673d5800f5737ea4d43d332bcffd51e51812f981ccbf5820dfee4610ef182.jpg" alt="CFP-SLAM overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The overview of CFP-SLAM. The green portion and the purple portion are the input and output modules… yellow = semantic module, orange &amp; blue = two-stage static probability modules.
+          <br><b>怎么看这张图：</b>这是 CFP 的总图。盯住黄色的语义模块和橙+蓝的「两级静态概率」模块——黄模块负责判物体，橙蓝两级负责把「静态概率」算出来当权重，正是它「粗→细」流程的可视化。
+        </figcaption>
+      </figure>
+
+      <h4>SG-SLAM（2023，IEEE TIM）——反潮流的「几何为主、语义为辅」</h4>
+      <p>SG-SLAM 基于 ORB-SLAM2 的 RGB-D 系统，走的是和大多数「重深度学习」工作<b>相反</b>的路线：以几何（对极约束）为主，只用 SSD 目标检测给一个语义先验、并用动态权重 $w$ 放宽几何阈值。它因此比 DS-SLAM / DynaSLAM 快很多，还能建<b>语义八叉树地图</b>（Octo-map + 带坐标的语义物体数据库）。</p>
+      <p>一句话招式：<b>几何挑大梁、语义只当帮腔，换来了便宜又实时</b>。它正是第一季 0012 综述里提到的「SG-SLAM 的语义八叉树地图」同一篇。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_SG-SLAM__A_Real-Time_RGB-D_Visual_SLAM_Toward_Dynamic_Sc/c088d2f972bfe3cf02238fafd0b1eb3a017c5d0e42de69b3161992d0e1e95a55.jpg" alt="SG-SLAM dynamic rejection">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Dynamic feature rejection effect demonstration. The empirical threshold ε in (b) is 0.2 and in (c) is 1.0. (a) ORB-SLAM2. (b)(c) SG-SLAM (G). (d) SG-SLAM (S). (e) SG-SLAM (S G).
+          <br><b>怎么看这张图：</b>这是「几何/语义/融合」三种拒动态效果的对比。看 (a) 纯 ORB-SLAM2 把人周围特征全留、(e) 融合后只删人保留其余——一眼就能看出「动态物体被处理掉」的效果，是本课最直观的一张原图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 诚实结论：精度不是唯一轴，且五篇并非同等原创</h2>
+      <p>先把第一季 <b>0012</b> 的两句结论摆在这里，它们是这组的天花板：<b>「没有任何单一方法被证明普遍更优」</b>，以及<b>「语义建图质量无法定量评估，只能用定位精度作 proxy」</b>。这五篇都落在 0012 框架内，谁也没推翻这句话。</p>
+      <p>第二，精度不是唯一的轴。0012 给过 DynaSLAM vs Dynamic-VINS 的耗时对照（桌面 GPU 237 ms vs Jetson 5.54 ms）——同一件事，一个在桌面 GPU 上慢、一个在嵌入式上快十倍。上面对比表的「计算平台与实时性」一行也说明了这点：DGM 的语义掩码 136.5 ms/帧很贵，RLD 29.5 ms/帧很轻，SG 在 Jetson 上只比 ORB 多不到 10 ms。<b>落地时「快不快、要不要 GPU」往往比「准一点」更要命。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="28" font-size="18" font-weight="700" fill="#1f2937">每帧耗时示意（跨平台，仅看量级）</text>
+          <line x1="120" y1="320" x2="120" y2="60" stroke="#94a3b8" stroke-width="2"/>
+          <line x1="120" y1="320" x2="860" y2="320" stroke="#94a3b8" stroke-width="2"/>
+          <rect x="160" y="220" width="90" height="100" fill="#0ea5e9"/>
+          <rect x="300" y="80" width="90" height="240" fill="#ef4444"/>
+          <rect x="440" y="268" width="90" height="52" fill="#22c55e"/>
+          <rect x="580" y="245" width="90" height="75" fill="#f59e0b"/>
+          <rect x="720" y="205" width="90" height="115" fill="#8b5cf6"/>
+          <text x="205" y="340" font-size="12" fill="#334155" text-anchor="middle">DynaVINS</text>
+          <text x="345" y="340" font-size="12" fill="#334155" text-anchor="middle">DGM-VINS</text>
+          <text x="485" y="340" font-size="12" fill="#334155" text-anchor="middle">RLD-SLAM</text>
+          <text x="625" y="340" font-size="12" fill="#334155" text-anchor="middle">CFP-SLAM</text>
+          <text x="765" y="340" font-size="12" fill="#334155" text-anchor="middle">SG-SLAM</text>
+          <text x="205" y="210" font-size="12" fill="#ffffff" text-anchor="middle">57</text>
+          <text x="345" y="70" font-size="12" fill="#ffffff" text-anchor="middle">136.5</text>
+          <text x="485" y="258" font-size="12" fill="#ffffff" text-anchor="middle">29.5</text>
+          <text x="625" y="235" font-size="12" fill="#ffffff" text-anchor="middle">42.7</text>
+          <text x="765" y="195" font-size="12" fill="#ffffff" text-anchor="middle">65.7</text>
+          <text x="120" y="50" font-size="12" fill="#64748b">ms/帧 ↑</text>
+          <text x="20" y="378" font-size="12" fill="#b45309">图注：示意。各篇平台不同（桌面 GPU / Jetson / 笔记本），不能严格横比，只看量级差异。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>五篇「每帧耗时」的量级条形图，数值取自各自原文（DynaVINS 取 BA 耗时 ~57 ms，DGM 取语义掩码 136.5 ms，RLD 29.5，CFP 42.7，SG 65.71）。<br>
+          <b>怎么看这张图：</b>① DGM 的语义掩码最贵（红条最高）；② RLD 最轻（绿条最矮）；③ 差异主要来自「要不要跑分割 / 检测网络、用什么平台」。<br>
+          <b>要记住的一句话：</b>这是<b>示意</b>图——平台不一致，不能当精确横评，但它直观说明「实时性是另一条轴」。
+        </figcaption>
+      </figure>
+
+      <p>第三，按原文贡献陈述，五篇的原创度并不齐平（以下是我们基于原文贡献的判断，<b>不是原文自评</b>）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>真正有新意（机制自洽）</h4><ul>
+          <li><b>DynaVINS</b>：B-R 对偶 + 权重动量 + 多假设聚类，是一套自洽的「鲁棒 BA + 选择性全局优化」。</li>
+          <li><b>CFP-SLAM</b>：粗到细两级静态概率 + 高/低动态区分，工程机制清楚。</li>
+          <li><b>SG-SLAM</b>：反潮流「几何为主、语义为辅」+ 语义八叉树地图，实时性漂亮。</li>
+        </ul></div>
+        <div class="mini-card"><h4>偏换模块 / 换数据集的增量</h4><ul>
+          <li><b>DGM-VINS</b>：JGDFE 与 TISM 都是已有组件的拼接，多目标跟踪直接借用 CenterTrack。</li>
+          <li><b>RLD-SLAM</b>：YOLOv5 检测 + 贝叶斯 + Kalman + VIO 紧耦合，基本是「检测头替换 + 加 IMU」的重组，差异点仅在 IMU 校正/恢复 VO。</li>
+        </ul></div>
+      </div>
+      <p>一句话给学员：五篇里只有 DynaVINS / CFP / SG 在「机制」上有自己的名字，DGM / RLD 更像把成熟模块重新组装 + 换数据集刷分；但后者恰恰是工业落地最现实的「组合式创新」——轻量化与泛化（RLD 在 KITTI 室外、SG 在 Bonn）是零基础工程师最该会的本事。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>DynaVINS 判定一个特征是「动态」还是「静态」，靠的是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。DynaVINS 完全不碰语义网络，靠重投影误差相对 IMU 预积分先验的大小关系（几何法）来判动态。" onclick="lessonKit.answer(this,'q0068b')">纯几何 + IMU，无语义</button>
+          <button data-correct="no" data-explanation="不对。用 YOLO 语义分割的是 DynaSLAM / DS-SLAM 等，不是 DynaVINS。" onclick="lessonKit.answer(this,'q0068b')">YOLO 语义分割</button>
+        </div>
+        <div class="quiz-feedback" id="q0068b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用你自己的话解释：为什么「人在走动」会让 SLAM 算错相机位姿？画一个简单的两帧示意图说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为 SLAM 默认世界静止，把同一表面在两帧里的特征当成同一个三维点的两次观测。人走动时他身上的特征在两帧位置大变，却被当作静止点观测，重投影误差失衡，位姿就被带偏。可以画左帧红点在人身、右帧红点平移、绿点（墙角）不动来示意。</div></details>
+        </li>
+        <li>「判定 → 处理 → 代价」三层框架里，DynaVINS 和 SG-SLAM 分别落在哪一层、用了什么具体手段？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>DynaVINS：判定层用「几何（重投影 vs IMU 先验）」；处理层用「降权（权重→0 抑制）」；代价层是不用 GPU、但 BA 耗时 53–61 ms。SG-SLAM：判定层用「几何为主 + 语义为辅」；处理层用「剔除」；代价层是只用检测、在 Jetson 上仅比 ORB 多不到 10 ms。</div></details>
+        </li>
+        <li>对比表有一行「是否建动态地图」，五篇答案都是「否」。这印证了第一季 0012 的哪句结论？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>印证「语义建图质量无法定量评估，只能用定位精度作 proxy」——既然动态建图没法量化评价，大家就干脆只建静态地图，把动态物体当噪声丢掉。</div></details>
+        </li>
+        <li>RLD-SLAM 的轻量主要来自哪两个设计？它的公式 (15) 在原文里有什么小瑕疵？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>轻量主要来自：① 用 YOLOv5 目标检测（bounding box）替代像素级语义分割，检测远快于分割；② 后端多视角概率估计与 3-D 跟踪只在高共视关键帧做，不每帧做。公式 (15) 在原文里被误标成了 (5)，引用以 (15) 为准。</div></details>
+        </li>
+        <li>为什么说 DGM-VINS 和 RLD-SLAM 偏「增量」而不是「机制新意」？（基于原文贡献陈述判断）
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>DGM 的 JGDFE 与 TISM 是向量一致性/对极/DBSCAN 与 CenterTrack+CondInst 等已有组件的拼接，多目标跟踪直接借用 CenterTrack；RLD 是 YOLOv5 检测 + 贝叶斯 + Kalman + VIO 紧耦合的重组，差异点仅在 IMU 校正/恢复 VO。两者都缺乏自有的新方法命名，属组合式创新。注意这是我们的判断，不是原文自评。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0067-自动驾驶SLAM综述2017-室外大尺度与高精地图.html">← 0067 自动驾驶 SLAM 综述（2017）</a>
+        <a class="next" href="0069-线特征与光照鲁棒上-点线融合的三条路.html">0069 线特征与光照鲁棒（上） →</a>
+      </div>
+      <p class="foot-note">动态环境没有银弹——理解五篇各自的代价，比记住谁更准更重要 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

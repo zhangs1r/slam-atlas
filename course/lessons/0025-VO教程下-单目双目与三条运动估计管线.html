@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VO 教程（下）：单目、双目与三条估计管线 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0025</div>
+      <h1>VO 教程（下）：单目、双目与三条估计管线</h1>
+      <p class="subtitle">接上节的几何，这一节换角度：同样是两张图，单目和双目分别怎么用？运动估计有三条路线，谁更准？🛤️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：运动估计三条管线、单目/双目取舍</span>
+        <span>👥 作者：Davide Scaramuzza、Friedrich Fraundorfer</span>
+        <span>📅 2011 年 12 月 · <i>Visual Odometry — Part I: The First 30 Years and Fundamentals</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 这一节接在哪里</a>
+        <a href="#b">2. ★ 三条运动估计管线</a>
+        <a href="#c">3. ★ 单目 vs 双目</a>
+        <a href="#d">4. 特征怎么用：三分法</a>
+        <a href="#e">5. V-SLAM 的两支与 VO 的取舍</a>
+        <a href="#f">6. 历史两支与精度数字</a>
+        <a href="#g">7. 两条实践结论与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：背出运动估计的三种组合（2D-2D / 3D-3D / 3D-2D）各用什么矩阵、各有什么代价；说清单目和双目各自的优缺点；并记住原文那句关键比较——在图像平面最小化误差比在三维空间更准。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0024</b>：上节讲了几何（对极约束、归一化像面、连乘骨架），本节是「这些几何怎么组合成运动估计」。接 <b>0018</b>：本节式（10）的重投影误差，正是 0018 讲 BA 时的残差定义。下一节 <b>0026</b> 换一条完全不同的路：不提取特征的稠密双目匹配。</p></div>
+      </div>
+
+      <h2>1. 这一节接在哪里：从「约束」到「怎么用约束」</h2>
+      <p>上节 0024 把几何约束讲完了：对极约束把对应点锁到一条线上，归一化像面给出方向向量，连乘骨架把一步步相对运动串成全程。这一节回答一个更「工程」的问题：<b>这些约束具体怎么组合，才能算出相机的运动？</b>原文把所有可能的组合归纳成「三条管线」，并明确比较了单目和双目谁更好。</p>
+      <p>先快速回顾上节的骨架——VO 是「一步只求一小段相对运动，再连乘」：</p>
+
+      <div class="figure">
+        <img src="../../md/images/2011_Visual_Odometry__Tutorial_/2f4d0df81cee4a10797e91e784ed5fb2b6f68036dc27b2f0031caa1e70d816ff.jpg" alt="Fig. 1 VO 问题示意：相邻位姿的相对变换串接成绝对位姿">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b><i>An illustration of the visual odometry problem. The relative poses $T_{k,k-1}$ of adjacent camera positions are computed from visual features and concatenated to get the absolute poses $C_k$.</i>（VO 问题示意——相邻相机位姿的相对变换 $T_{k,k-1}$ 由视觉特征算出，串接得到绝对位姿 $C_k$。）</p>
+          <p><b>怎么看这张图：</b>那条相机小方块串成的轨迹，就是「连乘」出来的。本节要讲的「三条管线」，解决的正好是「相邻两帧之间那个 $T_{k,k-1}$ 到底怎么算」——只是输入的数据形态不同（2D 点对、3D 点对、或 3D-2D 混合）。</p>
+        </figcaption>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 三条运动估计管线</h2>
+      <p>原文把「怎么从数据算运动」分成三类，取决于你手上是 <b>2D 像素点</b>还是 <b>3D 空间点</b>。下面这张系统框图正好把那一格「Motion Estimation」展开成三路，是本节的头号配图。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2011_Visual_Odometry__Tutorial_/1d6758b6a40166d1c6563138df6c2dfb970422f9b4b83d6aa007bab2d245ea92.jpg" alt="Fig. 2 VO 系统主要模块框图">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b><i>A block diagram showing the main components of a VO system.</i>（VO 系统主要模块框图。）</p>
+          <p><b>怎么看这张图：</b>从左往右：图像序列 → 特征检测 → 特征匹配（或跟踪）→ <b>运动估计</b>（下面并列三格：2D-2D、3D-3D、3D-2D）→ 局部优化（BA）。这图就是全篇目录，而「运动估计」下面那三格，正是本节要逐条拆的三条管线。</p>
+        </figcaption>
+      </div>
+
+      <table>
+        <tr><th>管线</th><th>输入数据</th><th>用什么解</th><th>最小解集</th><th>原文评价</th></tr>
+        <tr>
+          <td><b>2D-to-2D</b></td>
+          <td>两帧的 2D 像素对应</td>
+          <td><b>本质矩阵 $E$</b></td>
+          <td>五点法 / 八点法</td>
+          <td>单目下它「<i>avoids point triangulation</i>」（免去三角化），但实践中不如 3D-to-2D 常用，原因是 <b>3D-to-2D 的数据关联更快</b>（五点 vs 三点最小集）。</td>
+        </tr>
+        <tr>
+          <td><b>3D-to-3D</b></td>
+          <td>双目三角化后的两组 3D 点</td>
+          <td>刚体配准（两点集对齐）</td>
+          <td>—</td>
+          <td>对两组三维点做刚体配准。原文评价它不如 3D-to-2D 准（见下）。</td>
+        </tr>
+        <tr>
+          <td><b>3D-to-2D</b></td>
+          <td>已知 3D 点 + 它在新帧的 2D 投影</td>
+          <td><b>PnP / P3P</b></td>
+          <td>三点</td>
+          <td>最小化<b>重投影误差</b>，原文认为它最准、最常用。</td>
+        </tr>
+      </table>
+
+      <h3>2.1 3D-to-2D 为什么最准：原文的关键比较</h3>
+      <p>3D-to-2D 的核心是 <b>PnP（Perspective-n-Point）</b>：已知地图点（3D）和它在当前图像上的投影（2D），求相机位姿。它最小化的是<b>重投影误差</b>——即「按估计位姿把 3D 点投回图像，和真实观测差多少」：</p>
+      <div class="formula-box"><div class="flow-formula">$$\arg\min_{T_k}\sum_i\big\|p_k^i-\hat p_{k-1}^i\big\|^2$$</div></div>
+      <p>原文那句<b>必须引用</b>的比较是：3D-to-2D 比 3D-to-3D「<i>more accurate than from 3-D-to-3-D … because it minimizes the image reprojection error (10) instead of the 3-D-to-3-D feature position error (9)</i>」。</p>
+      <div class="callout">
+        <h4>★ 用大白话说</h4>
+        <p><b>在图像平面上最小化误差，比在三维空间里最小化更准。</b>为什么？因为测量噪声发生在图像上（像素有噪声），3D 点本身是「算出来的、也带噪声」，在带噪声的 3D 上做最小二乘等于「在噪声上再拟合噪声」。而重投影误差直接对齐「图像观测」，误差来源更干净。这句直接呼应 0018 课 BA 的残差定义——BA 优化的就是重投影误差。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 单目 vs 双目：优缺点对照</h2>
+      <p>同样三条管线，喂进去的数据来自单目还是双目，差别很大。原文把双目的优点原话列了三条，单目则有它存在的理由，下面照抄成表。</p>
+      <table>
+        <tr><th>双目（stereo）优点</th><th>原文原话</th></tr>
+        <tr><td>① 直接得到绝对尺度</td><td>「<i>3-D features are computed directly in the <b>absolute scale</b></i>」——左右眼有基线，三角化直接出真实距离，没有上节的尺度歧义。</td></tr>
+        <tr><td>② 只需在两视图间算匹配</td><td>「<i>matches need to be computed only between <b>two</b> views instead of three</i>」——单目常要借助第三帧，双目自带深度。</td></tr>
+        <tr><td>③ 小运动时漂移更小</td><td>「<i>exhibits <b>less drift</b> than the monocular one in case of small motions</i>」。</td></tr>
+      </table>
+      <div class="callout">
+        <h4>★ 那单目为什么还存在</h4>
+        <p>原文说：当「<i>distance to the scene is much larger than the stereo baseline</i>」（场景距离远大于双目基线）时，立体视觉会<b>退化</b>——基线太短、距离太远，视差小到量不出，双目等于废了。这时候只能用单目。简单说：看近处用双目爽，看远处双目变近视，单目上。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 特征怎么用：三分法</h2>
+      <p>除了「用不用深度」，原文还按「怎么用特征」把方法分成三类：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>feature-based（基于特征）</h4><p>提关键点、算描述子、做匹配。原文说它「<i>faster and more accurate</i>」——又快又准，是主流。</p></div>
+        <div class="mini-card"><h4>appearance-based / global（基于表观/全局）</h4><p>拿整块图像算相似度。原文说它「<i>less accurate than feature-based methods and computationally more expensive</i>」，且「<i>not robust to occlusions</i>」——不如特征法准、更贵、还怕遮挡。</p></div>
+        <div class="mini-card"><h4>hybrid（混合）</h4><p>两者结合，取长补短。</p></div>
+      </div>
+      <div class="callout">
+        <h4>★ 一句话记住</h4>
+        <p>特征法又快又准、怕弱纹理；表观法不怕弱纹理但慢且怕遮挡。绝大多数实战 VO 走 feature-based，这也是 0024 系统框图里「Feature Detection → Matching」那一路。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. V-SLAM 的两支与 VO 的取舍</h2>
+      <p>VO 往「建图 + 闭环」走一步，就是 <b>V-SLAM（视觉 SLAM）</b>。原文把 V-SLAM 分成两支：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>filtering（滤波法）</h4><p>用概率分布（如 EKF）把位姿和地图点融合起来，边走边更新。</p></div>
+        <div class="mini-card"><h4>nonfiltering / keyframe（关键帧法）</h4><p>只挑少量关键帧，在关键帧上做批量优化（BA）。这是后来 ORB-SLAM 那一路。</p></div>
+      </div>
+      <p>原文的诚实评价很关键：V-SLAM 比纯 VO <b>更精确</b>，但「<i>not necessarily more robust … more complex and computationally expensive</i>」——不一定更鲁棒，只是更复杂、更贵。而 VO 的哲学是「<i>trades off consistency for real-time performance</i>」：<b>用一致性（闭环、全局一致）换实时性</b>。这正好呼应 0024 说的「VO 只管走、不负责纠偏」。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 历史两支与精度数字</h2>
+      <p>原文把 VO 的演进按传感器分成两支，读起来很提气，也帮你建立时间线。</p>
+      <div class="callout">
+        <h4>★ Stereo VO 一支</h4>
+        <p>Moravec 滑动立体起步 → Matthies & Shafer 引入误差协方差 → Olson 加绝对方位传感器 → Lacroix 用相关函数曲率定协方差 → <b>Nistér 2004 首次实时长距离 + RANSAC</b> → Comport 用四焦张量免三角化。</p>
+      </div>
+      <div class="callout">
+        <h4>★ Monocular VO 一支</h4>
+        <p>Nistér 首次实时大尺度、五点解算 → Corke 全向相机 + 光流 → Lhuillier / Mouragnon 局部窗口 BA → Tardif <b>2.5 km 无 BA</b>、旋转平移解耦。</p>
+      </div>
+      <p>精度数字原文也给得很具体（请抄准）：VO 相对位置误差「<i>ranging from 0.1 to 2%</i>」；Matthies 在 5.5 m 路径上达到「<i>2% relative error</i>」；Olson 在 20 m 路径上「<i>1–2%</i>」；Konolige 用 windowed BA 跑 10 km 实验，把最终位置误差「<i>decrease the final position error by a factor of 2–5</i>」（降低 2–5 倍）。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文说 3D-to-2D（PnP）比 3D-to-3D 更准，根本原因是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。原文说 3D-to-2D 最小化的是图像重投影误差（式10），而 3D-to-3D 最小化的是带噪声的三维点位置误差（式9）；测量噪声在图像上，所以在图像平面最小化更准。" onclick="lessonKit.answer(this,'q0025a')">它在图像平面最小化重投影误差，比在带噪声的三维空间里拟合更准</button>
+          <button data-correct="no" data-explanation="不对。PnP 仍然需要已知 3D 点（来自双目三角化或之前注册），并非「完全不需要 3D 信息」。" onclick="lessonKit.answer(this,'q0025a')">因为 3D-to-2D 根本不需要任何三维信息</button>
+          <button data-correct="no" data-explanation="不对。准不准取决于误差定义在哪、噪声在哪，和「用几帧」不是一回事；3D-to-3D 也可能用多帧。" onclick="lessonKit.answer(this,'q0025a')">因为 PnP 用的帧数更多</button>
+        </div>
+        <div class="quiz-feedback" id="q0025a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 两条实践结论与边界</h2>
+      <p>原文在结论部分给了两条<b>务必引用</b>的实践建议：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 局部 BA 总该做</h4><p>「<i>should always be performed</i>」——局部光束法平差应当总是执行。对应 0018/0019 的 BA，是抑制漂移的刚需。</p></div>
+        <div class="mini-card"><h4>② 关键帧选择很重要</h4><p>「<i>very important … should always be done before updating the motion</i>」——在更新运动之前，关键帧选择应当总先做。挑好关键帧，优化才稳。</p></div>
+      </div>
+
+      <h3>7.1 本教程的边界（再次声明）</h3>
+      <p>和 0024 一样，必须诚实：RANSAC、误差建模、位置识别/回环、BA 的正式推导都在 <b>Part II</b>，本教程（Part I）不含。本节只讲了「稀疏特征 + 运动估计」这一支。</p>
+
+      <h3>7.2 收尾：下一节换一条路</h3>
+      <p>本节讲的都是「先提特征、再估运动」的<b>稀疏特征</b>路线。下一节 <b>0026</b> 我们换一条完全不同的路：<b>不提取特征</b>的稠密双目匹配——直接对整张图的每个像素算视差，得到稠密深度。那是 SGM 的故事。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>双目 VO 相比单目，原文列出的优点里不包括下面哪条？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="这是原文原话优点①：双目三角化直接得到 absolute scale，没有单目的尺度歧义。" onclick="lessonKit.answer(this,'q0025b')">直接得到绝对尺度（无尺度歧义）</button>
+          <button data-correct="no" data-explanation="这是原文原话优点②：双目只需在两视图间算匹配，不必借助第三帧。" onclick="lessonKit.answer(this,'q0025b')">匹配只需在两视图间计算，不必借助第三帧</button>
+          <button data-correct="yes" data-explanation="答对。这恰是单目存在的理由——当场景距离远大于双目基线时，双目会退化，此时只能用单目。所以「远处更准」不是双目优点。" onclick="lessonKit.answer(this,'q0025b')">在场景距离远大于基线时比单目更准</button>
+        </div>
+        <div class="quiz-feedback" id="q0025b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：写出三条运动估计管线各自的输入与解法</summary>
+          <div>
+            <p>① 2D-2D：两帧 2D 像素对应 → 本质矩阵 $E$（五点/八点法），单目下免去三角化；② 3D-3D：双目三角化后的两组 3D 点 → 刚体配准；③ 3D-2D：已知 3D 点 + 新帧 2D 投影 → PnP/P3P，最小化重投影误差。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：背出原文那句「3D-to-2D 更准」的关键比较</summary>
+          <div>
+            <p>原文：3D-to-2D「more accurate than from 3-D-to-3-D … because it minimizes the image reprojection error (10) instead of the 3-D-to-3-D feature position error (9)」。即在图像平面最小化重投影误差，比在带噪声的三维空间最小化更准，且直接呼应 0018 的 BA 残差。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：双目三条优点 + 单目为何仍有存在理由</summary>
+          <div>
+            <p>双目优点：① 3D 特征直接在绝对尺度下算出；② 匹配只需两视图；③ 小运动时漂移更小。单目存在理由：当「场景距离远大于双目基线」时立体视觉退化、视差量不出，只能用单目。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：feature-based 与 appearance-based 的取舍</summary>
+          <div>
+            <p>feature-based「faster and more accurate」，是主流；appearance-based「less accurate … computationally more expensive」且「not robust to occlusions」，慢、不准、怕遮挡。实战多走特征法。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：两条实践结论，并说清 VO 与 V-SLAM 的取舍</summary>
+          <div>
+            <p>两条结论：局部 BA「should always be performed」；关键帧选择「very important … should always be done before updating the motion」。VO 与 V-SLAM：V-SLAM 更精确但更复杂更贵、未必更鲁棒；VO「trades off consistency for real-time performance」，用一致性换实时性，不负责闭环纠偏。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0024-VO教程上-相机模型与对极几何.html">← 上一课：VO 教程（上）：相机模型与对极几何</a>
+        <a class="next" href="0026-SGM半全局匹配2008-双目深度怎么算.html">下一课：SGM（2008）：双目深度怎么算 →</a>
+      </div>
+      <p class="foot-note">三条管线 + 单目/双目，这就是 VO 的「武功招式表」。下一节看 SGM 怎么不靠特征、直接稠密地算出深度 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

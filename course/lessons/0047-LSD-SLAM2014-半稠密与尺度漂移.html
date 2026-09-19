@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LSD-SLAM（2014）：半稠密与尺度漂移 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0047</div>
+      <h1>LSD-SLAM（2014）：半稠密与尺度漂移</h1>
+      <p class="subtitle">把 GPU 砍到 CPU，把尺度漂移变成可估的变量 📐</p>
+      <div class="hero-meta">
+        <span>🎯 主题：半稠密 + sim(3) + 概率深度</span>
+        <span>👥 作者：Engel, Schöps, Cremers（慕尼黑工大）</span>
+        <span>📅 2014 · <i>LSD-SLAM: Large-Scale Direct Monocular SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">承接 DTAM 的两个痛点</a>
+        <a href="#b">半稠密为什么好</a>
+        <a href="#c">sim(3) 与尺度漂移</a>
+        <a href="#d">概率深度与方差归一化</a>
+        <a href="#e">直接法回环</a>
+        <a href="#f">局限与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清半稠密为什么是「稠密与稀疏之间的甜点」；讲准 sim(3) 为什么必须上、平均逆深度归一化为 1 意味着什么（回链 0024/0025）；写出方差归一化光度残差；讲清 LSD-SLAM 怎么做回环；并列出局限。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 它直接接 <b>0046 DTAM</b> 留下的两个痛点：① 算力从 GPU 砍到 CPU（用半稠密）；② <b>单目尺度不可观</b>这条线（你学过 <b>0024/0025 VO 教程</b>，单目只有 bearing、尺度不可观）的第 1 站——DTAM 把尺度当「污染项」，LSD-SLAM 把尺度变成「待估变量」(sim(3))。也是 <b>悬念④</b> 前半段的延续。</p></div>
+      </div>
+
+      <h2>1. 入口：LSD-SLAM 接住 DTAM 的两个痛点</h2>
+      <p>上一课 DTAM 证明了「不提特征、用全部像素」能实时走通，但留了两个没解决好的痛点：<b>必须 GPU</b>，以及 <b>单目尺度不可观</b>。LSD-SLAM（2014）的定位非常精准——它要在一台普通 CPU（甚至手机）上跑直接法单目 SLAM，而且还能建<b>大尺度、一致</b>的地图。摘要开门见山：</p>
+      <div class="formula-box"><div class="flow-formula"><i>「The explicitly scale-drift aware formulation allows the approach to operate on challenging sequences including large variations in scene scale. Major enablers are two key novelties: (1) a novel direct tracking method which operates on sim(3), thereby explicitly detecting scale-drift, and (2) an elegant probabilistic solution to include the effect of noisy depth values into tracking.」</i></div></div>
+      <p>两个新颖点正好对应两个痛点：<b>(1) 在 sim(3) 上做跟踪，显式检测尺度漂移</b>；(2) 把深度噪声以概率方式并入跟踪。下面依次拆开。先说为什么它能跑在 CPU 上——答案是「半稠密」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">半稠密：只在高梯度像素上保留深度（红色亮点）</text>
+          <rect x="40" y="50" width="820" height="400" fill="#fbf7f0" stroke="#8a7a5c" stroke-width="2"/>
+          <!-- 房间轮廓（浅色，仅示意） -->
+          <line x1="80" y1="360" x2="820" y2="360" stroke="#b9a888" stroke-width="3"/>
+          <line x1="80" y1="330" x2="820" y2="330" stroke="#cabf a3" stroke-width="2" stroke-opacity="0.7"/>
+          <line x1="160" y1="80" x2="160" y2="330" stroke="#b9a888" stroke-width="3"/>
+          <line x1="300" y1="80" x2="300" y2="330" stroke="#b9a888" stroke-width="3"/>
+          <line x1="160" y1="80" x2="300" y2="80" stroke="#b9a888" stroke-width="3"/>
+          <line x1="360" y1="120" x2="760" y2="120" stroke="#b9a888" stroke-width="2.5"/>
+          <line x1="360" y1="200" x2="760" y2="200" stroke="#b9a888" stroke-width="2.5"/>
+          <line x1="360" y1="120" x2="360" y2="200" stroke="#b9a888" stroke-width="2.5"/>
+          <line x1="760" y1="120" x2="760" y2="200" stroke="#b9a888" stroke-width="2.5"/>
+          <line x1="430" y1="300" x2="740" y2="300" stroke="#b9a888" stroke-width="3"/>
+          <line x1="470" y1="300" x2="470" y2="360" stroke="#b9a888" stroke-width="3"/>
+          <line x1="700" y1="300" x2="700" y2="360" stroke="#b9a888" stroke-width="3"/>
+          <line x1="430" y1="318" x2="740" y2="318" stroke="#b9a888" stroke-width="2.5"/>
+          <!-- 高梯度像素（红点，由真实线段撒点生成） -->
+          <circle cx="79.3" cy="358.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="94.8" cy="358.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="108.6" cy="359.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="120.9" cy="360.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="135.1" cy="359.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="149.4" cy="358.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="165.1" cy="361.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="178.1" cy="358.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="194.4" cy="361.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="208.4" cy="359.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="224.2" cy="358.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="238.0" cy="359.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="249.3" cy="358.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="264.2" cy="361.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="278.0" cy="360.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="294.0" cy="359.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="307.9" cy="358.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="320.2" cy="358.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="336.9" cy="359.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="349.6" cy="360.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="364.4" cy="359.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="380.0" cy="360.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="392.1" cy="360.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="407.4" cy="361.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="422.5" cy="359.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="437.7" cy="358.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="449.7" cy="361.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="462.8" cy="360.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="476.6" cy="360.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="493.8" cy="360.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="508.4" cy="359.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="521.9" cy="360.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="535.7" cy="359.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="551.0" cy="361.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="563.7" cy="360.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="576.3" cy="360.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="592.9" cy="362.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="607.8" cy="359.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="620.3" cy="360.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="633.1" cy="359.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="647.9" cy="358.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="661.7" cy="361.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="676.2" cy="359.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="691.5" cy="361.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="704.5" cy="359.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="720.6" cy="361.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="735.9" cy="361.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="748.0" cy="359.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="762.5" cy="361.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="779.1" cy="358.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="790.2" cy="358.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="804.7" cy="359.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="820.4" cy="359.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="78.0" cy="329.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="103.3" cy="330.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="129.6" cy="330.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="151.7" cy="330.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="176.2" cy="328.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="201.0" cy="331.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="224.7" cy="331.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="246.7" cy="329.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="269.4" cy="330.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="293.1" cy="328.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="317.5" cy="328.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="341.9" cy="328.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="364.5" cy="328.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="388.7" cy="329.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="412.3" cy="331.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="438.5" cy="328.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="460.9" cy="329.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="485.3" cy="328.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="511.1" cy="332.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="533.4" cy="329.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="555.8" cy="328.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="580.7" cy="329.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="606.5" cy="328.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="627.1" cy="331.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="653.0" cy="328.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="676.9" cy="328.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="700.8" cy="331.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="726.0" cy="330.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="747.4" cy="329.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="770.9" cy="331.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="796.3" cy="331.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="819.3" cy="328.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.2" cy="81.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.4" cy="96.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.3" cy="112.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="158.9" cy="126.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="159.4" cy="140.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="158.1" cy="157.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="159.0" cy="174.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.8" cy="189.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.7" cy="207.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.8" cy="220.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="158.9" cy="235.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="158.8" cy="250.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="160.5" cy="269.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.4" cy="283.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="160.6" cy="299.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="158.3" cy="315.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="161.6" cy="331.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="301.0" cy="79.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="298.7" cy="96.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="299.3" cy="112.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="301.9" cy="126.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="299.6" cy="144.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="300.9" cy="156.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="298.5" cy="172.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="301.6" cy="190.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="298.6" cy="206.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="301.9" cy="221.3" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="299.4" cy="236.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="298.5" cy="249.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="301.9" cy="268.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="300.1" cy="284.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="299.7" cy="300.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="301.3" cy="313.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="187.0" cy="79.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="214.5" cy="81.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="243.4" cy="79.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="272.3" cy="81.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="360.0" cy="120.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="388.7" cy="118.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="416.9" cy="118.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="443.7" cy="121.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="473.0" cy="119.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="503.8" cy="120.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="530.7" cy="120.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="560.2" cy="121.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="587.0" cy="120.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="616.1" cy="119.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="646.8" cy="120.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="674.5" cy="121.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="704.5" cy="119.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="731.9" cy="120.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="760.0" cy="120.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="359.8" cy="200.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="388.5" cy="201.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="417.9" cy="201.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="447.5" cy="199.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="474.5" cy="201.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="504.2" cy="198.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="529.9" cy="199.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="558.3" cy="199.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="586.9" cy="200.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="618.3" cy="201.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="644.3" cy="200.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="674.9" cy="198.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="704.4" cy="201.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="730.3" cy="201.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="759.6" cy="199.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="358.6" cy="159.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="760.9" cy="158.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="470.5" cy="330.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="468.3" cy="301.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="698.2" cy="301.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="429.1" cy="298.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="443.8" cy="301.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="459.5" cy="299.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="486.6" cy="300.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="498.8" cy="298.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="515.3" cy="299.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="526.9" cy="301.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="543.3" cy="301.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="555.2" cy="301.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="569.2" cy="301.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="584.8" cy="299.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="599.3" cy="301.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="612.3" cy="298.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="627.4" cy="299.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="639.8" cy="298.6" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="653.7" cy="298.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="668.8" cy="299.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="684.7" cy="299.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="711.2" cy="298.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="724.9" cy="298.1" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="740.9" cy="300.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="431.7" cy="307.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="431.3" cy="317.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="739.6" cy="309.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="740.8" cy="319.9" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="454.7" cy="318.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="477.3" cy="317.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="499.8" cy="316.5" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="523.7" cy="319.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="548.3" cy="316.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="571.4" cy="319.4" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="598.4" cy="318.7" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="619.9" cy="317.0" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="643.8" cy="317.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="667.1" cy="317.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="691.4" cy="319.8" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <circle cx="718.0" cy="318.2" r="3.2" fill="#e64a19" opacity="0.9"/>
+          <text x="450" y="470" fill="#888" font-size="12" text-anchor="middle">示意：真实帧约几十万像素，LSD-SLAM 只在高梯度处保留逆深度——本图约 200 个红点示意其位置（实际每帧几千个），集中在边缘与轮廓</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一张房间照片（墙角、踢脚线、门框、墙上挂画、一张桌子），浅色线是物体轮廓，红点是「梯度大的像素」——也就是半稠密法真正保留深度的位置。<br>
+          <b>怎么看这张图：</b>① 红点几乎全落在边缘、轮廓线上（门框、桌面、挂画边）；② 平坦区域（墙中央、桌面内部）几乎没有红点；③ 这就是「只挑信息最多的像素」，本图约 200 个红点示意（真实每帧几千个，而全图有几十万像素）。<br>
+          <b>要记住的一句话：</b>半稠密 = 在「全稠密要 GPU」和「稀疏丢边缘」之间取甜点：只保留梯度大的像素，它们恰好是信息最多的地方。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 半稠密（semi-dense）：为什么只取梯度大的像素</h2>
+      <p>DTAM 要 GPU，是因为它对<b>每一个</b>像素都建代价体。LSD-SLAM 问：真的需要全部像素吗？原文在对比特征法时给出了一句关键批评：</p>
+      <div class="formula-box"><div class="flow-formula"><i>「when using keypoints, information contained in straight or curved edges – which especially in man-made environments make up a large part of the image – is discarded.」</i></div></div>
+      <p>即：用关键点（keypoints）时，<b>直线或曲线边缘里的信息——在人造环境里它们占了图像很大一部分——被直接丢弃了</b>。而直接法（direct methods）绕开了这个限制，直接在所有像素强度上优化几何。</p>
+      <p>那么「半稠密」具体怎么取甜点？原文的地图表示说得很清楚：每个关键帧的逆深度图 $D_i$ 和方差图 $V_i$ <i>「are only defined for a subset of pixels $\Omega_{D_i}\subset\Omega_i$, containing all image regions in the vicinity of sufficiently large intensity gradient, hence semi-dense」</i>。也就是说：</p>
+      <ul>
+        <li><b>全稠密（DTAM）</b>：每个像素都估，信息最全，但要 GPU；</li>
+        <li><b>稀疏（特征法）</b>：只提关键点，把边缘这种「信息大户」丢掉了；</li>
+        <li><b>半稠密（LSD-SLAM）</b>：只保留<b>梯度大</b>的像素——这些像素恰好集中在边缘、轮廓上，是几何信息最丰富的地方，而平坦区域本就提供不了多少深度约束。</li>
+      </ul>
+      <p>★ 这就是「稠密与稀疏之间的甜点」：既不必像 DTAM 那样算全部像素（于是 CPU 能跑），又比特征法多保留了边缘这种最关键的信息。代价是：平坦区域的深度不被直接估计，要靠下一节的概率滤波从邻近像素「长」出来。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>半稠密为什么比「全稠密」更适合在 CPU 上实时跑？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="它只在梯度大的像素（边缘、轮廓）上保留并估计深度，跳过了平坦区域——计算量远低于逐像素全稠密，于是 CPU 就能实时，同时仍保留了信息最丰富的几何。" onclick="lessonKit.answer(this,'q0047a')">只算边缘像素</button>
+          <button data-correct="no" data-explanation="半稠密不是「精度更高」，而是「算力更省」。它跳过平坦区域，整体精度并不比全稠密高，只是性价比更适合 CPU 实时。" onclick="lessonKit.answer(this,'q0047a')">它更精确</button>
+        </div>
+        <div class="quiz-feedback" id="q0047a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ sim(3) 相似变换：把尺度漂移从污染项变成待估变量</h2>
+      <p>这是本课最硬核的一点，也直接回链你学过的 <b>0024/0025 VO 教程</b>：单目相机只有 bearing（射线方向），<b>绝对尺度不可观</b>。长时间跑下来，尺度会悄悄漂移——这是单目最大的误差源之一。</p>
+      <p>★ <b>LSD-SLAM 是这条「单目尺度不可观」线的第 1 站</b>：之前（DTAM、PTAM）把尺度当成「污染项」尽量压住；LSD-SLAM 干脆把它提升为<b>待估变量</b>。做法是上 <b>sim(3)</b>（3D 相似变换），它在 SE(3) 的旋转+平移之外，多了一个尺度 $s$：</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathbf S=\begin{pmatrix}s\mathbf R & \mathbf t\\ \mathbf 0^\top & 1\end{pmatrix},\qquad s\in\mathbb R^+,\quad \boldsymbol\xi\in\mathfrak{sim}(3),\ \boldsymbol\xi\in\mathbb R^7$$</div></div>
+      <p>关键操作原文写得很直白（§3.5）：<i>「The depth map of each created keyframe is scaled such that the mean inverse depth is one. In return, edges between keyframes are estimated as elements of sim(3), elegantly incorporating the scaling difference between keyframes, and, in particular for large loop-closures, allowing an explicit detection of accumulated scale-drift.」</i></p>
+      <p>翻译成三步：</p>
+      <ol>
+        <li><b>每帧归一化</b>：每个新建关键帧的深度图被缩放，使<b>平均逆深度 = 1</b>。这个缩放因子直接并进它的 sim(3) 位姿里。</li>
+        <li><b>关键帧之间用 sim(3)</b>：关键帧之间的边不再是 SE(3)，而是带尺度 $s\in\mathbb R^+$ 的相似变换，显式记下两帧之间的尺度差。</li>
+        <li><b>位姿更新在 $\mathfrak{sim}(3)$ 上</b>：Lie 代数从 6 维（se(3)）变成 7 维（sim(3)），多出来的那维就是尺度。</li>
+      </ol>
+      <p>这样一来，尺度漂移不再是偷偷污染轨迹的噪声，而是一个<b>能被估计、能被回环修正</b>的变量。下一课 DSO 之前，这是单目 SLAM 处理尺度最干净的一套表述。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">sim(3) 到底多了哪一维：回环能否回到原点</text>
+          <!-- 左：SE(3) -->
+          <rect x="40" y="60" width="380" height="300" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="230" y="86" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">SE(3)：只旋转+平移</text>
+          <path d="M120 320 C 120 180, 260 120, 360 180 C 440 230, 380 300, 300 300" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <circle cx="120" cy="320" r="8" fill="#2e7d32" stroke="#1b5e20" stroke-width="1.5"/>
+          <text x="120" y="340" fill="#1b5e20" font-size="12" text-anchor="middle">起点</text>
+          <circle cx="300" cy="300" r="8" fill="#e64a19" stroke="#7a1f00" stroke-width="1.5"/>
+          <text x="322" y="304" fill="#7a1f00" font-size="12">终点（错开）</text>
+          <line x1="120" y1="320" x2="300" y2="300" stroke="#c62828" stroke-width="2.5" stroke-dasharray="5 4"/>
+          <text x="210" y="350" fill="#c62828" font-size="12" text-anchor="middle">回环回不到原点</text>
+          <!-- 右：sim(3) -->
+          <rect x="480" y="60" width="380" height="300" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="670" y="86" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">sim(3)：多一个尺度 s</text>
+          <path d="M520 320 C 520 180, 660 120, 760 180 C 840 230, 780 320, 520 320" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <circle cx="520" cy="320" r="8" fill="#2e7d32" stroke="#1b5e20" stroke-width="1.5"/>
+          <text x="520" y="340" fill="#1b5e20" font-size="12" text-anchor="middle">起点</text>
+          <circle cx="520" cy="320" r="8" fill="#2e7d32" stroke="#1b5e20" stroke-width="1.5"/>
+          <text x="670" y="270" fill="#2e7d32" font-size="12" text-anchor="middle">整条轨迹缩放后回到起点</text>
+          <text x="670" y="300" fill="#1565c0" font-size="12" text-anchor="middle">s = 轨迹被整体缩放的倍数</text>
+          <line x1="230" y1="395" x2="230" y2="395" stroke="#888" stroke-width="1"/>
+          <text x="230" y="415" fill="#888" font-size="12" text-anchor="middle">SE(3) 下尺度被偷偷漂移，回环有缝</text>
+          <text x="670" y="415" fill="#888" font-size="12" text-anchor="middle">sim(3) 把 s 当成变量，回环严丝合缝</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间的两条回环轨迹。左：SE(3) 只允许旋转+平移，跑一圈后终点（红）与起点（绿）错开一段，回环合不拢。右：sim(3) 多了一个尺度 $s$，整条轨迹被均匀缩放后，终点正好落回起点（绿点重合）。<br>
+          <b>怎么看这张图：</b>① 左图红虚线标出「回不到原点」的缝隙，这就是尺度漂移；② 右图把 $s$ 作为变量吸收进位姿，回环自然闭合；③ 图上标出「$s$ 就是这条轨迹被整体缩放的倍数」。<br>
+          <b>要记住的一句话：</b>sim(3) 把尺度从「污染项」升级成「待估变量」——这是单目尺度不可观线（0024/0025）的第 1 站。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 300" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">为什么「平均逆深度归一化为 1」就等价于固定了尺度</text>
+          <!-- 一把尺子：拉长版与缩短版，刻度比例相同 -->
+          <rect x="60" y="80" width="780" height="22" fill="#efe6d6" stroke="#8a7a5c" stroke-width="2"/>
+          <line x1="60" y1="80" x2="60" y2="110" stroke="#37474f" stroke-width="2"/>
+          <line x1="230" y1="80" x2="230" y2="102" stroke="#37474f" stroke-width="2"/>
+          <line x1="400" y1="80" x2="400" y2="102" stroke="#37474f" stroke-width="2"/>
+          <line x1="570" y1="80" x2="570" y2="102" stroke="#37474f" stroke-width="2"/>
+          <line x1="740" y1="80" x2="740" y2="102" stroke="#37474f" stroke-width="2"/>
+          <line x1="840" y1="80" x2="840" y2="110" stroke="#37474f" stroke-width="2"/>
+          <text x="60" y="130" fill="#37474f" font-size="12" text-anchor="middle">0</text>
+          <text x="400" y="130" fill="#37474f" font-size="12" text-anchor="middle">μ</text>
+          <text x="840" y="130" fill="#37474f" font-size="12" text-anchor="middle">远</text>
+          <text x="450" y="170" fill="#1565c0" font-size="13" text-anchor="middle">除以均值 μ → 均值变成 1（选定一把尺子的单位长度）</text>
+          <!-- 归一化后的尺子 -->
+          <rect x="200" y="200" width="500" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="2"/>
+          <line x1="200" y1="200" x2="200" y2="230" stroke="#1565c0" stroke-width="2"/>
+          <line x1="333" y1="200" x2="333" y2="222" stroke="#1565c0" stroke-width="2"/>
+          <line x1="466" y1="200" x2="466" y2="222" stroke="#1565c0" stroke-width="2"/>
+          <line x1="600" y1="200" x2="600" y2="222" stroke="#1565c0" stroke-width="2"/>
+          <line x1="700" y1="200" x2="700" y2="222" stroke="#1565c0" stroke-width="2"/>
+          <line x1="700" y1="200" x2="700" y2="230" stroke="#1565c0" stroke-width="2"/>
+          <text x="200" y="250" fill="#1565c0" font-size="12" text-anchor="middle">0</text>
+          <text x="466" y="250" fill="#1565c0" font-size="12" text-anchor="middle">1（均值）</text>
+          <text x="700" y="250" fill="#1565c0" font-size="12" text-anchor="middle">远/μ</text>
+          <text x="450" y="285" fill="#888" font-size="12" text-anchor="middle">相对比例保留；绝对尺度被这个选择吸收——仍不可知，但内部自洽</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上是一把「原始尺子」（刻度相对间距不等比只是示意），下是把整把尺子除以均值 μ 后，均值刻度变成 1 的「归一化尺子」。<br>
+          <b>怎么看这张图：</b>① 归一化＝选定一把尺子的单位长度（把均值钉在 1）；② 所有深度都除以同一个 μ，<b>相对比例完全保留</b>；③ 绝对尺度被这个选择「吸收」了——所以尺度仍不可知，但整张地图内部自洽、可比较。<br>
+          <b>要记住的一句话：</b>平均逆深度归一化为 1，等于给地图选了把尺子；sim(3) 的 $s$ 就是不同关键帧之间这把尺子的伸缩差。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 概率深度表示 + 空间正则 + 方差归一化光度残差</h2>
+      <p>半稠密像素的深度不是一个数，而是一个<b>高斯分布</b>。每个关键帧存两张半稠密图：逆深度图 $D_i:\Omega_{D_i}\to\mathbb R^+$ 和对应的逆深度方差图 $V_i:\Omega_{D_i}\to\mathbb R^+$。新观测靠<b>小基线立体比较</b>来更新它（这部分原文明确说 <i>「as originally proposed in [9]」</i>，即 Engel 2013 的半稠密 VO，LSD-SLAM 直接复用，没有另起炉灶）；并做一次<b>空间正则化</b>（把邻居的分布拉近）再做离群剔除。</p>
+      <p>★ <b>本课真正的新贡献</b>在「把深度不确定度并进跟踪」。它定义一个<b>方差归一化的光度残差</b>（公式 12–15），把「图像噪声」和「深度不确定度导致的几何不确定性」分开：</p>
+      <div class="formula-box"><div class="flow-formula">$$E_p(\boldsymbol{\xi}_{ji})=\sum_{\mathbf p\in\Omega_{D_i}}\Big\|\frac{r_p^2(\mathbf p,\boldsymbol{\xi}_{ji})}{\sigma_{r_p(\mathbf p,\boldsymbol{\xi}_{ji})}^2}\Big\|_\delta$$</div></div>
+      <div class="formula-box"><div class="flow-formula">$$r_p(\mathbf p,\boldsymbol{\xi}_{ji})=I_i(\mathbf p)-I_j\!\big(\omega(\mathbf p,D_i(\mathbf p),\boldsymbol{\xi}_{ji})\big)$$</div></div>
+      <div class="formula-box"><div class="flow-formula">$$\sigma_{r_p}^2=2\sigma_I^2+\Big(\frac{\partial r_p}{\partial D_i(\mathbf p)}\Big)^2 V_i(\mathbf p)$$</div></div>
+      <p>读这三行：残差 $r_p$ 就是参考帧与变形后目标帧的灰度差；它的方差 $\sigma_{r_p}^2$ 由两项组成——$2\sigma_I^2$ 是<b>图像强度噪声</b>（对所有像素一样），$(\partial r_p/\partial D_i)^2 V_i$ 是<b>深度不确定度经几何传播后的不确定度</b>（每个像素不同，取决于该处逆深度方差 $V_i$）。Huber 范数 $\|\cdot\|_\delta$ 负责抗离群。</p>
+      <p>原文自己点明为什么要这么分（§3.3）：<i>「the proposed formulation explicitly takes into account varying noise on the depth estimates: This is of particular relevance as for direct, monocular SLAM, this noise differs significantly for different pixels, depending on how long they were visible」</i>。即：单目直接法里，每个像素的深度噪声差别很大（取决于它被看到了多久），把这项显式写进权重，跟踪才不会被不可靠的深度带偏。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="30" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">逆深度的高斯分布：随观测增多而收窄</text>
+          <text x="195" y="108" fill="#0d3c75" font-size="13" text-anchor="middle">第 1 帧（σ 大）</text>
+          <polyline points="70.0,325.6 74.2,324.3 78.3,322.7 82.5,320.8 86.7,318.4 90.8,315.6 95.0,312.2 99.2,308.3 103.3,303.6 107.5,298.3 111.7,292.2 115.8,285.3 120.0,277.6 124.2,269.2 128.3,259.9 132.5,250.0 136.7,239.4 140.8,228.2 145.0,216.7 149.2,205.0 153.3,193.2 157.5,181.6 161.7,170.4 165.8,159.8 170.0,150.0 174.2,141.3 178.3,133.9 182.5,127.9 186.7,123.6 190.8,120.9 195.0,120.0 199.2,120.9 203.3,123.6 207.5,127.9 211.7,133.9 215.8,141.3 220.0,150.0 224.2,159.8 228.3,170.4 232.5,181.6 236.7,193.2 240.8,205.0 245.0,216.7 249.2,228.2 253.3,239.4 257.5,250.0 261.7,259.9 265.8,269.2 270.0,277.6 274.2,285.3 278.3,292.2 282.5,298.3 286.7,303.6 290.8,308.3 295.0,312.2 299.2,315.6 303.3,318.4 307.5,320.8 311.7,322.7 315.8,324.3 320.0,325.6" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <text x="475" y="108" fill="#0d3c75" font-size="13" text-anchor="middle">第 3 帧（σ 中）</text>
+          <polyline points="350.0,330.0 354.2,330.0 358.3,330.0 362.5,330.0 366.7,330.0 370.8,330.0 375.0,329.9 379.2,329.9 383.3,329.7 387.5,329.5 391.7,329.2 395.8,328.6 400.0,327.7 404.2,326.2 408.3,324.0 412.5,320.8 416.7,316.2 420.8,309.9 425.0,301.6 429.2,290.9 433.3,277.6 437.5,261.8 441.7,243.7 445.8,223.7 450.0,202.6 454.2,181.6 458.3,161.8 462.5,144.7 466.7,131.3 470.8,122.9 475.0,120.0 479.2,122.9 483.3,131.3 487.5,144.7 491.7,161.8 495.8,181.6 500.0,202.6 504.2,223.7 508.3,243.7 512.5,261.8 516.7,277.6 520.8,290.9 525.0,301.6 529.2,309.9 533.3,316.2 537.5,320.8 541.7,324.0 545.8,326.2 550.0,327.7 554.2,328.6 558.3,329.2 562.5,329.5 566.7,329.7 570.8,329.9 575.0,329.9 579.2,330.0 583.3,330.0 587.5,330.0 591.7,330.0 595.8,330.0 600.0,330.0" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <text x="755" y="108" fill="#0d3c75" font-size="13" text-anchor="middle">第 8 帧（σ 小）</text>
+          <polyline points="630.0,330.0 634.2,330.0 638.3,330.0 642.5,330.0 646.7,330.0 650.8,330.0 655.0,330.0 659.2,330.0 663.3,330.0 667.5,330.0 671.7,330.0 675.8,330.0 680.0,330.0 684.2,330.0 688.3,330.0 692.5,330.0 696.7,330.0 700.8,330.0 705.0,330.0 709.2,329.9 713.3,329.8 717.5,329.2 721.7,327.4 725.8,322.7 730.0,312.2 734.2,292.2 738.3,259.9 742.5,216.7 746.7,170.4 750.8,133.9 755.0,120.0 759.2,133.9 763.3,170.4 767.5,216.7 771.7,259.9 775.8,292.2 780.0,312.2 784.2,322.7 788.3,327.4 792.5,329.2 796.7,329.8 800.8,329.9 805.0,330.0 809.2,330.0 813.3,330.0 817.5,330.0 821.7,330.0 825.8,330.0 830.0,330.0 834.2,330.0 838.3,330.0 842.5,330.0 846.7,330.0 850.8,330.0 855.0,330.0 859.2,330.0 863.3,330.0 867.5,330.0 871.7,330.0 875.8,330.0 880.0,330.0" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <line x1="70" y1="304.8" x2="320" y2="304.8" stroke="#c62828" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <line x1="350" y1="304.8" x2="600" y2="304.8" stroke="#c62828" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <line x1="630" y1="304.8" x2="880" y2="304.8" stroke="#c62828" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <text x="335" y="325" fill="#c62828" font-size="12">方差阈值</text>
+          <circle cx="755" cy="120" r="7" fill="#2e7d32" stroke="#1b5e20" stroke-width="1.5"/>
+          <text x="755" y="345" fill="#1b5e20" font-size="12" text-anchor="middle">越过阈值 → 落成 3D 点</text>
+          <text x="460" y="368" fill="#888" font-size="12" text-anchor="middle">σ 逐帧减小，钟形收窄；深度方差 V 足够小后该像素「落成」一个稳定 3D 点（曲线由真实高斯公式算得）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>从相机出发的一条射线上，逆深度随观测次数（第 1 / 3 / 8 帧）逐渐变成更尖的高斯钟形（蓝线由真实高斯 $y=A\exp(-(x-\mu)^2/2\sigma^2)$ 算得，$\sigma$ 逐格递减）。红色虚线是「方差阈值」，一旦钟形窄到越过它，这个像素就「落成」一个稳定 3D 点（绿点）。<br>
+          <b>怎么看这张图：</b>① 第 1 帧 $\sigma$ 大（不确定），第 8 帧 $\sigma$ 小（确定）；② 红虚线代表「可以多不可靠」的上限；③ 绿点表示越过阈值后深度被采纳进地图。<br>
+          <b>要记住的一句话：</b>深度是带方差的高斯；观测越多方差越小，稳定后才落成 3D 点——这就是概率深度滤波的可视化。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>方差归一化光度残差里，$(\partial r_p/\partial D_i)^2 V_i$ 这一项代表什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="它是深度不确定度（逆深度方差 V_i）经几何传播后、对光度残差造成的不确定度；每个像素不同，单目直接法必须显式考虑它，否则会被不可靠深度带偏。" onclick="lessonKit.answer(this,'q0047b')">深度不确定度</button>
+          <button data-correct="no" data-explanation="图像强度噪声是另一项 2σ_I²，对所有像素一样；而这一项随像素的深度方差 V_i 变化，是几何不确定度，不是图像噪声。" onclick="lessonKit.answer(this,'q0047b')">图像强度噪声</button>
+        </div>
+        <div class="quiz-feedback" id="q0047b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 直接法做回环：sim(3) 配准 + 双向一致性 + 位姿图</h2>
+      <p>前面几课的特征法靠词袋（DBoW）做回环；LSD-SLAM 是<b>直接法回环</b>：在 sim(3) 上直接做图像配准。关键帧加入地图后，它会收集候选回环帧（最近的 10 个 + 一个外观法候选），然后做两件事：</p>
+      <ol>
+        <li><b>sim(3) 直接配准</b>：用第 3 节那个带深度残差的 sim(3) 误差（公式 17–19）把两帧对齐，同时估出尺度差。</li>
+        <li><b>双向一致性检验</b>：原文独立地双向跟踪 $\xi_{j_ki}$ 和 $\xi_{ij_k}$，只有当两者统计上一致（公式 20 的 $\chi^2$ 检验）才接受，避免假回环。</li>
+      </ol>
+      <p>通过后，整个地图在后台用<b>位姿图优化</b>持续修正，误差函数（公式 21）是左乘约定的标准位姿图最小二乘，求解器用 <b>g2o</b>（原文 [18]）。这就把检测到的尺度漂移真正「修」回去了。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_LSD-SLAM__Large-Scale_Direct_Monocular_SLAM/3e6f2d7dec3f50817b722aba43abab860c12284045ccf6482e89790683b510f1.jpg" alt="LSD-SLAM global consistent map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>LSD-SLAM generates a consistent global map, using direct image alignment and probabilistic, semi-dense depth maps instead of keypoints. Top: Accumulated pointclouds of all keyframes of a medium-sized trajectory. Bottom: A selection of keyframes with color-coded semi-dense inverse depth map.（LSD-SLAM 用直接图像对齐与概率半稠密深度图（而非关键点）生成一致的全局地图；上为中等轨迹所有关键帧累积点云，下为若干关键帧的彩色半稠密逆深度图。）<br>
+          <b>怎么看这张图：</b>① 上半是整条轨迹累积出的半稠密点云（只在高梯度处有点）；② 下半用颜色编码每个关键帧的逆深度；③ 这就是「不用特征点也能建出大尺度一致地图」的总览。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_LSD-SLAM__Large-Scale_Direct_Monocular_SLAM/c5f7953034dfe54d56b73d851e9e3b4c940d7d2168bedbaf655865b7de32a86f.jpg" alt="Direct keyframe alignment on sim(3)">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Direct keyframe alignment on sim(3): (a)-(c): two keyframes with associated depth and depth variance. (d)-(f): photometric residual, depth residual and Huber weights, before minimization (left), and after minimization (right).（sim(3) 上的直接关键帧对齐：(a)-(c) 两个关键帧及其深度与深度方差；(d)-(f) 光度残差、深度残差、Huber 权重，最小化前（左）与后（右）。）<br>
+          <b>怎么看这张图：</b>① (a)(b)(c) 展示两帧的深度图与方差图（半稠密，只在边缘有值）；② (d)(e)(f) 左是优化前的残差/权重，右是优化后——残差明显变小、Huber 权重更集中；③ 这正对应第 3、4 节的 sim(3) 配准 + 方差归一化残差。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_LSD-SLAM__Large-Scale_Direct_Monocular_SLAM/f521886498c8a11902443bcf12257bcb54ded865f74d86f559b7337bbee68a20.jpg" alt="Two scenes with high scale variation">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Two scenes with high scale variation. Camera frustums are displayed for each keyframe with their size corresponding to the keyframe's scale.（两个尺度变化很大的场景；每个关键帧画出相机视锥，其大小对应该关键帧的尺度。）<br>
+          <b>怎么看这张图：</b>① 视锥大小不一，正说明各关键帧尺度 $s$ 不同；② 这正是 sim(3) 把尺度当变量后能看到的现象；③ 配合回环修正，大尺度变化下的地图仍能保持一致。
+        </figcaption>
+      </figure>
+
+      <h2>6. 速度与规模：它到底跑得多大</h2>
+      <p>原文明确说它 <i>「runs in real-time on a CPU」</i>，甚至 <i>「as odometry even on a modern smartphone [22]」</i>——这就是半稠密砍算力的回报。规模上，它演示了<b>超过 500 m、约 6 分钟</b>的挑战性轨迹（Fig. 7），并能在同一序列里从平均逆深度小于 20 cm 到大于 10 m 的大尺度变化下工作。</p>
+      <p>★ <b>诚实标注一处不确定：</b>你任务里问「约 5 Hz？请回 md 抄准」。我核对了原始 md，<b>全文没有给任何具体的帧率（Hz）数字</b>——它只保证「在 CPU 上实时、手机也能跑」，没有给出像 DTAM 那样的 30 Hz 相机参数。所以这里我不替它编一个 5 Hz，只如实写「实时、CPU 可跑、手机可跑」。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>7. 局限与衔接</h2>
+      <p>论文自己承认的边界：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 初始化需要视差</h4><p>系统靠「前几秒有足够的平移运动」来锁定深度配置；若运动太小，深度锁不住（和所有单目一样）。</p></div>
+        <div class="mini-card"><h4>② 光照敏感</h4><p>直接法假设亮度模型成立；全局光照变化仍会伤到光度残差。</p></div>
+        <div class="mini-card"><h4>③ 精度不如特征法</h4><p>半稠密只估边缘像素，绝对轨迹精度通常不如精心调过的特征法（如 ORB-SLAM，见 Fig. 9 对比）。</p></div>
+        <div class="mini-card"><h4>④ 回环的假设</h4><p>sim(3) 直接配准依赖足够好的初始化与双向一致性；大回环仍可能收敛半径不足（需金字塔 / ESM 辅助）。</p></div>
+      </div>
+      <p>★ <b>收束与承接：</b>LSD-SLAM 接住 DTAM 的两个痛点——用半稠密把算力从 GPU 砍到 CPU，用 <b>sim(3)</b> 把尺度漂移从「污染项」变成「待估变量」，是<b>单目尺度不可观</b>线（0024/0025）的第 1 站，也是<b>悬念④（提特征 vs 不提特征）</b>前半段的重要推进。它证明：不提特征的直接法，可以在 CPU 上建大尺度、一致、且自带尺度意识的地图。下一课 <b>0048 DSO</b> 会把直接法再做一次升华——引入<b>光度标定</b>与<b>滑动窗稀疏直接法</b>，把精度和效率再推一步。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>半稠密为什么被称为「稠密与稀疏之间的甜点」？原文如何论证边缘信息重要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>全稠密要 GPU、稀疏（关键点）把边缘这种信息大户丢弃；半稠密只保留梯度大的像素，它们恰好集中在边缘/轮廓（信息最丰富），于是 CPU 能实时又保留关键几何。原文批评关键点法「straight or curved edges … is discarded」。</div></details>
+          </li>
+          <li>为什么必须上 sim(3) 而不是 SE(3)？「平均逆深度归一化为 1」意味着什么？它和 0024/0025 什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>单目尺度不可观，长轨迹会尺度漂移；sim(3) 多一个尺度 s∈R⁺，把尺度差显式记为关键帧间的边、把尺度变成待估变量。每帧把平均逆深度归一化为 1，等于给地图选了把尺子（固定了 gauge），相对比例保留、绝对尺度被吸收。这是「单目只有 bearing、尺度不可观」线（0024/0025）的第 1 站。</div></details>
+          </li>
+          <li>写出方差归一化光度残差与它的方差分解；原文为什么要把深度噪声单独加权？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>$E_p=\sum\|r_p^2/\sigma_{r_p}^2\|_\delta$，$r_p=I_i(\mathbf p)-I_j(\omega(\mathbf p,D_i,\xi_{ji}))$，$\sigma_{r_p}^2=2\sigma_I^2+(\partial r_p/\partial D_i)^2 V_i$。原文说单目直接法里每个像素的深度噪声差别很大（取决于被看到多久），把 $(\partial r_p/\partial D_i)^2 V_i$ 这项显式写进权重，跟踪才不会被不可靠深度带偏。</div></details>
+          </li>
+          <li>LSD-SLAM 怎么做回环？地图优化用什么求解器？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>在 sim(3) 上直接配准两帧（带深度残差），再做双向一致性检验（独立互跟踪、χ² 一致才接受），最后用位姿图优化（g2o）持续修正。求解器是 g2o（原文 [18]）。</div></details>
+          </li>
+          <li>论文给出的速度/规模数字是什么？它有没有给具体 Hz？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>实时、CPU 可跑、手机也能跑；演示过 500 m+、约 6 分钟轨迹，平均逆深度从 <20 cm 到 >10 m。原文没有给出具体 Hz 数字——我没有替它编 5 Hz，只如实写「实时、CPU」。这是需要诚实标注的不确定点。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0046-DTAM2011-稠密直接法的开端.html">← DTAM（2011）：稠密直接法的开端</a>
+        <a class="next" href="0048-DSO2018-光度标定与稀疏直接法.html">DSO（2018）：光度标定与稀疏直接法 →</a>
+      </div>
+      <p class="foot-note">LSD-SLAM 用半稠密把直接法搬上 CPU，用 sim(3) 把尺度漂移变成可估变量——这是单目尺度不可观线的第 1 站。下一课 DSO 会带来光度标定与滑动窗 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Instant NGP（2022）：哈希编码把 NeRF 压到秒级 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0038</div>
+      <h1>Instant NGP（2022）：哈希编码把 NeRF 压到秒级</h1>
+      <p class="subtitle">上一节把 NeRF 的病根定位为「逐场景 1–2 天 + 每像素上百次 MLP 查询」。这一节只换「信息放在哪」，同一套体渲染框架不变，就把训练压到秒级 ⚡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多分辨率哈希编码、混合表示、秒级训练</span>
+        <span>👥 作者：Thomas Müller、Alex Evans、Christoph Schied、Alexander Keller（均 NVIDIA）</span>
+        <span>📅 2022 · SIGGRAPH / TOG 41(4) · <i>Instant Neural Graphics Primitives with a Multiresolution Hash Encoding</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 出发点：换编码，不换渲染</a>
+        <a href="#b">2. 参数化编码的两条代价与本文答案</a>
+        <a href="#c">3. ★ 核心：多分辨率哈希编码五步流程</a>
+        <a href="#d">4. 反直觉：有哈希冲突为什么还能工作</a>
+        <a href="#e">5. vs 稠密网格 / 树结构：用数字说话</a>
+        <a href="#f">6. 实验数字、局限与结论</a>
+        <a href="#g">7. 开放问题 + OCR 修正</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：复述原文对两类编码的划分；讲清哈希编码五步流程（定分辨率→算 hash→取特征→插值→拼接送 MLP）与默认超参 $L=16$、$F=2$；用「梯度平均」解释为什么冲突也能工作；抄准 Fig. 2 的 8× 加速与 NeRF 的 15 秒 / 5 分钟 PSNR 数字；复述五条局限，尤其「颗粒状」与 $T>2^{19}$ 的性能悬崖。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0036</b>：那里搭好体渲染骨架，本节的 MLP 输入就是那个 5D 坐标。接 <b>0037</b>：上一节把病根定为「逐场景 1–2 天 + 每像素上百次 MLP」，本节正是它的解法之一。下一节 <b>0039</b> 走更极端的「连网络都不要」路线，与本节的「混合表示」正好形成对照。</p></div>
+      </div>
+
+      <h2>1. 出发点：换编码，不换渲染</h2>
+      <p>先给一个术语：</p>
+      <div class="callout">
+        <h4>术语：编码（encoding）</h4>
+        <p>你可以把神经网络想象成一台「只会照章办事的工人」，它拿到的「原料」如果太粗糙，活儿就干不好。<b>编码</b>就是一道「前置加工」：把原始坐标（比如一个三维位置）先映射到一个更高维度的空间，再喂给网络。原文的核心洞察是——同样的网络，换一种原料加工方式，画质和速度可以天差地别。</p>
+      </div>
+      <p>原文引言里把话说得非常明确（用 <i>encoding</i> 这个词）：</p>
+      <div class="callout">
+        <p><i>The important commonality of these approaches is an encoding that maps neural network inputs to a higher-dimensional space, which is key for extracting high approximation quality from compact models.</i>（这些方法的重要共性是：一个<b>编码</b>把网络输入映射到更高维空间，而正是它，是让紧凑模型榨出高画质的关键。）</p>
+      </div>
+      <p>已有的编码分两类：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 频率编码（frequency encoding）</h4>
+          <p>就是 Transformer 和 <b>NeRF 用的那套 sin/cos 位置编码</b>（见 0037 第 2 节）。它把坐标展开成一组不同频率的振荡函数。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 参数化编码（parametric encoding）</h4>
+          <p>把一坨<b>可训练参数</b>塞进网格或树里，再用查表 + 插值取出来。原文说它「<i>blur the line between classical data structures and neural approaches</i>」——把经典数据结构和神经网络之间的界线糊掉了。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>★ 本节的要点</h4>
+        <p>这一节是<b>「换编码」</b>，不是换渲染。体渲染那条管线（0036 的式(1)(3)）原封不动，变的是「坐标进入 MLP 之前，先被怎么加工」。记住这句话，后面所有内容都是围绕这个加工方式展开的。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 参数化编码的两条代价与本文答案</h2>
+      <p>参数化编码虽然厉害，但原文毫不客气地指出了它的两个通病：</p>
+      <div class="callout">
+        <h4>★ 原文批评（很关键）</h4>
+        <ul>
+          <li><b>① 内存爆炸：</b>稠密网格「<i>consume much more memory than the neural network weights</i>」（消耗的显存比神经网络权重还多）。</li>
+          <li><b>② 结构维护的麻烦：</b>树 / 稀疏网格依赖 pruning（剪枝）、splitting（分裂）、merging（合并）这类启发式操作，「<i>complicate the training process, limit the method to a specific task, or limit performance on GPUs where control flow and pointer chasing is expensive</i>」——它会把训练搞复杂、把方法锁死在某个任务上，而且在 GPU 上因为大量分支跳转和指针追踪而跑不快。</li>
+        </ul>
+      </div>
+      <p>于是本文的答案很干脆：</p>
+      <div class="callout">
+        <h4>★ 本文的答案</h4>
+        <p>用<b>紧凑的空间哈希表</b>代替稠密网格，用<b>梯度平均</b>隐式解决冲突，<b>不做任何结构更新</b>。也就是说——既不存满整张网格（省内存），也不在训练中途去修剪树（省 GPU 上的麻烦），冲突就让它冲突，反正平均一下也能收敛。</p>
+      </div>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Instant NGP 用哈希表换掉稠密网格，主要解决了原文批评的哪一类代价？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。稠密网格「消耗的显存比网络权重还多」（O(N³)），哈希表用固定大小 T 个 entry 代替整张网格，直接把内存代价压下来；同时也避免了树结构需要的剪枝/分裂/合并等结构维护。" onclick="lessonKit.answer(this,'q0038a')">稠密网格的显存爆炸</button>
+          <button data-correct="no" data-explanation="不对。位置编码（频率编码）是 NeRF 那一套，它并不是本文要替换的对象；本文替换的是「参数化编码」里的稠密网格与树结构。" onclick="lessonKit.answer(this,'q0038a')">频率编码算得太慢</button>
+        </div>
+        <div class="quiz-feedback" id="q0038a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 核心：多分辨率哈希编码五步流程</h2>
+      <p>这是全节的主体，也是 Fig. 3 那张图用文字展开的样子。给定一个输入坐标 $\mathbf x\in\mathbb R^d$，在 $L$ 个层级上<b>独立</b>地执行下面五步：</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_InstantNGP/c7c8181a6676196d73f7bdee58ff0c0164534c3bf63a3cb526bf73b0ddfb8abf.jpg" alt="Fig. 3">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Illustration of the multiresolution hash encoding in 2D. (1) for a given input coordinate x, we find the surrounding voxels at L resolution levels and assign indices to their corners by hashing their integer coordinates. (2) for all resulting corner indices, we look up the corresponding F-dimensional feature vectors from the hash tables $\theta_l$ and (3) linearly interpolate them according to the relative position of x within the respective l-th voxel. (4) we concatenate the result of each level, as well as auxiliary inputs $\xi$, producing the encoded MLP input $y\in\mathbb R^{LF+E}$, which (5) is evaluated last.（2D 多分辨率哈希编码示意——(1) 对给定输入坐标 x，在 L 个分辨率层级上找到周围体素，并对角点整数坐标做哈希得到索引；(2) 对所有角点索引，从哈希表 $\theta_l$ 查出对应的 F 维特征向量；(3) 按 x 在第 l 个体素内的相对位置做线性插值；(4) 把各层结果与辅助输入 $\xi$ 拼接成编码后的 MLP 输入 $y\in\mathbb R^{LF+E}$；(5) 最后求值。）<br>
+          <b>怎么看这张图：</b>这是全篇最该被反复看的一张，五步流程就是它的图注。左侧每一横排是一个分辨率层级（从粗到细），都重复着「取角点→查表→插值」；右侧把 L 层结果竖着拼起来，再接上视角等辅助输入 $\xi$，整体送进 MLP。看明白这张图，本节的数学就通了。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>术语：多分辨率金字塔（multiresolution）</h4>
+        <p>就像你先看缩略图、再看高清图——同一张场景用「由粗到细」好几档分辨率同时表示。粗档抓大轮廓，细档补细节。本文把它们叠成 $L$ 层，每层一张哈希表。</p>
+      </div>
+      <h3>第 1 步：定 level 分辨率</h3>
+      <p>每一层 $l$ 的分辨率按几何级数增长：</p>
+      <div class="formula-box">
+        $$N_l:=\big\lfloor N_{\min}\cdot b^l\big\rfloor,\qquad b:=\exp\!\Big(\frac{\ln N_{\max}-\ln N_{\min}}{L-1}\Big)$$
+      </div>
+      <p>其中 $b\in[1.26,2]$ 是每层之间的「缩放倍率」。粗层分辨率低（只看大结构），细层分辨率高（管细节）。</p>
+
+      <h3>第 2 步：算 hash（找键）</h3>
+      <p>把坐标按当前层分辨率放大、取整，得到体素的 $2^d$ 个整数角点：</p>
+      <div class="formula-box">
+        $$\lfloor\mathbf x_l\rfloor:=\lfloor\mathbf x\cdot N_l\rfloor,\qquad \lceil\mathbf x_l\rceil:=\lceil\mathbf x\cdot N_l\rceil$$
+      </div>
+      <p>把每个角点的整数坐标<b>哈希</b>成表下标：</p>
+      <div class="formula-box">
+        $$h(\mathbf x)=\Big(\bigoplus_{i=1}^{d}x_i\pi_i\Big)\bmod T$$
+      </div>
+      <p>这里 $\oplus$ 是<b>按位异或</b>，$\pi_i$ 是互不相同的大素数；原文取 $\pi_1:=1$（为了更好的 cache 一致性）、$\pi_2=2654435761$、$\pi_3=805459861$。关键性质：当粗层满足 $(N_l+1)^d\le T$ 时，这个映射是 <b>1:1 的（无冲突）</b>；只有细层才真正「当哈希表用」，才会冲突。</p>
+
+      <h3>第 3 步：取特征</h3>
+      <p>拿着算出的下标，去对应层的特征数组里查——每个 entry 存一个 $F$ 维特征向量 $\theta_l$。共 $L$ 层，每层最多 $T$ 个 entry。</p>
+
+      <h3>第 4 步：插值</h3>
+      <p>按 $\mathbf x$ 在体素内的相对位置做 <b>$d$ 维线性插值</b>（术语：在网格里按距离给角点加权混合），权重就是 $\mathbf w_l:=\mathbf x_l-\lfloor\mathbf x_l\rfloor$。</p>
+
+      <h3>第 5 步：拼接 + MLP</h3>
+      <p>把各层插值出来的结果与辅助输入 $\xi\in\mathbb R^E$（比如视角方向、材质参数）<b>拼接</b>成 $\mathbf y\in\mathbb R^{LF+E}$，送进 MLP $m(\mathbf y;\Phi)$。反传时，梯度会依次穿过 MLP(5)→拼接(4)→插值(3)，最后<b>累加到被查到的那些特征向量上</b>——也就是说，训练时真正被「写」的是哈希表里的特征，而不是（主要不是）MLP 的权重。</p>
+      <div class="callout">
+        <h4>★ 默认超参（Table 1，请记这组数字）</h4>
+        <p>$L=16$（16 层）、$T=2^{14}\sim2^{24}$（表大小）、$F=2$（每个 entry 只存 2 维特征！）、$N_{\min}=16$、$N_{\max}=512\sim524288$。原文明确说：<b>只有 $T$ 与 $N_{\max}$ 需要按任务调</b>，其余基本不动。注意 $F=2$ 这个极小的数——它正是下一节 Plenoxels 争论的伏笔。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 反直觉：有哈希冲突为什么还能工作</h2>
+      <p>这是本节最反直觉的知识点，务必讲透。先给术语：</p>
+      <div class="callout">
+        <h4>术语：哈希冲突（hash collision）</h4>
+        <p>把「坐标角点」塞进一张大小固定为 $T$ 的表时，两个不同的位置可能算出同一个下标，于是它们去改<b>同一个</b>特征向量——这就是冲突。直觉上这会把两个不同的信息「混」在一起，听起来很糟。</p>
+      </div>
+      <p>原文是这样解释的：粗层「<i>injective—that is, they suffer from no collisions at all</i>」（单射，完全没有冲突），但只能表达低分辨率场景；细层能抓细节，却冲突很多。冲突时，不同样本的梯度被<b>平均</b>。关键来了——</p>
+      <div class="callout">
+        <h4>★ 为什么平均反而没问题</h4>
+        <p>原文说：这些样本对最终重建的重要性「<i>rarely equal</i>」（很少相等）。可见表面上的点同时具有高可见性和高密度，<b>梯度幅值大</b>；于是「<i>the gradients of the more important samples dominate the collision average</i>」——重要样本的梯度在平均里占主导，于是那个被共用的表项，自然被优化成了「重要样本想要的样子」。</p>
+      </div>
+      <p>所以：<b>不需要</b>任何 probing / bucketing / chaining（探查、分桶、拉链法），也<b>不需要任何结构更新</b>。同时，表的内存布局与场景内容无关，<b>caching 行为可预测</b>——这对 GPU 很友好。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_InstantNGP/c66154ffe55c36d8c866802438f6c58dfb50017db742dc2fb5d44e867dafcf04.jpg" alt="Fig. 7">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Neural signed distance functions trained for 11,000 steps. The frequency encoding struggles to capture the sharp details on these intricate models. NGLOD achieves the highest visual quality, at the cost of only training the SDF inside the cells of a close-fitting octree. Our hash encoding exhibits similar numerical quality in terms of intersection over union (IoU) and can be evaluated anywhere in the scene. However it also exhibits visually undesirable surface roughness that we attribute to randomly distributed hash collisions.（训练 11,000 步的神经符号距离函数。频率编码难以捕捉复杂模型上的锐利细节；NGLOD 视觉质量最高，代价是只在紧贴形状的 octree 单元内训练 SDF；我们的哈希编码在 IoU 上数值质量相当且可在场景任意处求值，但表现出视觉上不理想的表面粗糙感，我们归因于随机分布的哈希冲突。）<br>
+          <b>怎么看这张图：</b>这是全篇<b>唯一正面展示自身缺陷</b>的图。注意模型表面那层「砂纸感」的粗糙——原文明确说它来自随机哈希冲突。把它和右边 NGLOD 的干净表面对比，就能直观理解第 4 节那句「平均梯度」的副作用。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>★ 附录 A 的彩蛋（提了但没用）</h4>
+        <p>原文附录还给了平滑插值函数 $S_1(x)=x^2(3-2x)$、$S_1'(x)=6x(1-x)$，它在 0 与 1 处导数为 0，使编码变成 $C^1$ 光滑；并建议每层偏移半个体素 $1/(2N_l)$ 避免各层零点导数对齐。但原文老实说「<i>we do not employ in any of our results due to a small decrease in reconstruction quality</i>」——<b>提了，但没用上</b>，请如实记住这点。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. vs 稠密网格 / 树结构：用数字说话</h2>
+
+      <h3>vs 稠密网格：参数随体积立方增长</h3>
+      <p>原文给了一个量级论证：「<i>the number of parameters grows as $O(N^3)$, while the visible surface of interest has surface area that grows only as $O(N^2)$</i>」——你存的是整个体积（三次方），但真正有用的只是表面（二次方）。实测：分辨率 $128^3$ 的网格里，「<i>only 53,807 (2.57%) of its cells touch the visible surface</i>」——只有 2.57% 的格子碰到了可见表面，其余全是浪费。</p>
+
+      <h3>Fig. 2 的干净对照（同一 NeRF 实现、固定 11000 步）</h3>
+      <p>下面两张是同一套代码、只换编码与 MLP 大小的结果，也是理解「梯度稀疏 = 快」的关键图：</p>
+      <div class="grid-2">
+        <figure class="figure">
+          <img src="../../md/images/2022_InstantNGP/2d7dfc8e0b59457c1da3edc26d5ac70a96e66efd6b6eb35fc6e7cbe9e6872769.jpg" alt="Fig. 2(e)">
+          <figcaption>
+            <b>原图注（Fig. 2 的 (e)）：</b>…Our encoding (e) with a similar total number of trainable parameters as the frequency encoding configuration (b) trains over 8× faster, due to the sparsity of updates to the parameters and smaller MLP.（我们的编码 (e) 在可训练参数总量与频率编码配置 (b) 相近时，训练快 8×，原因是对参数的更新是稀疏的且 MLP 更小。）<br>
+            <b>怎么看这张图：</b>(e) 哈希表 $T=2^{14}$、10k+494k 参数 / 1:48 / PSNR 22.61，对照 (b) 频率编码 438k 参数 / 12:45 / PSNR 22.90。参数差不多，速度却快了 8 倍——原文归因于「参数的更新是稀疏的」和更小的 MLP。
+          </figcaption>
+        </figure>
+        <figure class="figure">
+          <img src="../../md/images/2022_InstantNGP/fe74a1165f421e27228a3d87d42487c89c56e14c0ac1e8f48d4e8c4e2b5d830f.jpg" alt="Fig. 2(f)">
+          <figcaption>
+            <b>原图注（Fig. 2 的 (f)）：</b>Increasing the number of parameters (f) further improves reconstruction accuracy without significantly increasing training time.（增加参数量 (f) 能进一步提升重建精度而几乎不增加训练时间。）<br>
+            <b>怎么看这张图：</b>(f) 把表放大到 10k+12.6M 参数、1:47、PSNR 24.58。注意时间几乎没变（1:47 vs 1:48），但精度明显涨了——说明「加表容量」这件本来很贵的事，在这里几乎是免费的。这正呼应「梯度稀疏→只更新少数参数」的机制。
+          </figcaption>
+        </figure>
+      </div>
+
+      <h3>vs 树结构（NGLOD / octree）</h3>
+      <p>原文<b>大方承认</b> NGLOD「<i>achieves the highest visual reconstruction quality</i>」（因为它用了贴合参考形状的数据结构）。但作者强调自己的编码「<i>approaches a similar fidelity to NGLOD in terms of intersection-over-union (IoU) with similar performance and memory cost</i>」，而且 <b>SDF 在整个训练体积内都有定义</b>，而 NGLOD 只在其 octree 内（靠近表面）有定义，因此本方法支持<b>近似软阴影</b>等渲染技巧。这一段很有价值：承认对手的强项，再指出自己的不同优势。</p>
+
+      <h3>vs 梯度路由 / 剪枝路线（NSVF、ACORN 等）</h3>
+      <p>对 ACORN，原文说它「<i>relies on an adaptive subdivision of the scene as part of a learning curriculum, none of which is necessary with our encoding</i>」（依赖作为学习课程一部分的自适应细分，而 ours 完全不需要）；对 NSVF 那类多阶段 coarse-to-fine，会「<i>leads to a more complex training process in which the sparse data structure must be periodically updated</i>」（导致更复杂的训练过程，且稀疏数据结构必须周期性更新）。</p>
+
+      <h3>Fig. 1：「秒级训练」的证据图</h3>
+      <figure class="figure">
+        <img src="../../md/images/2022_InstantNGP/a0c2ee786850b825374f7a5b327dc911764a07fec5f5204ec0b895b43e8248d5.jpg" alt="Fig. 1">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We demonstrate instant training of neural graphics primitives on a single GPU for multiple tasks… Our encoding is task-agnostic: we use the same implementation and hyperparameters across all tasks and only vary the hash table size which trades off quality and performance.（我们展示在单张 GPU 上对多个任务进行神经图形基元的即时训练……我们的编码与任务无关：所有任务用同一套实现与超参，只改哈希表大小来权衡质量与性能。）<br>
+          <b>怎么看这张图：</b>这是「秒级训练」的<b>总证据</b>图。图上方标注的训练时长按任务依次是 1 s / 15 s / 1 s / 15 s / 60 s——四个不同任务（图像、SDF、辐射缓存、NeRF）全用同一套超参，只是换哈希表大小。一眼就能看出「换编码」带来的普遍加速。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字、局限与结论</h2>
+
+      <h3>四任务与训练 / 渲染数字（请抄准）</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>四个任务（第 44–50 行）</h4>
+          <p>① Gigapixel image（2D→RGB）；② Neural SDF（3D→到表面距离）；③ Neural radiance caching / NRC（5D 光场，Monte Carlo 路径追踪）；④ NeRF（synthetic 8 场景）。全部单卡 <b>RTX 3090</b> 评测。</p>
+        </div>
+        <div class="mini-card">
+          <h4>摘要里的速度</h4>
+          <p>「training of high-quality neural graphics primitives in a <b>matter of seconds</b>, and rendering in <b>tens of milliseconds</b> at 1920×1080」。NeRF 每步约 <b>6 ms</b>，约 5 万步后 5 分钟即收敛良好。</p>
+        </div>
+        <div class="mini-card">
+          <h4>NeRF 的 PSNR（Table 2，avg.）</h4>
+          <p>1 s <b>21.202</b> → 5 s <b>29.261</b> → 15 s <b>31.407</b> → 1 min <b>32.635</b> → 5 min <b>33.176</b>。对照 NeRF 31.005、NSVF 31.739、mip-NeRF 33.090（后三者要训练 on the order of hours）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>其他任务亮点</h4>
+          <p>Gigapixel：ACORN 训 36.9 h 达 38.59 dB；本方法 $T=2^{24}$ 下 2.5 分钟追平、4 分钟峰值 <b>41.9 dB</b>。NRC：<b>133 FPS</b> vs 三角波编码 147 FPS，开销仅 0.7 ms（含训练与运行）。</p>
+        </div>
+      </div>
+      <p>原文结论：<b>15 秒</b>就与 NeRF、NSVF 相当，<b>1 分钟到 5 分钟</b>就与 mip-NeRF 相当，并把它归功于哈希编码 + 更小 MLP 带来的「<i>a 20–60× improvement</i>」。但原文也诚实承认：<b>Materials 这类强视角相关反射场景，mip-NeRF / NSVF 更好</b>——「<i>we attribute this to the much smaller MLP that we necessarily employ</i>」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_InstantNGP/ac551826ee9980ec12f8a3c6153a5c667525d2f8a417f9e37c0c5452f5329b4b.jpg" alt="Fig. 12">
+        <figcaption>
+          <b>原图注（Fig. 12）：</b>NeRF reconstruction of a modular synthesizer and large natural 360 scene. The left image took 5 seconds to accumulate 128 samples at 1080p on a single RTX 3090 GPU, allowing for brute force defocus effects. The right image was taken from an interactive session running at 10 frames per second on the same GPU.（模块化合成器与大型自然 360 场景的 NeRF 重建。左图在单张 RTX 3090 上以 1080p 累计 128 个采样仅需 5 秒，因而可以暴力做景深效果；右图来自同一 GPU 上 10 fps 的交互会话。）<br>
+          <b>怎么看这张图：</b>它把「训练快」兑现成「可以负担多采样抗锯齿 / 景深」的实用价值（左图 5 秒就能暴力堆 128 个采样做景深）。但右图也诚实暴露了现实：大场景上仍是 <b>10 fps</b>，还不够真正的实时。所以「秒级训练」和「实时渲染」是两件不同的事。
+        </figcaption>
+      </figure>
+
+      <h3>★ 明确局限（逐条，务必集中看）</h3>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 颗粒状微观结构（最显著）</h4>
+          <p>「<i>The salient artifact of our encoding is a small amount of 'grainy' microstructure… a result of hash collisions that the MLP is unable to fully compensate for</i>」。解决方向（过滤查表 / 加平滑先验）留给未来。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 小 MLP 换速度的代价</h4>
+          <p>强视角相关反射场景（如 Materials）不如 mip-NeRF / NSVF。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 生成式设置不友好</h4>
+          <p>特征与规则网格不双射，难以和 StyleGAN 式生成器结合。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ ray marching 贡献未量化</h4>
+          <p>「<i>an additional study is required to quantify the impact of advanced ray marching schemes… independently from the encoding and network architecture</i>」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>⑤ $T>2^{19}$ 的性能悬崖</h4>
+          <p>RTX 3090 的 6 MB L2 不够用，「<i>a performance cliff is visible</i>」——表一大过临界值，性能显著下降。这条很有工程味道。</p>
+        </div>
+      </div>
+
+      <h3>★ 结论（第 332 行，值得引用）</h3>
+      <div class="callout">
+        <p><i>Its low overhead allows it to be used even in time-constrained settings like online training and inference… it is a drop-in replacement, for example speeding up NeRF by several orders of magnitude and matching the performance of concurrent non-neural 3D reconstruction techniques.</i></p>
+        <p><b>两个词对 SLAM 读者特别重要：</b></p>
+        <ul>
+          <li><b>drop-in replacement（直接替换）</b>：不改动原有框架，把编码一换就行。</li>
+          <li><b>online training（在线训练）</b>：开销低到能边跑边训——而这恰恰是 SLAM 需要的能力（地图要随新帧实时更新）。</li>
+        </ul>
+      </div>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文说哈希编码是 NeRF 的 drop-in replacement，且可用于 online training。这为什么对 SLAM 读者有吸引力？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。drop-in replacement 指不动原框架只换编码；online training 指开销低到可边运行边训练。SLAM 的地图需要随新帧持续更新，正好需要「低开销 + 可在线的表示」，所以这两条直接命中 SLAM 的痛点。" onclick="lessonKit.answer(this,'q0038b')">因为它低开销、可在线更新，契合 SLAM 实时建图</button>
+          <button data-correct="no" data-explanation="不对。原文说的是加速训练与匹配非神经重建质量，并未声称提升了单帧渲染分辨率；而且 SLAM 关心的正是「在线 / 实时」而非「离线跑几天」。" onclick="lessonKit.answer(this,'q0038b')">因为它让 NeRF 的渲染分辨率变高了</button>
+        </div>
+        <div class="quiz-feedback" id="q0038b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 开放问题 + OCR 修正</h2>
+      <p>原文第 6 节列了几个开放问题：① 哈希函数本身能否被优化（把它变成 dictionary learning，一个「<i>continuous formulation of indexing</i>」可对解析微分，或用演化算法）；② 生成式场景；③ 云 / 烟等 VDB 异质体积场。</p>
+      <div class="callout">
+        <h4>★ OCR 提醒（如实说明，读 md 时注意）</h4>
+        <ul>
+          <li>标题与作者行的 <code>&lt;sub&gt;</code> 是 OCR 副标题排版残留，真实标题就是本课标题、作者即四位 NVIDIA 作者。</li>
+          <li>符号整体丢失为 <code>�</code>：<code>the number of parameters �</code> 应为 $T$；<code>dimensionality �</code> 应为 $F$；<code>�-linear interpolation</code> 应为 $d$-线性插值。</li>
+          <li>$10^{-2}$ 被印成类似 $\stackrel{\sim}{10}\stackrel{-2}{1}$ 的怪样子。</li>
+          <li>「a <b>cot</b> size of $2^{14}$」中的 cot 是 of 被误识，应为「a <b>batch</b> size of $2^{14}$」。</li>
+          <li><code>Fi . 4</code> 应为 Fig. 4；连字 <code>ff</code> 被吃掉（eficient / eficiency / suficient / Giga ixel）。</li>
+          <li>Table 2 的金 / 银 / 铜奖牌标记只剩 <code>●</code>、对比列缺失，引用时须自行按数值判定最优。</li>
+        </ul>
+      </div>
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>用大白话解释「换编码不换渲染」是什么意思，并写出编码的两大分类。</p>
+          <p><b>答：</b>体渲染那条管线（0036 的式(1)(3)）原封不动，变的是坐标进入 MLP 之前的加工方式。两大类：① 频率编码（NeRF 用的 sin/cos 位置编码）；② 参数化编码（把可训练参数塞进网格 / 树里再查表插值）。本节属于后者，但用哈希表代替了稠密网格与树。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>写出多分辨率哈希编码五步，并说明默认超参里最该记住的两个数。</p>
+          <p><b>答：</b>① 定 level 分辨率 $N_l=\lfloor N_{\min}b^l\rfloor$；② 算 hash $h(\mathbf x)=(\bigoplus x_i\pi_i)\bmod T$ 找角点索引；③ 查该层 $F$ 维特征向量 $\theta_l$；④ 按相对位置做 $d$ 线性插值；⑤ 各层结果拼接 $\xi$ 成 $\mathbf y\in\mathbb R^{LF+E}$ 送 MLP，反传梯度累加到被查特征上。最该记：$L=16$、$F=2$（每个 entry 只存 2 维特征），且只有 $T$ 与 $N_{\max}$ 需按任务调。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>为什么哈希冲突（不同位置共用一个表项）在细层也能工作？Fig. 2 的 (e)(f) 说明了什么？</p>
+          <p><b>答：</b>冲突时不同样本的梯度被平均，但可见表面上的样本可见性高、密度大、梯度幅值大，于是「重要样本的梯度主导了平均」，表项被优化成重要样本想要的样子，无需探查 / 分桶 / 拉链，也无需结构更新。Fig. 2：(e) 哈希表与频率编码参数相近却快 8×；(f) 把表放大到 12.6M 参数，时间几乎不变、精度反而更高——说明「梯度稀疏、只更新少数参数」让加表容量几乎免费。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>抄准 NeRF 的 PSNR 时间线，并复述两条最该记住的局限。</p>
+          <p><b>答：</b>1 s 21.202 → 5 s 29.261 → 15 s 31.407 → 1 min 32.635 → 5 min 33.176；同实现频率编码 1 min 26.669、5 min 30.056。最该记：① 哈希冲突导致「颗粒状」微观结构（Fig. 7 表面砂纸感），MLP 无法完全补偿；② $T>2^{19}$ 后 RTX 3090 的 6 MB L2 不够，出现性能悬崖。另：强视角相关反射场景不如 mip-NeRF。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 5：</b>结论里的 drop-in replacement 与 online training 对 SLAM 为什么重要？</p>
+          <p><b>答：</b>drop-in replacement = 不动原框架只换编码（易集成）；online training = 开销低到可边运行边训练。SLAM 的地图需随新帧实时持续更新，正需要低开销、可在线的表示，所以这两条直接命中 SLAM 的痛点。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0037-NeRF下-位置编码与分层采样.html">← 上一课：NeRF（下）</a>
+        <a class="next" href="0039-Plenoxels2022-连神经网络都不要.html">下一课：Plenoxels（2022） →</a>
+      </div>
+      <p class="foot-note">把「信息」从网络权重搬到一张哈希表，NeRF 就从 1–2 天塌缩到秒级。下一节，有人想把 MLP 也一并扔掉 🔥</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

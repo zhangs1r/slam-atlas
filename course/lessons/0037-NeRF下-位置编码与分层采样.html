@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeRF（下）：位置编码、分层采样与代价 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0037</div>
+      <h1>NeRF（下）：位置编码、分层采样与代价</h1>
+      <p class="subtitle">上一节结尾原文自己说了「这些还不够」。这一节讲三个让它真正 work 的装置，再老实交代代价——逐场景 1–2 天，正是下一节要打的靶子 ⚙️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：位置编码、分层采样细节、训练细节，以及代价与局限</span>
+        <span>👥 作者：Mildenhall、Srinivasan、Tancik、Barron、Ramamoorthi、Ng（UC 伯克利 &amp; Google）</span>
+        <span>📅 2020 · ECCV · <i>NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 开场：上一节说「还不够」</a>
+        <a href="#b">2. ★ 装置一：位置编码（式4）</a>
+        <a href="#c">3. ★ 装置二：分层采样（细节与采样数）</a>
+        <a href="#d">4. ★ 装置三：训练细节</a>
+        <a href="#e">5. ★ 三个前提条件</a>
+        <a href="#f">6. ★ 代价与局限（本节的收束）</a>
+        <a href="#g">7. 与下一节的钩子 + OCR 修正</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清为什么要位置编码（谱偏置），背出式(4)与 $L=10/L=4$；讲清两级采样里 $N_c=64$、$N_f=128$ 与「粗网络给出 PDF」的分工；抄准训练数字（batch 4096 ray、V100 1–2 天）；复述三个前提条件与六条代价，尤其两条开放问题。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0036</b>：上一节只讲「为什么两级」，PDF 与逆变换采样细节就在这里补。接 <b>0015</b>：第一季提过「NeRF 每条光线约 128 个采样点」，本节补上这 128 从哪来（$N_c$ 64 + $N_f$ 128）。接 <b>0027</b>：真实数据的位姿/内参来自 COLMAP。下一节 <b>0038</b> 的问题陈述就是本节的结论。</p></div>
+      </div>
+
+      <h2>1. 开场：上一节说「还不够」</h2>
+      <p>上一节（0036）我们把 NeRF 的骨架搭完了：连续 5D 场、体渲染式(1)、离散求积式(3)、两级网络、可微损失式(6)。但你如果照着那套直接训练，画质是上不去的。</p>
+      <div class="callout">
+        <h4>★ 原文的诚实自白</h4>
+        <p>上一节引用过原文第 99 行：那些组件「<i>are not sufficient for achieving state-of-the-art quality</i>」（不足以达到最先进画质）。所以这一节要补上<b>三个让它真正 work 的装置</b>：① 位置编码；② 分层采样（细节）；③ 一堆训练细节。这三个装置在后面两节（0038 Instant NGP、0039 Plenoxels）会被反复引用，所以本节必须讲清。补完装置后，原文也<b>老实交代了代价</b>——那才是本节最有价值的部分。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 装置一：位置编码（式4）</h2>
+      <p>第一个术语先讲清楚：</p>
+      <div class="callout">
+        <h4>术语：位置编码（positional encoding）</h4>
+        <p>把「坐标本身」直接喂给网络，网络很难画出细密的纹理。位置编码的做法是：把一个标量坐标 $p$，<b>展开成一组不同频率的 $\sin/\cos$</b>，等于先给网络一副「高频放大镜」，让它看得见细节。</p>
+      </div>
+      <p>具体地，对坐标 $p$ 做如下映射（式4）：</p>
+      <div class="formula-box">
+        $$\gamma(p)=\big(\sin(2^0\pi p),\cos(2^0\pi p),\ \cdots,\ \sin(2^{L-1}\pi p),\cos(2^{L-1}\pi p)\big)$$
+      </div>
+      <p>其中 $(x,y,z)$ 先归一化到 $[-1,1]$；频率档数 $L=10$（用于空间坐标 $\mathbf x$）、$L=4$（用于方向 $\mathbf d$）。</p>
+      <div class="callout">
+        <h4>★ 为什么必需：谱偏置（spectral bias）</h4>
+        <p>原文第 103 行说：尽管神经网络是「万能函数逼近器」，但直接拿 $xyz\theta\phi$ 当输入，「<i>renderings that perform poorly at representing high-frequency variation</i>」（表示高频变化的表现很差）。作者引用 Rahaman 等人的结论——<b>谱偏置</b>：深度网络「<i>are biased towards learning lower frequency functions</i>」（天生偏向学低频函数）。所以光给网络「低频的原料」，它就画不出细纹。解决方法是把网络重写为 $F_\Theta=F'_\Theta\circ\gamma$——先经过 $\gamma$ 升频，再进网络。<b>大白话：只给低频原料 → 画不出细纹；先展开成一组 sin/cos → 等于先给一副高频放大镜。</b></p>
+      </div>
+      <p>消融实验（Table 2）把话说死，数字请抄准（均在 Realistic Synthetic 360° 上）：</p>
+      <table>
+        <thead><tr><th>配置</th><th>PSNR</th><th>SSIM</th></tr></thead>
+        <tbody>
+          <tr><td>完整模型（第 9 行）</td><td><b>31.01</b></td><td><b>0.947</b></td></tr>
+          <tr><td>No pos. encoding（第 2 行）</td><td>28.77</td><td>0.924</td></tr>
+          <tr><td>No view dependence（第 3 行）</td><td>27.66</td><td>—</td></tr>
+          <tr><td>No hierarchical（第 4 行）</td><td>30.06</td><td>—</td></tr>
+          <tr><td>降频 $L=5$（第 7 行）</td><td>30.59</td><td>—</td></tr>
+          <tr><td>升频 $L=15$（第 8 行）</td><td>30.81</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <p>原文结论：「<i>positional encoding (row 2) and view-dependence (row 3) provide the largest quantitative benefit followed by hierarchical sampling (row 4)</i>」——位置编码与视角依赖收益最大，其次才是分层采样。另外 $L=15$ 没比 $L=10$ 更好，作者解释 $2^L$ 已超输入数据最高频（约 1024），再多频率也是浪费。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么 NeRF 必须加位置编码，而不能直接把 $xyz$ 喂给 MLP？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文第 103 行与 Rahaman 的谱偏置结论：深度网络天生偏向学低频函数，直接输入坐标只能画出低频、画面过平滑；$\gamma$ 把坐标升频成多频率 sin/cos，才看得清高频细节。Table 2 第 2 行去掉 PE 掉到 28.77。" onclick="lessonKit.answer(this,'q0037a')">因为直接输入坐标网络只学低频，画不出高频细节</button>
+          <button data-correct="no" data-explanation="不对。位置编码不是为了缩小网络，恰恰是把输入维度拉大；它解决的是「网络画不出高频」的谱偏置问题，不是容量问题。" onclick="lessonKit.answer(this,'q0037a')">为了让网络更小、更快</button>
+        </div>
+        <div class="quiz-feedback" id="q0037a"></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/2a7bf1cf52c8fc3737c17285c79f719c0e60f7381b9f4a6235a4d2e0e8017799.jpg" alt="Fig. 4">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Removing view dependence prevents the model from recreating the specular reflection on the bulldozer tread. Removing the positional encoding drastically decreases the model's ability to represent high frequency geometry and texture, resulting in an oversmoothed appearance.（去掉视角依赖后模型无法再现推土机履带上的镜面反射；去掉位置编码后模型表示高频几何与纹理的能力大幅下降，画面变得过度平滑。）<br>
+          <b>怎么看这张图：</b>这是位置编码作用的<b>视觉版证据</b>，与 Table 2 第 2/3 行数值互为印证。带位置编码、带视角依赖的图清晰锐利；去掉位置编码后，推土机履带、纹理都「糊成一团」——正好演示「只给低频原料就画不出细纹」。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 装置二：分层采样（细节与采样数）</h2>
+      <p>上一节（0036 第 5 节）只讲了「为什么要两级」的动机，这里补全<b>具体机制</b>和<b>采样数</b>。整套流程：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>第一步：均匀粗采样</h4>
+          <p>均匀抽 <b>$N_c=64$</b> 个点，跑粗 MLP，得到每点的 $\sigma$ 与颜色。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第二步：构造 PDF</h4>
+          <p>把粗网络的 alpha 合成权重 $w_i=T_i\big(1-\exp(-\sigma_i\delta_i)\big)$ <b>归一化</b>，得到沿光线的<b>分段常数概率密度（PDF）</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第三步：逆变换采样</h4>
+          <p>对这个 PDF 做<b>逆变换采样</b>，抽 <b>$N_f=128$</b> 个更密的点，集中到「更可能有内容」处。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第四步：细网络合成</h4>
+          <p>细 MLP 在 <b>$N_c+N_f=192$</b> 个点上算最终颜色。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>★ 术语：PDF 与逆变换采样</h4>
+        <p><b>PDF（概率密度函数）</b>就是「沿这条光线，哪一段更可能有物体」的分布图。<b>逆变换采样</b>是一种「按给定分布抽点」的标准手法：先算分布的累计函数（CDF），再在均匀随机数上反查回去，得到的位置就服从这个分布。这里用它，让 128 个点大多数落在有内容的地方，而不是均匀撒在空气里。</p>
+      </div>
+      <div class="callout">
+        <h4>★ 一个必须记住的分工</h4>
+        <p><b>粗网络不是「粗结果」，而是「给出该往哪里多采样的概率密度」。</b>它唯一使命是告诉细网络「去哪儿采更值」。这也回答了 0015 留下的口子：第一季说「NeRF 每条光线约 128 个采样点」——那 128 正是这里的 $N_f=128$；加上粗网络 $N_c=64$，一条光线实际要查 192 个点、跑两次 MLP。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/75b7186333ad0ca8612b0c17e7155a0cf9c88cb6b0c12288531ea064183820f5.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>An overview of our neural radiance field scene representation and differentiable rendering procedure. We synthesize images by sampling 5D coordinates (location and viewing direction) along camera rays (a), feeding those locations into an MLP to produce a color and volume density (b), and using volume rendering techniques to composite these values into an image (c). This rendering function is differentiable, so we can optimize our scene representation by minimizing the residual between synthesized and ground truth observed images (d).（神经辐射场场景表示与可微渲染流程总览——沿相机光线采样 5D 坐标 (a) → 送入 MLP 输出颜色与体密度 (b) → 用体渲染合成图像 (c) → 该渲染函数可微，故可用合成图与真值图的残差反传优化场景表示 (d)。）<br>
+          <b>怎么看这张图：</b>本节<b>复用</b>这张图（它在 0036 也出现过）。重点看 (b)：一个 MLP 实际被跑了两次——粗网络先给出沿光线的密度分布，再决定细网络在哪些点多采样。它是唯一能标出「粗/细两路采样」的图，正好配本节的分层采样细节。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 装置三：训练细节</h2>
+      <p>这些数字很硬、很有说服力，请抄准：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>batch 与采样数</h4>
+          <p>每个 batch 是 <b>4096 条 ray</b>；每条 ray 粗体积 <b>64</b> 点、细体积额外 <b>128</b> 点。</p>
+        </div>
+        <div class="mini-card">
+          <h4>优化器</h4>
+          <p><b>Adam</b>（$\beta_1=0.9,\beta_2=0.999,\epsilon=10^{-7}$）；学习率 $5\times10^{-4}$ <b>指数衰减到</b> $5\times10^{-5}$。</p>
+        </div>
+        <div class="mini-card">
+          <h4>迭代与耗时</h4>
+          <p><b>100–300k 次迭代</b>；单张 <b>NVIDIA V100 上约 1–2 天</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>术语：Adam</h4>
+          <p>一种自适应学习率优化器，按梯度的一阶、二阶矩分别调整每个参数——深度学习的默认主力，你后面会反复见到。</p>
+        </div>
+      </div>
+      <p>把数字串起来：一个场景，要喂 <b>4096 条光线 / batch</b>，每条光线查 <b>192 个点 × 两次 MLP</b>，跑 <b>十几到几十万次迭代</b>，最终在 V100 上烧掉 <b>1–2 天</b>。这串数字，就是下一节要解决的「慢」从何而来。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 三个前提条件</h2>
+      <p>这三个「前提条件」是后面几节（尤其 0038/0039，以及 NeRF-SLAM 一类工作）会反复引用的问题，必须讲。</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① 逐场景单独训练</h4>
+          <p>原文：「<i>We optimize a separate neural continuous volume representation network for each scene</i>」——<b>每个场景一个网络</b>，不是能泛化到新场景的模型。换个场景就得重新训练。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 已知相机位姿/内参/包围盒</h4>
+          <p>合成数据用真值；<b>真实数据用 COLMAP 估计</b>——这里要接 <b>0027</b> 课（从无序图像做三维重建、产出位姿）。没有位姿，NeRF 无从训练。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 输入视角少了会掉点</h4>
+          <p>Table 2 第 5/6 行：输入图 100 → 50 → 25，PSNR 从 <b>31.01 → 29.79 → 27.78</b> 一路掉。视角越稀疏，画质越差。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ 代价与局限（本节的收束）</h2>
+      <p>装置讲完，原文也把代价摊开。这部分是本节最有价值的内容，请集中看。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 逐场景优化</h4>
+          <p>不是泛化模型，换场景重训。这是 ① 前提的另一种说法，但它是「代价」不是「假设」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 单场景耗时</h4>
+          <p><b>100–300k 迭代、V100 上 1–2 天</b>。慢，是后两节的核心靶子。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 时间—空间互斥</h4>
+          <p>原文第 189 行：「<i>The biggest practical tradeoffs between these methods are time versus space. All compared single scene methods take at least 12 h to train per scene</i>」——所有单场景方法每场景至少训练 12 小时。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 依赖 COLMAP</h4>
+          <p>位姿/内参/包围盒都得先有，真实数据靠 COLMAP 估计（接 0027）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>⑤ 视角稀疏掉点</h4>
+          <p>100→25 图，PSNR 31.01→27.78。稀疏输入是它的软肋。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>★ 两条开放问题（最有价值的「泼冷水」）</h4>
+        <p>原文自己列了两条，务必引用：</p>
+        <ul>
+          <li><b>效率</b>：「<i>there is still much more progress to be made in investigating techniques to efficiently optimize and render neural radiance fields</i>」——如何<b>高效地优化与渲染</b>神经辐射场，仍有大量空间。</li>
+          <li><b>可解释性</b>：「<i>sampled representations such as voxel grids and meshes admit reasoning about the expected quality of rendered views and failure modes, but it is unclear how to analyze these issues when we encode scenes in the weights of a deep neural network</i>」——体素/网格这类采样表示，你能分析「哪会渲坏、为什么坏」；但把场景<b>编码进深度网络权重</b>后，<b>你不知道它会在哪里失败</b>。</li>
+        </ul>
+        <p><b>第二条特别值得讲</b>：它点出了隐式表示的一个本质缺点——<b>不可解释、不可预判失败模式</b>。这条观察能接第一季 <b>0015</b> 课讲的「高斯方向卡在哪」：显式表示至少还能分析失败，隐式网络则是个黑箱。后面 0038/0039 换编码、换表示，本质都是在回应这两条开放问题。</p>
+      </div>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文说把场景编码进神经网络权重后，「你不知道它会在哪里失败」。这指向哪个开放问题？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。这是「可解释性」那条开放问题：体素/网格能分析渲染质量与失败模式，但权重编码的场景无法预判哪里会坏。另一条「效率」是关于训练/渲染速度，不是关于能否预判失败。" onclick="lessonKit.answer(this,'q0037b')">可解释性（无法预判失败模式）</button>
+          <button data-correct="no" data-explanation="不对。效率那条讲的是「如何高效优化与渲染」，与「能否预判失败」无关。能预判失败属于可解释性。" onclick="lessonKit.answer(this,'q0037b')">效率（训练/渲染太慢）</button>
+        </div>
+        <div class="quiz-feedback" id="q0037b"></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/01140549befa535d55a1dfc7a79d0a5fa2e4e09583cd4910c456f25c2767a072.jpg" alt="Fig. 6">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>（按正文第 6 节语境，为真实前向场景 Real Forward-Facing 的定性对比图；原图注在 md 中信息有限，此处依 §6 判断。）<br>
+          <b>怎么看这张图：</b>它讲「在真实手机拍的照片上 NeRF 表现如何」。真实数据的位姿来自 COLMAP（见前提 ②），本身有误差，但 NeRF 仍能合成出合理的、肉眼可接受的新视角。它把上一节 Table 1 里 Real Forward-Facing 那行 26.50 的 PSNR 落到肉眼可见的画面上。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 与下一节的钩子 + OCR 修正</h2>
+      <p>本节的结论，正是下一节的问题陈述：<b>「逐场景 1–2 天」+「每像素要查上百次 MLP」</b>。下一节 <b>Instant NGP（0038）</b> 会回答：<b>同一个体渲染框架不变，只把「信息放在哪」换一换，能不能把训练压到秒级？</b> 请带着这个问题去读 0038。</p>
+      <div class="callout">
+        <h4>★ OCR 提醒（如实说明，读 md 时注意）</h4>
+        <p>① 公式里的 $\mathbf r(t)=\mathbf o+t\dot{\mathbf c}$ 应为 $\mathbf r(t)=\mathbf o+t\mathbf d$（$\mathbf d$ 被误识成带点的 c）。② 大量<b>连字「ff」被吃掉</b>：<code>diferentiable/diferent/eficiency/suficient</code> 实为 differentiable/different/efficiency/sufficient。③ 正文「800 800」应为 $800\times800$。④ Table 1 里 NV 在 Real Forward-Facing 列显示「一」是破折号，表示「无法在该数据上评估」（NV 只能重建有界体积内的物体）。⑤ 参考文献里 Rahaman 等的谱偏置论文被标成 ICML 2018，<b>实际为 ICML 2019</b>。</p>
+      </div>
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>写出位置编码式(4)，并说明 $L=10$ 与 $L=4$ 分别用在哪；用大白话解释「为什么必需」。</p>
+          <p><b>答：</b>$$\gamma(p)=\big(\sin(2^0\pi p),\cos(2^0\pi p),\cdots,\sin(2^{L-1}\pi p),\cos(2^{L-1}\pi p)\big)$$ $L=10$ 用于空间坐标 $(x,y,z)$（先归一化到 $[-1,1]$），$L=4$ 用于方向 $\mathbf d$。必需原因：谱偏置——深度网络偏向学低频函数，直接输入坐标画不出高频细节；$\gamma$ 先升频成多频率 sin/cos 才看得见细纹。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>分层采样的采样数 $N_c$、$N_f$ 是多少？为什么粗网络不是「粗结果」？</p>
+          <p><b>答：</b>$N_c=64$（均匀粗采样跑粗 MLP），$N_f=128$（按粗网络权重构造的分段常数 PDF 做逆变换采样，跑细 MLP；最终在 192 个点上算色）。粗网络的唯一使命是<b>给出「该往哪多采样」的概率密度</b>，而不是产出一张低清图。这也补全了 0015 说的「每条光线约 128 个采样点」——那 128 即 $N_f$。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>抄准训练细节的关键数字，并说明它们如何对应「慢」。</p>
+          <p><b>答：</b>batch = 4096 条 ray；每条 ray 粗 64 点 + 细额外 128 点；Adam（$\beta_1=0.9,\beta_2=0.999,\epsilon=10^{-7}$），lr $5\times10^{-4}$ 指数衰减到 $5\times10^{-5}$；100–300k 迭代；V100 上约 1–2 天。慢来自：每像素要查上百次 MLP、且逐场景十几到几十万次迭代。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>复述三个前提条件，并指出哪一条件要接 0027 课。</p>
+          <p><b>答：</b>① 逐场景单独训练一个网络（非泛化模型）；② 需已知相机位姿/内参/包围盒，真实数据靠 <b>COLMAP</b> 估计——这条接 <b>0027</b>（从无序图像做三维重建）；③ 输入视角减少会掉点（100→50→25 图，PSNR 31.01→29.79→27.78）。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 5：</b>原文自己列的两条开放问题是什么？「你不知道它会在哪失败」指向哪条？</p>
+          <p><b>答：</b>① 效率：如何高效优化与渲染神经辐射场；② 可解释性：体素/网格能分析渲染质量与失败模式，但把场景编码进网络权重后，无法分析这些问题。「不知道在哪失败」指向<b>可解释性</b>那条——这也是隐式表示的本质缺点，能接 0015 的「高斯方向卡在哪」。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0036-NeRF上-隐式表示与体渲染.html">← 上一课：NeRF（上）</a>
+        <a class="next" href="0038-InstantNGP2022-哈希编码把NeRF压到秒级.html">下一课：Instant NGP（2022） →</a>
+      </div>
+      <p class="foot-note">把场景塞进权重，带来的是 5 MB 的轻盈，也是 1–2 天的漫长与黑箱的不可解释。下一节，有人想把它压到秒级 ⏱️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

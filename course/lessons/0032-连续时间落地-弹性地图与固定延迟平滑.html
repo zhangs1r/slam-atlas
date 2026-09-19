@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>连续时间落地：弹性地图与固定延迟平滑 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0032</div>
+      <h1>连续时间落地：弹性地图与固定延迟平滑</h1>
+      <p class="subtitle">上一节是「CT 值不值得用」的对比研究；这一节是两个真实系统——一篇回答「CT 怎么和地图结合」，一篇回答「CT 怎么做到实时」🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：ElasticLiDAR++ / CLIO·CLIC 两个 CT 系统</span>
+        <span>👥 作者：A. 弹性地图团队（T-RO 2022）；B. APRIL-ZJU/clic（2023）</span>
+        <span>📅 2022 / 2023 · <i>Elasticity Meets Continuous-Time</i> 与 <i>Continuous-Time Fixed-Lag Smoothing</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 两个系统，把 CT 用起来</a>
+        <a href="#b">2. 论文 A：Elasticity 到底指什么</a>
+        <a href="#c">3. 论文 A：direct vs composition 与关键公式</a>
+        <a href="#d">4. 论文 A：实验、局限与图</a>
+        <a href="#e">5. 论文 B：实时性 + 固定延迟平滑</a>
+        <a href="#f">6. 论文 B：双滑窗、公式与边缘化</a>
+        <a href="#g">7. 两篇局限、OCR 修正与收尾</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：讲清「elasticity」指的是地图可被拉拽而非轨迹弹性；区分 map-centric 与 trajectory-centric；说清 composition 为何比 spline-direct 更准；复述 fixed-lag smoothing 与边缘化；并指出「预积分是离散框架的补丁，换框架后不再需要」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0031</b>：上一节问「CT 值不值得用」，本节是「CT 用起来长什么样」。接 <b>0019</b>：论文 B 的式(22–24) 就是 0019 的 Schur 消元，这里用来做边缘化。接 <b>0030</b>：论文 B 明确说 CT 框架「不需要预积分」。接 <b>0005/0006</b>（不做特征、直接 surfel 融合）与 <b>0016</b>（连续时间插值去畸变）。</p></div>
+      </div>
+
+      <h2>1. 两个系统，把 CT 用起来</h2>
+      <p>上一节 0031 做了个「受控对比」，证明连续时间（CT）在<b>不同步、剧烈运动</b>时赢了离散时间。但「赢」不等于「能落地」——真实系统还要回答两个问题：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>论文 A：CT 怎么和地图结合</h4>
+          <p><i>Elasticity Meets Continuous-Time: Map-Centric Dense 3D LiDAR SLAM</i>（2022，IEEE T-RO 体例），系统名 <b>ElasticLiDAR++</b>。它关心「回环时怎么让一整张稠密地图保持一致」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>论文 B：CT 怎么做到实时</h4>
+          <p><i>Continuous-Time Fixed-Lag Smoothing for LiDAR-Inertial-Camera SLAM</i>（2023），开源代码 <code>APRIL-ZJU/clic</code>，系统名 <b>CLIO / CLIC</b>。它关心「CT 残差太贵，怎么塞进滑窗实时跑」。</p>
+        </div>
+      </div>
+      <p>一篇答「地图」，一篇答「实时」——合起来，就是 CT 从论文走进工程的两个关键缺口。下面先讲 A。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 论文 A：Elasticity 到底指什么</h2>
+      <p>标题里的 <b>Elasticity（弹性）</b> 是本节最容易误读的点，务必先讲清。摘要说：<i>Map-centric SLAM utilizes elasticity as a means of loop closure</i>（地图中心 SLAM 把弹性当作回环闭合的手段）。更准确地说，它把全局优化里「时间上的依赖」转成了「<b>空间上的依赖</b>」——具体实现是一个<b>形变图（deformation graph）</b>：回环时对整个地图做<b>非刚性加权形变</b>，而不是去改位姿。</p>
+      <div class="callout">
+        <h4>★ 关键澄清：elasticity ≠ 轨迹弹性</h4>
+        <p>它指的是「<b>地图可以被拉拽</b>」。常见误读是把 elasticity 想成「轨迹是橡皮筋、可以拉伸」——错。本文的弹性作用在<b>地图</b>上：回环检测发现两端对不上，就通过形变图把整张地图「温柔地」掰到一致，位姿图反而不动。记住这句话就不会读偏。</p>
+      </div>
+
+      <h3>map-centric vs trajectory-centric（§II）</h3>
+      <p>原文把 SLAM 分成两支：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>地图中心（map-centric）</h4>
+          <p>原文：<i>does not maintain any trajectory</i>（不维护任何轨迹）。回环靠<b>形变地图</b>。代价：传感器数据历史不能存，<i>the map is not recoverable</i>（地图不可逆），且有 growing distortion（畸变随地图长大）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>轨迹中心（trajectory-centric）</h4>
+          <p>主流做法。回环靠<b>位姿图</b>（pose graph）调整关键帧位姿。地图只是位姿的副产品。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2022_Elasticity_Meets_Continuous-Time__Map-Centric_Dense_3D_L/5fe4b156b539e37f630e6d52bea1886e038c12d1d07248dc83b5f1f5096b2741.jpg" alt="Fig. 3">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>System block diagram of our method (named ElasticLiDAR++). The device local trajectory is tracked in the local mapping stage, while the global consistent map is maintained in the second global mapping stage.（方法（名为 ElasticLiDAR++）的系统框图。设备局部轨迹在局部建图阶段跟踪，全局一致地图在第二个全局建图阶段维护。）<br>
+          <b>怎么看这张图：</b>这是全文骨架图。上半「局部建图」用 CT 跟踪设备轨迹；下半「全局建图」才用到 elasticity——回环一来，就通过形变图把全局地图拉一致。注意两条流水线分开了：轨迹是局部的、短期的，地图是全局的、可被形变的。这正是 map-centric 的工程样子。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 论文 A：direct vs composition 与关键公式</h2>
+      <p>在 CT 里把轨迹和地图绑在一起，原文 §II-C2 给了两种范式，请做成对照：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>direct（直接法）</h4>
+          <p>直接优化样条的<b>控制点</b>本身。简单，但控制点就是最终轨迹，每轮都从「整条曲线」出发，容易碰到奇异性。</p>
+        </div>
+        <div class="mini-card">
+          <h4>composition（组合法）</h4>
+          <p>保留离散位姿，只优化一个<b>低频修正量</b>。本文选它并改进：修正量用<b>三次 B 样条</b>平滑、在 <b>SE(3)</b>（位姿流形）上更新。每轮从「零修正」出发，无奇异性。</p>
+        </div>
+      </div>
+
+      <h3>关键公式（抄准）</h3>
+      <p>先把 CT 轨迹在两段之间做<b>线性插值</b>——这条就是「去运动畸变」用的（同一帧内不同时刻的点，用不同时刻的位姿投影）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$T(\tau)=T_k\exp\big(\alpha[\xi]_\times\big),\qquad [\xi]_\times=\log\big(T_k^{-1}T_{k+1}\big),\qquad \alpha=\frac{\tau-\tau_k}{\tau_{k+1}-\tau_k}$$</div>
+      </div>
+      <p>其中 $[\xi]_\times$ 是相对运动的反对称矩阵，$\alpha$ 是区间内归一化时间。运动畸变就是「同一帧曝光期间机器人还在动」，用这条把每个点归到它真实的 $\tau$ 时刻。</p>
+
+      <p>然后两类几何约束（先看图和公式一起懂）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$r_I=\sum\big\|n_{ab}^T\big(R(\tau_a)u_{\tau_a}+t(\tau_a)-(R(\tau_b)u_{\tau_b}+t(\tau_b))\big)\big\|^2$$</div>
+        <div class="flow-formula">$$r_M=\sum\big\|n_{mc}^T\big(u^m-(R(\tau_c)u_{\tau_c}+t(\tau_c))\big)\big\|^2$$</div>
+      </div>
+      <p>第一条 $r_I$ 是 <b>surfel-to-surfel（面元对面元）</b>约束：surfel 是「surface element（面元）」——点云里一个带法向的小面片。$u_{\tau_a},u_{\tau_b}$ 是局部窗内两个不同时刻生成的面元，要求它们在各自插值位姿下「贴平」（法向 $n_{ab}$ 方向上距离近）。第二条 $r_M$ 是 <b>map prior（地图先验）</b>约束：局部扫描面元 $u_{\tau_c}$ 要贴到已有地图面元 $u^m$ 上。<b>原文明说：The motion distortion is corrected based on the map prior</b>——这正是 map-centric 与 CT 的耦合点，也是本文最漂亮的一步。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_Elasticity_Meets_Continuous-Time__Map-Centric_Dense_3D_L/bff8295486222e8a0799ee5e68f01b3b46adf8d7f818684afc624abfe9dbec4f.jpg" alt="Fig. 4">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Illustration of geometrical constraints on the local trajectory. Two surfels $u_{\tau_a}$ and $u_{\tau_b}$ generated at $\tau_a,\tau_b$ within a local window forms constraints on the interpolated trajectory poses $T_{\tau_a}$ and $T_{\tau_b}$. The constraint between the local scan $u_{\tau_c}$ and the map prior $u^m$ forces the trajectory to be fitted onto the map prior.（局部轨迹上的几何约束示意。……局部扫描 $u_{\tau_c}$ 与地图先验 $u^m$ 之间的约束把轨迹「拉」到地图先验上。）<br>
+          <b>怎么看这张图：</b>它把式(3)(4) 画了出来。关键点：同一帧里 $\tau_a,\tau_b$ 两个不同时刻的点，各自对插值轨迹位姿 $T_{\tau_a},T_{\tau_b}$ 构成约束——这正是「帧内不再假设匀速」的直观表达（接 0016 的连续时间去畸变）。右侧 $u_{\tau_c}$ 被 map prior $u^m$ 拉住，就是 $r_M$ 的几何画面。</p>
+        </figcaption>
+      </figure>
+      <p>最后，composition 的 SE(3) 修正：把离散位姿 $T_k$ 乘上一个由附近控制点算出的修正 $dT$，四个控制点 $c_{k-1..k+2}$ 参与：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$T_k'=dT\big(\tau_k,\,C_{k\in\Phi(\tau_k)}\big)\cdot T_k$$</div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 论文 A：实验、局限与图</h2>
+      <p><b>实验设置：</b>仿真（1000 个随机稀疏 surfel、100 Hz 运动、5 s 局部窗）+ <b>8 个真实数据集、4 种平台</b>（手持单线旋转 Hokuyo、手持 VLP-16、四足 VLP-16、轮式 VLP-16），室内/室外/无结构。基线是 <b>CT-SLAM [3]</b>（Bosse & Zlot / Zebedee）。</p>
+      <div class="callout">
+        <h4>★ 最反直觉的数字：控制点少反而更准</h4>
+        <p>Table II：同样 66 个状态，<b>composition + SE(3)</b> 做到平移 10.3 mm / 旋转 $1.2\times10^{-3}$ rad，而 <b>spline-direct</b> 只有 103.0 mm / $93.7\times10^{-3}$ rad；spline-direct 加到 101 个控制点（606 状态）也只是 23.1 mm / $5.1\times10^{-3}$ rad。原因：composition 优化的是「修正量」，每轮从零出发、<b>无奇异性</b>。这打破了「控制点越多越准」的直觉。</p>
+      </div>
+      <ul>
+        <li>全栈仿真 12.3 mm vs [3] 的 35.3 mm。</li>
+        <li>真实轨迹 RMSE 0.173–0.552 m（最大 60×69 m 规模）。</li>
+        <li>平面估计位置误差 <b>3.2–4.5 mm vs CT-SLAM 8.0–9.4 mm</b>（约 3 倍更少噪声）。</li>
+        <li>回环定位最难情形 <b>6 cm / 0.004 rad</b>，而 Sparse ICP 2.52 m / 2.42 rad、Open3D 13.8 m、SHOT 7.59 m。</li>
+        <li>耗时 <b>2.1 s / 每秒数据</b>（Matlab 单线程）。</li>
+      </ul>
+      <figure class="figure">
+        <img src="../../md/images/2022_Elasticity_Meets_Continuous-Time__Map-Centric_Dense_3D_L/3b46d62462c116bc60348368c2d4c3ba9b83bda52cf952ee83bfb4387e473ff2.jpg" alt="Fig. 12(b)">
+        <figcaption>
+          <b>原图注（Fig. 12(b) 所在总注）：</b>(a) Scanning path: Our proposed method closes a loop at (i) whereas trajectory-based SLAM does at (ii).（扫描路径：本方法在 (i) 处闭合回环，而基于轨迹的 SLAM 在 (ii) 处闭合。）<br>
+          <b>怎么看这张图：</b>这是 elasticity 的实体——形变图节点如何吸收回环误差。基于轨迹的 SLAM 要在 (ii) 处「把位姿图掰弯」来闭合回环；本文在 (i) 处直接通过形变图把地图拉一致，位姿不动。图里那些被拉拽的地图节点，就是「elasticity = 地图可被拉拽」的视觉证据。</p>
+        </figcaption>
+      </figure>
+      <h3>明确局限（论文 A）</h3>
+      <ul>
+        <li>① <b>growing map distortion</b>：原文 <i>The distortion in the 60-m scale map reached to 10 cm</i>，地图越大畸变越大。</li>
+        <li>② <b>partial observation problem</b>：局部重访重叠不足 → 不触发形变 → 整体结构漂移约 0.1 m。</li>
+        <li>③ 非高斯重复噪声（mixed pixel，多来自静止扫描）融合无效。</li>
+        <li>④ 分辨率约束：小于设定分辨率的小物体被忽略，分辨率过高算力骤增（<i>0.02 m or higher resolution were acceptable</i>）。</li>
+        <li>⑤ 回环平移误差（6 cm）仍大于重建精度（&lt;1 cm）。</li>
+        <li>⑥ 时偏标定在「退化场景如宽大无纹理室外」仍很难。</li>
+        <li>⑦ 局部图并入全局时忽略了重力对齐。</li>
+      </ul>
+    </section>
+
+    <div class="paper-divider"></div>
+
+    <section class="section-card" id="e">
+      <h2>5. 论文 B：实时性 + 固定延迟平滑</h2>
+      <p>论文 B 要同时解两个障碍。① <b>实时性</b>：CT 残差里的位姿由多个控制点拼出，状态与雅可比复杂度都上升，原文 <i>Existing continuous-time odometry methods rarely achieve real-time performance</i>。② <b>固定延迟平滑缺失</b>：离散法普遍用滑窗 + <b>边缘化（marginalization，把旧状态的信息「压」成先验保留，而不是丢掉）</b>保住旧测量信息，而 <i>continuous-time methods like VIO or LIO rarely consider how to preserve information of old measurements/states</i>，直接丢信息。本文同时解这两个。</p>
+      <div class="callout">
+        <h4>★ fixed-lag smoothing 是什么（串起前面几节）</h4>
+        <p>原文并不给 filtering / full smoothing / fixed-lag 的教科书三方对照，而是对比「<b>有无边缘化</b>」：DT 法用 fixed-lag + 边缘化；CT 法常常丢信息。本方案 = 「constant size of sliding window（定长滑窗）」+「probabilistically marginalize out control points（概率性地边缘化掉轨迹控制点和其他状态）」。配合 0029 的框架：full smoother / fixed-lag smoother / filter 三者里，fixed-lag 就是「只保留最近一段、旧的全边缘化」——本文正是把它搬进 CT。</p>
+      </div>
+
+      <h3>★ 它与预积分的关系（务必对照 0030）</h3>
+      <p>原文 II-A 明说离散法 <i>widely adopt preintegration technique, which integrates high-rate IMU data into a low-rate preintegration factor</i>（普遍用预积分，把高频 IMU 积成低频因子）；而 CT 法 <i>naturally couple raw IMU measurements in the batch optimization</i>（把原始 IMU 直接塞进批量优化）。<b>本文的 IMU 因子不需要预积分。</b>一句话对照：预积分是为了在离散框架里省事，而连续时间框架下这个补丁不需要了。另注：本文属于<b>紧耦合</b>（IMU/LiDAR/相机在同一个因子图里联合优化，而非各自算完再松耦合拼接），正好接第一季第 0006 课讲过的「松耦合 vs 紧耦合」。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 论文 B：双滑窗、公式与边缘化</h2>
+      <p><b>双滑窗（实现巧思）：</b>LI <b>时间</b>滑窗（常数时长 $\eta\Delta t=0.12$ s，$\Delta t=0.03$ s ⟹ $\eta=4$）+ 视觉<b>关键帧</b>滑窗（常数量 10 帧）。只有 LI 时间窗内的 active 控制点参与优化，其余控制点 <i>involved in the optimization but kept static</i>（参与但保持不变）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_Continuous-Time_Fixed-Lag_Smoothing_for_LiDAR-Inertial-C/d5a69be7f98ce56b9af9d879fce27735794f408fdd88256175d3a15a4f67669d.jpg" alt="Fig. 4">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Involved measurements from IMU (blue block) and LiDAR (green block) sensors in a temporal sliding window in $[t_{\kappa-1},t_\kappa)$, and measurements of camera (yellow block, keyframes denoted by arrows) in a keyframe sliding window. The active trajectory segment... is within the LI temporal sliding window.（IMU（蓝）与 LiDAR（绿）在一个时间滑窗内的测量，相机（黄，关键帧用箭头标）在关键帧滑窗内；待优化的 active 轨迹段位于 LI 时间滑窗内。）<br>
+          <b>怎么看这张图：</b>它解释「双滑窗不同步」这一实时性关键取舍——IMU/LiDAR 按<b>时间</b>滑窗（蓝绿），相机按<b>关键帧</b>滑窗（黄，箭头是关键帧）。只有落在 LI 时间窗里的控制点才被优化，其他固定。这就是「为实时只动一小段」的直观图。</p>
+        </figcaption>
+      </figure>
+
+      <h3>关键公式（抄准）</h3>
+      <p>累计 B 样条（阶数取 cubic，degree 3）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(t)=p_i+\sum_{j=1}^{k-1}\lambda_j(t)\,d_j^i$$</div>
+        <div class="flow-formula">$$R(t)=R_i\prod_{j=1}^{k-1}\mathrm{Exp}\!\Big(\lambda_j(t)\,\mathrm{Log}\big(R_{i+j-1}^{-1}R_{i+j}\big)\Big)$$</div>
+      </div>
+      <p>LiDAR 因子（式13/14，点到面、最近点参数化）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$r_L=G\,n_\pi^T\cdot Ll\Big(GR(\tau_\ell)(Lp_\ell+n_L)+Gp_L(\tau_\ell)\Big)+Gd_\pi$$</div>
+      </div>
+      <p><b>IMU 因子（式18）</b>——角速度、加速度由轨迹<b>解析导数</b>代入，原始 IMU 测量直接用：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$r_I=\Big[{}^I\omega(\tau_m)-{}^I\omega_m+b_\omega^\kappa;\;\ {}^Ia(\tau_m)-{}^Ia_m+b_a^\kappa\Big]$$</div>
+      </div>
+      <p>原文：<i>we can optimize the continuous-time trajectory by raw IMU measurements directly, avoiding the efforts of IMU propagation or preintegration</i>。另有 bias 随机游走因子。</p>
+
+      <h3>★ 边缘化 = 第一季悬念①的 Schur 消元（接 0019）</h3>
+      <p>把旧控制点边缘化掉，数学上就是 0019 讲过的 Schur 消元。把状态和雅可比按「保留 $\alpha$ / 边缘化 $\beta$」分块：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\begin{bmatrix}H_{\alpha\alpha}&H_{\alpha\beta}\\H_{\beta\alpha}&H_{\beta\beta}\end{bmatrix}\begin{bmatrix}x_\alpha\\x_\beta\end{bmatrix}=\begin{bmatrix}b_\alpha\\b_\beta\end{bmatrix}$$</div>
+        <div class="flow-formula">$$\hat H_{\alpha\alpha}x_\alpha=\hat b_\alpha\qquad(\text{Schur 补后})$$</div>
+      </div>
+      <div class="callout">
+        <h4>★ 同一个数学，第二个用途</h4>
+        <p>在 0019 里 Schur 消元用来「把三维点消掉、只留位姿」；在这里它用来「把旧控制点边缘化、压成先验因子」。请牢牢钉死：<b>这就是第一季悬念①的 Schur 消元，在这里被用来做「边缘化」——同一个数学，第二个用途。</b></p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2023_Continuous-Time_Fixed-Lag_Smoothing_for_LiDAR-Inertial-C/68295e056c16fce6ece5fed14d959c2e3d6584747622b9041fbfc08575360257.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>(a) A typical factor graph of LI system fusion. (b) A typical factor graph of LIC system fusion. Active control points are to be optimized, while static control points remain constant... (c) After marginalization of (b), the induced prior factor is involved with the latest control points, latest bias and timeoffsets.（(a) LI 系统因子图。(b) LIC 系统因子图；active 控制点待优化，static 控制点保持不变……(c) 对 (b) 做边缘化后，导出的先验因子与最新控制点、最新偏置和时偏相关。）<br>
+          <b>怎么看这张图：</b>这是本节头号图。把它和 0020 课讲过的「节点—边」图放一起看：(b) 里粗的是 active 控制点（待优化）、细的是 static 控制点（固定）；(c) 是边缘化后多出来的<b>先验因子</b>（虚线），它把被丢掉的老信息「压缩」保留下来，连着最新控制点、偏置和时偏。这就是 fixed-lag smoothing 的因子图长相。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_Continuous-Time_Fixed-Lag_Smoothing_for_LiDAR-Inertial-C/45efb4b8f4c5e439137760ae488bb9cb405cd28f4fc2fb740a724fef4c23c01c.jpg" alt="Fig. 11">
+        <figcaption>
+          <b>原图注（Fig. 11）：</b>Temporal calibration error of CLIC system in NCD_01 sequence... Although we start from various initial values of timeoffsets, the estimates of timeoffsets are able to quickly converge.（CLIC 系统在 NCD_01 序列上的时间标定误差……虽然从各种时偏初值出发，时偏估计都能快速收敛。）<br>
+          <b>怎么看这张图：</b>它把上一节 0031「CT 天然能估时偏」的结论，从<b>批量</b>搬到了<b>在线滑窗</b>。无论初值是正是负，时偏估计都在约 3 s 内收敛到 −2.0 ms（std 2.7 ms）。注意这发生在固定延迟的实时系统里——说明 CT 的时偏红利在在线场景照样成立。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 两篇局限、OCR 修正与收尾</h2>
+      <h3>论文 B 的关键数字</h3>
+      <ul>
+        <li>VIRAL 平均 <b>CLIO 0.034 m</b>（LIO-SAM 0.096、CLINS 0.036、VIRAL 0.054、MILIOM 0.077）。</li>
+        <li>NCD_01 w/ loop <b>CLIO 0.408 vs LIO-SAM 0.544</b>；NCD_06（手持剧烈抖动）<b>CLIO 0.091 vs LIO-SAM 0.272</b>。</li>
+        <li>LVI-SAM Handheld 上 CLIO 直接 fail；CLIC w/loop 0.65 vs LVI-SAM 0.83，开时偏标定后 <b>0.56</b>。</li>
+        <li>计算开销（Table VIII，397 s 序列）：<b>CLINS 总 1601.86 s（不实时！）</b>，其中 Update trajectory 占 1184.34 s；<b>CLIO 217.82 s</b>；<b>CLIC 294.57 s</b>——均 &lt; 397 s，这就是固定延迟的关键权衡数字；边缘化（Update prior）仅 8.4 s。</li>
+        <li>时偏在线标定：3 s 内收敛，终值 −2.0 ms（std 2.7 ms）。</li>
+      </ul>
+      <h3>论文 B 明确局限</h3>
+      <ul>
+        <li>① 为实时只优化 LI 时间窗内控制点，视觉关键帧窗内其余控制点固定 → 原文承认 <i>which might degrade the effects of visual factors</i>。</li>
+        <li>② 回环优化后<b>主动丢弃先验信息</b>（因线性化点可能已远离当前最优）。</li>
+        <li>③ <b>并非所有场景最优</b>——室内 Vicon Room 上 LIC-Fusion 2.0 明显更好（Seq1 0.033 vs CLIC 0.080）。</li>
+        <li>④ 纯 LI 的 <b>CLIO 在 Handheld 序列 fail</b>，必须靠相机兜底。</li>
+        <li>⑤ <i>our current implementation is not optimal</i>，仍有很大提速空间。</li>
+        <li>⑥ 外参假定预先标定完成。</li>
+      </ul>
+
+      <div class="callout">
+        <h4>OCR 提醒（论文 A · 务必说明你修正了什么）</h4>
+        <p>表 I 中 <code>∞</code> 应为 <b>$\omega$</b>（IMU rotational）；正文式(5)(6) 前的说明里 <code>β</code> 应为 <b>$\omega$</b>（角速度）；多处 <code>[*]</code> 应为 <b>$[\cdot]_\times$</b>（反对称矩阵）；摘要大写小型字母排版被拆散且有重复句。本课程一律用正确形式。</p>
+      </div>
+      <div class="callout">
+        <h4>OCR 提醒（论文 B · 本条很重要）</h4>
+        <p>md 里 <i>we focus on B-spine-based representation</i> 应为 <b>B-spline</b>；<b>式(23) 右侧的 $\mathbf x_\alpha,\mathbf x_\beta$ 应为 $\mathbf b_\alpha,\mathbf b_\beta$</b>（Schur 补的右端是向量 $b$，不是状态 $x$）；<b>第 131 行 $Gg=[0,0,9.8]$ 丢了负号，重力应为 $[0,0,-9.8]$</b>；表 II 中 <code>\dot b_a^\kappa</code> 的多余点号应删；Table VIII 第二处 <i>Update Trajectory</i> 应为 <b>Update prior</b>（与前一行撞名）。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文 A 标题里的 elasticity，是指「轨迹像橡皮筋一样可以拉伸」吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。elasticity 指的是「地图可以被拉拽」——回环时通过形变图对整张地图做非刚性加权形变，位姿反而不动。常见误读正是把它想成轨迹弹性。" onclick="lessonKit.answer(this,'q0032a')">不对，它指地图可被拉拽</button>
+          <button data-correct="yes" data-explanation="对。摘要说 map-centric SLAM 把 elasticity 当回环手段，具体是形变图对地图做非刚性形变，而非改轨迹。轨迹弹性是误读。" onclick="lessonKit.answer(this,'q0032a')">对，它指地图可被形变</button>
+        </div>
+        <div class="quiz-feedback" id="q0032a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文 B 里，连续时间框架下的 IMU 因子还需要像 0030 那样做预积分吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不需要。原文 II-A 说 CT 法把原始 IMU 直接耦合进批量优化，角速度/加速度由轨迹解析导数代入。预积分是离散框架为省事打的补丁，换框架后补丁不需要了。" onclick="lessonKit.answer(this,'q0032b')">不需要，原始 IMU 直接进优化</button>
+          <button data-correct="yes" data-explanation="错。本文明确说 CT 不需预积分；预积分只出现在它对比的离散法里。这正是「换范式后补丁消失」的对照点。" onclick="lessonKit.answer(this,'q0032b')">需要，和 0030 一样预积分</button>
+        </div>
+        <div class="quiz-feedback" id="q0032b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>论文 A 里 composition 比 spline-direct 更准，反直觉在哪？原因是什么？</p>
+          <p><b>答：</b>反直觉在「控制点少反而更准」：66 状态下 composition 做到 10.3 mm，而 spline-direct 103 mm，即便 spline-direct 加到 606 状态也只有 23.1 mm。原因是 composition 优化的是「修正量」，每轮从零出发、无奇异性；spline-direct 直接优化控制点本身，容易陷入奇异性。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>论文 B 的「边缘化」和 0019 的 Schur 消元是什么关系？fixed-lag smoothing 又是什么？</p>
+          <p><b>答：</b>边缘化在数学上就是 Schur 消元：把旧控制点（块 $\beta$）的信息压缩成先验因子，保留块 $\alpha$ 的方程 $\hat H_{\alpha\alpha}x_\alpha=\hat b_\alpha$。fixed-lag smoothing（接 0029）是「只保留最近一段窗口、旧状态全部边缘化」的平滑策略，本文把它搬进连续时间框架。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>论文 A 的 $r_M$（map prior 约束）为什么是「map-centric 与 CT 的耦合点」？</p>
+          <p><b>答：</b>因为运动畸变校正（CT 的插值轨迹）是基于已有地图先验完成的——局部扫描面元被强制贴到 map prior 上，而地图本身又靠 elasticity（形变图）保持全局一致。CT 提供逐时刻位姿，map prior 提供全局一致性，二者在 $r_M$ 处耦合。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>论文 B 的 Table VIII 里，为什么 CLINS 不算实时、而 CLIO/CLIC 算？</p>
+          <p><b>答：</b>因为序列总长 397 s，CLINS 总耗时 1601.86 s（远超序列长，不实时），其中 Update trajectory 占 1184 s；CLIO 217.82 s、CLIC 294.57 s，都 &lt; 397 s，说明固定延迟滑窗 + 边缘化把计算压到了实时以内。边缘化本身仅 8.4 s。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 5：</b>把本节和上一节串起来：CT 在「批量对比」和「在线系统」里分别靠什么赢？</p>
+          <p><b>答：</b>0031 的批量对比里，CT 靠「免插值、免积分、时偏可联合优化」在剧烈运动/不同步时赢 DT；本节论文 B 把同样的时偏红利搬进在线滑窗（Fig.11 3 s 收敛），并靠 fixed-lag + 边缘化（Schur 消元）做到实时。两节合起来：CT 既「更准（不同步时）」又「能实时」。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0031-连续时间vs离散时间2022-什么时候必须换建模.html">← 上一课：连续时间 vs 离散时间</a>
+        <a class="next" href="0033-KinectFusion-稠密建图的开端.html">下一课：KinectFusion（2011） →</a>
+      </div>
+      <p class="foot-note">惯性与连续时间这一模块收尾了；下一模块换话题——位姿算完了，<b>地图长什么样</b>（TSDF 系）🧊</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SGM（2008）：双目深度怎么算 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0026</div>
+      <h1>SGM（2008）：双目深度怎么算</h1>
+      <p class="subtitle">上一节是「先提特征再估运动」的稀疏路线；这一节走反面——不提特征，直接对每像素算视差，稠密地长出深度 🌐</p>
+      <div class="hero-meta">
+        <span>🎯 主题：半全局匹配（SGM）与互信息代价</span>
+        <span>👥 作者：Heiko Hirschmüller</span>
+        <span>📅 2008 · <i>Stereo Processing by Semiglobal Matching and Mutual Information</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 这一节接在哪里</a>
+        <a href="#b">2. 它要解决什么</a>
+        <a href="#c">3. ★ 为什么要互信息（MI）</a>
+        <a href="#d">4. 经典四步与代价家族</a>
+        <a href="#e">5. ★ 关键公式串讲</a>
+        <a href="#f">6. 工程细节：HMI / 亚像素 / 一致性</a>
+        <a href="#g">7. 实验数字与航空实例</a>
+        <a href="#h">8. 明确局限与收尾</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 SGM 为什么用互信息而不是灰度差；背出能量函数里 $P_1/P_2$ 各管什么；讲清路径递推怎么把「全局最小化」近似成线性复杂度；并诚实列出它的六条局限。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0024</b>：对极几何说「对应点落在对极线上」，SGM 就是把搜索限制在极线上、再沿极线做代价聚合的工程化。接 <b>0006</b>：都是「匹配/配准」，只是传感器不同；SGM 的 scan-line 代价聚合和激光的 scan-to-scan 有同构直觉。它还是<b>第一季悬念④</b>（提取 vs 不提取特征）的一个源头：SGM 走稠密、不提特征一路，与 VO/SfM 的稀疏特征路线正对照。</p></div>
+      </div>
+
+      <h2>1. 这一节接在哪里：从「稀疏」到「稠密」</h2>
+      <p>0024/0025 讲的是「先提特征点、再靠特征点估运动」——那是<b>稀疏</b>路线：只用画面里少数稳定的点。这一节换脑子：能不能<b>不提特征</b>，直接对整张图的<b>每一个像素</b>算出它离相机多远？这就是<b>稠密双目立体匹配（dense stereo）</b>。SGM（Semiglobal Matching，半全局匹配）是这条路线上最经典、最被工程界偏爱的方法之一。</p>
+      <div class="callout">
+        <h4>生活类比：视差与深度成反比</h4>
+        <p>你盯着一个近处杯子、左右眼交替看，杯子相对背景「跳」得很明显；看远处大山，左右眼几乎没差别。这个「左右图里同一个点的横向错位量」叫<b>视差（disparity）$d$</b>。双目的几何关系给出 <b>$d=Bf/Z$</b>：$B$ 是两镜头基线、$f$ 是焦距、$Z$ 是深度。所以<b>视差越大越近、越小越远</b>——算出了每个像素的视差，就解出了每个像素的深度。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它要解决什么：稠密匹配的三道坎</h2>
+      <p>原文开篇就点明，稠密双目在三类地方容易错配：<b>遮挡</b>、<b>物体边界</b>、<b>细结构</b>，以及<b>弱纹理 / 重复纹理</b>区。更要命的是——<b>记录与光照差异</b>（两台相机曝光不同、或同一场景不同时间拍）会让基于灰度差的代价彻底失效。</p>
+      <p>同时，当时排第一梯队的方法（Graph Cuts / Belief Propagation / 分层法）虽然准，但「runtimes of <b>more than 20 sec to more than a minute</b>」——二十多秒到一分钟以上，而且复杂度随场景大小变。于是 SGM 的野心很明确：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 抗辐射变化</h4><p>不受曝光/光照差异影响，灰度差法失效它也不慌。</p></div>
+        <div class="mini-card"><h4>② 近全局精度</h4><p>精度接近那些全局最优方法，但不必真做全局搜索。</p></div>
+        <div class="mini-card"><h4>③ 线性复杂度</h4><p>复杂度 $O(WHD)$（宽×高×最大视差），可预测、可扩展。</p></div>
+        <div class="mini-card"><h4>④ 快</h4><p>目标运行在 1–2 秒级，而不是一分钟。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 为什么要互信息（MI）</h2>
+      <p>原文把匹配代价分成两类：<b>BT（采样不敏感的绝对差，Birchfield-Tomasi）</b>这一类，以及 <b>MI（互信息，Mutual Information）</b>这一类。传统 AD/SD/BT 的问题原文明说：它们「<i>are sensitive to radiometric differences</i>」（对辐射/光照差异敏感）。而 MI「<i>is insensitive to recording and illumination changes</i>」——因为它由两个图的<b>熵</b>与<b>联合熵</b>构成，只关心「灰度值的统计分布关系」，不关心具体灰度值是多少。</p>
+      <div class="callout">
+        <h4>生活类比：熵与互信息</h4>
+        <p><b>熵</b>是「一件事有多不确定 / 多乱」：抛硬币结果很随机，熵高；太阳每天东升，熵低。<b>互信息</b>衡量「知道左图某处，能消除多少右图对应处的不确定性」。两张图配准得好，左右对应像素的灰度分布高度相关、联合熵低、互信息高；配准得差，两边像两团独立噪声，互信息低。所以 MI 把「找对应」变成「找让互信息最大的视差」。</p>
+      </div>
+      <p>原文的实验原话必须引（这是 MI 优于 BT 的硬证据）：在全局线性 / 非线性缩放时，「<i>BT breaks down very quickly, while the performance of MI and HMI is almost constant</i>」；在不同曝光下，「<i>BT fails completely, whereas HMI is nearly unaffected</i>」。结论很干脆：「<i>using BT is only advisable on images that are carefully taken under exactly the same conditions</i>」——BT 只在「同条件精心拍摄」时才建议用。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info/1c6e4cf9d890e2cb52be2c8ce634dc29101b56c3a882bc3fc77386b4fee5d29d.jpg" alt="Fig. 1 基于 MI 的匹配代价计算过程">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b><i>Calculation of the MI-based matching cost as a preprocessing step. For each pixel of $I_b$ (base image), a cost volume is computed from $I_m$ (match image) for all disparities. The joint probability $P$ is estimated with Parzen windows for a current disparity image and then convolved with a Gaussian $g$. A response image $h_{I_1,I_2}$ (right) shows an example for a pixel position of $I_b$ (left), where the true correspondence in $I_m$ is marked by a black dot.</i>（基于 MI 的匹配代价计算过程。）</p>
+          <p><b>怎么看这张图：</b>它把式（4）–（6）画成一条流水线：左图 $I_b$、右图 $I_m$ → 按当前视差图 warp → 统计计数（count）→ 得到概率 $P$ → $P$ 与高斯核 $g$ 卷积 → 取负对数得到 $-\log(P\otimes g)$ → 最终响应图 $h_{I_1,I_2}$。注意右边那个「真实对应点（黑点）」处响应最低——这就是 MI 代价的样子。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 经典四步与代价家族</h2>
+      <p>原文沿用 Scharstein & Szeliski 的分类，把双目匹配拆成四步，并点名了各类算法：</p>
+      <table>
+        <tr><th>步骤</th><th>干什么</th><th>代表性方法（原文点名）</th></tr>
+        <tr><td>① 代价计算</td><td>对每个像素、每个候选视差算一个「像不像」的代价</td><td>AD / SD / BT、梯度、<b>MI</b></td></tr>
+        <tr><td>② 代价聚合</td><td>把邻域代价加起来，抑制噪声</td><td>固定窗口、权重窗、分割块</td></tr>
+        <tr><td>③ 视差计算 / 优化</td><td>从代价里选最优视差（最小化能量）</td><td>DP、tree-based DP、Graph Cuts、Belief Propagation、layered 方法</td></tr>
+        <tr><td>④ 视差精修</td><td>左右一致性、亚像素、填洞等后处理</td><td>左右一致性检验、亚像素拟合</td></tr>
+      </table>
+      <p>原文还指出一个关键事实：<b>「almost all of the currently top-ranked algorithms optimize a global energy function」</b>——当时几乎所有顶尖方法，本质都是在最小化一个全局能量函数。SGM 也是，只是它用「半全局」的招数把全局最小化变得便宜。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 关键公式串讲</h2>
+      <p>这一节最硬核的五条公式，逐条过。</p>
+
+      <h3>5.1 互信息的定义</h3>
+      <div class="formula-box"><div class="flow-formula">$$MI_{I_1,I_2}=H_{I_1}+H_{I_2}-H_{I_1,I_2}$$</div></div>
+      <p>配准好时，左右图对应区域统计上强相关，联合熵 $H_{I_1,I_2}$ 低，于是 MI 高。所以「找对应」=「找让 $MI$ 最大的视差」。</p>
+
+      <h3>5.2 逐像素 MI 代价（这里的「鸡生蛋」）</h3>
+      <div class="formula-box"><div class="flow-formula">$$C_{MI}(p,d)=-mi_{I_b,f_D(I_m)}(I_{bp},I_{mq}),\qquad q=e_{bm}(p,d)$$</div></div>
+      <p>这条式子的麻烦在于：MI 作代价，需要先有一个视差图 $D$ 去把右图 warp（变形对齐）到左图，才能统计联合分布。可我们<b>正要算</b>的恰恰就是这个视差图——<b>没有视差就没法算 MI 代价，没有 MI 代价又算不出视差</b>。这就是本节最值得讲的逻辑难点：一个「鸡生蛋、蛋生鸡」的循环。原文的破法是<b>层次化、迭代求解</b>——从粗分辨率随便给个视差图起步，一层层往上 refine。</p>
+
+      <h3>5.3 能量函数（SGM 的灵魂）</h3>
+      <div class="formula-box"><div class="flow-formula">$$E(D)=\sum_p\Big(C(p,D_p)+\sum_{q\in N_p}P_1\mathrm{T}\big[|D_p-D_q|=1\big]+\sum_{q\in N_p}P_2\mathrm{T}\big[|D_p-D_q|>1\big]\Big)$$</div></div>
+      <p>逐项解释：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>第一项：数据项</h4><p>$C(p,D_p)$ 是逐像素匹配代价，来自 5.1/5.2。鼓励「每个像素自己匹配得上」。</p></div>
+        <div class="mini-card"><h4>$P_1$：小不连续</h4><p>惩罚「视差变化正好 1 像素」——允许<b>斜面 / 曲面</b>（相邻像素视差平滑变 1 很常见），罚得轻。</p></div>
+        <div class="mini-card"><h4>$P_2$：大跳变</h4><p>惩罚「视差变化大于 1 像素」，且<b>不随跳变幅度增长</b>——用来保住<b>视差不连续</b>（物体边缘处该跳就跳，不因跳得大而多罚）。原文还规定 $P_2=P_2'/|I_{bp}-I_{bq}|$，并始终 $P_2\ge P_1$。</p></div>
+      </div>
+
+      <h3>5.4 路径递推（式 13）</h3>
+      <p>SGM 的巧思：不在整张 2D 图上做全局最小化（那会 NP-complete），而是沿若干个方向各做一维动态规划，再把它们加起来近似全局。沿方向 $r$ 的递推：</p>
+      <div class="formula-box"><div class="flow-formula">$$L_r(p,d)=C(p,d)+\min\Big(L_r(p-r,d),\ L_r(p-r,d-1)+P_1,\ L_r(p-r,d+1)+P_1,\ \min_i L_r(p-r,i)+P_2\Big)-\min_k L_r(p-r,k)$$</div></div>
+      <p>前四项分别是「保持视差 / 视差减 1（罚 $P_1$）/ 视差加 1（罚 $P_1$）/ 视差大跳（罚 $P_2$）」里取最小；末项减去「上一像素的最小代价」，纯粹是为了把数值上界压到 $L\le C_{\max}+P_2$，避免累加爆掉。</p>
+
+      <h3>5.5 聚合（式 14）</h3>
+      <div class="formula-box"><div class="flow-formula">$$S(p,d)=\sum_r L_r(p,d)$$</div></div>
+      <p>把所有方向的路径代价加起来，就是该像素该视差的聚合代价；随后 <b>winner-takes-all</b>（谁最小取谁）得到视差，再用<b>左右一致性检验</b>把不可靠的置无效。原文强调：<b>路径数至少 8、建议 16</b>。下面这张图讲的就是「半全局」这个聚合。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info/80ca47a309881584650008518feb296ee28c5c8f9bd2d9775e22a07cadedb240.jpg" alt="Fig. 2 视差空间中的代价聚合">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b><i>Aggregation of costs in disparity space. Left: Minimum cost path $L_r(p,d)$ in the $(x,y,d)$ coordinate system for one path direction $r$. Right: 16 path directions starting from pixel $p$.</i>（视差空间中的代价聚合。）</p>
+          <p><b>怎么看这张图：</b>左边是某一条路径方向 $r$ 上，最小代价路径 $L_r(p,d)$ 在「$(x,y,d)$ 三维空间」里怎么走（沿视差轴蜿蜒）；右边是从一个像素 $p$ 出发的 <b>16 条方向路径</b>。SGM 的「半全局」就靠这张：每个方向各跑一遍一维 DP，最后把所有方向的代价加起来。多方向叠加，才能近似「全局」又不至于 NP-complete。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 工程细节：HMI / 亚像素 / 左右一致性</h2>
+      <p>原文给了三个很落地的工程 trick，值得记。</p>
+
+      <h3>6.1 层次化 MI（HMI）</h3>
+      <p>为解决 5.2 的鸡生蛋，HMI 从 <b>1/16 分辨率、随机视差图</b>起步，递归向上采样。关键规则：低分辨率层的视差图「<i>is used only for estimating the probability distribution P</i>」——只用来估概率分布 $P$，其余全部重算，<b>以免误差跨层传播</b>。理论耗时只比 BT 慢约 <b>14%</b>：</p>
+      <div class="formula-box"><div class="flow-formula">$$1+\frac{1}{2^3}+\frac{1}{4^3}+\frac{1}{8^3}+3\frac{1}{16^3}\approx1.14$$</div></div>
+      <p>而 $P$ 用 $7\times7$ 高斯核做 Parzen 估计即可，不必精确。</p>
+
+      <h3>6.2 亚像素</h3>
+      <p>对最小代价邻域拟合二次曲线取极小，得到亚像素级视差。原文自己承认这「<i>theoretically justified only for correlation using the sum of squared differences</i>」——只对平方和相关的情形有理论依据，对 MI 只是近似。</p>
+
+      <h3>6.3 左右一致性</h3>
+      <p>分别从 base / match 图出发求 $D_b$、$D_m$，若两边对不上就判无效。原文指出聚合对两侧<b>不对称</b>；想要边界更好，得把 $I_m$ 当 base 重算一遍（更慢）。下面这张是 2.1–2.3 节处理步骤的总览，把上面这些都串起来。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info/930a57ed4d07521a14673cb00abee75eb859d081da7f1a5ceb382eab583f5cc9.jpg" alt="Fig. 3 2.1-2.3 节处理步骤总览">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b><i>Summary of processing steps of Sections 2.1, 2.2, and 2.3.</i>（2.1–2.3 节处理步骤总览。）</p>
+          <p><b>怎么看这张图：</b>它画出 Downscale by $s$ → MI → 代价计算与聚合（Calc./Aggreg. of costs）→ 视差选择（Disp.-selection）→ 左右一致性（L/R Check）→ 上采样（Upscale），并有一个「$s=1$?」的回环判断。这正是 6.1 层次化 HMI 的完整流程图，也是整篇方法的骨架。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字与航空实例</h2>
+      <p>原文在 Middlebury 四对标准图上测（Tsukuba 384×288、Venus 484×383、Teddy 450×375、Cones 450×375；视差范围 16/32/64 px）。在 <b>1 px 阈值</b>下，C-SGM 排 6.2、SGM 排 9.3（领跑的是 AdaptingBP 1.7、DoubleBP 2.3）；但<b>阈值降到 0.5 px 时，C-SGM 与 SGM 变成榜首</b>——因为亚像素做得更好。</p>
+      <p>运行时间（Teddy，2.2 GHz Opteron + SSE2）：SGM <b>1.8 s</b>、C-SGM <b>2.7 s</b>；作为对照，BT 1.5 s、迭代 MI 4 s（比 BT 慢 164%）、HMI 1.8 s（仅慢 18%）。可见 HMI 基本吃掉了 MI 的抗辐射好处，却把速度拉回 BT 量级。</p>
+      <div class="callout">
+        <h4>★ 诚实提醒</h4>
+        <p>本文是 <b>2008 年</b>，正文<b>完全没有提到 KITTI</b>。KITTI 是 2012 年才出的数据集，不要往这篇里硬塞。本节所有数字都来自 Middlebury 与航空实例。</p>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info/5dfb1d483d710f497940a1514e9fc4041a18b79cfd6c1c207807947971890b82.jpg" alt="Fig. 9 上：SGM 视差图">
+        <img src="../../md/images/2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info/90b661a41a7d71114cbdbbdc63351d83db568f5355bd845c89980ceb24c42342.jpg" alt="Fig. 9 下：C-SGM 视差图">
+        <figcaption>
+          <p><b>原图注（Fig. 9）：</b><i>Disparity images calculated by SGM (top) and C-SGM (bottom) …</i>（SGM（上）与 C-SGM（下）算出的视差图。）</p>
+          <p><b>怎么看这张图：</b>这两张是<b>同图（Fig. 9）的不同部分</b>——上排是 SGM、下排是 C-SGM（带十字交叉窗口的改进版）。对照能直接看出：在弱纹理背景处，C-SGM 把前景 / 背景的边界修对了，而 SGM 那一版边界发糊。这就是 C-SGM 在 0.5 px 阈值登顶的直观证据。</p>
+        </figcaption>
+      </div>
+
+      <p>航空实例更夸张：UltraCam 单图 11,500×7,500（86 Mpixel）、8 cm/像素、视差范围达 2,000 px；<b>单图对 6 个邻居约 5.5 小时（单核）</b>，45 张图用 22 核并行；HRSC 推扫式影像在 40 核集群上 3–4 天处理 400 km²。下面这张是 Graz 航空影像的正交投影重投影结果。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info/1b12d620f5e49a734420fe95d23ac12fa29e13e591083eb5d943df701c097ef5.jpg" alt="Fig. 14(d) 奥地利 Graz 航空 UltraCam 影像 SGM 匹配结果的正交投影">
+        <figcaption>
+          <p><b>原图注（Fig. 14(d)）：</b><i>SGM matching results from aerial UltraCam images of Graz, Austria. (d) Orthographic reprojection.</i>（奥地利 Graz 航空 UltraCam 影像的 SGM 匹配结果，(d) 正交投影重投影。）</p>
+          <p><b>怎么看这张图：</b>注意这是 <b>Fig. 14 的 (d) 子图</b>——它展示把稠密视差图重投影成俯视的正交影像后，地面建筑与地形被正确地铺平对齐。86 Mpixel 级的大图还能跑出连贯深度，正是 SGM 线性复杂度 $O(WHD)$ 的价值。</p>
+        </figcaption>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SGM 为什么叫「半全局（Semiglobal）」而不是「全局」？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。SGM 沿多个方向各做一维动态规划（式13），再把所有方向的代价加起来（式14）近似全局能量最小化；它避免了在整张 2D 图上做真·全局搜索（那样对多数保不连续能量是 NP-complete）。" onclick="lessonKit.answer(this,'q0026a')">它用多方向一维 DP 聚合来近似全局最小化，不是真做 2D 全局搜索</button>
+          <button data-correct="no" data-explanation="不对。原文明确说在 2D 上做全局最小化对多数保不连续能量是 NP-complete，SGM 正是为了避免它才用「半」全局。" onclick="lessonKit.answer(this,'q0026a')">因为它真的在整张 2D 图上做了全局最优搜索</button>
+          <button data-correct="no" data-explanation="不对。只算单方向（一条极线）那是 scan-line optimization；SGM 要用至少 8、建议 16 条方向路径才叫「半全局」。" onclick="lessonKit.answer(this,'q0026a')">因为它只在一条极线上做匹配，所以只算半张图</button>
+        </div>
+        <div class="quiz-feedback" id="q0026a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 明确局限与收尾</h2>
+      <p>原文很诚实，列了多条局限，逐条是它自己写的，不要美化：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 无可见性 / 顺序约束</h4><p>1D 路径聚合<b>无法施加可见性与顺序约束</b>——「both concepts cannot be realized for paths that are not identical to epipolar lines」，所以它更接近 Scan line Optimization 而非常规 DP。</p></div>
+        <div class="mini-card"><h4>② 只是近似</h4><p>二维全局最小化对多数保不连续能量是 <b>NP-complete</b>，SGM 只是近似。</p></div>
+        <div class="mini-card"><h4>③ 最弱假设</h4><p>强度一致视差选择的假设③（面可用平面近似）「<i>is the weakest</i>」。</p></div>
+        <div class="mini-card"><h4>④ 亚像素只是近似</h4><p>二次曲线拟合只对平方和相关有理论依据，对 MI 只是近似。</p></div>
+        <div class="mini-card"><h4>⑤ MI 的失效方式</h4><p>把变换后强度存成 <b>8 bit</b> 会导致严重信息损失，这是 MI 特定的坑。</p></div>
+        <div class="mini-card"><h4>⑥ 跨条带限制</h4><p>单图只能与可重叠的图配对，条带间重叠「<i>&lt;50 percent</i>」时不做跨条带匹配。</p></div>
+      </div>
+
+      <h3>8.1 衔接与收尾</h3>
+      <p>本节讲清了「两张图怎么得到<b>稠密深度</b>」，并且是用「沿极线搜 + 多方向代价聚合」做的——这正是 0024 对极几何的工程化落地，也是和 0006 激光 scan-to-scan 同构的「匹配」直觉。它更是一条<b>不提取特征</b>的路线，和 VO/SfM 的稀疏特征路线正好构成第一季悬念④ 的两极。</p>
+      <p>下一节 <b>0027</b> 我们把问题放大：一堆<b>无序照片</b>怎么变成整个三维模型？那是 COLMAP 的故事。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 SGM 用互信息（MI）而不用 BT 灰度差，下面哪句符合原文？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。原文说 BT/AD/SD「are sensitive to radiometric differences」，而 MI「is insensitive to recording and illumination changes」；不同曝光下 BT fails completely、HMI nearly unaffected。" onclick="lessonKit.answer(this,'q0026b')">MI 对记录与光照变化不敏感，BT 在曝光不同时会彻底失效</button>
+          <button data-correct="no" data-explanation="不对。原文恰恰说 MI 由熵与联合熵构成、对辐射变化不敏感；BT 才对灰度差敏感。" onclick="lessonKit.answer(this,'q0026b')">MI 比 BT 更依赖两张图灰度完全一致</button>
+          <button data-correct="no" data-explanation="不对。MI 代价需要先有视差图去 warp 才能算，存在「鸡生蛋」循环，必须层次化迭代求解，并非直接可得。" onclick="lessonKit.answer(this,'q0026b')">MI 代价可以直接算，不需要任何先验视差图</button>
+        </div>
+        <div class="quiz-feedback" id="q0026b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：用 $d=Bf/Z$ 解释「视差越大越近」</summary>
+          <div>
+            <p>双目中视差 $d$ 是同一空间点在左右图的横向错位；$d=Bf/Z$（$B$ 基线、$f$ 焦距、$Z$ 深度）。$B,f$ 固定时 $d$ 与 $Z$ 成反比：近处点左右图错位大（$d$ 大），远处点错位小（$d$ 小）。所以算出每像素视差即得每像素深度。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：能量函数里 $P_1$ 与 $P_2$ 各管什么</summary>
+          <div>
+            <p>第一项是逐像素匹配代价。$P_1$ 惩罚视差变化正好 1 像素（允许斜面/曲面，罚轻）。$P_2$ 惩罚视差变化大于 1 像素，且<b>不随跳变幅度增长</b>，用来保住视差不连续（物体边缘该跳就跳）；并规定 $P_2=P_2'/|I_{bp}-I_{bq}|$、始终 $P_2\ge P_1$。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：MI 代价为什么有「鸡生蛋」问题，原文怎么破</summary>
+          <div>
+            <p>MI 作代价需要先有视差图 $D$ 去 warp 右图才能统计联合分布，可正要算的就是 $D$——没有视差算不了 MI，没有 MI 算不出视差。破法：层次化、迭代求解，从 1/16 分辨率随机视差图起步，低层视差图只用于估概率分布 $P$，其余重算以免误差跨层传播。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：为什么 SGM 是「半全局」而不是全局</summary>
+          <div>
+            <p>SGM 沿至少 8（建议 16）个方向各做一维动态规划（式13），再求和（式14）近似全局能量最小化；它避免在整个 2D 上做真·全局搜索——后者对多数保不连续能量是 NP-complete。多方向一维 DP 叠加，既近全局精度，又保线性复杂度 $O(WHD)$。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：列出 SGM 的两条硬局限，并说明本文是否提 KITTI</summary>
+          <div>
+            <p>两条硬局限：① 1D 路径聚合无法施加可见性/顺序约束（更接近 scan-line optimization）；② 二维全局最小化对多数保不连续能量是 NP-complete，SGM 只是近似。另：本文 2008 年，<b>全文未提 KITTI</b>（KITTI 2012 才出），所有数字来自 Middlebury 与航空实例，不可编造 KITTI 结果。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0025-VO教程下-单目双目与三条运动估计管线.html">← 上一课：VO 教程（下）：单目、双目与三条估计管线</a>
+        <a class="next" href="0027-COLMAP-从无序图像到三维重建.html">下一课：COLMAP（2016）：从无序图像到三维重建 →</a>
+      </div>
+      <p class="foot-note">SGM 是「稠密、不提特征」一路的典范。记住 $P_1/P_2$ 和「半全局」那张图，下一节看一堆照片如何长成三维模型 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

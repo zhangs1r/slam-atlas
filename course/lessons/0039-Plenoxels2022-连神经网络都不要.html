@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plenoxels（2022）：连神经网络都不要 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0039</div>
+      <h1>Plenoxels（2022）：连神经网络都不要</h1>
+      <p class="subtitle">上一节把「信息」从 MLP 搬到了哈希表（混合）；这一节把 MLP 也拿掉（显式）。作为收官节，它还要回答一个更大的问题：NeRF 里真正不可省的到底是什么 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：显式辐射场、球谐、TV 正则、梯度稀疏、全季收束</span>
+        <span>👥 作者：Sara Fridovich-Keil*、Alex Yu*、Benjamin Recht、Matthew Tancik、Angjoo Kanazawa、Qinhong Chen（UC Berkeley；两位共同一作）</span>
+        <span>📅 2022 · CVPR · <i>Plenoxels: Radiance Fields without Neural Networks</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 想解决什么 + 灵魂的提问</a>
+        <a href="#b">2. 相关工作与逆问题四件套</a>
+        <a href="#c">3. ★ 关键公式：体渲染 / 球谐 / 损失</a>
+        <a href="#d">4. 怎么优化（严格按原文）</a>
+        <a href="#e">5. ★ 为什么能快：梯度稀疏</a>
+        <a href="#f">6. 实验数字、局限与分歧思辨</a>
+        <a href="#g">7. ★ 全季收束：把三篇串成一条线</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：复述原文灵魂句「关键不是神经网络而是可微体渲染器」；抄准体渲染式(1)(2)并说明它和 0036 是同一个；解释球谐（类比「球面上的傅里叶级数」）与每体素 27 个系数；讲清 TV 正则的直觉、RMSProp 而非二阶优化、随机采样体素更新 TV；用「梯度很快变稀疏」解释速度；并给出 NeRF / Instant NGP / Plenoxels 的对照表。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0036</b>：体渲染离散求积公式在此原样复用，只是「查网络」换成了「插值查表」。接 <b>0038</b>：上一节是「混合表示」（网络 + 哈希特征表），本节是「显式表示」（连网络都不要）。接 <b>0033–0035</b>（TSDF / Voxel Hashing / Voxblox）：它们都是「给每个空间位置一个标量」的<b>显式离散</b>几何场，本节是显式离散的<b>辐射</b>场。下一阶段可接 <b>0015</b>（3D 高斯）。</p></div>
+      </div>
+
+      <h2>1. 想解决什么 + 灵魂的提问</h2>
+      <p>先把靶子钉死在 NeRF 的计算成本上（第 1 节）：</p>
+      <div class="callout">
+        <p><i>…with training lasting more than a day and rendering requiring 30 seconds per frame, on a single GPU…</i>（单卡上训练要「不止一天」、渲染每帧要 30 秒）。后续工作虽降低了渲染成本，但「<i>single GPU training still requires multiple hours</i>」——单卡训练仍要几个小时，这是限制实际应用的瓶颈。</p>
+      </div>
+      <p>但本节真正有灵魂的一问，在摘要与第 1 节里说得非常重：</p>
+      <div class="callout">
+        <h4>★ 本节灵魂（务必引用）</h4>
+        <p><i>Our experiments suggest the key element of Neural Radiance Fields is not the neural network but the differentiable volumetric renderer.</i>（我们的实验表明，神经辐射场的关键要素<b>不是神经网络，而是那个可微的体渲染器</b>。）</p>
+        <p>也就是说：大家以为「NeRF = 神经网络」，但本文说——网络只是配角，真正不可替代的是「把 3D 场积分成 2D 图像」且能反传的那套<b>可微体渲染</b>。策略上：沿用 NeRF 的体渲染公式与 PlenOctrees 的球谐表示，但把「先训 NeRF 再抽取」改成<b>端到端直接优化稀疏体素</b>。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 相关工作与逆问题四件套</h2>
+      <p>原文第 2 节把相关工作分成三支：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>Classical Volume Reconstruction</h4>
+          <p>体素网格、MPI、octree 等传统方法。本文「<i>use an even simpler sparse array structure</i>」（用了更简单的稀疏数组结构）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Neural Volume Reconstruction</h4>
+          <p>occupancy / SDF 走向可微体渲染；其中 Neural Volumes（NV）最接近本文，但因用 3D CNN 优化网格而被区分开。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Accelerating NeRF</h4>
+          <p>分区域处理 / JAXNeRF 并行 / AutoInt 精确光线积分 / Learned Initializations / 表面附近采样 / 预训练后抽取到快速结构。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>★ 第 5 节的收束框架：逆问题四件套</h4>
+        <p>原文把方法论抽象为四样东西——<b>数据表示 + 前向模型 + 正则函数 + 优化器</b>。记住这四个词，它既是本节的方法论，也是你读任何「重建类」论文时的通用透镜。本节最后会把它用作全季收束的框架。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 关键公式：体渲染 / 球谐 / 损失</h2>
+
+      <h3>① 体渲染（式1、式2）——和 0036 是同一个</h3>
+      <div class="formula-box">
+        $$\hat C(\mathbf r)=\sum_{i=1}^{N}T_i\big(1-\exp(-\sigma_i\delta_i)\big)\mathbf c_i,\qquad T_i=\exp\Big(-\sum_{j=1}^{i-1}\sigma_j\delta_j\Big)$$
+      </div>
+      <p>★ 请读者盯住：这跟 0036 讲的 NeRF 离散求积公式是<b>同一个</b>。原文也承认它的近似性——「<i>it assumes single-scattering and constant values between samples</i>」（假设单散射、相邻采样间为常值），但「<i>differentiable and enables updating the 3D model based on the error of each training ray</i>」（可微，能基于每条训练光线的误差去更新 3D 模型）。这就是灵魂句里「可微体渲染器」的数学本体。</p>
+
+      <h3>② 球谐表示（第 3.2 节，本节新增的核心）</h3>
+      <div class="callout">
+        <h4>术语：球谐函数（spherical harmonics）</h4>
+        <p>先给生活类比：它就像<b>「球面上的傅里叶级数」</b>。傅里叶级数是把一段一维信号拆成一堆不同频率的正弦波；球谐则是把「从一个方向看过去是什么颜色」这种定义在球面上的信号，拆成一堆不同「阶」的基函数。低阶 = 大尺度的平滑变化（更朗伯 / 漫反射），高阶 = 细节（更镜面 / 高光）。</p>
+      </div>
+      <p>具体做法：每个被占据体素的<b>角点</b>存一个标量密度 $\sigma$ 和<b>每个颜色通道</b>的一组球谐系数；某个方向上的样本颜色，就是「<i>a sum of these harmonic basis functions for each color channel, weighted by the corresponding optimized coefficients and evaluated at the appropriate viewing direction</i>」，即形如：</p>
+      <div class="formula-box">
+        $$c=\sum_{l}\sum_{m}k_l^m\,Y_l^m(\mathbf d)$$
+      </div>
+      <p>用 <b>2 阶</b>球谐 → 每通道 <b>9</b> 个系数 → <b>每体素 27 个球谐系数</b>。理由：PlenOctrees 发现「<i>higher order harmonics confer only minimal benefit</i>」（更高阶球谐收益极小）。</p>
+
+      <h3>③ 总损失（式3）</h3>
+      <div class="formula-box">
+        $$\mathscr L=\mathscr L_{recon}+\lambda_{TV}\mathscr L_{TV}$$
+        $$\mathcal L_{recon}=\frac{1}{|\mathcal R|}\sum_{\mathbf r\in\mathcal R}\|C(\mathbf r)-\hat C(\mathbf r)\|_2^2$$
+        $$\mathcal L_{TV}=\frac{1}{|\mathcal V|}\sum_{\mathbf v\in\mathcal V}\sum_{d\in[D]}\sqrt{\Delta_x^2(\mathbf v,d)+\Delta_y^2(\mathbf v,d)+\Delta_z^2(\mathbf v,d)}$$
+      </div>
+      <p>其中 $\Delta_x^2(\mathbf v,d)$ 是体素 $\mathbf v:=(i,j,k)$ 的第 $d$ 个值与相邻体素 $(i+1,j,k)$ 第 $d$ 个值之差的平方、按分辨率归一化；$D$ 是每体素存储的密度 + SH 系数总数。原文注：对 SH 系数与 $\sigma$ 用<b>不同权重</b>，且这些权重「<i>fixed for each scene type</i>」（对每个场景类型固定：有界、forward-facing、360°）。</p>
+      <div class="callout">
+        <h4>术语 &amp; 直觉：全变差 TV 正则（total variation）</h4>
+        <p>TV 正则惩罚「相邻体素值跳变太大」，逼着解尽量平滑。直觉：只有 100 张图，却要定上千万个体素值——这是个严重<b>欠定</b>的问题（未知数远多于方程）。没有正则，解会乱飞；TV 相当于给「没被照片直接看到的地方」灌入「邻近应该差不多」的先验，用先验补上缺失的信息。</p>
+      </div>
+      <p>另外两类正则，按场景加：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>稀疏性先验（式4）</h4>
+          <p>仅用于真实 forward-facing 与 360°（来自 SNeRG）：$\mathcal L_s=\lambda_s\sum_{i,k}\log(1+2\sigma(\mathbf r_i(t_k))^2)$。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Beta 分布正则（式5）</h4>
+          <p>仅用于真实 360°（Following Neural Volumes）：$\mathcal L_\beta=\lambda_\beta\sum_{\mathbf r}\big(\log(T_{FG}(\mathbf r))+\log(1-T_{FG}(\mathbf r))\big)$，$T_{FG}$ 为前景累积透射率，「<i>promotes a clear foreground-background decomposition</i>」（鼓励前景要么全不透明、要么全空）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 怎么优化（严格按原文）</h2>
+      <p>下面每一条都严格按原文写，<b>不添加原文没写的正则或调度器</b>。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>优化对象</h4>
+          <p>体素密度与球谐系数，「<i>optimized directly, without any special initialization or pretraining with a neural network</i>」（直接优化，没有任何特殊初始化或用神经网络预训练）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>损失组合</h4>
+          <p>MSE 重建损失 + <b>TV 正则</b>；真实 forward-facing 与 360° 另加 <b>Cauchy 稀疏先验</b>；真实 360° 再加 <b>beta 分布正则</b>。<b>无其他正则。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>随机化</h4>
+          <p>「<i>we use a stochastic sample of the rays $\mathcal R$ to evaluate the MSE term and a stochastic sample of the voxels $\mathcal V'$ to evaluate the TV term</i>」——注意 <b>TV 项也是随机采样体素</b>，不是全体。</p>
+        </div>
+        <div class="mini-card">
+          <h4>优化器（★ 请特别准确）</h4>
+          <p>问题「<i>poorly conditioned</i>」（病态），本该用二阶方法，但「<i>practically challenging</i>」；于是「<i>Instead, we use RMSProp</i>」——用 RMSProp 缓解病态，又不必承担二阶方法的完整计算复杂度。<b>不得臆测它用了别的调度器。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>学习率</h4>
+          <p>「<i>same learning rate schedule as JAXNeRF and Mip-NeRF</i>」，但对密度和球谐系数分别调初始学习率；主实验里对所有场景固定不变。</p>
+        </div>
+        <div class="mini-card">
+          <h4>粗到细 + 剪枝</h4>
+          <p>从低分辨率稠密网格开始优化 → 剪枝 → 每维度对半细分 → 继续优化；合成场景「<i>begin with 256³ resolution and upsample to 512³</i>」，细分后用<b>三线性插值</b>初始化。剪枝沿用 PlenOctrees（取最大权重或对密度取阈值），并因三线性插值牵扯相邻体素而加一步 dilation：<b>「a voxel is only pruned if both itself and its neighbors are deemed unoccupied」</b>（自身和邻居都被判空才剪）。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>★ 实现</h4>
+        <p>自研 <b>PyTorch CUDA 扩展</b>做可微体渲染（现代自动微分库对稀疏体素体渲染支持不佳），另提供较慢的 JAX 实现。这点在局限里还会再提。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 为什么能快：梯度稀疏</h2>
+      <p>原文把「为什么比 NeRF 快」分了三层来讲，务必看全：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>第一层：直接原因（§2）</h4>
+          <p>NeRF 慢，因为「<i>every rendered pixel requires evaluating a coordinate-based MLP at hundreds of sample locations</i>」（每个像素都要沿光线在成百个采样点评估一次坐标型 MLP）。把 MLP 扔了，这一步开销直接归零。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第二层：结构性原因（§3.8，最重要）</h4>
+          <p>「<i>The speed of our implementation is possible in large part because the gradient of our Plenoxel model becomes very sparse very quickly.</i>」前 12800 个 batch 内，合成场景每 batch 更新体素比例可低至 <b>1%</b>；<b>前 1–2 分钟内非零梯度体素少于 10%</b>。于是可用稀疏参数更新。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第三层：方法论（§5）</h4>
+          <p>「<i>a differentiable forward model, a continuous representation (in our case, via trilinear interpolation), and appropriate regularization</i>」。换成显式表示后，不再需要 MLP 的前向 / 反向，也不需要位置编码——位置编码被「网格 + 三线性插值 + 球谐」三件显式工具替换。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2022_Plenoxels/ee2adcd0561d9565350fd3f7f5a8ebdce882c6347037e5514005f5e1df40824b.jpg" alt="Fig. 4">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Gradient sparsity. The gradient becomes very sparse spatially within the first 12800 batches (one epoch for the synthetic scenes), with as few as 1% of the voxels updating per batch in the synthetic case. This enables efficient training via sparse parameter updates.（梯度稀疏性。在前 12800 个 batch（合成场景的一个 epoch）内梯度在空间上迅速变得稀疏，合成场景中每 batch 仅有约 1% 的体素更新；这使通过稀疏参数更新进行高效训练成为可能。）<br>
+          <b>怎么看这张图：</b>这是「为什么能快」的<b>机制图</b>，不是抽象的「没有 MLP 所以快」。曲线一路往下掉，说明梯度很快就只在极少数体素上非零，于是优化器只需更新一小撮参数。注意实线是均值、阴影是各场景范围——不同场景都遵循同一条「迅速变稀疏」的规律。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字、局限与分歧思辨</h2>
+
+      <h3>实验数字（请抄准）</h3>
+      <div class="callout">
+        <h4>数据集</h4>
+        <p>① 合成有界——NeRF 的 <b>8 个场景</b>（chair, drums, ficus, hotdog, lego, materials, mic, ship），各 100 训练 / 200 测试，$800\times800$；② 真实无界 forward-facing——8 场景（5 个来自 LLFF），20–60 张手机照片，$1008\times756$；③ 真实无界 360°——<b>Tanks and Temples</b> 的 4 个场景（M60, playground, train, truck）。</p>
+      </div>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>合成（8 场景平均）</h4>
+          <p>Ours <b>31.71 / 0.958 / 0.049，11 mins</b>；NV 26.05 / 0.893 / 0.160，>1 day；JAXNeRF 31.85 / 0.954 / 0.072，<b>1.45 days</b>。原文注：「<i>4 of the synthetic scenes train in under 10 minutes</i>」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>真实 forward-facing</h4>
+          <p>Ours <b>26.29 / 0.839 / 0.210，24 mins</b>；LLFF 24.13 / 0.798 / 0.212；JAXNeRF 26.71 / 0.820 / 0.235，<b>1.62 days</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>真实 360°</h4>
+          <p>Ours <b>20.40 / 0.696 / 0.420，27 mins</b>；NeRF++ 20.49 / 0.648 / 0.478，<b>~4 days</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>渲染速度 &amp; 首个 epoch</h4>
+          <p>「<i>interactive rates (15 fps)</i>… Although our implementation is <i>not optimized for fast rendering</i>」；合成场景「<b>1 minute, 20 seconds</b>」即可出可用结果；更快可转成 PlenOctree。</p>
+        </div>
+      </div>
+      <p><b>关键对照：</b>合成场景 PSNR 相当（31.71 vs 31.85）而训练 <b>11 min vs 1.45 days</b>；360° 几乎持平（20.40 vs 20.49）而 <b>27 min vs ~4 days</b>。这就是摘要里「<i>over two orders of magnitude faster</i>」（快两个数量级以上）的由来。</p>
+
+      <h3>Ablation（四组，很有教学价值）</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 插值方式（Table 1）</h4>
+          <p>三线性 $256^3$ <b>30.57</b>、三线性 $128^3$ <b>28.46</b>、最近邻 $256^3$ <b>27.17</b>、最近邻 $128^3$ <b>23.73</b>。结论：「<i>trilinear interpolation at 128³ outperforms nearest neighbor at 256³</i>」——双原因：提高有效分辨率 + 「<i>produces a continuous function approximation that is critical for successful optimization</i>」。★ 这条很重要：<b>连续可微比分辨率高更重要。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>② 网格分辨率（Table 4）</h4>
+          <p>$512^3$ 31.71 → $256^3$ 30.57 → $128^3$ 28.46 → $64^3$ 26.11 → $32^3$ 23.49。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 视角数（Table 3）</h4>
+          <p>100 图 31.71；25 图（低 TV）26.88；<b>25 图（高 TV）28.25</b>；NeRF 25 图 27.78 → 加大 TV 权重反超 NeRF。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 渲染公式（Table 5）</h4>
+          <p>Max [24]（NeRF 用）30.57 vs Neural Volumes [22] 27.54。</p>
+        </div>
+      </div>
+
+      <h3>★ 明确局限（逐条）</h3>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 欠定逆问题的固有伪影</h4>
+          <p>「<i>our method exhibits different artifacts than neural methods… both methods achieve similar quality in terms of standard metrics</i>」（drums 场景高光处）。详见 Fig. 9。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② TV 权重无普适最优</h4>
+          <p>「<i>there is no optimal a priori setting of the TV weight</i>」——需按场景逐个调；作者认为可接受，因为训练快，且真实场景图少需更强正则。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 渲染未优化</h4>
+          <p>15 fps，原文明说「<i>not optimized for fast rendering</i>」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 实现层面</h4>
+          <p>稀疏体素体渲染在主流自动微分库支持不佳，需自写 CUDA 扩展。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Plenoxels/f40e1e558b28d0f895b4c477d370b2ca6780e5293d2f77e3778a4e0bc003a539.jpg" alt="Fig. 9">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Artifacts. JAXNeRF and Plenoxel exhibit slightly different artifacts, as shown here in the specularities in the synthetic drums scene. Note that some artifacts are unavoidable for any underdetermined inverse problem, but the specific artifacts vary depending on the priors induced by the model and regularizer.（伪影。JAXNeRF 与 Plenoxel 表现出略有不同的伪影，此处展示的是合成 drums 场景高光处的差异。注意任何欠定逆问题都有不可避免的伪影，但具体的伪影形态取决于模型与正则引入的先验。）<br>
+          <b>怎么看这张图：</b>这是「<b>显式表示不是免费午餐</b>」的证据。左边 JAXNeRF（神经网络法）和右边 Plenoxel（显式法）的画质指标差不多，但高光处的瑕疵<b>长不一样</b>——因为二者的先验不同。它直接服务于上面的局限 ①。
+        </figcaption>
+      </figure>
+
+      <h3>★ 与上一节的关键分歧（全季最值得思辨的一点）</h3>
+      <div class="callout">
+        <p>Instant NGP 明确做过一个消融：把 MLP 换成<b>线性层</b>后，「<i>the quality is significantly compromised as compared to the MLP, which is better able to capture specular effects and to resolve hash collisions</i>」，而「<i>the MLP is only 15% more expensive than the linear layer</i>」（MLP 只比线性层贵 15%）。可 Plenoxels 却说「没有神经网络也能达到 NeRF 质量」。</p>
+        <p><b>两者并不矛盾</b>，分歧点在「<b>特征表里存了多少信息</b>」——NGP 的哈希表每个 entry 只存 $F=2$ 维特征，而 Plenoxels 每个体素存 <b>27 个球谐系数 + 密度</b>。NGP 把「大部分表达能力」留给了那个小 MLP；Plenoxels 把表达能力直接摊进每个体素的 27 个系数里，于是连 MLP 都不需要了。</p>
+        <p>★ 并如实说明一条<b>时间关系</b>：Plenoxels 全文不含 Müller / hash encoding / instant 字样（arXiv 2112.05131，2021-12），Instant NGP 为 arXiv 2201.05989（2022-01），<b>Plenoxels 成文早于 Instant NGP</b>。所以<b>不要写「Plenoxels 回应了 Instant NGP」</b>（相反，是 NGP 引用了 Plenoxels）。</p>
+      </div>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Instant NGP（MLP + 每 entry 2 维哈希特征）和 Plenoxels（无网络 + 每体素 27 个系数）都说自己能达到 NeRF 质量，却不矛盾。关键分歧在哪？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。NGP 每个哈希 entry 只存 F=2 维特征，表达能力主要留在小 MLP；Plenoxels 每个体素直接存 27 个球谐系数 + 密度，把表达能力摊进了显式网格。分歧点正是「特征表里存了多少信息」，而非「要不要网络」。" onclick="lessonKit.answer(this,'q0039a')">特征表里存了多少信息（2 维 vs 27 维）</button>
+          <button data-correct="no" data-explanation="不对。两者都用了可微体渲染器，也都能达到 NeRF 质量；矛盾并不在「渲染框架」或「是否达到质量」，而在「信息存放的密度」。" onclick="lessonKit.answer(this,'q0039a')">一个用了体渲染、一个没用</button>
+        </div>
+        <div class="quiz-feedback" id="q0039a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. ★ 全季收束：把三篇串成一条线</h2>
+      <p>这是本节的最后一个小节，也是<b>第二季（阶段 B 打地基）的收官</b>。我们把三篇摆在一起看位移：</p>
+      <div class="callout">
+        <p><b>NeRF（隐式）</b> → 信息全塞进网络权重；<b>Instant NGP（混合）</b> → 网络 + 可训练哈希特征表；<b>Plenoxels（显式）</b> → 只留可微渲染器，连网络都不要。</p>
+      </div>
+      <table>
+        <thead><tr><th>维度</th><th>NeRF（0036/37）</th><th>Instant NGP（0038）</th><th>Plenoxels（0039）</th></tr></thead>
+        <tbody>
+          <tr><td>信息存放位置</td><td>MLP 权重（隐式）</td><td>哈希特征表 + 小 MLP（混合）</td><td>稀疏体素网格（显式）</td></tr>
+          <tr><td>每场景参数量 / 存储</td><td>约 5 MB 权重</td><td>表 $T=2^{14}\sim2^{24}$ + 10k MLP</td><td>上千万体素值（27 系数 + 密度）</td></tr>
+          <tr><td>合成场景 PSNR（avg.）</td><td>31.01</td><td>33.176（5 min）</td><td>31.71（11 min）</td></tr>
+          <tr><td>训练时间</td><td>1–2 天（V100）</td><td>秒级～5 min（3090）</td><td>11 min（合成）/ 27 min（360°）</td></tr>
+          <tr><td>渲染速度</td><td>30 s / 帧</td><td>60 FPS（HD）</td><td>15 fps（未优化）</td></tr>
+          <tr><td>原文承认的主要伪影</td><td>视角稀疏掉点、黑箱不可解释</td><td>颗粒状微观结构（哈希冲突）</td><td>欠定逆问题固有伪影（高光处）</td></tr>
+        </tbody>
+      </table>
+
+      <h3>① 与前面模块的呼应</h3>
+      <p>TSDF（<b>0033–0035</b>）也是「给每个空间位置一个标量」，那是<b>显式离散</b>的几何场；NeRF 是<b>隐式连续</b>的辐射场；Plenoxels 又回到<b>显式离散</b>，但存的是<b>辐射</b>而非几何。「显式 vs 隐式」这个轴，走了一圈又回来了——这正是第一季第 <b>0015</b> 课那句「显式 vs 隐式」的完整版答案。</p>
+
+      <h3>② 指向第一季 0015 与下一阶段</h3>
+      <p>第一季第 <b>0015</b> 课的 3D 高斯<b>保留了「可微渲染 + 梯度优化」</b>，但把体渲染换成光栅化、把采样换成各向异性高斯——它与 Plenoxels 一样，都在追问「<b>NeRF 里真正不可省的是什么</b>」。而 Plenoxels 原文留了一句预言性的未来工作：</p>
+      <div class="callout">
+        <p><i>…combining our method with additional components such as camera optimization and large-scale voxel hashing, it may enable a practical pipeline for end-to-end photorealistic 3D reconstruction.</i></p>
+        <p>注意：这句话把「<b>大规模体素哈希</b>」列为拼图之一——与上一节 <b>0038</b> 的方向（哈希编码）暗合。两条看似对立的路线，在结尾处其实手指向了同一块拼图。</p>
+      </div>
+
+      <h3>③ 一句话总结全季</h3>
+      <p>第一季在讲「怎么把问题写成图」，第二季在讲「<b>图上的边怎么算得又快又准、算完的结果怎么存下来</b>」——而这一模块（0036–0039）告诉我们，连「存什么、存哪里」本身都可以被重新设计。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Plenoxels/d19cb2414c951f9f71ad657430967d15ea5fdbd027256226b79c8c5fc12c5f9c.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of our sparse Plenoxel model. Given a set of images… we optimize a (a) sparse voxel ("Plenoxel") grid with density and spherical harmonic coefficients at each voxel. To render a ray, we (b) compute the color and opacity of each sample point via trilinear interpolation of the neighboring voxel coefficients. We integrate… using (c) differentiable volume rendering, following the recent success of NeRF. The voxel coefficients can then be (d) optimized using the standard MSE reconstruction loss… along with a total variation regularizer.（稀疏 Plenoxel 模型总览。给定一组图像……我们优化 (a) 一个稀疏体素网格，每个体素存密度与球谐系数；渲染一条光线时，(b) 通过对邻近体素系数做三线性插值计算每个采样点的颜色与不透明度；再 (c) 用可微体渲染积分（沿用 NeRF 的成功做法）；(d) 用标准 MSE 重建损失加全变差正则优化体素系数。）<br>
+          <b>怎么看这张图：</b>这是本节<b>头号图</b>，与 0036 的 NeRF Fig. 2 逐格对应：同一个体渲染框架（(c) 仍是 NeRF 那套可微积分），只是 (b) 把「查网络」换成了「插值查表」。(a) 直接优化稀疏网格、(d) 用 MSE + TV——这就是「三篇可以串成一条线」最直观的依据。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Plenoxels/b0ed809198c8328f8e81d9aa448bb64176ff5f98dacfa697cf7a597c2c4efc93.jpg" alt="Fig. 1">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Plenoxel: Plenoptic Volume Elements for fast optimization of radiance fields. We show that direct optimization of a fully explicit 3D model can match the rendering quality of modern neural based approaches such as NeRF while optimizing over two orders of magnitude faster.（Plenoxel——用于辐射场快速优化的全光体积元素。我们展示：对一个完全显式的 3D 模型直接优化，即可匹配 NeRF 等现代神经方法的渲染质量，而优化速度快两个数量级以上。）<br>
+          <b>怎么看这张图：</b>全篇主张的第一句话的图像版，也是把「不要神经网络」摆上桌的标志性对比图。右边那张合成场景的并排对比，肉眼几乎分不出「神经法」和「显式法」的差别——但训练时间差了两个数量级。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>★ OCR 提醒（如实说明，读 md 时注意）</h4>
+        <ul>
+          <li>分数被拉平为整数：「with <b>718</b> of the images… the remaining <b>118</b>」应为 <b>7/8</b> 与 <b>1/8</b>。</li>
+          <li>上标丢失：「a 1283 grid」应为 $128^3$；Table 4 的 <code>5123/2563/1283/643/323</code> 应为 $512^3/256^3/128^3/64^3/32^3$。</li>
+          <li>Table 3 列错位 / 数字粘连，引用该表具体数字前须回原 PDF 核对。</li>
+          <li>$1-\exp(-\sigma_i\delta_i)$ 被拆成 <code>1 - e x p(-σ_i δ_i)</code>。</li>
+        </ul>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>写出体渲染式(1)(2)，并说明它和 0036 讲的关系。</p>
+          <p><b>答：</b>$$\hat C(\mathbf r)=\sum_{i=1}^{N}T_i\big(1-\exp(-\sigma_i\delta_i)\big)\mathbf c_i,\quad T_i=\exp\Big(-\sum_{j=1}^{i-1}\sigma_j\delta_j\Big)$$ 这正是 0036 的离散求积公式，<b>同一个</b>。原文承认它假设单散射、采样间常值，但可微，能反传——这就是灵魂句里「可微体渲染器」的数学本体。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>用「球面上的傅里叶级数」类比解释球谐，并说明每体素存多少个系数、为什么。</p>
+          <p><b>答：</b>球谐像把「某个方向看过去是什么颜色」这种球面信号拆成不同阶的基函数：低阶 = 平滑（漫反射）、高阶 = 细节（高光）。用 2 阶球谐 → 每通道 9 个系数 → 每体素 <b>27</b> 个球谐系数 + 1 个密度。取 2 阶是因为 PlenOctrees 发现更高阶收益极小。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>为什么 Plenoxels 不需要位置编码？TV 正则的直觉是什么？</p>
+          <p><b>答：</b>换成显式表示后，「位置编码」被「网格 + 三线性插值 + 球谐」三件显式工具替换，不再需要把坐标升频喂网络。TV 正则惩罚相邻体素值跳变，逼解平滑；因为只 100 张图却要定上千万体素值，是严重欠定问题，TV 用「邻近应差不多」的先验补上缺失信息。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>抄准三组训练时间对照，并解释「为什么能快」的三层。</p>
+          <p><b>答：</b>合成 31.71 / 11 min vs JAXNeRF 1.45 days；真实 360° 20.40 / 27 min vs NeRF++ ~4 days。三层：① 直接原因——每个像素不再要在上百个采样点评估 MLP；② 结构性原因（最重要）——梯度很快变稀疏（前 1–2 分钟非零梯度体素 &lt;10%，每 batch 可低至 1%），故可稀疏参数更新；③ 方法论——可微前向模型 + 连续表示（三线性插值）+ 适当正则，替代了 MLP 前向 / 反向与位置编码。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 5：</b>为什么说 Instant NGP 与 Plenoxels「不矛盾」？并说明两者的时间先后。</p>
+          <p><b>答：</b>分歧在「特征表里存了多少信息」：NGP 每 entry 只存 $F=2$ 维特征、表达能力留给了小 MLP；Plenoxels 每体素存 27 个系数 + 密度、把表达能力摊进显式网格，故连 MLP 都不需。时间上 Plenoxels（arXiv 2112.05131，2021-12）<b>早于</b> Instant NGP（arXiv 2201.05989，2022-01），故不能写「Plenoxels 回应了 Instant NGP」，反而是 NGP 引用了 Plenoxels。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0038-InstantNGP2022-哈希编码把NeRF压到秒级.html">← 上一课：Instant NGP（2022）</a>
+        <a class="next" href="../index.html">第二季完 · 返回课程馆 →</a>
+      </div>
+      <p class="foot-note">从「全塞进网络」到「混合」再到「显式」，我们走完了一圈「显式 vs 隐式」。第二季（阶段 B 打地基）到此结束，下一步可进入阶段 C / D / F 等主干模块 🚀</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

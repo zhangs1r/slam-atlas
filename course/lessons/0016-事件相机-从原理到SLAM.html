@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>事件相机：从原理到 SLAM（2022 总览 + 2020 SLAM 专述） — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0016</div>
+      <h1>事件相机：从原理到 SLAM（2022 总览 + 2020 SLAM 专述）</h1>
+      <p class="subtitle">⚡ 两篇综述一起读：先用 2022 这篇"事件视觉全景"打地基讲"它到底怎么工作、强在哪、难在哪"，再用 2020 这篇"事件 SLAM 专述"把方法切成四类、把坑和 future 摊开。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：Event Camera（事件相机 / DVS）原理、表示、四大优势与三大挑战，落到事件 vSLAM 四类方法</span>
+        <span>👥 作者：Gallego 等（2022）/ Chen、Shao、Xin 等（2020*）</span>
+        <span>📅 年份 · <i>Event-based Vision: A Survey</i> (2022) &amp; <i>Event-based SLAM: A Comprehensive Survey</i> (*见正文日期冲突说明)</span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 事件相机到底是什么</a>
+        <a href="#b">2. 事件是怎么"生"出来的：EGM</a>
+        <a href="#c">3. 四大优势（含一处自相矛盾修正）</a>
+        <a href="#d">4. 三大挑战：数据关联</a>
+        <a href="#e">5. 事件的七种表示</a>
+        <a href="#f">6. 事件 SLAM 四类方法</a>
+        <a href="#g">7. 2022 的 SLAM 结论（§4.4）</a>
+        <a href="#h">8. 卡在哪 &amp; 未来方向</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你能说清：事件相机和手机摄像头<strong>根本不是一类东西</strong>——它不拍"画面"，只报告"哪个像素、什么时候、亮度变了多少、变亮还是变暗"。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>前面讲的是"用图像/帧做 SLAM"。事件相机换了一种传感范式：输出是异步、稀疏、微秒级的时间流。本季"建立坐标系"里，它是和 3DGS、NeRF 并列的"另一条快路线"。</p></div>
+      </div>
+      <h2>1. 事件相机到底是什么：和帧相机的根本区别</h2>
+      <p>2022 这篇综述的摘要一上来就点明差异（原文）：</p>
+      <div class="formula-box">"Event cameras are bio-inspired sensors that differ from conventional frame cameras: Instead of capturing images at a fixed rate, they <b>asynchronously measure per-pixel brightness changes</b>, and output a stream of events that encode the time, location and sign of the brightness changes."</div>
+      <p>普通相机（frame camera）按外部时钟<strong>每固定一段时间拍一整张图</strong>（比如 30 FPS）；事件相机每个像素独立、异步地盯着自己那点的亮度，一旦变化够大就"喊一嗓子"，发出一个<strong>事件（event）</strong>。一个事件就是一个四元组（2020 综述 §2.1 原话）：</p>
+      <div class="formula-box">$$e_k = (x_k,\, y_k,\, t_k,\, p_k)$$ 其中 $(x_k,y_k)$ 是触发像素坐标，$t_k$ 是时间戳，$p_k=\pm1$ 是极性（变亮 ON / 变暗 OFF）。</div>
+      <p>注意它<strong>不输出绝对亮度</strong>，只输出"变化"。2022 摘要强调它的诱人特性：高时间分辨率（μs 级）、极高动态范围、低功耗、像素带宽达 kHz 级、从而减少运动模糊。下面几节我们逐个拆开。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_EventSurvey/713657a72e5dc487d6e510ef93bcd795c73cb4eff6b7a6885fd7f88573429bbc.jpg" alt="2022 综述 Fig.1(b) DVS 像素工作原理">
+        <figcaption>
+          <p><b>原图注（Fig. 1(b)）：</b> "Schematic of the operation of a DVS pixel, converting light into events."（DVS 像素的工作原理示意图：把光变成事件。）</p>
+          <p><b>怎么看这张图：</b> 这是理解整门课的一张"心脏图"——它画的是一个像素内部怎么把入射光转成事件流。对照 (a) 的像素电路图看：每个像素先记下当前对数亮度，再持续监测；一旦变化超过阈值就发事件，带着坐标、时间、极性传出去。⚠️ 诚实说明：原图 Fig.1 有 (a)–(f) 六个子图（电路、原理、芯片照片、时空螺旋、帧+事件叠加等），这里只取 <code>713657a7…</code> 对应的 (b) 子图，因为它最直观讲"原理"；其余子图按出现顺序推断归属，未逐张引用。</p>
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 事件是怎么"生"出来的：事件生成模型（EGM）</h2>
+      <p>两篇综述都给了同一套<strong>事件生成模型</strong>。2022 §2.4 把亮度记成对数亮度 $L\doteq\log(I)$（"brightness"），无噪声时事件触发条件是：自上次在该像素触发以来，亮度增量达到一个<strong>时间对比度阈值 $C$</strong>。公式如下（2022 Eq.(1)(2) 与 2020 Eq.(1) 完全一致，仅符号用 $\mathbf{x}_k$ 或 $\mathbf{u}_k$ 之分）：</p>
+      <div class="formula-box">
+        <p>亮度增量（当前减上次）：$\displaystyle \Delta L(\mathbf{x}_k, t_k) = L(\mathbf{x}_k, t_k) - L(\mathbf{x}_k, t_k-\Delta t_k)$</p>
+        <p>触发条件（达到阈值）：$\displaystyle \Delta L(\mathbf{x}_k, t_k) = p_k C \tag{1,2}$</p>
+        <p>其中 $C>0$，$\Delta t_k$ 是该像素上次触发到这次的时间间隔，极性 $p_k\in\{+1,-1\}$ 是亮度变化符号。</p>
+      </div>
+      <p>一个小但关键的点（2022 特别强调）：DVS 事件是<strong>由亮度变化"幅度"触发的</strong>（式 2），而不是由"亮度导数超过阈值"触发的（式 3 只是泰勒展开后的近似解读）。别把"变化量"和"变化率"搞混。</p>
+      <div class="callout"><h4>助教划重点：两个常用近似</h4><p>2022 还给出两个把事件和"经典视觉量"连起来的近似（Eq.(3)(4)）：</p>
+        <p>① 时间导数近似：$\displaystyle \frac{\partial L}{\partial t}(\mathbf{x}_k,t_k) \approx \frac{p_k C}{\Delta t_k}$ —— 事件强度（极性/间隔）≈ 该点的亮度变化率。</p>
+        <p>② 运动边缘近似：$\displaystyle \Delta L \approx -\nabla L \cdot \mathbf{v}\,\Delta t$ —— 在恒定光照下，事件由<strong>运动的亮度边缘</strong>产生；$\nabla L$ 是图像平面上的亮度梯度，$\mathbf{v}$ 是边缘的运动速度。</p>
+      </div>
+      <p>式 ② 有个反直觉的推论（2020 §2.1 也点明）：如果运动方向和边缘<strong>平行</strong>，那边缘在图像上不动、不产生亮度变化，<strong>就不触发事件</strong>——这条边缘在事件里"隐形"了。这正是后面"数据关联难"的根源之一。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 四大优势（以及一处要正经修正的自相矛盾）</h2>
+      <p>2022 摘要把事件相机的卖点列成四条：高时间分辨率（μs 级）、极高动态范围、低功耗、像素带宽 kHz 级且减少运动模糊。2020 §1 也沿用了这四条，并补了一句"高动态范围（&gt; 120 dB）"。但这里<strong>有两处必须当场修正</strong>的硬伤，不能照抄：</p>
+      <div class="callout"><h4>⚠️ 修正 1：动态范围"140 dB"自相矛盾</h4><p>2022 摘要写的是 "very high dynamic range (<b>140 dB versus 60 dB</b>)"，但<strong>同一篇</strong>的传感器表（Table 1）里 DVS128 动态范围只有 <b>120 dB</b>、ATIS 是 "&gt; 120 dB"、DAVIS346 是 143 dB；而 2020 综述又写成 "&gt; 120 dB"。三个数字（140 / 120 / &gt;120）放一起对不上。安全说法：事件相机动态范围<strong>通常 &gt; 120 dB，部分传感器可到约 140 dB</strong>，远高于帧相机的约 60 dB。写课时别把 140 dB 当铁律。</p></div>
+      <div class="callout"><h4>⚠️ 修正 2：3 kHz 带宽对应"300 ms"是单位错误</h4><p>2022 §2.2 原文："At the brighter light intensity, the DVS pixel bandwidth is about <b>3 kHz</b>, equivalent to an exposure time of about <b>300 ms</b>." —— 这里单位错了。3 kHz = 每秒 3000 次，对应周期 $1/3000 \approx$ <strong>333 μs</strong>，不是 300 ms（差了 1000 倍）。正确应是"<b>约 300 μs</b>"。这正是"高时间分辨率 / 低延迟"那个卖点的量化来源，必须改对。</p></div>
+      <p>修正后，四条优势的人话版是：① <strong>微秒级时间分辨率</strong>，能跟住高速运动、没有运动模糊；② <strong>对数亮度 → 极高动态范围（&gt;120 dB）</strong>，白天黑夜通吃；③ <strong>低延迟</strong>（每个像素独立、变化够大立刻发），可在连续时间处理；④ <strong>低功耗 + 低冗余</strong>（只传"变了的点"）。下面这张图用"事件传递函数"把"带宽/延迟"那条讲实了。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_EventSurvey/d7fb078ba09a94f1898267aa41e7b02356fc18afeb4e53fdeb09e00401daffc5.jpg" alt="2022 综述 Fig.2(b) 事件传递函数">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b> "‘Event transfer function’ from a single DVS pixel in response to sinusoidal LED stimulation. … Fig. 2b shows that, at low frequencies, the DVS pixel produces a certain number of events per cycle. Above some cutoff frequency, the variations are filtered out … and thus the number of events per cycle drops."（单像素对正弦 LED 刺激的"事件传递函数"；超过某个截止频率后变化被前端滤掉，每周期事件数下降。）</p>
+          <p><b>怎么看这张图：</b> 横轴是刺激频率、纵轴是每周期事件数。曲线拐下去的那个"截止频率"就是上面说的时间分辨率上限——亮度变化太快，前端光电电路跟不住，事件就稀疏了。把这张图和"3 kHz ↔ 约 300 μs"一起看，就明白"快"的边界在哪。⚠️ 诚实说明：Fig.2 有 (a) 测量装置、(b) 响应曲线两个子图，这里取 <code>d7fb078b…</code> 对应的 (b) 响应图；原文未显式给子图文件边界，按正文顺序推断 (a) 为测量装置、未单独引用。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 三大挑战：最棘手的是"数据关联"</h2>
+      <p>2022 §2.3 把处理事件的新方法要克服的困难归纳为三类（原文三点）：</p>
+      <ul>
+        <li><strong>① 不同的时空输出</strong>：事件是异步、空间稀疏的；图像是同步、稠密的。为图像序列设计的老算法不能直接套。</li>
+        <li><strong>② 不同的光度传感</strong>：帧相机给灰度，事件只给"变亮/变暗"的二值变化信息；而变化既看场景亮度，也看相机与场景的相对运动。</li>
+        <li><strong>③ 噪声与动态效应</strong>：所有视觉传感器都有噪声（光子散粒噪声、晶体管电路噪声），事件相机量化"时间对比度"的过程尤其复杂、尚未被完全刻画。</li>
+      </ul>
+      <p>其中第 ② 条直接引出 SLAM 里最痛的问题——<strong>数据关联（data association）</strong>。2022 §3 指出：事件由"运动引起的亮度变化"产生，所以同一场景点在不同运动状态下的事件外观会完全变样；而跟踪又要在不同时间把"同一个点"的事件对上，这就非常难。下图用"同一场景、两种运动方向"把这件事画活了。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_EventSurvey/265c371a273c5a078212e086bc545dcc445a89fec8633065928939c2650b734c.jpg" alt="2022 综述 Fig.5 数据关联挑战">
+        <figcaption>
+          <p><b>原图注（Fig. 5）：</b> "The challenge of data association. Panels (a) and (b) show events from a scene (c) under two different motion directions: (a) diagonal and (b) up-down. … Clearly, it is not easy to establish event correspondences between (a) and (b) due to the changing appearance of the edge patterns in (c) with respect to the motion."（数据关联之难：同一场景在两种运动方向下，事件边缘图案长得完全不同，难以建立对应。）</p>
+          <p><b>怎么看这张图：</b> 中间 (c) 是真实场景边缘；左右 (a)(b) 是两种运动（斜向 / 上下）下积累出的事件图。重点看：<strong>同样的边缘，换个运动方向，事件图案就换一张脸</strong>。这正解释了为什么"特征跟踪 / 回环检测"在事件域特别难——你不能在事件里直接找"和上次一样的特征"。</p>
+        </figcaption>
+      </figure>
+      <div class="callout"><h4>助教划重点</h4><p>事件相机"强在高速/HDR"，但代价是"外观随运动而变"。所以事件 SLAM 的核心难题，不是算力，而是<strong>怎么在变化的外观里把同一个 3D 点认出来</strong>。后面四类方法，本质上是在用不同方式回答这个问题。</p></div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 事件的七种表示（2022 §3.1 / 2020 §2.2）</h2>
+      <p>单个事件信息太少，实际算法往往先把事件流"换一种表示"再处理。2022 Fig.3 一口气展示了多种（原文列举）：时空中的原始事件、<strong>事件帧（event frame / 亮度增量图）</strong>、<strong>时间面（time surface，每像素最近触发时刻）</strong>、<strong>体素网格（voxel grid）</strong>、<strong>运动补偿事件图（motion-compensated event image, IWE）</strong>、以及由事件<strong>重建出的强度图</strong>。2020 §2.2 也把表示归为几类：单个事件、事件包、事件帧、时间面、体素网格、3D 点集、运动补偿事件图、重建图。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_EventSurvey/2faaaa31b73a0c65a1877bcefb61654a82e76cc13e5b81929b2e95b20cad6667.jpg" alt="2022 综述 Fig.3 多种事件表示">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b> "Several event representations (Section 3.1) of the slider depth sequence [81]. From left to right: events in space time … Event frame (brightness increment image) … Time surface … Interpolated voxel-grid … Motion-compensated event image … Reconstructed intensity image."（同一段序列的多种事件表示：时空事件、事件帧、时间面、插值体素网格、运动补偿事件图、重建强度图。）</p>
+          <p><b>怎么看这张图：</b> 这是整门课里最该"扫一眼记住"的图。从左到右，事件被逐步"翻译"成越来越像普通图像的东西：左边是稀疏的彩色点云（蓝正/红负），右边是稠密的重建灰度图。记住一句话——<strong>越往右越方便套传统 CV 工具，但越往右越丢掉事件的"异步/稀疏"优势</strong>。后面四类 SLAM 方法，几乎都在"用哪种表示"上做文章。</p>
+        </figcaption>
+      </figure>
+      <div class="callout"><h4>为什么表示这么重要</h4><p>2020 §8.2.1 直接把这列为未来方向之一：把事件转成"类图像表示"去套老算法，会忽略稀疏性、造成冗余计算，且短窗口丢边缘、长窗口有运动模糊；相机静止时时间面还会退化。所以"怎么表示事件"本身就是开放问题。</p></div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 事件 SLAM 四类方法（2020 §3–§6）</h2>
+      <p>2020 综述把事件 vSLAM 按方法论切成<strong>四类</strong>（原文 §1）：feature-based（特征法）、direct（直接法）、motion-compensation（运动补偿法）、deep learning（深度学习方法）。每类都在回答"怎么建立事件对应 + 怎么求位姿 + 怎么建图"。</p>
+      <ul>
+        <li><strong>① 特征法（§3）</strong>：从事件提取点/线特征并跟踪，再做 BA。优化目标为重投影误差（Eq.(9)(10)）：$\displaystyle T_{m,n},X=\arg\min\sum_{(f_{m,i},f_{n,j})\in\mathcal{F}}\|\mathbf{x}_{f_{m,i}}-\mathbf{x}_{f_{n,j}}^m\|^2$。快、省算力，但<strong>纹理缺失场景直接跪</strong>。</li>
+        <li><strong>② 直接法（§4）</strong>：不做显式特征，直接对齐事件/边缘图。事件-图像对齐（Eq.(11)(12)）最小化"观测亮度变化 vs 图像预测亮度变化"的差；事件表示对齐（Eq.(13)(14)）最小化两帧事件图差异。适合纹理缺失，但中等运动下受限。</li>
+        <li><strong>③ 运动补偿法（§5）</strong>：以事件帧为主表示，通过"把事件 warp 到参考帧并对齐"来估计运动（Eq.(15)：$\displaystyle T_{ref,k},X=\arg\min_{T_{ref,k}} g_a(H_{mc}(\mathcal{E}))$）。分 CMax（对比度最大化）、DMin（离散度最小化）、概率模型三类。能靠长窗口累积保持边缘，但——见下方"事件塌缩"。</li>
+        <li><strong>④ 深度学习方法（§6）</strong>：用网络直接从事件预测位姿与深度（Eq.(16)：$T=f(\mathcal{E};\theta_f),\, D=g(\mathcal{E};\theta_g)$），分自监督（Eq.(17) 光流损失）与有监督（Eq.(18) 位姿+深度损失）。能抓非线性、抗噪；但<strong>依赖大数据、泛化无保证</strong>；其中 SNN 能直接吃异步事件但训练极难。</li>
+      </ul>
+      <div class="callout"><h4>⚠️ 事件塌缩（event collapse，2020 §5.4）</h4><p>这是运动补偿法的专属坑：在某些运动下，优化会把事件"压"到目标空间里的一条<strong>线或一个点上</strong>（collapse to a line or a point），目标函数反而拿到比真解更大的值，于是收敛到坏解。缓解办法有：把运动参数初始化在真解附近、对事件做白化（whitening）、用散度/面积形变等度量做正则。它直接导致运动补偿法"基本只敢用在旋转运动"上。</p></div>
+      <figure class="figure">
+        <img src="../../md/images/2020_EventSLAM-Survey/a9ecc52427b632f502088feb3719e4c85766081f084cdf6eac6c24e16c7caf43.jpg" alt="2020 综述 Fig.7 深度学习方法两类">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b> "Diagrams of two typical types of deep learning methods. Self-supervised methods estimate depth and camera pose to recover optical flow as the training signal (in orange), while supervised methods estimate the depth and camera pose with ground truth separately (in blue)."（两类深度学习方法示意：自监督用光流作训练信号（橙），有监督用真值分别估深度与位姿（蓝）。）</p>
+          <p><b>怎么看这张图：</b> 这是四类方法里"深度学习方法"那一块的示意图。它把"要不要真值"切成两条路：橙线是自监督（用多视图几何一致性当监督），蓝线是有监督（直接拿位姿/深度真值回归）。放到第 8 节你还会看到，2020 综述把"深度学习方法"单独列为未来可结合基础模型（foundation model）的方向。⚠️ 诚实说明：Fig.7 是 2020 综述的图，原文未拆分多个子图文件，这里整张引用。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 2022 的 SLAM 结论（§4.4）：三复杂度轴 + 只有两篇纯事件</h2>
+      <p>2022 §4.4 "Pose Estimation and SLAM" 给了非常清醒的总结。它说最一般的问题是 6-DOF 运动 + 自然 3D 场景，但研究是<strong>按复杂度逐级啃</strong>的，可拆成三条"复杂度轴"：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>轴 1：问题维度</h4><p>2D（3-DOF，如旋转/平面运动）先于 3D（6-DOF 自由运动）被解决。</p></div>
+        <div class="mini-card"><h4>轴 2：运动类型</h4><p>约束运动（旋转 / 平面）先研究，再攻最难的 6-DOF 自由运动。</p></div>
+        <div class="mini-card"><h4>轴 3：场景类型</h4><p>人工高对比场景、线/2D 地图先解决，再到自然场景（任意光度变化）。</p></div>
+      </div>
+      <p>2022 还点了两个"没怎么被碰"的方向：</p>
+      <ul>
+        <li><strong>回环检测（loop closure）基本没做</strong>——事件流随运动变外观，同一地点不同方向长出不同事件，回环/重定位很难（这也是 2020 §8.2.2 列为未来方向的原因）。</li>
+        <li><strong>立体（stereo）相对未被探索</strong>——双事件相机的对应仍是计算瓶颈（2022 §4.3 讲 instantaneous stereo 时强调"找对应"是最耗时的一步）。</li>
+      </ul>
+      <p>最关键的一句话（2022 Table 3 结论）：在它列出的所有方法里，<strong>只有 [25]、[26] 两篇用"纯事件"解决了最一般场景</strong>（其余要么要 RGB-D、要么要强度图、要么只要旋转运动）。而且一旦为了降复杂度去加额外传感器（如 RGB-D），就又把帧相机那套瓶颈（延迟、运动模糊）带了回来。下面这张图就是"纯事件 SLAM"能长出什么——半稠密地图 + 轨迹。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_EventSurvey/5e0b4fc261fdf915410554b6c9dcb52707c7973156f319990e1315b2e8658bea.jpg" alt="2022 综述 Fig.8(b) 事件 SLAM 轨迹与半稠密地图">
+        <figcaption>
+          <p><b>原图注（Fig. 8(b)）：</b> "(b) Estimated camera trajectory (several methods) and semi-dense 3D map (i.e., point cloud)."（多方法估计的相机轨迹 + 半稠密 3D 地图（点云）。）</p>
+          <p><b>怎么看这张图：</b> 这张是"事件 SLAM 到底能产出什么"的实证。注意它叫 <strong>semi-dense（半稠密）</strong>地图——因为事件只由"运动的亮度边缘"产生，地图天然mostly是边缘点（2022 §4.4 原话）。也就是说：事件 SLAM 擅长勾出<strong>结构边缘</strong>，但不擅长填满整个表面。结合第 8 节"稀疏/噪声/随运动变"的总结看，会更清楚它的能力边界。⚠️ 诚实说明：Fig.8 有 (a) 重建场景（事件+投影地图叠加）、(b) 轨迹+点云两个子图，这里取 <code>5e0b4fc2…</code> 对应的 (b)；子图文件边界按正文顺序推断。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 卡在哪 &amp; 未来方向（2020 §7.3 / §8）</h2>
+      <p>先把四类方法的"优缺点"摊成一张表（基于 2020 §7.3 Discussion 原话归纳）：</p>
+      <table>
+        <thead><tr><th>方法</th><th>强在哪</th><th>弱在哪（§7.3）</th></tr></thead>
+        <tbody>
+          <tr><td><b>特征法</b></td><td>挑少量事件特征处理，<strong>算得快</strong>，能扛高速运动。</td><td>纹理缺失场景失效；常需外援 IMU。</td></tr>
+          <tr><td><b>直接法</b></td><td>纹理缺失场景<strong>更鲁棒</strong>。</td><td>中等运动下性能受限。</td></tr>
+          <tr><td><b>运动补偿法</b></td><td>长窗口累积保边缘，鲁棒于高速 / 大场景。</td><td>受<strong>事件塌缩</strong>所限，基本只敢用旋转运动；纹理缺失也掉精度。</td></tr>
+          <tr><td><b>深度学法</b></td><td>给足训练数据可估得准（如驾驶场景）。</td><td>依赖大数据、泛化无保证；平面运动数据训的模型难迁移到复杂运动。</td></tr>
+        </tbody>
+      </table>
+      <p>2020 §8 把"难"再切成<strong>内在挑战（intrinsic）</strong>与<strong>外在挑战（extrinsic）</strong>。内在：运动相关边缘图案、传感器噪声、事件稀疏性、缺乏理论框架；外在：恶劣光照（夜间闪烁光）、纹理缺失、动态物体。然后给出 <strong>4 个未来方向</strong>（§8.2）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>表示（Representation）</h4><p>更充分利用事件"异步/稀疏"本质的表示；事件语义地图；以及——神经表示（见下）。</p></div>
+        <div class="mini-card"><h4>鲁棒性（Robustness）</h4><p>全局优化 / 回环（PL-EVIO 已加回环模块但整体极少研究）；地点识别与重定位（运动相关导致同地异事件）。</p></div>
+        <div class="mini-card"><h4>多传感器与基准</h4><p>融合 IMU/图像互补；建立公平可比的 benchmark 数据集。</p></div>
+        <div class="mini-card"><h4>基础模型</h4><p>把大模型先验知识与事件相机"只给边缘、缺全貌"的特性结合，做主动 SLAM。</p></div>
+      </div>
+      <div class="callout"><h4>📌 串到本季前面的 3DGS</h4><p>2020 §8.2.1 在"神经表示"里明确点名了 3DGS："3D Gaussian Splatting (Kerbl et al., 2023) achieves real-time rendering, which is a promising future direction for the realtime mapping module in the event-based vSLAM methods."——即把 3DGS 的实时渲染当作事件 SLAM"实时建图模块"的潜在未来方向。这正好把上一节（0015）的 3DGS 和本节事件 SLAM 接上了线。</p></div>
+
+      <div class="interactive-card">
+        <h3>互动判断 1</h3>
+        <p>关于事件相机的"高动态范围"，下面哪句最诚实？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不准确。2022 摘要写的 140 dB 和它自己的传感器表（DVS128=120 dB、ATIS>120 dB）对不上，2020 综述又写 >120 dB。把 140 dB 当铁律会和它的表格自相矛盾。" onclick="lessonKit.answer(this,'q0016')">事件相机动态范围铁定是 140 dB，无一例外</button>
+          <button data-correct="yes" data-explanation="对。三处数字（140 / 120 / >120）放一起对不上；稳妥说法是通常 >120 dB、部分传感器约 140 dB，远高于帧相机的约 60 dB。写综述/笔记时别把 140 dB 当成定值。" onclick="lessonKit.answer(this,'q0016')">通常 > 120 dB、部分到约 140 dB（摘要的 140 与自身表格矛盾）</button>
+        </div>
+        <div class="quiz-feedback" id="q0016"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 2</h3>
+        <p>"事件塌缩（event collapse）"是指事件太多把显存撑爆？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。事件塌缩不是显存问题，而是运动补偿法里的优化病态：在某些运动下事件被 warp 到目标空间里的一条线/一个点，目标函数反而拿到更大值，收敛到坏解。它限制了这类方法基本只敢用于旋转运动。" onclick="lessonKit.answer(this,'q0016b')">是，事件太多撑爆显存</button>
+          <button data-correct="yes" data-explanation="对，你抓住了重点：它是优化收敛到坏解的现象（事件压成线/点），不是资源问题。缓解办法有靠近真解初始化、事件白化、几何正则等（2020 §5.4）。" onclick="lessonKit.answer(this,'q0016b')">错，是运动补偿优化把事件压成线/点导致收敛到坏解</button>
+        </div>
+        <div class="quiz-feedback" id="q0016b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>写出事件生成模型的触发条件 $\Delta L = p_k C$，并写出其线性化近似 $\Delta L \approx -\nabla L\cdot\mathbf{v}\Delta t$。解释"为什么边缘平行于运动方向时不产生事件"。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>触发：$\Delta L(\mathbf{x}_k,t_k)=L(\mathbf{x}_k,t_k)-L(\mathbf{x}_k,t_k-\Delta t_k)=p_k C$。线性化（恒定光照、泰勒展开）：$\Delta L\approx -\nabla L(\mathbf{x}_k)\cdot\mathbf{v}(\mathbf{x}_k)\Delta t$，即事件由"亮度梯度 $\nabla L$ 沿运动速度 $\mathbf{v}$ 的分量"引起。若运动方向与边缘平行，则边缘在图像上不移动、$\nabla L$ 在运动方向上无分量，亮度不变、不触发事件——边缘在事件里"隐形"。</div></details></li>
+        <li>把四类事件 vSLAM 方法（特征 / 直接 / 运动补偿 / 深度学习）各用一句说清"它怎么建立对应"，并各写一条 §7.3 指出的短板。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>特征法：从事件提点/线特征再匹配（短板：纹理缺失失效）。直接法：直接对齐事件/边缘图、不做显式特征（短板：中等运动受限）。运动补偿法：把事件 warp 到参考帧最大化对齐（短板：事件塌缩，基本只敢旋转运动）。深度学法：网络直接从事件回归位姿/深度（短板：依赖大数据、泛化无保证）。</div></details></li>
+        <li>2022 §4.4 说的"三复杂度轴"是什么？为什么它强调只有 [25]、[26] 两篇做到"纯事件"最一般场景？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>三轴：问题维度（2D→3D）、运动类型（约束→6-DOF 自由）、场景类型（人工高对比→自然场景）。大多方法为了降复杂度加了 RGB-D/强度图或只做旋转运动；只有 [25] Kim、[26] Rebecq 两篇不依赖额外传感、用纯事件解决了最一般的 3D 自然场景，所以被单独点名。一旦加传感器，帧相机的延迟/运动模糊瓶颈又被带回。</div></details></li>
+        <li>2020 §8.2 列了哪 4 个未来方向？其中如何点名 3D Gaussian Splatting？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>四个方向：Representation（表示）、Robustness（鲁棒性/回环/重定位）、Multi-sensor &amp; Benchmark（多传感器与基准）、Foundation Model（基础模型）。在 Representation→Neural Representation 里明确写：事件版 NeRF 已优于帧版 NeRF，而 "3D Gaussian Splatting achieves real-time rendering, which is a promising future direction for the realtime mapping module in the event-based vSLAM methods"——把 3DGS 实时渲染当作事件 SLAM 实时建图的潜在方向。</div></details></li>
+        <li>修正题：2022 原文 "3 kHz bandwidth … equivalent to an exposure time of about 300 ms" 哪里错了？给出正确数量级及理由。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>单位错了。3 kHz = 3000 次/秒，对应周期 $1/3000\ \text{s}\approx 333\ \mu\text{s}$，不是 300 ms（差 1000 倍）。正确应为"约 300 μs"。这正是事件相机"微秒级时间分辨率 / 低延迟"那一条优势的量化来源，必须改对，否则和摘要"μs 级"自相矛盾。</div></details></li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0015-3D高斯泼溅全景2025.html">← 3D 高斯泼溅全景（2025）</a>
+        <a class="next" href="0017-导览-第二季开场-打地基.html">第二季开场：打地基 →</a>
+      </div>
+      <p class="foot-note">⚠️ <b>元数据冲突说明：</b> 本课的 2020 那篇文件名标 "2020"，但正文首页写 "Received: 20 February 2024 / Accepted: 5 April 2026 / Published online: 25 April 2026"。我们<strong>按正文实际内容</strong>讲解，并标注其为"2020*（日期见正文冲突）"，不凭文件名假定年份。第一季到此为止，下一季进入阶段 B 打地基 🧱 已开课：<a href="0017-导览-第二季开场-打地基.html">第二季开场（0017）</a></p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

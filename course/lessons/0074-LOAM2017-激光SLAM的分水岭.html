@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LOAM（2017）：激光 SLAM 的分水岭 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0074</div>
+      <h1>LOAM（2017）：激光 SLAM 的分水岭</h1>
+      <p class="subtitle">十年来几乎所有激光 SLAM 系统，都站在这篇论文搭好的骨架上 📐</p>
+      <div class="hero-meta">
+        <span>🎯 主题：两步优化 · 特征提取 · 运动畸变补偿</span>
+        <span>👥 作者：Ji Zhang、Sanjiv Singh（CMU）</span>
+        <span>📅 2017 · <i>Low-drift and real-time lidar odometry and mapping</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">为什么扫描对扫描不行</a>
+        <a href="#deskew">运动畸变怎么补</a>
+        <a href="#feature">两类特征</a>
+        <a href="#residual">点到线、点到面</a>
+        <a href="#two">两步优化</a>
+        <a href="#kd">顺手埋一个伏笔</a>
+        <a href="#result">结果与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 LOAM 的两层结构各在干什么；解释运动畸变为什么会发生；写出点到线与点到面的残差；并知道它留给后人的最大一个问题是什么。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>直接接第一季 <b>0008</b> 课（那时我们只是在横评里见过 LOAM 的 scan-to-map）与 <b>0006</b> 课（第一次提到 ikd-Tree 的悬念）；本篇的「点到面残差」与第二季 <b>0022</b> 课同宗。</p>
+        </div>
+      </div>
+
+      <h2>1. 为什么「扫描对扫描」不行</h2>
+
+      <p>先建立问题。激光 SLAM 最朴素的做法是：<b>把当前这一帧点云，和上一帧点云对齐，算出这两帧之间我动了多少。</b>然后一帧一帧地累加下去。</p>
+
+      <p>这个做法叫 <b>scan-to-scan</b>。它有两个致命伤，而且这两个伤是<b>同源的</b>。</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>致命伤一：一帧点云不是「一张照片」</b>
+          <p>相机按下快门，画面是<b>同一瞬间</b>的。但机械旋转激光雷达转一圈要 0.1 秒——这 0.1 秒里，车一直在往前开。于是<b>同一帧里，最早采到的点与最晚采到的点，来自两个不同的车位置</b>。你不处理这一层，这帧点云就是一个「时空被揉在一起」的东西。</p>
+        </div>
+        <div class="mini-card">
+          <b>致命伤二：误差会累积并被放大</b>
+          <p>scan-to-scan 每次都只用一个很短的时间间隔（0.1 秒）来估运动。原文的说法是：这样估出来的运动<b>本身就低估</b>，而且估错的那一点点会被下一帧继承，越滚越大。这就是常说的<b>漂移</b>。</p>
+        </div>
+      </div>
+
+      <p>LOAM 的全部智慧，就是<b>用一个结构同时解决这两个问题</b>。而这个结构只有一句话：</p>
+
+      <div class="callout">
+        <h4>LOAM 的核心主张</h4>
+        <p>把「估计运动」和「精修地图」<b>拆成两个并行算法</b>，用不同的频率跑：<br>
+        ① <b>里程计</b>（lidar odometry）跑得<b>快但粗</b>——高频输出速度，顺便把运动畸变去掉；<br>
+        ② <b>建图</b>（lidar mapping）跑得<b>慢但精</b>——把累积的点云和地图做精细配准，输出高精度位姿。<br>
+        原文的原话是：「一个算法以高频但低保真度做里程计来估计速度……第二个算法以低一个数量级的频率做精细匹配与配准。」</p>
+      </div>
+
+      <p>原文给出的频率是：<b>里程计约 10 Hz，建图 1 Hz</b>——正好差一个数量级。为什么这么分工？原文的解释非常朴素：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「激光里程计只关心速度……以及运动畸变的去除。之后，激光建图只需要考虑刚体变换来做精确的扫描匹配。」</p>
+
+      <p>翻译成大白话：<b>先把容易的问题解掉（我现在跑多快、往哪跑），再拿这个结果去做那个难的问题（我和地图到底对不对得上）。</b>不要在还没搞清楚「我在动」的时候，就去追求「我和地图严丝合缝」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_LOAM-Journal/136f01d939256f3dfdf202c1276fb0d1cd921901eade187973e92fa9e435b3de.jpg" alt="LOAM Fig.1 overview of the two-algorithm structure">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The method aims at motion estimation and mapping using a moving 3D lidar. Point clouds are formed as the sensor rotate. Distortion is present due to the sensor motion. It decomposes the problem by two algorithms running in parallel.<br>
+          （中译：本方法用移动的三维激光雷达做运动估计与建图。点云随着传感器旋转而形成，因传感器自身运动而带有畸变。方法用两个并行运行的算法来分解该问题。）<br>
+          <b>怎么看这张图：</b>这是全篇的总纲。请重点看它把一整套 SLAM 切成了哪两块，以及这两块之间箭头怎么走——<b>上图是「里程计」，下图是「建图」，中间有信息互相传递</b>。先记住这个形状，下面三节都在展开它。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="deskew">
+      <h2>2. 运动畸变怎么补</h2>
+
+      <p>先把「运动畸变」这件事看清楚。它其实是一个很直观的现象。</p>
+
+      <p>想象你站在一条笔直的走廊中间，手持一台旋转激光雷达。你<b>站着不动</b>转一圈，量到的两侧墙面是<b>笔直的两条线</b>。现在你<b>边走边转</b>——因为你转了 0.1 秒才转完一圈，这 0.1 秒里你往前挪了 1 米，所以「扫到墙的左边那一段」和「扫到墙的右边那一段」时，你人在两个不同的位置。</p>
+
+      <p>如果你不处理，把这一圈点都当成「站在起点时测的」，那么<b>笔直的墙在点云里就会被拉成一条弧线或斜线</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">运动畸变：为什么「一条直线」会被扫成「一条弧」</text>
+
+          <!-- ===== 格 1：真实世界 ===== -->
+          <rect x="18" y="46" width="272" height="336" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="154" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">① 真实世界（俯视）</text>
+          <text x="154" y="88" text-anchor="middle" font-size="11" fill="#7a8a99">一条笔直的走廊</text>
+
+          <!-- 两堵墙 -->
+          <rect x="52" y="104" width="204" height="10" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <rect x="52" y="306" width="204" height="10" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <text x="154" y="124" text-anchor="middle" font-size="10" fill="#7a8a99">墙</text>
+          <text x="154" y="330" text-anchor="middle" font-size="10" fill="#7a8a99">墙</text>
+
+          <!-- 起点车 -->
+          <rect x="86" y="196" width="30" height="16" rx="4" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="94" cy="214" r="3.5" fill="#37474f"/><circle cx="108" cy="214" r="3.5" fill="#37474f"/>
+          <text x="101" y="190" text-anchor="middle" font-size="10" fill="#2c5f8a">起点</text>
+          <!-- 终点车（虚线） -->
+          <rect x="184" y="196" width="30" height="16" rx="4" fill="none" stroke="#5a8fc7" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <text x="199" y="190" text-anchor="middle" font-size="10" fill="#2c5f8a">终点</text>
+          <!-- 运动箭头 -->
+          <path d="M120 204 L180 204" stroke="#2c5f8a" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <path d="M180 204 L173 200 L173 208 Z" fill="#2c5f8a"/>
+          <text x="150" y="222" text-anchor="middle" font-size="10" fill="#2c5f8a">边走边转</text>
+
+          <!-- 扫描扇 -->
+          <path d="M116 204 L120 108 L230 108 L230 300 L120 300 Z" fill="#7fc4a0" opacity="0.16" stroke="#4a9c76" stroke-width="0.9" stroke-dasharray="4 3"/>
+          <text x="240" y="205" font-size="10" fill="#4a9c76">一圈</text>
+          <text x="240" y="219" font-size="10" fill="#4a9c76">0.1 秒</text>
+
+          <text x="154" y="358" text-anchor="middle" font-size="11.5" fill="#3b4a5e">墙是直的，车在动</text>
+
+          <!-- ===== 格 2：不校正 ===== -->
+          <rect x="306" y="46" width="272" height="336" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="442" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">② 不校正：直接叠在一起</text>
+          <text x="442" y="88" text-anchor="middle" font-size="11" fill="#a8846f">当作「都在起点测的」</text>
+
+          <!-- 上方被拉弯的墙 -->
+          <g fill="#c0392b">
+            <circle cx="344" cy="112" r="3"/><circle cx="368" cy="115" r="3"/><circle cx="392" cy="120" r="3"/>
+            <circle cx="416" cy="127" r="3"/><circle cx="440" cy="135" r="3"/><circle cx="464" cy="145" r="3"/>
+            <circle cx="488" cy="157" r="3"/><circle cx="512" cy="171" r="3"/><circle cx="536" cy="187" r="3"/>
+          </g>
+          <path d="M344 112 Q440 130 536 187" stroke="#c0392b" stroke-width="1.6" fill="none" stroke-dasharray="5 4"/>
+          <!-- 下方被拉弯的墙 -->
+          <g fill="#c0392b">
+            <circle cx="344" cy="308" r="3"/><circle cx="368" cy="305" r="3"/><circle cx="392" cy="300" r="3"/>
+            <circle cx="416" cy="293" r="3"/><circle cx="440" cy="285" r="3"/><circle cx="464" cy="275" r="3"/>
+            <circle cx="488" cy="263" r="3"/><circle cx="512" cy="249" r="3"/><circle cx="536" cy="233" r="3"/>
+          </g>
+          <path d="M344 308 Q440 290 536 233" stroke="#c0392b" stroke-width="1.6" fill="none" stroke-dasharray="5 4"/>
+
+          <text x="442" y="205" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">墙被拉成了弧线</text>
+          <text x="442" y="358" text-anchor="middle" font-size="11.5" fill="#a8563a">走廊不再笔直</text>
+
+          <!-- ===== 格 3：校正后 ===== -->
+          <rect x="594" y="46" width="272" height="336" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="730" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">③ 校正：按时间戳搬回去</text>
+          <text x="730" y="88" text-anchor="middle" font-size="11" fill="#5f8a72">每台点搬回它被采到的那一刻</text>
+
+          <rect x="632" y="100" width="204" height="8" fill="#4a9c76"/>
+          <rect x="632" y="312" width="204" height="8" fill="#4a9c76"/>
+          <text x="730" y="128" text-anchor="middle" font-size="11" fill="#2f6d51">又变回直的</text>
+          <text x="730" y="336" text-anchor="middle" font-size="11" fill="#2f6d51">又变回直的</text>
+
+          <text x="730" y="205" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">前提：这一帧里</text>
+          <text x="730" y="222" text-anchor="middle" font-size="11.5" fill="#2f6d51">速度是匀速的</text>
+          <text x="730" y="358" text-anchor="middle" font-size="11.5" fill="#2f6d51">走廊恢复笔直</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个走廊、同一帧点云，在「不处理」与「按时间戳搬回去」两种做法下，分别长什么样。<br>
+          <b>怎么看这张图：</b>① 左格是真实世界——<b>墙是两条平行直线</b>，车从「起点」开到「终点」，同时转了一圈；② 中格（红色点）是<b>不校正</b>的结果：把这一圈所有点都当成「站在起点测的」，于是直线被拉弯了；③ 右格（绿色）是<b>校正后</b>：把每个点按它自己的时间戳，搬回它被测到的那个时刻所对应的车位置，墙又变直了。<br>
+          <b>要记住的一句话：</b>去畸变（deskew）不是「修点云」，而是<b>把每个点送回它该在的那个坐标系</b>——而要做到这一点，你必须先知道「这段时间里车是怎么动的」。
+        </figcaption>
+      </figure>
+
+      <p>那么问题来了：<b>「这段时间里车是怎么动的」，你本来就是要估计的呀？</b>这不就成了鸡生蛋了吗？</p>
+
+      <p>LOAM 的回答是：<b>用一个假设换一个起点。</b>它假设在一个扫描周期（0.1 秒）内，车做的是<b>匀速运动</b>——角速度和线速度都不变。有了这个假设，只要知道「这一圈开始时的位姿」与「开始时的速度」，就能按时间比例<b>线性插值</b>算出每个时刻的位姿：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$T_{(k,i)}^{L}=\frac{t_{(k,i)}-t_{k}}{t-t_{k}}\cdot T_{k}^{L}(t)$$</div>
+      </div>
+
+      <p>其中 $T_{(k,i)}^{L}$ 表示「第 $k$ 个扫描里、第 $i$ 个点被采到的那一刻」的变换，$t_{(k,i)}$ 是那个点的时间戳，$t_k$ 是本圈开始时间。整式的意思是：<b>按「这个点在本圈里的时间进度」，把它对应的变换按比例缩放一下。</b></p>
+
+      <p>这是个很实用的近似：<b>它不要求匀速运动假设在整个轨迹上成立，只要求它在 0.1 秒内成立。</b>原文也明确说了它的边界——如果角速度或线速度变化剧烈，这个假设就不够了，那时就需要 IMU 来帮忙（原文的实测里，楼梯场景不加 IMU 误差 2.1%–4.4%，加了 IMU 降到 0.9%–2.6%）。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>LOAM 去畸变时假设「一帧 0.1 秒内速度恒定」。如果一辆车在这 0.1 秒内<b>急刹车</b>（速度从 10 m/s 掉到 5 m/s），这个假设会带来什么后果？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不会报错，也不会算不出来——它照样会输出一个结果，只是那个结果是偏的。这类假设的问题从来不是「跑不动」，而是「跑得动但悄悄偏了」。" onclick="lessonKit.answer(this,'q0074a')">程序会直接报错退出</button>
+          <button data-correct="yes" data-explanation="对。「按时间比例线性缩放」相当于认为整段时间内速度不变，而实际上后半段慢了；于是那一部分的点会被搬到错误的位置，墙在点云里会留下明显的弯曲或重影。这正是原文承认的边界：剧烈变化的运动需要 IMU 介入。" onclick="lessonKit.answer(this,'q0074a')">后半段的点放错了位置</button>
+          <button data-correct="no" data-explanation="去畸变是一帧内部的操作，它不会影响下一帧的运动估计。而且畸变不会自己消失——它只会在你按错误的速度模型搬点时被留在点云里。" onclick="lessonKit.answer(this,'q0074a')">下一帧的畸变会翻倍</button>
+        </div>
+        <div class="quiz-feedback" id="q0074a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="feature">
+      <h2>3. 两类特征：只留角点和平面点</h2>
+
+      <p>现在到 LOAM 最出名的那一步：<b>它不把整帧点云都拿去配准，只挑两类点。</b></p>
+
+      <p>这两类点是：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>边缘点（edge points）</b>
+          <p>落在<b>一条棱</b>上的点。比如墙角、桌沿、门框边。它们的特点是：<b>周围邻居点离得很散</b>——因为一条线在空间里只占一个方向，其它方向没东西。</p>
+          <p>配准时它们去找上一帧里的<b>一条边缘线</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>平面点（planar points）</b>
+          <p>落在<b>一个面</b>上的点。比如墙面、地面、桌面。它们的特点是：<b>邻居点排得很整齐</b>——都贴着同一个平面。</p>
+          <p>配准时它们去找上一帧里的<b>一块平面片</b>。</p>
+        </div>
+      </div>
+
+      <p>怎么自动判断一个点属于哪一类？原文用了一个叫<b>曲率</b>（也叫平滑度）的量：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$c=\frac{1}{|S|\cdot\left\|X_{(k,i)}^{L}\right\|}\left\|\sum_{j\in S,\,j\neq i}\left(X_{(k,i)}^{L}-X_{(k,j)}^{L}\right)\right\|$$</div>
+      </div>
+
+      <p>别被符号吓到，它做的事情很朴素：<b>拿一个点，和它同一根扫描线上的前后几个邻居比一比，看差距有多大。</b></p>
+
+      <ul>
+        <li>$X_{(k,i)}^{L}$ 是当前这个点，$X_{(k,j)}^{L}$ 是它邻域 $S$ 里的其它点；</li>
+        <li>括号里是「这个点减掉邻居」，把所有邻居的这些差加起来（向量和）；</li>
+        <li>除以 $|S|$ 是取平均，<b>除以 $\|X_{(k,i)}^{L}\|$（它到雷达中心的距离）是为了去掉「远处点天然看着更散」这个尺度影响</b>——这一项很关键，否则远处的墙也会被误判成边缘；</li>
+        <li>最后取模长。结果就是 $c$。</li>
+      </ul>
+
+      <p><b>怎么读这个数：</b>$c$ 小 → 邻居点都贴在一条平滑的面上 → <b>平面点</b>；$c$ 大 → 邻居点散开、附近有一条棱 → <b>边缘点</b>。原文用的分界阈值是 $c > 5\times10^{-3}$ 算边缘候选，$c < 5\times10^{-3}$ 算平面候选。</p>
+
+      <p>还有一个必须提的工程细节：<b>它不会把一帧里所有满足条件的点都要。</b>原文的做法是——每根扫描线切成 <b>4 个子区域</b>，每个子区域<b>最多</b>取 <b>2 个边缘点 + 4 个平面点</b>。这是为了让特征点在视野里<b>分布均匀</b>，而不是挤在某一面墙上。到建图那一步，它用的特征数量还要再放大 <b>10 倍</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_LOAM-Journal/5ae40780379b5f93f8655d6a6a84544d99a182bcf37e70766efdc1e1a519af99.jpg" alt="LOAM Fig.5 edge points and planar points in a corridor">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>The extracted edge points (yellow) and planar points (red) from the lidar cloud taken in a corridor. Note that the motion distortion on the wall.<br>
+          （中译：在走廊中采集的点云里提取出的边缘点（黄）与平面点（红）。注意墙面上的运动畸变。）<br>
+          <b>怎么看这张图：</b>① 先找<b>黄色的点</b>——它们集中在哪里？（答：墙与墙交汇的棱线上）；② 再看<b>红色的点</b>——它们铺在哪里？（答：平整的墙面上）；③ 最后注意图注自己提醒的那件事：<b>墙面有明显的运动畸变</b>——这正是上一节讲的问题，而且它是<b>在这一帧原始数据里就能看出</b>的。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="residual">
+      <h2>4. 点到线、点到面：两种残差</h2>
+
+      <p>挑出特征点之后，下一步是「把它们配起来」。这里有个很关键的思路：<b>不要去上一帧里找「对应的那个点」，而是找「对应的那条线/那个面」。</b></p>
+
+      <p>为什么？因为激光点每次采样位置都在变，你几乎不可能两次打中同一个物理点。但<b>「落在同一条棱上」「落在同一个平面上」这件事是稳定的</b>。所以 LOAM 让一个点去找<b>几何基元</b>，而不是找另一个点。这正是第一季 <b>0004</b> 课讲过的「landmark 地图 vs 几何地图」在激光侧的体现。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_LOAM-Journal/e381ad9e27155866d39d04e9efd63554b9fcef4eae35c65a27377a93e9540e2e.jpg" alt="LOAM Fig.7 correspondence of edge line and planar patch">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Finding an edge line as the correspondence for an edge point (left) and a planar patch as the correspondence for a planar point (right).<br>
+          （中译：为边缘点寻找一条边缘线作为对应（左）；为平面点寻找一块平面片作为对应（右）。）<br>
+          <b>怎么看这张图：</b>① 左图里，<b>点 $i$ 要去配的是「过 $j$、$l$ 两点的那条线」</b>——所以只要在上一帧里找到最近的两个点 $j$ 和 $l$ 就够了（两点定一条线）；② 右图里，<b>点 $i$ 要去配的是「过 $j$、$l$、$m$ 三点的那块平面」</b>——所以要找最近的三个不共线点；③ 注意 $j$、$l$、$m$ 都来自<b>上一帧的地图</b>，不是当前帧。
+        </figcaption>
+      </figure>
+
+      <p>有了「点 + 线」或「点 + 面」，残差就很好定义了：</p>
+
+      <div class="formula-box">
+        <p style="margin:0 0 .5rem"><b>点到线</b>（边缘点 $i$ 配到过 $j$、$l$ 的直线）：</p>
+        <div class="flow-formula">$$d_{E}=\frac{\left|(\tilde X_i-\bar X_j)\times(\tilde X_i-\bar X_l)\right|}{\left|\bar X_j-\bar X_l\right|}$$</div>
+        <p style="margin:.9rem 0 .5rem"><b>点到面</b>（平面点 $i$ 配到过 $j$、$l$、$m$ 的平面）：</p>
+        <div class="flow-formula">$$d_{H}=\frac{\left|(\tilde X_i-\bar X_j)\cdot\left((\bar X_l-\bar X_j)\times(\bar X_m-\bar X_j)\right)\right|}{\left|(\bar X_l-\bar X_j)\times(\bar X_m-\bar X_j)\right|}$$</div>
+      </div>
+
+      <p>这两个式子的<b>几何含义</b>其实很简单：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>点到线：平行四边形的高</b>
+          <p>$(\tilde X_i-\bar X_j)$ 与 $(\tilde X_i-\bar X_l)$ 是两个向量，它们的<b>叉积的模</b>等于「这两个向量张成的平行四边形的面积」。再除以底边长 $|\bar X_j-\bar X_l|$，得到的就是<b>平行四边形的高</b>——而那个高，正好就是<b>点 $i$ 到直线 $jl$ 的垂直距离</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>点到面：体积除以底面积</b>
+          <p>$(\bar X_l-\bar X_j)\times(\bar X_m-\bar X_j)$ 是平面的<b>法向量</b>（方向垂直于平面，模长等于底面平行四边形的面积）。让 $(\tilde X_i-\bar X_j)$ 与它点乘，得到的是<b>平行六面体的体积</b>；再除以法向量的模（底面积），剩下的就是<b>高</b>——即点 $i$ 到平面的垂直距离。</p>
+        </div>
+      </div>
+
+      <p>所以这两条残差本质上都是同一件事：<b>一个点到一条线/一个面的垂直距离</b>；我们的目标就是让这个距离尽量小。这也是为什么第二季 <b>0022</b> 课（点云 BA）里讲「点到面残差」时，你会觉得很眼熟——它是同一族东西。</p>
+
+      <p>把所有边缘点与平面点的残差堆在一起，就得到一个非线性最小二乘问题，用 <b>Levenberg–Marquardt</b> 求解：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$T\leftarrow T-\left(J^{\top}J+\lambda\,\mathrm{diag}(J^{\top}J)\right)^{-1}J^{\top}d$$</div>
+      </div>
+
+      <p>工程上还有个细节值得知道：<b>离群点会被自动踢掉。</b>原文用 bisquare 权重函数给每个残差配一个权重——残差小的时候权重接近 1，残差大到一定程度后权重直接归 0。这就是第二季 <b>0019</b> 课讲过的「鲁棒核」在激光侧的具体形式。</p>
+    </section>
+
+    <section class="section-card" id="two">
+      <h2>5. 两步优化：一快一慢，一粗一精</h2>
+
+      <p>现在把前面所有零件装起来，看 LOAM 的整体结构。</p>
+
+      <p>回到最开始的悬念：<b>既然去畸变要先知道「车怎么动」，而估计「车怎么动」又依赖去畸变后的点云，那到底谁先？</b></p>
+
+      <p>LOAM 的答案是<b>用两层互相喂</b>：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        里程计：拿<b>当前帧</b>配 <b>上一帧</b> → 得到速度与粗略位姿 → <b>顺便去畸变</b><br>
+        ↓<br>
+        建图：拿<b>去畸变后的累积点云</b>配 <b>地图</b> → 得到精细位姿 → <b>回灌修正里程计</b>
+      </div>
+
+      <p>两者的分工可以列成一张表：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">激光里程计</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">激光建图</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>频率</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">约 <b>10 Hz</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>1 Hz</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>拿什么配什么</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">当前帧 ↔ <b>上一帧</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">累积点云 ↔ <b>地图</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>特征数量</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">基准量</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">约 <b>10 倍</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>主要产出</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">速度 + 去畸变后的帧</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">高精度位姿</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>典型耗时</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">建树 11–18 ms、提特征 23–35 ms</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">建树 58–131 ms、提特征 134–283 ms</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>最后一行很关键：<b>建图那一层的耗时大约是里程计的 6.4 倍。</b>如果让建图也跑 10 Hz，就完全做不到了——这就是「差一个数量级的频率」这个设计的经济学依据。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">两步优化：同一辆车，两条不同频率的流水线</text>
+
+          <!-- 车 -->
+          <rect x="40" y="52" width="46" height="26" rx="5" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="52" cy="82" r="5" fill="#37474f"/><circle cx="74" cy="82" r="5" fill="#37474f"/>
+          <circle cx="74" cy="176" r="5" fill="#37474f"/><circle cx="52" cy="176" r="5" fill="#37474f"/>
+          <rect x="40" y="52" width="46" height="128" rx="5" fill="#5a8fc7" opacity="0.14" stroke="#2c5f8a" stroke-width="1.4"/>
+          <path d="M63 60 L63 44 L88 44 L88 150 L63 150 Z" fill="#7fc4a0" opacity="0.24" stroke="#4a9c76" stroke-width="1"/>
+          <text x="63" y="200" text-anchor="middle" font-size="11" fill="#2c5f8a">车在走</text>
+
+          <!-- 时间轴 -->
+          <line x1="130" y1="392" x2="860" y2="392" stroke="#90a4ae" stroke-width="1.6"/>
+          <path d="M860 392 L850 387 L850 397 Z" fill="#90a4ae"/>
+          <text x="872" y="396" font-size="11" fill="#5a4a42">时间</text>
+
+          <!-- 上泳道：里程计 -->
+          <text x="130" y="92" font-size="13" font-weight="700" fill="#8f4a33">激光里程计 · 约 10 Hz（快而粗）</text>
+          <rect x="130" y="104" width="730" height="70" rx="8" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.2"/>
+          <!-- 每 0.1s 一个标记 -->
+          <g fill="#cc785c">
+            <circle cx="152" cy="139" r="5"/><circle cx="218" cy="139" r="5"/><circle cx="284" cy="139" r="5"/>
+            <circle cx="350" cy="139" r="5"/><circle cx="416" cy="139" r="5"/><circle cx="482" cy="139" r="5"/>
+            <circle cx="548" cy="139" r="5"/><circle cx="614" cy="139" r="5"/><circle cx="680" cy="139" r="5"/>
+            <circle cx="746" cy="139" r="5"/><circle cx="812" cy="139" r="5"/>
+          </g>
+          <!-- 抖动折线 -->
+          <polyline points="152,133 218,146 284,131 350,145 416,134 482,147 548,132 614,144 680,135 746,146 812,133"
+                    fill="none" stroke="#cc785c" stroke-width="1.5"/>
+          <text x="140" y="188" font-size="11.5" fill="#8f4a33">每 0.1 秒出一个速度估计：密、抖</text>
+          <text x="500" y="188" font-size="11.5" fill="#8f4a33">作用：把这一帧的运动畸变去掉</text>
+
+          <!-- 下泳道：建图 -->
+          <text x="130" y="230" font-size="13" font-weight="700" fill="#2f6d51">激光建图 · 1 Hz（慢而精）</text>
+          <rect x="130" y="242" width="730" height="70" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.2"/>
+          <g fill="#2e9e6b">
+            <rect x="182" y="264" width="46" height="26" rx="5"/>
+            <rect x="398" y="264" width="46" height="26" rx="5"/>
+            <rect x="614" y="264" width="46" height="26" rx="5"/>
+            <rect x="812" y="264" width="32" height="26" rx="5"/>
+          </g>
+          <text x="205" y="281" text-anchor="middle" font-size="11" fill="#ffffff">配准</text>
+          <text x="421" y="281" text-anchor="middle" font-size="11" fill="#ffffff">配准</text>
+          <text x="637" y="281" text-anchor="middle" font-size="11" fill="#ffffff">配准</text>
+          <text x="828" y="281" text-anchor="middle" font-size="10" fill="#ffffff">…</text>
+          <text x="140" y="330" font-size="11.5" fill="#2f6d51">每 1 秒把累积点云与地图精配准一次：疏、稳</text>
+          <text x="560" y="330" font-size="11.5" fill="#2f6d51">用它修里程计</text>
+
+          <!-- 回灌箭头 -->
+          <path d="M828 264 C 862 220, 862 180, 828 150" fill="none" stroke="#2f6d51" stroke-width="1.8" stroke-dasharray="6 4"/>
+          <path d="M828 150 L834 160 L822 160 Z" fill="#2f6d51"/>
+          <text x="770" y="222" font-size="11" fill="#2f6d51" text-anchor="end">精配准的结果</text>
+          <text x="770" y="238" font-size="11" fill="#2f6d51" text-anchor="end">回头修正里程计</text>
+
+          <!-- 底部备注 -->
+          <text x="450" y="368" text-anchor="middle" font-size="12" fill="#5a4a42">频率为什么差 10 倍：建图那一步的总耗时约是里程计的 6.4 倍</text>
+          <text x="450" y="420" text-anchor="middle" font-size="11.5" fill="#8a786f">先解容易的（我在跑多快），再解难的（我和地图对不对得上）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>LOAM 的两层结构在同一根时间轴上的样子。上面那条是你的「快速反应」层，下面那条是你的「精雕细琢」层。<br>
+          <b>怎么看这张图：</b>① 先比两条泳道里的标记<b>密度</b>——上面的点密（10 Hz）、下面的方块疏（1 Hz）；② 看上面的折线为什么是<b>抖动</b>的——因为里程计只求快、不求准，它的输出是「带噪声的速度估计」；③ 看右边那根<b>虚线回灌箭头</b>——建图的精配准结果会回头去修正里程计的位姿，这是两层之间唯一的反馈；④ 最下面那行是关键：<b>频率差 10 倍不是随意的偏好，而是算力逼出来的</b>。<br>
+          <b>要记住的一句话：</b>「先跑得快但粗，再跑得慢但准，然后让慢的回头修快的」——这个结构之后被几乎所有激光惯性系统继承，只是「慢的那一层」从配准换成了因子图优化。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="kd">
+      <h2>6. 顺手埋一个伏笔：那棵 k-d 树</h2>
+
+      <p>这一节讲一个看起来很不起眼、但会在<b>第 0084 课还债</b>的细节。</p>
+
+      <p>配准需要「找最近的点」。比如一个边缘点，要去找上一帧里离它最近的两个点。这种「最近邻查询」在点云上无法暴力遍历（十几万个点，每个都遍历一遍就是十几万倍），所以要用空间索引——LOAM 用的是 <b>k-d 树</b>。</p>
+
+      <p>那么，这棵树什么时候建？</p>
+
+      <div class="callout">
+        <h4>一个重要的澄清</h4>
+        <p><b>LOAM 不是「每次迭代重建 k-d 树」。</b>它的做法是：<br>
+        ① <b>里程计</b>里，把<b>上一帧</b>的点云存进一棵 k-d 树——这棵树在一整个扫描周期内<b>不变</b>；<br>
+        ② <b>建图</b>里，把地图按 <b>10 m 的立方体切块</b>，取出与当前帧相交的那些块建一棵 k-d 树——建图每个扫描周期才跑一次，所以这棵树也是<b>每个扫描周期建一次</b>。<br>
+        然后 LM 每次迭代只做「查询最近邻」，<b>不重建树</b>。</p>
+      </div>
+
+      <p>所以 LOAM 已经避开了「每次迭代重建」这种明显的浪费。但它仍然留下了一个更大的开销：<b>建图那一步，每个扫描周期都要对（可能很大的）地图重新建一次 k-d 树。</b></p>
+
+      <p>原文把这些开销老老实实列在了表里：<b>建图阶段建 k-d 树要 58–131 ms，提特征要 134–283 ms</b>——也就是说，每秒钟里有一大块时间花在「重建索引」上。</p>
+
+      <p>为什么这是个问题？因为<b>地图会一直长大</b>。车开得越远，地图越大，重建这棵树就越慢。这就构成了一个天花板：<b>你没法在很大的场景里长时间实时运行。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>这条「每秒钟重建一次地图 k-d 树」的开销，在地图变大时会怎么变化？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不会不变。建树要处理的点数就是地图里的点数，地图越大，要处理的点越多。如果它不变，就不会有后面那整条研究线了。" onclick="lessonKit.answer(this,'q0074b')">基本保持不变</button>
+          <button data-correct="yes" data-explanation="对。建树的代价随点数增长，而地图点数随行驶距离增长。于是「每秒钟的处理时间」会越来越长，最终超过 1 秒——实时性就崩了。这正是 FAST-LIO2 用 ikd-Tree 要解决的核心问题，也是第 0084 课要还的债。" onclick="lessonKit.answer(this,'q0074b')">随地图规模增长</button>
+          <button data-correct="no" data-explanation="不会自动变小。地图只会越加越多（除非你主动删），所以建树要处理的点数只会增长，不会减少。" onclick="lessonKit.answer(this,'q0074b')">随行驶距离变小</button>
+        </div>
+        <div class="quiz-feedback" id="q0074b"></div>
+      </div>
+
+      <p>记住这个问题。它从第一季 <b>0006</b> 课就被提起，在第二季 <b>0022</b> 课被明确推迟，第三季 <b>0023</b> 课又把它立了一遍——<b>到第 0084 课才正面回答。</b>在那之前，我们会先看到好几篇「在别的方向上努力」的工作。</p>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>7. 结果与边界</h2>
+
+      <p>先看效果。LOAM 在 KITTI 数据集上的平均相对位置误差是 <b>0.88%</b>——在当时的纯激光方法里排第一。这个数字放在今天看依然不差。</p>
+
+      <p>更有说服力的是两个自采实验：</p>
+
+      <ul>
+        <li><b>Velodyne HDL-32E，校园路线 1.0 km，车速 2–3 m/s</b>：水平误差不超过 1 m、垂直误差 1.5 m，<b>总误差 0.2%</b>；</li>
+        <li><b>街道路线 3.6 km，车速 11–18 m/s</b>（这是相当快的速度）：水平误差约 2 m。</li>
+      </ul>
+
+      <p>注意后面这个：<b>在 3.6 公里、时速 40–65 公里的情况下，误差只有 2 米左右</b>，而且这是在没有回环、没有 GPS、只用激光的情况下做到的。这就是为什么它被称为「分水岭」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_LOAM-Journal/fbdfac76dbbe96296c4f82a123dbe7720b51cae1a13de4d376a28a9a8e16ae3b.jpg" alt="LOAM Fig.12 comparison of odometry output and mapping output">
+        <figcaption>
+          <b>原图注（Fig. 12）：</b>Comparison between (a) a lidar odometry output and (b) final lidar mapping output. The lidar odometry has a low fidelity. The lidar mapping further performs careful scan matching.<br>
+          （中译：激光里程计输出 (a) 与最终激光建图输出 (b) 的对比。里程计保真度较低，建图进一步执行精细的扫描匹配。）<br>
+          <b>怎么看这张图：</b>这是对「两步分工」最直接的可视化验证。① 看左边 (a)——那是里程计直接给出的结果，能看出<b>边缘发虚、局部有重影</b>；② 看右边 (b)——那是建图精配准之后的结果，<b>线条明显更锐利</b>；③ 注意两边的差别不是「有没有建出地图」，而是<b>同一份数据被对齐得有多准</b>：这就是「低频高精度」换来的东西。
+        </figcaption>
+      </figure>
+
+      <h3>原文承认的边界（逐条）</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 没有回环</b>
+          <p>原文把「加回环」明确写进了未来工作。所以它跑得再远，也存在累积漂移——只是在 KITTI 那种规模下漂得很少。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 假设速度平滑连续</b>
+          <p>如果角速度或线速度变化剧烈，匀速假设就不成立，需要 IMU 介入（原文给了楼梯场景的实测：不加 IMU 误差 2.1%–4.4%，加 IMU 降到 0.9%–2.6%）。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 频率比 10 是折中</b>
+          <p>原文明确说这个比例是偏好：再高一点漂移会变大，再低一点更费算力；而且每次建图完成会引入一次位姿「跳变」。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 特征稀少的环境更差</b>
+          <p>在建图阶段，<b>自然与室外环境中特征稀少时，匹配精度不如人造环境</b>——因为墙角、门框这类「人造特征」本来就少。</p>
+        </div>
+      </div>
+
+      <p>这四条里，第 ① 与第 ② 直接定义了后面十年的研究方向：<b>加回环</b>（0092–0093 课）与<b>把 IMU 拉进优化</b>（0077 课起）。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请用自己的话解释：为什么 LOAM 要把问题拆成「里程计」与「建图」两层，而不是直接做一次全局优化？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>核心原因是<b>两件事的难度和可承受的时间尺度不同</b>。</p>
+              <p>① <b>里程计要解决的问题相对简单</b>：只需要估计「这一小段时间里我动了多少」，而且它的输入（当前帧 vs 上一帧）时间间隔很短、差异小，所以容易做快。它的副产品是「把运动畸变去掉」——这一步一旦做完，后续的所有配准都变得更干净。</p>
+              <p>② <b>建图要解决的问题难得多</b>：它要把累积了好几帧的点云与一张不断长大的地图做精确配准。原文的耗时表显示，建图那一步的总耗时约是里程计的 <b>6.4 倍</b>。如果强行让建图也跑 10 Hz，就完全做不到了。</p>
+              <p>③ 所以拆层的逻辑是：<b>先解容易的（我在跑多快），用它把数据清洗干净；再解难的（我和地图对不对得上），允许它慢一点。</b>这样两层各自的频率都能落在算力允许的范围内，而整体精度由「慢的那一层」保证。</p>
+            </div></details>
+          </li>
+          <li>「去畸变」这件事需要先知道「车怎么动」，而「车怎么动」本来就是要估计的。LOAM 是怎么跳出这个循环的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它引入了一个<b>额外假设</b>来打破循环：<b>在一个扫描周期（约 0.1 秒）内，角速度与线速度都恒定。</b></p>
+              <p>有了这个假设，问题就变了：不再需要知道「每个时刻的真实速度」，而只需要知道「本圈开始时的位姿」和一个<b>分段恒定的速度</b>。于是它可以用<b>线性插值</b>按时间比例算出任意时刻的变换：</p>
+              <p style="text-align:center;font-family:var(--font-serif);padding:.4rem 0">按时间进度缩放本圈的总体变换</p>
+              <p>关键在于这个假设的<b>适用范围很窄</b>——只要求 0.1 秒内成立，而不是整条轨迹上成立。所以它大多数时候好用。原文也诚实地指出了它的失效条件：运动剧烈变化时（比如急刹、急转），这个假设就不够了，需要 IMU 来提供更真实的速度信息。</p>
+            </div></details>
+          </li>
+          <li>LOAM 用「点到线」与「点到面」两种残差。请分别写出它们的表达式，并解释式子里的<b>叉积</b>与<b>点乘</b>分别在几何上对应什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>点到线：</b>分子是 $|(\tilde X_i-\bar X_j)\times(\tilde X_i-\bar X_l)|$，分母是 $|\bar X_j-\bar X_l|$。</p>
+              <p>叉积的模长 = 两个向量张成的<b>平行四边形面积</b>；再除以底边长度，结果就是<b>平行四边形的高</b>——也就是点到直线的垂直距离。<b>所以叉积在这里扮演的角色是「造出一个面积」。</b></p>
+              <p><b>点到面：</b>分子是 $|(\tilde X_i-\bar X_j)\cdot((\bar X_l-\bar X_j)\times(\bar X_m-\bar X_j))|$，分母是 $|(\bar X_l-\bar X_j)\times(\bar X_m-\bar X_j)|$。</p>
+              <p>这里先对两个向量取叉积，得到平面的<b>法向量</b>（模长等于底面面积）；再把它与第三个向量<b>点乘</b>，得到的是<b>平行六面体的体积</b>；除以底面积，剩下的就是<b>高</b>——即点到平面的垂直距离。<b>所以点乘在这里扮演的角色是「把长度投影到法向上」。</b></p>
+              <p>一句话总结：<b>叉积负责「造面积/造法向」，点乘负责「量投影」；两者搭配起来，就能用一个式子同时表达「距离」而这个距离对旋转平移都不变。</b></p>
+            </div></details>
+          </li>
+          <li>LOAM 每秒钟要对地图重建一次 k-d 树。为什么这是一个「天花板」？请说明它限制了什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为<b>建树的代价正比于地图里的点数，而地图点数正比于已经走过的距离</b>。</p>
+              <p>于是出现了一个恶性循环：跑得越远 → 地图越大 → 建树越慢 → 每秒钟花在「重建索引」上的时间越多。当这个时间超过 1 秒时，建图那一层的频率就掉到 1 Hz 以下，整个系统的实时性就崩了。</p>
+              <p><b>它限制的是「场景规模 × 运行时长」</b>：在一个小房间里跑十分钟没问题，但在一条几公里的隧道里跑一小时就会撑不住。原文的实测里，建图阶段建树要 58–131 ms，这已经是个不小的开销了。</p>
+              <p>更要紧的是：这个瓶颈<b>不是靠换更好的配准算法能解决的</b>——它是数据结构问题。所以后面才有 FAST-LIO2 的 ikd-Tree（不再每次重建整棵树）与 Faster-LIO 的 iVox（干脆不用树）。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0073-导览-第四季开场-激光主干.html">← 第四季开场：激光 SLAM 是怎么学会不看特征的</a>
+        <a class="next" href="0075-LeGO-LOAM2018-为嵌入式瘦身.html">LeGO-LOAM（2018）：为嵌入式瘦身 →</a>
+      </div>
+      <p class="foot-note">这一篇是整季的地基，值得多读两遍。后面的每一篇都在它的骨架上改零件 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

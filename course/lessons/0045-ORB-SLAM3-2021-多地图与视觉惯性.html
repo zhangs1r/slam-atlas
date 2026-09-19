@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ORB-SLAM3（2021）：多地图与视觉惯性 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0045</div>
+      <h1>ORB-SLAM3（2021）：多地图与视觉惯性</h1>
+      <p class="subtitle">跟踪失败不再「全部作废」，并偿还了第二季的 IMU 初始化悬念 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：Atlas 多地图 + 视觉惯性初始化</span>
+        <span>👥 作者：Campos, Elvira, Gómez Rodríguez, Montiel, Tardós</span>
+        <span>📅 2021 · <i>ORB-SLAM3: An Accurate Open-Source Library for Visual, Visual–Inertial, and Multimap SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">定位与 Atlas 多地图</a>
+        <a href="#b">视觉惯性融合</a>
+        <a href="#c">IMU 初始化（悬念⑤）</a>
+        <a href="#d">焊接窗口与因子图</a>
+        <a href="#e">实验数字</a>
+        <a href="#f">局限与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Atlas 如何用「活跃地图 + 非活跃地图」让跟踪失败不再全部作废；讲清地图合并（map merging）与焊接窗口；说出视觉惯性三种融合模式；讲准 IMU 初始化的三步；并列出本篇的关键实验数字与局限。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>本篇把 ORB-SLAM2 再往前推一步。★ 重点偿还 <b>第二季悬念⑤（IMU 初始化）</b>——0029/0030 预积分教程里明确说那篇论文没有初始化章节，这里第一次给出基于 MAP 估计的快速初始化。预积分项（IMU preintegration）正是 <b>0030</b> 学的东西，下面会显式回链。也接 <b>0014 回环检测综述</b>（它把 DBoW2 的「三道闸」改成「先几何验证、再局部一致性」以提高召回）。</p></div>
+      </div>
+
+      <h2>1. 定位：第一个「视觉 + 视觉惯性 + 多地图」系统</h2>
+      <p>论文摘要开宗明义：ORB-SLAM3 是<b>第一个</b>能同时做视觉、视觉惯性、多地图 SLAM，且支持单目 / 双目 / RGB-D 与针孔 / 鱼眼镜头模型的系统。它在 ORB-SLAM2 基础上加了两块最关键的拼图：<b>Atlas 多地图表示</b>与<b>视觉惯性（VI）融合</b>。</p>
+      <p>论文还提出一个抽象相机模型：把投影 / 反投影 / 雅可比拆成独立模块，于是 SLAM 代码与相机模型解耦，新增鱼眼（Kannala–Brandt）只需提供这几个函数即可——这是它能支持鱼眼的前提。</p>
+
+      <h2>2. 核心一：Atlas（地图集）多地图表示</h2>
+      <p>ORB-SLAM2 的逻辑是「丢了就重来」：跟踪失败就丢弃整张地图。ORB-SLAM3 改成：系统维护一个<b>地图集（Atlas）</b>，里面有一个<b>活跃地图</b>和若干<b>非活跃地图</b>。</p>
+      <ul>
+        <li>跟踪线程在活跃地图上实时定位，由局部建图线程持续长大它；</li>
+        <li>一旦跟踪失败，系统<b>不重置</b>，而是新建一个活跃地图（原来的沉为非活跃）；</li>
+        <li>当识别到当前活跃地图与旧地图有<b>共视区域</b>时，把两份地图<b>合并（map merging）</b>成一张，合并后的新地图成为活跃地图。</li>
+      </ul>
+      <p>这比「丢了就重来」好在哪？在长时间、多段采集（multisession）场景下，系统可以「走到哪建到哪」，再回头把分段的地图无缝拼起来——前面建过的地图不会因为中间一段迷路就白费。这正是数据关联的第四种：<b>多地图数据关联</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="38" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">Atlas 多地图与地图合并：跟踪失败 ≠ 全部作废</text>
+          <!-- 办公楼轮廓 -->
+          <rect x="60" y="70" width="780" height="300" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2.5"/>
+          <text x="450" y="62" fill="#6b5b3e" font-size="13" text-anchor="middle">一座办公楼的三段场景</text>
+          <!-- 三段地图，不同颜色 -->
+          <path d="M120 320 L120 150 L260 150 L260 320 Z" fill="#bbdefb" stroke="#1565c0" stroke-width="2" opacity="0.75"/>
+          <path d="M300 320 L300 130 L470 130 L470 320 Z" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2" opacity="0.75"/>
+          <path d="M510 320 L510 160 L720 160 L720 320 Z" fill="#ffccbc" stroke="#e64a19" stroke-width="2" opacity="0.75"/>
+          <text x="190" y="245" fill="#0d3c75" font-size="13" text-anchor="middle">地图 A</text>
+          <text x="385" y="235" fill="#1b5e20" font-size="13" text-anchor="middle">地图 B</text>
+          <text x="615" y="250" fill="#bf360c" font-size="13" text-anchor="middle">地图 C</text>
+          <!-- 重叠区域（同一间会议室被两段拍到） -->
+          <ellipse cx="385" cy="250" rx="42" ry="30" fill="#fff59d" stroke="#f9a825" stroke-width="2.5"/>
+          <text x="385" y="255" fill="#7a4f00" font-size="11" text-anchor="middle">会议室</text>
+          <!-- 双箭头合并 -->
+          <line x1="232" y1="250" x2="343" y2="250" stroke="#7b1fa2" stroke-width="3" marker-start="url(#m1)" marker-end="url(#m1)"/>
+          <text x="288" y="240" fill="#7b1fa2" font-size="12" text-anchor="middle">识别共视</text>
+          <text x="288" y="278" fill="#7b1fa2" font-size="11" text-anchor="middle">→ 地图合并</text>
+          <line x1="472" y1="245" x2="568" y2="250" stroke="#7b1fa2" stroke-width="3" marker-start="url(#m1)" marker-end="url(#m1)"/>
+          <text x="520" y="235" fill="#7b1fa2" font-size="11" text-anchor="middle">焊接窗口</text>
+          <text x="520" y="273" fill="#7b1fa2" font-size="11" text-anchor="middle">一起优化</text>
+          <defs><marker id="m1" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#7b1fa2"/></marker></defs>
+          <text x="450" y="370" fill="#888" font-size="12" text-anchor="middle">同一间会议室被两段都拍到 → 触发合并；合并后一起做局部 BA 把接缝对齐</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一座办公楼的三段场景，各自建出的地图用蓝 / 绿 / 橙三色画。中间黄色椭圆是「同一间会议室被两段都拍到」的重叠区域，双箭头表示「识别到共视 → 地图合并 → 焊接窗口一起优化」。<br>
+          <b>怎么看这张图：</b>① 三块色块是三次（可能跨时间）独立建出的地图；② 黄圈是触发合并的重叠区；③ 紫色箭头说明合并不是简单拼接，还要在焊接窗口做 BA 对齐接缝。<br>
+          <b>要记住的一句话：</b>跟踪失败 ≠ 全部作废——丢了的地图沉为非活跃，回头重逢时再无缝合并。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_ORB-SLAM3/7fd38c9bf22b4e47114d31a62269bb627a34a0f1c9c8f86aaf6a7f93d8ec3ea7.jpg" alt="ORB-SLAM3 main system components">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Main system components of ORB-SLAM3.（ORB-SLAM3 主要系统组件。）<br>
+          <b>怎么看这张图：</b>① 与 ORB-SLAM2 Fig.1 平行，但多了 Atlas（地图集）、非活跃地图、以及「tracking 在丢失时去所有 Atlas 地图里重定位」的逻辑；② 注意回环节点在这里同时承担 loop closing 与 map merging；③ 它把本课的 Atlas 多地图与 VI 融合都标在了系统框图上。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>3. 核心二：视觉惯性（VI）融合</h2>
+      <p>把 IMU 接进 SLAM，好处是鲁棒性：在纹理缺失、运动模糊、遮挡时，IMU 仍能提供姿态。ORB-SLAM3 提供三种融合模式：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 纯视觉模式</h4><p>只用相机，即 ORB-SLAM2 的单目 / 双目 / RGB-D。</p></div>
+        <div class="mini-card"><h4>② 视觉惯性模式</h4><p>相机 + IMU，单目惯性 / 双目惯性，IMU 让单目尺度可观、且能抗纹理缺失。</p></div>
+        <div class="mini-card"><h4>③ 多地图视觉惯性</h4><p>在 Atlas 之上叠加 VI，地图合并时也带着惯性约束一起优化。</p></div>
+        <div class="mini-card"><h4>④ 鱼眼 + IMU</h4><p>借助抽象相机模型，鱼眼镜头也能接 IMU，覆盖大 FOV（接近 / 超过 180°）场景。</p></div>
+      </div>
+      <p>在视觉惯性模式下，状态向量除相机位姿外，还多了一项：速度 $\mathbf v_i$、陀螺仪偏置 $\mathbf b_i^g$、加速度计偏置 $\mathbf b_i^a$。这与 0029/0030 预积分教程里讲的「IMU 预积分量 $\Delta \mathbf R, \Delta \mathbf v, \Delta \mathbf p$ 与偏置随机游走」是同一套语言。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>4. 关键设计：IMU 初始化（★ 呼应第二季悬念⑤）</h2>
+      <p>★ <b>这是第二季悬念⑤的第一站。</b>第二季 0029/0030 预积分教程全文都在讲「给定初始 IMU 参数后如何预积分」，却明确说那篇论文<b>没有初始化章节</b>——也就是「最初的尺度、重力方向、偏置到底怎么来」是个缺口。ORB-SLAM3 在这里把它补上了。</p>
+      <p>它提出一个基于 MAP 估计、分阶段、又快又准的初始化方法（论文 §V-B）：</p>
+      <ol>
+        <li><b>第一步：纯视觉 MAP 估计。</b>先跑 2 秒纯单目 SLAM（4 Hz 插 10 个关键帧），得到一张<b>只差一个尺度</b>的地图（up-to-scale），用视觉 BA 优化（Fig.2(b)）。</li>
+        <li><b>第二步：纯惯性 MAP 估计。</b>把视觉轨迹当常数，单独优化惯性变量：尺度 $s$、重力方向旋转 $\mathbf R_{wg}$、IMU 偏置 $\mathbf b$、各帧速度 $\bar{\mathbf v}$（Fig.2(c)）。这一步给出好初值。</li>
+        <li><b>第三步：视觉–惯性联合 MAP 估计。</b>把视觉与惯性变量一起联合优化，进一步精修（Fig.2(a)）。</li>
+      </ol>
+      <p>关键成果：<b>2 秒达到 5% 尺度误差，15 秒收敛到 1% 尺度误差</b>。对比 ORB-SLAM-VI 要 15 秒才出第一个尺度估计、VI-DSO 要 20–30 秒——它快得多，且把「运动足够后解出重力方向与尺度」这件事工程化落地了。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="38" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">视觉惯性初始化（呼应第二季悬念⑤）</text>
+          <!-- 左：手机被拿起，只有 IMU 在动的几秒 -->
+          <rect x="40" y="80" width="250" height="240" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="165" y="110" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">① 静止被拿起</text>
+          <rect x="120" y="140" width="90" height="150" fill="#cfd8dc" stroke="#607d8b" stroke-width="2"/>
+          <text x="165" y="305" fill="#37474f" font-size="12" text-anchor="middle">手机</text>
+          <!-- 加速度曲线 -->
+          <polyline points="55,250 90,250 120,200 150,260 180,180 210,250 275,250" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <text x="165" y="345" fill="#c62828" font-size="11" text-anchor="middle">加速度曲线（IMU 在动）</text>
+          <line x1="165" y1="70" x2="165" y2="130" stroke="#2e7d32" stroke-width="3" marker-end="url(#g1)"/>
+          <text x="165" y="64" fill="#2e7d32" font-size="12" text-anchor="middle">重力方向</text>
+          <!-- 中：解出重力与尺度 -->
+          <rect x="325" y="80" width="250" height="240" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="450" y="110" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">② 运动足够后</text>
+          <circle cx="450" cy="200" r="46" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <line x1="450" y1="200" x2="450" y2="156" stroke="#2e7d32" stroke-width="3" marker-end="url(#g1)"/>
+          <text x="450" y="210" fill="#0d3c75" font-size="12" text-anchor="middle">重力方向</text>
+          <text x="450" y="270" fill="#37474f" font-size="12" text-anchor="middle">+ 尺度 s 被解出</text>
+          <text x="450" y="300" fill="#888" font-size="11" text-anchor="middle">（5% 误差 @2s）</text>
+          <!-- 右：轨迹有真实尺度 -->
+          <rect x="610" y="80" width="250" height="240" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="735" y="110" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">③ 轨迹有尺度</text>
+          <polyline points="640,290 690,250 740,210 800,170 850,140" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <text x="735" y="310" fill="#0d3c75" font-size="12" text-anchor="middle">真实尺度轨迹</text>
+          <text x="735" y="335" fill="#888" font-size="11" text-anchor="middle">（1% 误差 @15s）</text>
+          <defs><marker id="g1" markerWidth="9" markerHeight="9" refX="4" refY="4" orient="auto"><path d="M0,0 L9,4 L0,9 Z" fill="#2e7d32"/></marker></defs>
+          <text x="450" y="358" fill="#888" font-size="11" text-anchor="middle">图注：这正是第二季 0029 明确说那篇论文缺失的初始化章节——先用纯视觉拿到 up-to-scale 地图，再让 IMU 把尺度与重力方向解出来</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一台手机从静止被拿起。左：最初只有 IMU 在动的几秒（加速度曲线 + 重力方向箭头）；中：运动足够后解出重力方向与尺度 $s$；右：位姿轨迹终于有了真实尺度。<br>
+          <b>怎么看这张图：</b>① 左侧红曲线是 IMU 加速度，绿箭头是重力方向（初始化要解出的量之一）；② 中间蓝圆 + 绿箭头表示「重力方向 + 尺度 s」已被估出；③ 右侧蓝折线是带真实尺度的轨迹。<br>
+          <b>要记住的一句话：</b>这就是第二季 0029 明确说那篇论文缺失的初始化章节——ORB-SLAM3 用「先视觉、后惯性、再联合」三步把尺度与重力方向解出来。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>5. 地图合并的「焊接窗口」与因子图</h2>
+      <p>当两块地图被判定要合并，ORB-SLAM3 不是简单拼接，而是分两步把接缝对齐：</p>
+      <ol>
+        <li><b>焊接窗口（welding window）组装</b>：取 $K_a$ 与 $K_m$ 各自在共视图里的邻域关键帧及它们看到的地图点，把 $M_a$ 用变换 $\mathbf T_{ma}$ 对齐到 $M_m$。</li>
+        <li><b>合并地图</b>：把两份地图熔成一张活跃地图，删重复点。</li>
+        <li><b>焊接 BA（welding BA）</b>：对焊接窗口内的所有关键帧与点做局部 BA（Fig.3(a)）；为消 gauge，窗口外但看到这些点的关键帧以固定位姿参与。</li>
+        <li><b>本质图优化</b>：用整张合并地图的本质图做位姿图优化，把焊接窗口的修正<b>传播</b>到地图其余部分。</li>
+      </ol>
+      <p>★ 视觉惯性版本的焊接 BA（Fig.3(b)）在目标函数里同时含：<b>重投影误差项（蓝）</b>、<b>IMU 预积分项（黄）</b>、<b>偏置随机游走项（紫）</b>。这里的 IMU 预积分正是第二季 <b>0030</b> 学的东西——论文直接把预积分残差 $\mathbf r_{\mathcal T_{i,i+1}}$（含 $\Delta\mathbf R,\Delta\mathbf v,\Delta\mathbf p$ 与协方差）作为因子图的边。下面这张原图把三种因子画得清清楚楚。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_ORB-SLAM3/69b10aa36527e22dd71440f0065168e60b115f4a7394fb9ff0a768abbbd11a5c.jpg" alt="Welding BA factor graph">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Factor graph representation for the welding BA, with reprojection error terms (blue squares), IMU preintegration terms (yellow squares), and bias random walk (purple squares). (a) Visual welding BA. (b) Visual-Inertial welding BA.（焊接 BA 的因子图：重投影项（蓝）、IMU 预积分项（黄）、偏置随机游走（紫）。(a) 视觉焊接 BA；(b) 视觉惯性焊接 BA。）<br>
+          <b>怎么看这张图：</b>① 蓝色方块＝重投影误差因子（连接相机与 3D 点）；② 黄色方块＝IMU 预积分因子（连接相邻关键帧，正是 0030 学的预积分量）；③ 紫色方块＝偏置随机游走因子。(b) 比 (a) 多了黄、紫两类惯性因子。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>6. 实验数字</h2>
+      <p>平台：i7-7700 CPU 3.6 GHz + 32 GB，只用 CPU。所有结果报中位（EuRoC 10 次、TUM-VI 3 次、多会话 5 次）。挑硬数字：</p>
+      <ul>
+        <li><b>EuRoC 单会话（Table II，RMS ATE，m）</b>：ORB-SLAM3 四种配置都优于文献最佳。单目 0.041*、双目 0.044*、单目惯性 0.041*、双目惯性 0.044*（带 * 表示部分序列未完成的均值）。在单目惯性配置下比 MSCKF/OKVIS/ROVIO 准 5–10 倍，比 VI-DSO/VINS-Mono 准 2 倍以上。</li>
+        <li><b>EuRoC 每序列 10 次运行（Fig. 4 彩色方块）</b>：每张图用颜色标出 10 次运行的 rms ATE，方差小说明系统稳。V103 单目、V203 双目这些 ORB-SLAM2 解不了的序列，ORB-SLAM3 多数能解——多地图兜底了快速运动丢失。</li>
+        <li><b>与 VINS-Mono 对比</b>：单会话准 2.6 倍，多会话（multisession）优势扩大到 <b>3.2 倍</b>——这就是地图合并的回报。</li>
+        <li><b>TUM-VI 多会话（Fig. 5/6）</b>：说明「多地图 + 地图合并」在长时间 / 多段采集上的价值。室外序列 outdoors1 单会话处理漂移约 60 m，但若在 magistrale2 之后以多会话方式处理，漂移被显著减小。</li>
+        <li><b>室内 AR/VR 房间序列（Table IV）</b>：双目惯性平均 RMS ATE 约 0.009 m（<b>9 mm</b>）；即摘要所说「quick hand-held motions in the room of TUM-VI 下 9 mm」。</li>
+        <li><b>运行时间（Table VI/VII）</b>：实时 30–40 帧、3–6 关键帧/秒；回环 / 地图合并各步低于 1 秒，full BA 可能数秒，但都在独立线程、不阻塞实时。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_ORB-SLAM3/d0e264f5fa7e3d4101b14365f02755359946b02fc5e3290cce9fc9a7700c9d87.jpg" alt="EuRoC ATE ten executions colored squares">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Colored squares represent the rms ATE for ten different executions in each sequence of the EuRoC dataset.（彩色方块代表 EuRoC 各序列 10 次运行得到的 rms ATE。）<br>
+          <b>怎么看这张图：</b>① 每个方块是一次运行的一个序列误差，颜色编码大小；② 颜色越一致、越浅＝系统越稳；③ 与 DSO/ROVIO/VI-DSO 发布的图对照，ORB-SLAM3 明显更稳更准。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_ORB-SLAM3/206cfe62fbfa2ba717ffd91208861163f2d9561a876ba1653b63c5c9e8109487.jpg" alt="TUM-VI multisession stereo-inertial">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Multisession stereo-inertial result with several sequences from TUM-VI dataset (front, side, and top views).（TUM-VI 数据集多会话双目惯性结果，含前 / 侧 / 顶三视图。）<br>
+          <b>怎么看这张图：</b>① 同一建筑内多段序列拼接成一张大地图；② 小房间序列提供的回环（在长序列里缺失）把整体误差拉到厘米级；③ 这就是「多地图 + 地图合并」在长时间采集上的价值可视化。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_ORB-SLAM3/f955664453f3a332b0b4ebf93a6b0c8e22a5c17483c6ff3b5a1a670a1a26f20e.jpg" alt="TUM-VI multisession outdoors1">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Multisession stereo-inertial. In red, the trajectory estimated after singlesession processing of outdoors1. In blue, multisession processing of magistrale2 first and then outdoors1.（多会话双目惯性；红＝outdoors1 单会话处理结果；蓝＝先 magistrale2 再以多会话处理 outdoors1。）<br>
+          <b>怎么看这张图：</b>① 红轨迹（单会话）漂移明显（≈60 m）；② 蓝轨迹（多会话）漂移被显著减小；③ 直观说明地图合并如何利用先前地图纠正长序列漂移。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>ORB-SLAM3 的 Atlas 在跟踪失败时，默认怎么处理？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="它不重置，而是把当前地图沉为非活跃、新建一个活跃地图；等重访共视区域时再无缝合并。这就是「跟踪失败 ≠ 全部作废」。" onclick="lessonKit.answer(this,'q0045a')">新建地图待合并</button>
+          <button data-correct="no" data-explanation="不是丢弃重来。ORB-SLAM2 才是丢了就重来；ORB-SLAM3 的改进恰恰是保留旧地图、回头合并，所以多会话才准。" onclick="lessonKit.answer(this,'q0045a')">丢弃全部重来</button>
+        </div>
+        <div class="quiz-feedback" id="q0045a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>7. 局限与衔接</h2>
+      <p>论文 §VIII 明确承认的主要失败情形：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 低纹理环境</h4><p>这是主要失败模式。直接法对低纹理更鲁棒，但只做短/中期数据关联；特征法能解长期/多地图关联，却在低纹理下跟踪变弱。</p></div>
+        <div class="mini-card"><h4>② 慢运动 / 缺横滚俯仰</h4><p>如平地上行驶的汽车，IMU 难初始化；若可能，改用双目 SLAM，或用单目深度 CNN。</p></div>
+        <div class="mini-card"><h4>③ 纯旋转探索</h4><p>探索中若只有纯旋转，无法估计深度（单目尤其明显）。</p></div>
+        <div class="mini-card"><h4>④ 室外远点漂移</h4><p>TUM-VI 室外序列受云天空远点影响，惯性参数（尺度、加速度偏置）可能漂到 10–70 m，但仍是该序列最佳。</p></div>
+      </div>
+      <p>★ <b>收束与承接：</b>本课偿还了第二季<b>悬念⑤（IMU 初始化）</b>——0029/0030 预积分教程里缺失的初始化章节，在这里以「视觉→惯性→联合」三步 MAP 估计补齐，并复用 0030 的预积分因子（Fig.3 的黄/紫方块）。同时，它把 0014 回环检测综述的「假阳性铁律」升级为「先几何验证、再局部一致性」以提高召回——代价是多地图下不再轻易产生重复区域。下一课（0046 DTAM 2011）将转向第三季另一条主线：<b>稠密直接法</b>，与 ORB 这套特征法形成对照。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>Atlas 多地图表示由哪两部分组成？跟踪失败时它比 ORB-SLAM2 好在哪？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>Atlas = 一个活跃地图 + 若干非活跃地图。跟踪失败时它不重置，而是新建活跃地图、旧地图沉为非活跃；重访共视区域时再无缝合并。好处：长时间/多段采集下前面建的地图不浪费，多会话精度显著优于「丢了就重来」。</div></details>
+          </li>
+          <li>视觉惯性融合有哪三种模式？IMU 给单目带来了什么关键量？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>三种：纯视觉、视觉惯性、多地图视觉惯性（外加鱼眼+IMU 组合）。IMU 让单目尺度可观、并能在纹理缺失/运动模糊/遮挡时提供姿态，大幅提升鲁棒性。</div></details>
+          </li>
+          <li>IMU 初始化分哪三步？它偿还了第二季的哪个悬念？最终尺度误差是多少？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>三步：① 纯视觉 MAP（2 秒 up-to-scale 地图）；② 纯惯性 MAP（解尺度 s、重力方向、偏置、速度）；③ 视觉-惯性联合 MAP。它偿还了第二季悬念⑤（IMU 初始化，0029/0030 那篇论文缺的章节）。最终 2 秒 5% 尺度误差、15 秒收敛到 1%。</div></details>
+          </li>
+          <li>地图合并的「焊接窗口」做什么？Fig.3 的因子图里三种方块各代表什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>焊接窗口取两块地图在共视图邻域的关键帧与点，先做局部 BA（welding BA）对齐接缝，再用本质图优化把修正传播到全图。Fig.3 三色方块：蓝＝重投影误差项，黄＝IMU 预积分项（即 0030 学的预积分量），紫＝偏置随机游走项。</div></details>
+          </li>
+          <li>论文承认的主要局限有哪些？举出至少三条。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① 低纹理环境是主要失败模式；② 慢运动/缺横滚俯仰（如平地汽车）IMU 难初始化；③ 纯旋转探索无法估深度；④ 室外远点可能导致惯性参数漂移（10–70 m）。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0044-ORB-SLAM2-2017-绝对尺度与工程标杆.html">← ORB-SLAM2（2017）：绝对尺度与工程标杆</a>
+        <a class="next" href="0046-DTAM2011-稠密直接法的开端.html">DTAM（2011）：稠密直接法的开端 →</a>
+      </div>
+      <p class="foot-note">ORB-SLAM3 用 Atlas 多地图和视觉惯性，把「跟踪失败」从灾难变成「回头再合并」，并填补了第二季留下的 IMU 初始化空缺。下一课我们转入第三季另一条主线：稠密直接法 DTAM 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

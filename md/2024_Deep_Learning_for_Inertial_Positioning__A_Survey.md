@@ -1,0 +1,616 @@
+# Deep Learning for Inertial Positioning: A Survey
+
+Changhao Chen , Member, IEEE, and Xianfei Pan
+
+Abstract— Inertial sensors are widely utilized in smartphones, drones, vehicles, and wearable devices, playing a crucial role in enabling ubiquitous and reliable localization. Inertial sensor-based positioning is essential in various applications, including personal navigation, location-based security, and human-device interaction. However, low-cost MEMS inertial sensors’ measurements are inevitably corrupted by various error sources, leading to unbounded drifts when integrated doubly in traditional inertial navigation algorithms, subjecting inertial positioning to the problem of error drifts. In recent years, with the rapid increase in sensor data and computational power, deep learning techniques have been developed, sparking significant research into addressing the problem of inertial positioning. Relevant literature in this field spans across mobile computing, robotics, and machine learning. In this article, we provide a comprehensive review of deep learning-based inertial positioning and its applications in tracking pedestrians, drones, vehicles, and robots. We connect efforts from different fields and discuss how deep learning can be applied to address issues such as sensor calibration, positioning error drift reduction, and multisensor fusion. This article aims to attract readers from various backgrounds, including researchers and practitioners interested in the potential of deep learning-based techniques to solve inertial positioning problems. Our review demonstrates the exciting possibilities that deep learning brings to the table and provides a roadmap for future research in this field.
+
+Index Terms— Inertial navigation, deep learning, inertial sensor calibration, pedestrian dead reckoning, sensor fusion, visual-inertial odometry.
+
+## I. INTRODUCTION
+
+HE inertial Measurement Unit (IMU) is widely used in smartphones, drones, vehicles, and VR/AR devices. It continuously measures linear velocity and angular rate and tracks the motion of these platforms, as illustrated in Figure 1. With the advancements in Micro-Electro-Mechanical Systems (MEMS) technology, today’s MEMS IMUs are small, energy-efficient, and cost-effective. Inertial positioning (navigation) calculates attitude, velocity, and position based on inertial measurements, making it a crucial element in various location-based applications, including locating and navigating individuals in transportation infrastructures (e.g., airports, train stations) [1], supporting security and safety services (e.g., aiding first-responders) [2], enabling smart city/infrastructure, and facilitating human-device interaction [3]. Compared to other positioning solutions such as vision or radio, inertial positioning is completely ego-centric, works indoors and outdoors, and is less affected by environmental factors such as complex lighting conditions and scene dynamics.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/b70017404c234db0f3b40e7e541ccf659b9d7f6c895f5ad722d43676b82da21d.jpg)  
+Fig. 1. Inertial sensors are ubiquitous in modern platforms such as smartphones, drones, intelligent vehicles, and VR/AR devices. They play a critical role in enabling completely egocentric motion tracking and positioning, making them essential for a range of applications.
+
+Unfortunately, the measurements obtained from low-cost MEMS IMUs are subject to several error sources such as bias error, temperature-dependent error, random sensor noise, and random-walk noise. In classical inertial navigation mechanisms, angular rates are integrated into orientation, and based on the acquired attitude, acceleration measurements are transformed into the navigation frame. Finally, the transformed accelerations are doubly integrated into locations [4], [5]. Traditional inertial navigation algorithms are designed and described using concrete physical and mathematical rules. Under ideal conditions, sensor errors are small enough to allow hand-designed inertial navigation algorithms to produce accurate and reliable pose estimates. However, in real-world applications, inevitable measurement errors cause significant problems for inertial positioning systems without constraints, which can fail within seconds. In this process, even a minor error can be amplified exponentially, resulting in unbounded error drifts.
+
+Previous researchers have attempted to address the problem of error drifts in inertial navigation by incorporating domain-specific knowledge or other sensor. In the context of pedestrian tracking, exploiting the periodicity of human walking is important, and the process of pedestrian dead reckoning (PDR) involves detecting steps, estimating step length and heading, and updating the user’s location to mitigate error drifts from exponential to linear increase [6]. Zerovelocity update (ZUPT) involves attaching the IMU to the user’s foot and detecting the zero-velocity phase, which is then used in Kalman filtering to correct inertial navigation states [7]. Platforms such as drones or robots equipped with other sensors such as cameras or LiDAR can significantly improve the performance of pure inertial solutions by effectively integrating inertial sensors with these modalities through filtering or smoothing [8], [9], [10]. However, these solutions have limitations in specific application domains and are unable to address the fundamental problem of inertial navigation.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/37eb11c242d830c53d0d5902a8df87a56a8c3d7f95636e4fb930bf7d8cdc2c39.jpg)  
+Fig. 2. An overview of our survey structure.
+
+Recently, deep learning has shown impressive performance in various fields, including computer vision, robotics, and signal processing [11]. It has also been introduced to address the challenges of inertial positioning. Deep neural network models have been leveraged to calibrate inertial sensor noises, reduce the drifts of inertial navigation mechanisms, and fuse inertial data with other sensor information. These research works have attracted significant attention, as they show potential for exploiting massive data to generate data-driven models instead of relying on concrete physical or mathematical models. With the rapid development of deep learning techniques, learningbased inertial solutions have become even more promising.
+
+## A. Taxonomy
+
+This survey aims to provide a comprehensive review of deep-learning-based approaches to inertial positioning, including measurement calibration, inertial positioning algorithms, and sensor fusion. To achieve this, we establish a taxonomy of existing deep learning-based inertial positioning approaches, and conduct an analysis of their effectiveness at three levels: sensor level, algorithm level, and application level, as illustrated in Figure 2.
+
+• At the sensor level, deep learning is employed as a calibration method for inertial sensors. It effectively models error sources in inertial measurements and implicitly eliminates corrupted measurement errors and noise.
+
+• At the algorithm level, deep neural networks are constructed to partially or completely replace modules in traditional inertial navigation mechanisms that enhance and correct IMU integration in general. Additionally, deep learning serves as a powerful tool for fusing inertial data with other sensor modalities such as cameras and LiDAR. Deep learning based IMU integration and fusion methods enable improved positioning accuracy and reliability.
+
+• At the application level, we delve into specific use cases where deep learning methods can be applied to inertial positioning for pedestrians, vehicles, drones, and robots. For instance, we explore how learned motion patterns can enhance pedestrian dead reckoning (PDR) and zero-velocity update (ZUPT) algorithms.
+
+Finally, we thoroughly discuss the advantages and limitations of existing works in this domain. We also identify the key challenges and future opportunities that lie ahead in this research direction.
+
+## B. Comparison With Other Surveys
+
+Compared with other deep learning surveys, such as those focused on object detection [12], semantic segmentation [13], and robotics [14], survey on deep learning based inertial positioning is relatively scarce and hard to find. While a broader survey on machine learning enhanced inertial sensing does exist [15], our survey narrows the focus to deep learning based inertial positioning, providing deeper insights and analysis of the fast-evolving developments in this area over the past five years (2018-2022). Other relevant surveys, such as those focused on inertial pedestrian positioning [6], indoor positioning [16], step length estimation [17], and pedestrian dead reckoning [18], do not cover recent deep learning based solutions. To the best of our knowledge, this article is the first survey that discusses deep learning based inertial positioning thoroughly and deeply.
+
+## C. Survey Organization
+
+The rest of this survey is organized as follows: Section II provides a brief overview of classical inertial navigation mechanisms. Sections III, IV, and V delve into methods and algorithms pertaining to sensor calibration based on deep learning, inertial navigation algorithms, and sensor fusion, respectively. Sections VI, VII, VIII, and IX explore specific applications of deep learning techniques within the realm of pedestrian inertial positioning, inertial positioning for vehicles, UAVs, and robots, IMU-integrated positioning, and human motion and activity recognition, respectively. Section X presents representative public datasets, evaluation metrics, and a performance comparison between learning-based and traditional inertial positioning models. Finally, Section XI concludes by discussing the benefits, challenges, and opportunities.
+
+## II. CLASSICAL INERTIAL NAVIGATION MECHANISMS
+
+This section provides an overview of classical inertial navigation mechanisms and highlights their limitations. It begins by presenting the inertial measurement model and classical strapdown inertial navigation method. Subsequently, two solutions that aim to reduce the drifts of inertial navigation system, namely pedestrian dead reckoning (PDR) and zero-velocity update (ZUPT), are discussed, with a specific focus on their applicability in pedestrian tracking scenarios. The section finally introduces sensor fusion approaches that integrate inertial data with information from other sensors.
+
+## A. Inertial Measurement Model
+
+Inertial measurements acquired from low-cost MEMS IMUs are often corrupted by various types of error sources, resulting in unbounded error drifts when integrated in strapdown inertial navigation systems (SINS). These error sources can be classified into two categories: deterministic errors and random errors [19]. Deterministic errors comprise bias error, nonorthogonality error, misalignment error, scale-factor error, and temperature-dependent error. On the other hand, random errors include random sensor noise and random-walk noise resulting from long-term operation, which are challenging to model and eliminate.
+
+Raw IMU measurements, i.e. accelerations aˆ and angular rates ωˆ , can be formulated by
+
+$$
+\hat { \mathbf { a } } = \mathbf { a } + \mathbf { b } _ { a } + \mathbf { n } _ { a }\tag{1}
+$$
+
+$$
+\hat { \pmb { \omega } } = \pmb { \omega } + \mathbf { b } _ { \omega } + \mathbf { n } _ { \omega }\tag{2}
+$$
+
+where ${ \bf b } _ { a }$ and $\mathbf { b } _ { \omega }$ are acceleration bias and gyroscope bias, ${ \bf n } _ { a }$ and $\mathbf { n } _ { \omega }$ are additive noises above accelerometer and gyroscope.
+
+Traditionally, it is important to calibrate inertial sensors before running an inertial navigation algorithm that involves integrating inertial data into system states. One effective tool for achieving this is the Allan variance method [20], which models the random process of inertial sensor errors.
+
+## B. Strapdown Inertial Navigation System
+
+Inertial sensor measures linear accelerations ${ \bf a } _ { b } ( t )$ and angular rates $\omega _ { b } ^ { n } ( t )$ of attached user body at the timestep t. b represents the body frame, while n denotes the navigation (world) frame, i.e. the navigation frame. $\omega _ { b } ^ { n } ( t )$ means that the angular rates of body frame with respect to the navigation frame. To simplify inertial motion model, this article assumes that the biases and noises of sensor in Equation 1 and 2 have been removed in the stage of inertial sensor calibration. (R, p) are defined orientation and position variables. From the kinematic model of IMU, we can have
+
+$$
+\left\{ \begin{array} { l l } { \mathbf { R } _ { b } ^ { n } ( t + 1 ) = \mathbf { R } _ { b } ^ { n } ( t ) \mathbf { R } _ { b _ { t + 1 } } ^ { b _ { t } } } \\ { \mathbf { v } _ { n } ( t + 1 ) = \mathbf { v } _ { n } ( t ) + \mathbf { a } _ { n } ( t ) d t } \\ { \mathbf { p } _ { n } ( t + 1 ) = \mathbf { p } _ { n } ( t ) + \mathbf { v } _ { n } ( t ) d t + \frac { 1 } { 2 } \mathbf { a } _ { n } ( t ) d t ^ { 2 } } \end{array} \right.\tag{3}
+$$
+
+where $\mathbf { a } _ { n } , \mathbf { v } _ { n } , \mathbf { p } _ { n }$ are acceleration, velocity and position in the navigation frame, $\mathbf { R } _ { b } ^ { n }$ represents the rotation from the body frame to the navigation frame.
+
+Firstly, orientation is updated by inferring the rotation matrix $\pmb { \Omega } ( t )$ via Rodriguez formula:
+
+$$
+\begin{array} { r l } & { \Omega ( t ) = \mathbf { R } _ { b _ { t + 1 } } ^ { b _ { t } } } \\ & { \qquad = \mathbf { I } + \sin ( \sigma ) \frac { [ \pmb { \sigma } \times ] } { \pmb { \sigma } } + ( 1 - \cos ( \sigma ) ) \frac { [ \pmb { \sigma } \times ] ^ { 2 } } { \pmb { \sigma } ^ { 2 } } , } \end{array}\tag{4}
+$$
+
+where rotation vector $\pmb { \sigma } = \pmb { \omega } ( t ) d t$
+
+To update velocity, the accelerations in navigation frame can be expressed as a function of measured accelerations, i.e.
+
+$$
+{ \bf a } _ { n } ( t ) = { \bf R } _ { b } ^ { n } ( t - 1 ) { \bf a } _ { b } ( t ) - { \bf g } _ { n }\tag{5}
+$$
+
+Then, the accelerations in navigation frame ${ \bf a } _ { n } ( t )$ are integrated into the velocity in the navigation frame $\mathbf { v } _ { n } ( t )$ , and the location $\mathbf { p } _ { n } ( t )$ is finally updated by integrating the velocity via Equation 4.
+
+As we can see, in this process, even a small measurement error can be exponentially amplified, leading to the problem of inertial error drifts. In the past, high-precision inertial sensors such as laser or fiber inertial sensors could keep the measurement error small enough to maintain the accuracy of INS. However, due to the size and cost limitations of current MEMS IMUs, compensation methods are necessary to mitigate the corresponding error drifts. One approach is to introduce domain-specific knowledge or other sensor information.
+
+## C. Domain Specific Knowledge
+
+1) Pedestrian Dead Reckoning: Pedestrian dead reckoning (PDR) is a method that leverages domain-specific knowledge about human walking to track pedestrian motion. PDR comprises three main steps: step detection, heading and stride length estimation, and location update [6]. In step detection, PDR uses the threshold of inertial data to identify step peaks or stances and segment the corresponding inertial data. Dynamic stride length estimation is then achieved via an empirical formula, known as the Weinberg formula [21], which considers the segmented accelerations and user’s height. Similar to SINS, heading estimation is done by integrating gyroscope signals into orientation changes and adding orientation changes to the initial orientation to obtain the current heading. Finally, the estimated heading and stride length are used to update the pedestrian’s location. By avoiding double integration of accelerations and incorporating a reliable stride estimation model, PDR effectively reduces inertial positioning drifts. However, inaccurate step detection and stride estimation can still occur, leading to large system error drifts. Moreover, PDR is limited to pedestrian navigation as it depends on the periodicity of human walking.
+
+2) Zero-Velocity Update: The Zero-velocity update (ZUPT) algorithm is designed to compensate for the errors of SINS by identifying the still phase of human walking and using zero-velocity as observations in a Kalman filter [7]. To facilitate the detection of the still phase, the IMU is typically attached to the user’s foot, as it undergoes significant motion and reflects walking patterns well. Techniques such as peakdetection [22], zero-crossings [23], or auto-correlation [24] can be used to analyze the inertial data and segment the zerovelocity phase. Once the still phase is detected, zero-velocity is used as pseudo-measurements in the filtering process, thereby limiting the error drifts of open-loop integration. However, the effectiveness of ZUPT depends on the assumption that the user’s foot remains completely still, and any incorrect still phase detection or small motion disturbances can cause navigation system drifts. Additionally, ZUPT is limited to pedestrian tracking.
+
+## D. Integrating IMU With Other Sensors
+
+Integrating the IMU with other sensors, such as camera [9], LiDAR [10], UWB [25], and magnetometer [26], can provide promising results as it allows for exploiting their complementary properties. By fusing the data from multiple sensors, the accuracy and robustness of pose estimation can be significantly improved, making it a general solution for all platforms. However, in some scenarios, certain sensors, such as visual perception, may not be available or highly dependent on the environment, which can negatively affect the egocentric property of inertial positioning. Additionally, in sensor fusion approaches, it is essential to consider various factors such as sensor calibration, initialization, and time-synchronization.
+
+## E. Discussion
+
+As previously mentioned, classical inertial navigation methods are designed to solve specific problems within their respective domains. However, their performance is often limited due to real-world issues such as imperfect modeling, measurement errors, and environmental influences, resulting in inevitable error drifts. Researchers in the field of inertial navigation are therefore constantly searching for ways to build models that can tolerate measurement errors and mitigate system drifts. In addition to relying on Newtonian physical rules, it has been observed that domain-specific knowledge, whether it be an experienced human walking model or scene geometry, can serve as a useful constraint in reducing the error drifts of inertial positioning systems. One potential approach to improving inertial positioning accuracy and robustness is to exploit massive inertial data to extract domain-specific knowledge and construct a data-driven model. In the next sections, we will delve deeper into this problem and explore potential solutions.
+
+## III. LEARNING TO CALIBRATE INERTIAL SENSOR
+
+Inertial measurements obtained from low-cost IMUs are often affected by various sources of noise, making it challenging to distinguish the true values from the sources of error. The error sources are a complex interplay of deterministic and random factors, further complicating the issue. To address the impact of measurement errors, the powerful nonlinear approximator capabilities of deep neural networks can be exploited. A natural approach is to develop a deep neural network that receives the raw inertial measurements as input and produces the calibrated inertial measurements as output, representing the actual platform motion. By training this neural model on labeled datasets using stochastic gradient descent (SGD) [35], the inertial measurement errors can be implicitly learned and corrected by the neural network. It is important to note that the quality of the collected training dataset has a significant impact on the performance of the model.
+
+Before the age of deep learning, attempts were made to use neural networks to learn the measurement errors of inertial sensors. For example, a 1-layer artificial neural network (ANN) [36] is proposed to model the distribution of gyro drifts, and is able to successfully approximate gyro drifts with such a ‘shallow’ network [27]. This method has an advantage over Kalman filtering (KF) based calibration methods in that it does not require setting hyper-parameters before use, such as the sensor noise matrix in KF.
+
+In recent years, there has been increasing interest in using deep neural networks (DNN) with multiple layers to solve the inertial sensor calibration problem. With the addition of more layers, neural networks become more expressive and can learn complex relationships between the raw inertial measurements and the true motion of the vehicle. One approach, proposed by [28], uses a Convolutional Neural Network (ConvNet) to remove error noises from inertial measurements. They collected inertial data from two grades of IMU under given constant accelerations and angular rates. The ConvNet framework takes raw inertial measurements (from low-precision IMU) as inputs and tries to output acceleration and angular rate references (from high-precision IMU). Their experiment shows that deep learning can remove some of the sensor error and improve test accuracy. However, this work has not been validated in a real navigation setup, and thus it cannot demonstrate how learning-based sensor calibration reduces error drifts in inertial navigation. Both of the mentioned methods require reference data from high-precision IMUs as labels to train the networks, as shown in Figure 3 (a). However, acquiring reference data from high-precision IMUs can be costly.
+
+In addition to directly learning from pseudo ground-truth IMU labels, another approach is to enable neural networkbased calibration models to produce inertial data that can be integrated into more accurate orientation estimation. This is illustrated in Figure 3 (b). By producing more accurate orientation values, the neural network implicitly removes the corrupted noises above inertial data. For example, OriNet [29] inputs 3-dimensional gyroscope signals into an LSTM network [70] to obtain calibrated gyroscope signals, which are then integrated with the orientation at the previous timestep to generate orientation estimates at the current timestep. A loss function between orientation estimates and real orientation is defined and minimized for model training. OriNet has been evaluated on a public drone dataset, demonstrating an improvement in orientation performance of approximately 80%. A similar approach is [31], who calibrates gyroscope using ConvNet, reporting good attitude estimation accuracy. Calib-Net [34] is another ConvNet framework that denoises gyroscope data by extracting effective spatio-temporal features from inertial data. Calib-Net is based on dilation ConvNet [71] to compensate the gyro noise, as illustrated in Figure 4. This model is able to significantly reduce orientation error compared to raw IMU integration. When this learned inertial calibration model is incorporated into a visual-inertial odometry (VIO), it further improves localization performance and outperforms representative VIOs such as VINS-mono [9]. Other efforts in this direction include works by [32] and [33].
+
+TABLE I  
+A SUMMARY OF EXISTING METHODS ON DEEP LEARNING BASED INERTIAL SENSOR CALIBRATION
+<table><tr><td>name</td><td>year</td><td>sensor</td><td>model</td><td>learning</td><td>target</td></tr><tr><td>Xiyuan et al. [27]</td><td>2003</td><td>gyro</td><td>1-layer NN</td><td>SL</td><td>gyro drifts compensation</td></tr><tr><td>Chen et al. [28]</td><td>2018</td><td>gyro, acc</td><td>ConvNet</td><td>SL</td><td>inertial noise compensation</td></tr><tr><td>Esfahani et al. [29]</td><td>2019</td><td>gyro</td><td>LSTM</td><td>SL</td><td>gyroscope calibration</td></tr><tr><td>Nobre et al. [30]</td><td>2019</td><td>gyro, acc</td><td>Deep Q-Network</td><td>RL</td><td>optimal calibration parameters</td></tr><tr><td>Brossard et al. [31]</td><td>2020</td><td>gyro</td><td>ConvNet</td><td>SL</td><td>gyro corrections</td></tr><tr><td>Zhao et al. [32]</td><td>2020</td><td>gyro</td><td>LSTM</td><td>SL</td><td>gyroscope calibration</td></tr><tr><td>Huang et al. [33]</td><td>2022</td><td>gyro</td><td>Temporal ConvNet</td><td>SL</td><td>gyroscope calibration</td></tr><tr><td>Calib-Net [34]</td><td>2022</td><td>gyro</td><td>Dilated ConvNet</td><td>SL</td><td>gyroscope denoising</td></tr></table>
+
+• Years indicates the publication year of each work  
+• Sensors indicates the sensors involved in each work. gyro and acc represent gyroscope and accelerometer respectively.  
+• Model indicates which module the framework consists of  
+• Learning indicates how to train neural networks. SL and RL represent Supervised Learning and Reinforcement Learning  
+• Target indicates what the model aims to solve or produce.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/e347cc836b18b6eacb966fb18d294c7ac1210ae605c061d1ad35d074c33fe4a8.jpg)  
+Fig. 3. An overview of existing deep learning based inertial sensor calibration methods.
+
+Instead of directly calibrating inertial sensors with DNNs, some researchers have explored using DNNs to generate parameters that improve classical calibration algorithms, as shown in Figure 3 (c). One example is the work by [30], who models inertial sensor calibration as a Markov Decision Process and proposes to use deep reinforcement learning [72] to learn the optimal calibration parameters. The authors demonstrated the effectiveness of their approach in calibrating inertial sensors for a visual-inertial odometry (VIO) system.
+
+As discussed above, deep learning-aided inertial sensor calibration methods (listed in Table I) have shown promising results in removing corrupted sensor noises and improving the accuracy of inertial positioning systems. These methods do not require human intervention and can automatically learn error models. However, it is important to note that the learned error model is typically dependent on the specific sensor or platform used. Therefore, a change in sensor or user can result in different data distributions, leading to reduced performance of the learned model. Additionally, further analysis is needed to determine which types of noise can be effectively removed by learning-based calibration methods.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/7c0f80c587919694473c91e190d5089b5b4df519e41f61d4011a0b388fdff7e6.jpg)  
+Fig. 4. An example of gyro calibration results (reprint from Calib-Net [34]). Compared with raw IMU integration, deep learning based calibration models significantly reduce attitude drifts.
+
+## IV. LEARNING TO CORRECT IMU INTEGRATION
+
+In addition to sensor calibration, researchers are exploring various methods for using deep learning to construct inertial positioning models that can either partially or completely replace classical inertial navigation mechanisms. This section provides an overview of how deep learning can be used to correct IMU integration in general. Next sections will discuss deep learning approaches for pedestrian tracking applications, and present deep inertial solutions for vehicles, UAVs, and robots. A summary of existing works and their contributions is provided in Table II.
+
+In deep learning-based inertial positioning approaches, a user’s absolute velocity can be inferred from a sequence of IMU data using a deep neural network. This velocity information can then be used as a key constraint to reduce the drifts in IMU double integration. Figure 5 provides an example of velocity learning from IMU sequence, where the periodicity of human walking makes it easy to infer the user’s moving velocity. Similar observations have been made for vehicles, UAVs, and robotic platforms, which will be discussed in Section VII. Existing works on applying learned v elocity to correct IMU integration can generally be divided into three categories, as shown in Figure 6, and will be discussed as follows.
+
+One category of deep learning models aims to learn location displacement, which is the average velocity multiplied by a fixed period of time, as illustrated in Figure 6(a). The approach proposed by [37] formulates inertial positioning as a sequential learning problem, where 2D motion displacements in the polar coordinate, also known as polar vectors, are learned from independent windows of segmented inertial data. This is because the frequency of platform vibrations is relevant to the absolute moving speed, which can be measured by IMU, when tracking human or wheeled configurations. Based on this observation, they propose IONet, an LSTMbased framework for end-to-end learning of relative poses. Trajectories are generated by adding motion displacements together with initial locations. To train neural models, a large collection of data was collected from a smartphone-based IMU in a room with a high-precision visual motion tracking system (i.e., Vicon) to provide ground-truth pose labels. Once the model is trained, the IONet model can be used in areas outside the data-collection room. In a two-minute random pedestrian walking scenario, the localization error of IONet is within 3 meters 90% of the time, when evaluating across users, devices, and attachments, outperforming some classical PDR algorithms. In tracking trolley, IONet shows comparable performance over representative visual-inertial odometry and is even more robust in featureless areas. However, supervised learning-based IONet requires high-precision pose as training labels. When testing with data different from those in the training set, there will be performance degradation. To improve the generalization ability, [41] proposes MotionTransformer, which allows the inertial positioning model to self-adapt into new domains via generative adversarial network (GAN) [73] and domain adaptation [74], without the need for labels in new domains. To encourage more reliable inertial positioning, [75] is able to produce pose uncertainties along with poses, offering the belief in the extent to which the learned pose can be trusted. To allow full 3D localization, TLIO [47] proposes to learn 3D location displacements and covariances from a sequence of gravity-aligned inertial data. To avoid the impacts from initial orientation, the inertial data are transformed into a local gravity-aligned frame. The learned displacements and covariances are then incorporated into an extended Kalman filter as observation states that estimate full-states of orientation, velocity, location, and IMU bias. In a 3-7 minute human motion scenario, the localization error of TLIO is within 3 meters 90% of the time.
+
+Another category of deep learning models aims to leverage learned velocity to correct accelerations, as illustrated in Figure 6(b). A prominent example is RIDI [38], which trains a deep neural network to predict velocity vectors from inertial data, which are then used to correct linear accelerations by subtracting gravity, aligning with the constraints of learned velocities. The corrected linear accelerations are then doubly integrated to estimate positions. To enhance the accuracy of inertial accelerations, RIDI leverages human walking speed as a prior, which compensates for the drifts in inertial positioning, effectively constraining them to a lower level. RoNIN [49] improves upon RIDI by transforming inertial measurements and learned velocity vectors into a heading-agnostic coordinate frame and introducing several novel velocity losses. To minimize the impact of orientation estimation, RoNIN employs device orientation to transform inertial data into a frame with its Z-axis aligned with gravity. However, a limitation of RoNIN is its reliance on orientation estimation. NILoc [59] is an intriguing trial based on RoNIN, which tackles the neural inertial localization problem, aiming to infer global location from inertial motion history only. This work recognizes that human motion patterns are unique in different locations, which can be utilized as a “fingerprint” to determine the location, similar to WiFi or magnetic-field fingerprinting. NILoc first calculates a sequence of velocity from inertial data and then employs a Transformer-based DNN framework [76] to transform the velocity sequence into location. However, one fundamental limitation of NILoc is that in some areas, such as open spaces, symmetrical or repetitive places, there may not be a unique motion pattern.
+
+An alternative approach involves incorporating learned velocity into the updating process of a Kalman filter (KF), as shown in Figure 6 (c). Reference [39] uses a ConvNet to infer current speed from IMU sequences and incorporates this speed into the Kalman filter as a velocity observation to constrain the drifts of SINS-based inertial positioning. This approach is similar to the zero-velocity update (ZUPT) method, which detects and uses zero-velocity in KF as observations, but instead uses full speeds as observations in KF. Incorporating learned velocity allows the KF to handle more complex human motion. A similar trial is [52], that is based on a DNN that infers walking velocity in the body frame and combines it with an extended KF. In addition to the learned velocity, [52] produces a noise parameter for KF to dynamically update parameters, rather than setting a fixed noise parameter.
+
+Inertial positioning heavily relies on accurately estimating the device’s attitude. Several methods aim to improve orientation estimation to enhance the performance of deep learning based inertial odometry. RIDI, RoNIN, and TLIO still depend on device orientation to rotate inertial data into a suitable frame. To address this problem, IDOL [54] proposes a two-stage process that first learns orientation from data and then rotates inertial data into the appropriate frame, followed by learning the position. Reference [61] estimates orientation using magnetic data and combines it with learned odometry to reduce positioning drifts while minimizing reliance on device orientation.
+
+TABLE II  
+A SUMMARY OF EXISTING METHODS ON DEEP LEARNING BASED INERTIAL POSITIONING
+<table><tr><td>name</td><td>Year</td><td>Carrier</td><td>model</td><td>learning</td><td>target</td></tr><tr><td>IONet [37]</td><td>2018</td><td>Pedestrian, Trolley</td><td>LSTM</td><td>SL</td><td>location displacement</td></tr><tr><td>RIDI [38]</td><td>2018</td><td>Pedestrian</td><td>SVM, SVR</td><td>SL</td><td>velocity for inertial data calibration</td></tr><tr><td>Cortes et al. [39]</td><td>2018</td><td>Pedestrian</td><td>ConvNet</td><td>SL</td><td>velocity to constrain system drifts</td></tr><tr><td>Wagstaff et al. [40]</td><td>2018</td><td>Pedestrian</td><td>LSTM</td><td>SL</td><td>zero-velocity detection for ZUPT</td></tr><tr><td>Chen et al. [41]</td><td>2019</td><td>Pedestrian, Trolley</td><td>LSTM</td><td>TL</td><td>location displacement</td></tr><tr><td>AbolDeepIO [42]</td><td>2019</td><td>UAV</td><td>LSTM</td><td>SL</td><td>location displacement</td></tr><tr><td>RINS-W [43]</td><td>2019</td><td>Vehicle</td><td>RNN</td><td>SL</td><td>zero-velocity dection for KF</td></tr><tr><td>Feigl et al. [44]</td><td>2019</td><td>Pedestrian</td><td>LSTM</td><td>SL</td><td>walking velocity</td></tr><tr><td>Wang et al. [45]</td><td>2019</td><td>Pedestrian</td><td>LSTM</td><td>SL</td><td>walking heading for ZUPT</td></tr><tr><td>Yu et al. [46]</td><td>2019</td><td>Pedestrian</td><td>ConvNet</td><td>SL</td><td>adaptive zero-velocity detection</td></tr><tr><td>TLIO [47]</td><td>2020</td><td>Pedestrian</td><td>ConvNet</td><td>SL</td><td>3D displacement and uncertainty for EKF</td></tr><tr><td>LIONet [48]</td><td>2020</td><td>Pedestrian</td><td>Dilated ConvNet</td><td>SL</td><td>lightweight inertial model</td></tr><tr><td>RoNIN [49]</td><td>2020</td><td>Pedestrian</td><td>LSTM, TCN</td><td>SL</td><td>velocity for inertial data calibration</td></tr><tr><td>Brossard et al. [50]</td><td>2020</td><td>Vehicle</td><td>ConvNet</td><td>SL</td><td>co-variance noise for KF</td></tr><tr><td>StepNet [51]</td><td>2020</td><td>Pedestrian</td><td>ConvNet, LSTM</td><td>SL</td><td>dynamic step length for PDR</td></tr><tr><td>Wang et al. [52]</td><td>2020</td><td>Pedestrian</td><td>ConvNet</td><td>SL</td><td>measurement noise for Kalman Filter</td></tr><tr><td>ARPDR [53]</td><td>2020</td><td>Pedestrian</td><td>TCN</td><td>SL</td><td>stride length and walking heading for PDR</td></tr><tr><td>IDOL [54]</td><td>2021</td><td>Pedestrian</td><td>LSTM</td><td>SL</td><td>device orientation and location</td></tr><tr><td>PDRNet [55]</td><td>2021</td><td>Pedestrian</td><td>ConvNet</td><td>SL</td><td>step length and heading for PDR</td></tr><tr><td>Buchanan et al. [56]</td><td>2021</td><td>Legged Robot</td><td>ConvNet</td><td>SL</td><td>integrate location displacement with leg odometry</td></tr><tr><td>Zhang et al. [57]</td><td>2021</td><td>Vehicle, UAV</td><td>RNN</td><td>SL</td><td>independent motion terms</td></tr><tr><td>Gong et al. [58]</td><td>2021</td><td>Pedestrian</td><td>LSTM</td><td>SL</td><td>fusing inertial data from two devices</td></tr><tr><td>NILoc [59]</td><td>2022</td><td>Pedestrian</td><td>ConvNet</td><td>SL</td><td>inertial relocalization</td></tr><tr><td>RIO [60]</td><td>2022</td><td>Pedestrian</td><td>DNN</td><td>UL</td><td>rotation-equivariance as supervision signal</td></tr><tr><td>Wang et al. [61]</td><td>2022</td><td>Pedestrian</td><td>DNN</td><td>SL</td><td>efficient and low-latent model</td></tr><tr><td>TinyOdom [62]</td><td>2022</td><td>Pedestrian, Vehicle</td><td>TCN+NAS</td><td>SL</td><td>deployment on resource-constrained device</td></tr><tr><td>ČTIN [63]</td><td>2022</td><td>Pedestrian</td><td>Transformer</td><td>SL</td><td>velocity and trajectory prediction</td></tr><tr><td>DeepVIP [64]</td><td>2022</td><td>Vehicle</td><td>ConvNet, LSTM</td><td>SL</td><td>velocity and heading for car localization</td></tr><tr><td>Bo et al. [65]</td><td>2022</td><td>Pedestrian</td><td>ConvNet</td><td>TL</td><td>model-independent stride learning</td></tr><tr><td>OdoNet [66]</td><td>2022</td><td>Vehicle</td><td>ConvNet</td><td>SL</td><td>speed learning for ZUPT</td></tr><tr><td>A2DIO [67]</td><td>2022</td><td>Pedestrian</td><td>ConvNet, LSTM</td><td>SL</td><td>pose invariant odometry</td></tr><tr><td>LLIO [68] Liu et al. [69]</td><td>2022 2023</td><td>Pedestrian Pedestrian</td><td>MLP TCN</td><td>SL SL</td><td>3D displacement for lightweight odometry general model trained on large dataset</td></tr></table>
+
+• Year indicates the publication year of each work.  
+• Carrier indicates the platform running inertial navigation  
+• Model indicates which module the framework consists of.  
+• Learning indicates how to train neural networks. SL, TL and UL represent Supervised Learning, Transfer Learning and Unsupervised Learning.  
+• Target indicates what the model aims to solve or produce.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/d83ef10903266722db8c81a91a493684935661a783bad728e3e4ad54491eb166.jpg)  
+Fig. 5. The velocity of attached platform can be inferred from a sequence of inertial measurements via deep neural networks. (reprint from L-IONet [48]).
+
+Figure 7 showcases several examples of deep learning based inertial positioning results.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/535d38beb36f4a47094056859336a2f6b4e574f36466f53a7cdec11f1c9f0561.jpg)  
+Fig. 6. An overview of existing methods on learning to correct IMU integration.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/1681a96867bd07bd5ef43d00ce6ebfa387b8ab1234867ad9207f0dce54721d5d.jpg)  
+(a)
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/64d5649a7c5803ad290e579666a7be9709e4e6331b02ffcdf2f091d37306fbe6.jpg)
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/567e781dee833905bf33e195995284cbeb24dbde1c85c6b78c538d0df5bf6531.jpg)  
+(b)  
+Fig. 7. Sample results of deep learning based inertial positioning from (a) VR device for pedestrian tracking (reprint from TLIO [47]) (b) smartphone for trolly tracking (reprint from IONet [37]).
+
+## V. LEARNING BASED IMU INTEGRATED POSITIONING
+
+Integrating inertial sensors with other sensors as a multisensor navigation system has been an area of research for several decades. Nowadays, platforms such as robots, vehicles, and VR/AR devices are equipped with GNSS, cameras, IMUs, and LIDAR sensors. Hence, it is natural to consider introducing multimodal learning techniques [77] and designing learning models capable of fusing multimodal information to construct a mapping function from sensor data to pose.
+
+## A. Learning Based Visual-Inertial Positioning
+
+Visual-inertial odometry (VIO) has garnered attention as a means of integrating low-cost, complementary camera and IMU sensors that are widely deployed. Monocular vision can capture the appearance and geometry of a scene, but cannot recover the scale metric. IMU provides metric scale and improves motion tracking in featureless areas, complex lighting conditions, and motion blur. However, a pure inertial solution can only last for a short period. Therefore, an effective fusion of these two complementary sensors is necessary for accurate pose estimation.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/83b24893627af90ce1d4dd19215acfd6884ee187e1ceb74779c8961aa5897378.jpg)  
+Fig. 8. An overview of existing methods on deep learning based sensor fusion for visual-inertial positioning.
+
+Traditional VIO methods integrate visual and inertial information based on filtering [8], [88], fixed-lag smoothing [89], or full smoothing [90]. Recently, deep learning-based VIO models have emerged, directly constructing a mapping function from images and IMU to pose in a data-driven manner. VINet [78] is an end-to-end deep VIO model consisting of a ConvNet-based visual encoder to extract visual features from two images and an LSTM-based inertial encoder to extract inertial features from a sequence of inertial data between the two images. As shown in Figure 8 (a), the visual and inertial features are concatenated together as one tensor, followed by an LSTM and fully-connected layer that finally maps features into a 6-dimensional pose. VINet is trained on public driving datasets such as the KITTI dataset [91] and a public drone dataset such as the EuroC dataset [92]. The learned VIO model is generally more robust to sensor noises compared to traditional VIO methods, although its model performance still cannot compete with state-of-the-art VIO methods.
+
+To effectively integrate visual and inertial information, [80] proposes a selective sensor fusion mechanism that learns to choose important features conditioned on sensor observations, as demonstrated in Figure 8 (b). Specifically, this work proposes two types of fusion: soft fusion, which is based on an attention mechanism and generates a soft mask to reweight features based on their importance, and hard fusion, which is based on Gumbel Soft-max and generates a hard mask consisting of either 1 or 0 to either propagate or ignore a feature. Experimental evaluation on the KITTI dataset demonstrates that compared with directly concatenating features [78], selective fusion enhances the performance of deep VIO by 5%-10%. An interesting observation is that the number of useful features is relevant to the amount of linear/rotational velocity, with inertial features contributing more to rotation rate (e.g., turning), while more visual features are used to increase linear velocity.
+
+Both [78] and [80] are trained in a supervised learning manner using datasets with high-precision ground-truth poses as training labels. However, obtaining high-precision poses can be difficult or costly in certain cases. Consequently, selfsupervised learning-based VIOs, which do not require pose labels, have attracted attention. Self-supervised VIOs leverage the multi-view geometry relation of consecutive images, such as novel view synthesis, as a supervision signal [79], [81], [84], [86]. The task of novel view synthesis involves transforming a source image into a target view and comparing the differences between the synthesized target images and real target images as loss. In VIOLearner [79] and DeepVIO [81], as shown in Figure 8 (c), the pose transformation is generated from an inertial data sequence and used in the novel view synthesis process. In UnVIO [84] and SelfVIO [86], inertial data is integrated with visual data via an attention module applied to the concatenated visual and inertial features extracted from the images and IMU sequence. They show that incorporating inertial data with visual data improves the accuracy of pose estimation, particularly rotation estimation.
+
+## B. Learning Based IMU/GNSS Integrated Positioning
+
+Kalman filtering (KF) serves as a conventional solution for merging IMU and GPS data in GNSS/IMU integrated navigation systems. However, recent developments leverage deep learning to enhance the accuracy of filtering algorithms and mitigate IMU/GNSS positioning drifts.
+
+Reference [93] introduces a tight-integration of GNSS and INS by converting INS information into Doppler data and integrating it with GNSS tracking loops to mitigate Doppler effects on the GNSS signal. It incorporating radial basis function neural network and Adaptive Network-Based Fuzzy Inference System, effectively bridges GNSS outages, contributing to overall system robustness. After that, [94] introduces a GNSS/INS/odometer integrated system for land vehicle navigation, utilizing a fuzzy neural network (FNN) to refine resolution accuracy during prolonged GNSS outages. Their experimental results validate its effectiveness in improving position, velocity, and attitude accuracy, particularly under extended GPS signal loss.
+
+Moving beyond the neural network methods before deep learning age, [95] proposes a deep learning-based Kalman filtering approach. It incorporates a modeling step alongside the prediction and update steps of the extended KF, addressing IMU errors and correcting positioning drifts with the help of GNSS measurements. Expanding on the dual optimization concept, [96] introduces two neural networks to optimize INS/GNSS navigation during GNSS outages. The first network compensates for inertial navigation system drifts, while the second corrects errors generated by a filtering process, employing a radial basis function network for accurate position data.
+
+In scenarios where GNSS signals are absent, [97] proposes a multi-task learning method. It involves denoizing inertial data through a convolutional autoencoder, followed by temporal convolutional network (TCN) processing to address GNSS gaps. The resulting aiding data significantly contributes to deriving an accurate navigation solution within the Kalman filtering (KF) framework. [98] introduces the Self-Learning Square-Root Cubature Kalman Filter (SL-SRCKF). This method employs an LSTM-based framework to continuously obtain observation vectors during GNSS outages, learning the relationship between observation vectors and internal filter parameters. The SL-SRCKF’s error prediction ability is notably enhanced by introducing long short-term memory (LSTM) network, outperforming other neural networks under various GPS outage conditions.
+
+To refine the parameters used in filtering, [99] introduces temporal convolutional neural (TCN) based framework that not only learns the parameters of measurement noise covariances but also the parameters of process noise covariances, resulting in higher position accuracy compared to classical INS/GNSS integrated positioning systems. Additionally, [100] proposes a residual neural network with an attention mechanism to predict individual velocity elements of the noise covariance matrix. Through experiments, this work demonstrates that adjusting the non-holonomic constraint uncertainty during dynamic vehicle motions improves positioning accuracy, particularly under large dynamic motions.
+
+## C. Learning to Fuse IMU With Other Sensors
+
+The use of learning-based sensor fusion extends beyond visual-inertial odometry (VIO) and IMU/GNSS integrated navigation to include other sensor modalities such as LiDAR-inertial odometry (LIO), thermal-inertial odometry, and radar-inertial odometry [82], [83], [87]. DeepTIO [82] and MilliEgo [83] employ attention-based selective fusion mechanisms, similar to soft fusion [80], to reweight and fuse features from inertial and visual data, resulting in improved pose accuracy. In addition, unsupervised learning-based LiDARinertial odometry [87] generates motion transformation from IMU sequence and uses it for LIDAR novel view synthesis to facilitate self-supervised learning of egomotion, similar to VIOLearner [79]. In all these cases, the inclusion of IMU data in deep neural networks enhances pose estimation accuracy and robustness.
+
+## VI. LEARNING TO CORRECT PEDESTRIAN INERTIAL POSITIONING
+
+The previous subsections addressed the general problems of applying deep learning to correct inertial positioning drifts and sensor fusion for IMU integrated positioning. This subsection focuses on the specific use of deep learning to address particular aspects of pedestrian navigation algorithms, namely Pedestrian Dead Reckoning (PDR) and Zero-Velocity Update (ZUPT).
+
+## A. Learning to Correct Pedestrian Dead Reckoning
+
+Pedestrian dead reckoning (PDR) error drifts often stem from inaccurate stride and heading estimates. To address these issues, researchers have incorporated deep learning techniques into the process of step detection, dynamic step length estimation, and walking heading estimation.
+
+To estimate walking stride more robustly, researchers have sought to solve it in a data-driven way. One such method is SmartStep [101], a deep learning-based step detection framework that achieves 99% accuracy in step detection tasks across various motion modes. Compared to peak/valley detectionbased methods, data-driven methods do not require IMUs to be fixed in position, specific motion modes, or pre-calibration and threshold setting. Another approach involves using LSTM to regress walking stride from raw inertial data [44]. This method has demonstrated effectiveness in various human motions, such as walking, running, jogging, and random movements. Additionally, StepNet [51] learns to estimate step length dynamically, i.e., the change in distance, which achieves an impressive performance with only a 2.1%-3.2% error rate when compared to traditional static step length estimation. The attachment mode of the device, such as in hand or in pocket, can also influence walking stride estimation. To address this problem, Bo et al. [65] employed domain adaptation [74] to extract domain-invariant features for stride estimation, which enhanced the performance in new domains, such as holding, calling, pocket, and swinging.
+
+Accurate heading estimation is crucial for updating position in the right direction in PDR. To achieve more accurate and robust heading estimation, Wang et al. [45] utilize a Spatial Transformer Network [102] and LSTM to learn heading direction from the inertial sensor attached to an unconstrained device. However, one problem that arises is the misalignment between the device heading and pedestrian heading, making it difficult to estimate the real walking heading based on sensor data. To address this misalignment issue, [103] introduces a deep neural network to estimate walking direction in the sensor’s frame. They derive a geometric model to convert walking direction from the sensor’s frame into a reference frame (i.e., north and east coordinates) by exploiting acceleration and magnetic data. This geometric model is combined with a learning framework to produce heading estimates. When tested on unseen data, this work reports a median heading error of 10<sup>◦</sup>. PDRNet [55] follows the process of a traditional PDR algorithm but replaces the step length and heading estimation modules with deep neural networks. Their experiments indicate that learning step length and heading together outperforms regressing them separately.
+
+## B. Learning to Correct Zero-Velocity Update
+
+In pedestrian inertial navigation systems (INS) based on zero-velocity update (ZUPT), the zero-velocity phase is utilized to correct inertial positioning errors through Kalman filtering. Therefore, the accuracy of zero-velocity detection is crucial in determining when to update the system states. However, traditional threshold-based zero-velocity detection is complicated by the mixed variety of motions experienced by humans, making it challenging to set a reliable threshold when the user is still.
+
+To address this issue, researchers have explored data-driven approaches that utilize the powerful feature extraction and classification capabilities of deep learning to classify whether the user is in the ZUPT phase. For instance, [40] proposes a six-layer long short-term memory (LSTM) network to detect zero-velocity. The LSTM inputs a sequence of IMU data, typically 100 consecutive data points, and outputs the probability of whether the user is still or in motion at the current timestep. The results from the LSTM-based zerovelocity detection are then fed into a ZUPT-based INS. The proposed approach achieves a reduction in localization error by over 34% compared to fixed threshold-based ZVDs and was shown to be more robust during a mixed variety of motions, such as walking, running, and climbing stairs. Similarly, [46] designs an adaptive ZUPT using convolutional neural networks (ConvNet) to classify ZVDs based on IMU sequences. Deep learning approaches, such as LSTM and ConvNet, have demonstrated excellent performance in extracting robust and useful features for zero-velocity identification, irrespective of different users, motion modes, and attachment places.
+
+## VII. LEARNING TO CORRECT INERTIAL POSITIONING ON VEHICLES, UAV AND ROBOTIC PLATFORMS
+
+As previously mentioned, deep learning methods have shown great potential in addressing the challenges of pedestrian inertial navigation. However, these techniques can also be applied to other platforms, such as vehicles, UAVs, robots, and more.
+
+These platforms share similarities with pedestrians, such as the ability to infer movement velocity from inertial data. This is because inertial data contains vibration information that reflects the fundamental frequency proportional to the vehicle speed. Building on the success of IONet [37], [42] proposes AbolDeepIO, an improved triple-channel LSTM network that predicts polar vectors for drone localization from inertial data sequences. AbolDeepIO has been evaluated on a public drone dataset and has shown competitive performance compared to traditional visual-inertial odometry methods like VINS-mono.
+
+When deploying deep learning-based inertial navigation on real-world devices, prediction accuracy and model efficiency must be considered. To address this, TinyOdom [62] aims to deploy neural inertial odometry models on resourceconstrained devices. It proposes a lightweight model based on temporal convolutional networks (TCN) [104] to learn position displacement and optimizes the model through neural architecture search (NAS) [105] to reduce model size between 31 and 134 times. TinyOdom was extensively evaluated on tracking pedestrians, animals, aerial, and underwater vehicles. Within 60 seconds, its localization error is between 2.5 and 12 meters.
+
+Learning-based inertial odometry has also been extended to legged robots by [56]. The learned location displacement is combined with kinematic motion models to estimate robot system states at high frequencies (400 Hz). In this work, the robot successfully navigated a field experiment, where a legged robot walked around for 20 minutes in a mine with poor illumination and visual feature tracking failures.
+
+In the realm of inertial positioning for vehicles, researchers have proposed various methods to mitigate error drifts and improve accuracy. One such method is presented in [50], where error covariances are learned from inertial data and incorporated into Kalman filtering for updating system states. This approach has been shown to improve inertial positioning performance. Similar to ZUPT-based pedestrian positioning, zero-velocity-update (ZUPT) can also be used for car-equipped inertial navigation systems. The zero-velocity phase provides valuable context information to correct system error drifts via Kalman filtering. OdoNet, presented in [66], is an example of a system that learns and utilizes car speed along with a zero-velocity detector to reduce error drifts in car-equipped IMU systems. Deep learning techniques have also been explored for detecting zero-velocity phases in vehicle navigation. For example, [43] proposes a deep learning-based method for detecting zero-velocity phases in vehicle navigation. In another study, [57] derives a model with motion terms that are relevant only to the IMU data sequence. This model provides theoretical guidance for learning models to infer useful terms and has been evaluated on a drone dataset, where it outperformed TLIO and other learning methods.
+
+Overall, these studies demonstrate the potential of deep learning-based methods in improving inertial navigation for various platforms, including pedestrians, vehicles, drones, and robots. By leveraging the rich information contained within IMU data, deep learning models can effectively mitigate error drifts and improve the accuracy of inertial positioning systems. Furthermore, by optimizing the model efficiency and considering deployment on resource-constrained devices, these techniques can be applied in real-world scenarios.
+
+## VIII. LEARNING SENSOR FUSION FOR IMU INTEGRATED POSITIONING APPLICATIONS
+
+This section explores the applications of learning-based sensor fusion for IMU-integrated positioning in vehicles, robots, and pedestrian navigation. Compared to pure inertial positioning, IMU-integrated systems demonstrate enhanced robustness and accuracy in complex dynamic scenarios, enabling sustained operation over extended periods.
+
+In the realm of vehicle navigation, establishing a robust tight-integrated IMU/GNSS positioning system is crucial for providing accurate global positioning, particularly in challenging environments like tunnels or streets with tall buildings. Deep learning techniques play a pivotal role in addressing challenges such as compensating positioning drifts and estimating filtering parameters. Studies like [95] and [96] utilize deep learning to model error drifts in IMU/GNSS systems, while others such as [99] and [100] focus on learning essential filtering parameters like measurement noises, process noises, or velocity for effective fusion in Kalman filtering.
+
+In the domain of intelligent unmanned platforms like vehicles, robots, and UAVs, which often operate in complex and dynamic scenarios, robust perception is vital for reliable planning, decision-making, and control. Multisensory positioning supports these objectives, but issues such as camera occlusions, image degradations, and complex illumination changes can make visual-inertial positioning systems fragile. Deep learning interventions, as seen in studies like [78] and [80], enhance the robustness of visual-inertial positioning by extracting more reliable features through the efficacy of deep neural networks in feature learning. End-to-end training in self-supervised learning-based visual-inertial positioning [79], [81], [84] leverages multi-view geometry relations between consecutive images, providing a supervision signal without requiring high-precision pose labels. This self-supervised approach maximizes the use of large amounts of data, simultaneously offering depth estimates crucial for scene perception in self-driving vehicles and mobile robots.
+
+For pedestrian navigation in indoor environments, vision or LiDAR-aided inertial positioning corrects drifts by exploiting feature associations between images or point clouds. However, this integrated system demands more energy and computation compared to IMU-only solutions. To enhance the efficiency of deep learning-based visual-inertial positioning for pedestrians, [106] employs knowledge distillation to compress a large teacher network into a lightweight version, transferring learned knowledge effectively. In scenarios with significant image degradations, such as smoke or fog, integrating thermal or mmWave radar sensors with IMU proves beneficial. Approaches like DeepTIO [82] and MilliEgo [83] utilize generative model-based frameworks to extract features from thermal images or noisy mmWave radar point clouds, constructing multisensory positioning systems for accurate pose estimation, particularly in smoke-filled environments for firefighters.
+
+## IX. LEARNING BASED HUMAN MOTION ANALYSIS AND ACTIVITY RECOGNITION
+
+Inertial sensors have diverse applications beyond positioning, such as motion tracking, activity recognition, and more. Although these tasks are not the primary focus of this survey, this section provides a brief yet comprehensive overview of how deep learning is utilized in these domains.
+
+## A. Human Motion Analysis
+
+Data-driven approaches are utilized to reconstruct human pose and motion using either a single IMU or multiple IMUs attached to the body. These models primarily focus on analyzing human motion rather than localizing users, which differentiates them from inertial positioning. Several studies have applied machine learning to gait and pose analysis, such as knee angle estimation for human walking using supervised support vector regression in [107] and probabilistic parameter learning for human gesture recognition in [108] through handcrafted motion features extracted from inertial data. In addition, machine learning methods, such as multi-layer perceptrons (MLPs), have been utilized in IMU data to learn sensor displacement for human motion reconstruction in [109], [110], and [111].
+
+Recently, deep learning has shown promising performance in human pose reconstruction. For example, [112] proposed Deep Inertial Poser, a recurrent neural network (RNN)-based framework that can reconstruct full-body pose from six IMUs attached to the user’s body. TransPose [113], another RNNbased framework, enables real-time human pose estimation using six body-attached IMUs. Furthermore, [114] combines a neural kinematics estimator with a physics-aware motion optimizer to improve the accuracy of human motion tracking.
+
+TABLE III  
+A SUMMARY OF EXISTING METHODS ON DEEP LEARNING BASED SENSOR FUSION
+<table><tr><td>name</td><td>year</td><td>sensor</td><td>model</td><td>learning</td><td>target</td></tr><tr><td>VINet [78]</td><td>2017</td><td>MC+I</td><td>ConvNet, LSTM</td><td>SL</td><td>formulating VIO as a sequential learning problem</td></tr><tr><td>VIOLearner [79]</td><td>2018</td><td>MC+I</td><td>ConvNet</td><td>UL</td><td>VIO with online correction module</td></tr><tr><td>Chen et al. [80]</td><td>2019</td><td>MC+I</td><td>ConvNet, LSTM, Attention</td><td>SL</td><td>feature selection for deep VIO</td></tr><tr><td>DeepVIO [81]</td><td>2019</td><td>SC+I</td><td>ConvNet, LSTM</td><td>UL</td><td>learning VIO from stereo images and IMU</td></tr><tr><td>DeepTIO [82]</td><td>2020</td><td>T+I</td><td>ConvNet, LSTM, Attention</td><td>SL</td><td>learning pose from thermal and inertial data</td></tr><tr><td>MilliEgo [83]</td><td>2020</td><td>MR+I</td><td>ConvNet, LSTM, Attention</td><td>SL</td><td>learning pose from mmWare radar and inertial data</td></tr><tr><td>UnVIO [84]</td><td>2021</td><td>MC+I</td><td>ConvNet, LSTM, Attention</td><td>UL</td><td>unsupervised learning of VIO</td></tr><tr><td>DynaNet [85]</td><td>2021</td><td>MC+I</td><td>ConvNet, LSTM</td><td>SL</td><td>combining DNN with Kalman filtering</td></tr><tr><td>SelfVIO [86]</td><td>2022</td><td>MC+I</td><td>ConvNet, LSTM, Attention</td><td>UL</td><td>unsupervised VIO with GAN-based depth generator</td></tr><tr><td>Tu et al. [87]</td><td>2022</td><td>L+I</td><td>ConvNet, LSTM, Attention</td><td>UL</td><td>unsupervised learning of LIDAR-inertial odometry</td></tr></table>
+
+• Year indicates the publication year of each work.  
+• Sensor indicates the sensors involved in each work. I, MC, SC, T, MR, L, A represent inertial sensor, monocular camera, stereo camera, thermal camera, millimeter wave radar, LIDAR and airflow sensor respectively.  
+• Learning indicates how to train neural networks. SL and UL represent Supervised Learning and Unsupervised Learning
+
+TABLE IV  
+PUBLIC DATASETS FOR DATA-DRIVEN INERTIAL POSITIONING
+<table><tr><td>Dataset</td><td>Year</td><td>Environment</td><td>Attachment</td><td>IMU Type</td><td>Sample Rate</td><td>Groundtruth</td><td>Accuracy</td><td>Data Size</td></tr><tr><td>KITTI Odometry</td><td>2013</td><td>Outdoors</td><td>Car</td><td>OXTS RT3003</td><td>10 Hz</td><td>GPS/IMU</td><td>10 cm</td><td>22 seqs, 39.2 km</td></tr><tr><td>EuRoC MAV</td><td>2016</td><td>Indoors</td><td>MAV</td><td>ADIS 16488</td><td>200 Hz</td><td>Motion Capture</td><td>1 mm</td><td>11 seqs, 0.9 km</td></tr><tr><td>Oxford RobotCar</td><td>2016</td><td>Outdoors</td><td>Car</td><td>NovAte SPAN</td><td>50 Hz</td><td>GPS/IMU</td><td>Unknown</td><td>1010.46 km</td></tr><tr><td>TUM VI</td><td>2018</td><td>In/Outdoors</td><td>Human</td><td>BMI 160</td><td>200 Hz</td><td>Motion Capture</td><td>1 mm</td><td>28 seqs, 20 km</td></tr><tr><td>ADVIO</td><td>2018</td><td>In/Outdoors</td><td>Human</td><td>InvenSense 20600</td><td>100 Hz</td><td>Other Algorithms</td><td>Unknown</td><td>23 seqs, 4.5 km</td></tr><tr><td>OxIOD</td><td>2018</td><td>Indoors</td><td>Human</td><td>InvenSense 20600</td><td>100 Hz</td><td>Motion Capture</td><td>0.5 mm</td><td>158 seqs, 42.587 km</td></tr><tr><td>RONIN</td><td>2019</td><td>Indoors</td><td>Human</td><td></td><td>200 Hz</td><td>AR device</td><td>Unknown</td><td>117 seqs</td></tr><tr><td>SIMD</td><td>2023</td><td>In/Outdoors</td><td>Human</td><td></td><td>50 Hz</td><td>GPS/IMU</td><td>10 cm</td><td>4562 seqs, 717.48 km</td></tr></table>
+
+## B. Human Activity Recognition (HAR)
+
+Deep learning can be utilized to exploit inertial information from body-worn IMUs for human activity recognition. For instance, [115] published a popular public dataset of human activity recognition and successfully classified current activity among six classes, including walking, standing still, sitting, walking downstairs, walking upstairs, and laying down, using support vector machines (SVM). In addition, [116] presents an LSTM-based HAR model that inputted a sequence of inertial data and outputted class probability. Moreover, [117] introduces a ConvNet-based HAR model that achieved a classification accuracy of 97%, outperforming an accuracy of 96% from SVM-based HAR models. To reduce onboard computational requirements, [118] presents a learning framework that exploited both features automatically extracted by DNN and hand-crafted features to achieve accurate and real-time human activity recognition on low-end devices.
+
+Learning from inertial data can also benefit sports and health applications. For instance, [119] shows that deep learning is effective in detecting Parkinson’s disease by assessing the patient’s daily activity through the analysis of inertial information from wearable sensors. Additionally, [120] provides instructions for athletes’ sports training based on sensor data and activity information.
+
+## X. DATASETS AND EVALUATION METRICS
+
+In this section, we present five prominent public datasets widely utilized in deep learning-based inertial positioning research, as outlined in Table IV. Additionally, we introduce the evaluation metrics and compare several representative methods using two well-known datasets.
+
+## A. The Inertial Positioning Datasets
+
+In the realm of vehicle navigation, the KITTI dataset [91] serves as a widely adopted benchmark. The sensors are rigidly affixed to the car chassis, making it conducive for studying vehicle movements. Specifically, the KITTI Odometry Dataset encompasses data collected from car-driving scenarios, including visual images, LIDAR point clouds, IMU, and ground truth. The high-precision GPS/IMU integrated system provides ground truth, with raw unsynchronized data packages containing high-frequency inertial data at 100 Hz, and images and ground truth from GPS at 10 Hz.
+
+In the domain of drone and robotic research, the EuRoC MAV datasets [92] feature tightly synchronized video streams from a Micro Aerial Vehicle (MAV) equipped with a stereo camera and an IMU. Comprising 11 flight trajectories across two environments, this dataset captures complex motion. The images, captured at 20 frames per second (FPS), and IMU measurements recorded at 200 Hz span the MAV’s stationary state, takeoff, flight, and landing on its initial position. A consistent IMU (MEMS IMU ADIS16448) operating at 200 Hz, along with Vicon Motion Capture and Leica MS50 laser tracker, is used to produce accurate ground truth.
+
+For pedestrian navigation, the Oxford Inertial Odometry Dataset (OxIOD), The Robust Neural Inertial Navigation Dataset (RONIN), and Smartphone Inertial Measurement Dataset (SIMD) collect IMU data from mobile devices to reflect human motion in everyday life.
+
+• The OxIOD dataset [48] consists of inertial measurements collected with IMUs attached in various ways (handheld, in the pocket, in a handbag, and on a trolley/stroller). It encompasses different motion modes, four types of off-the-shelf consumer phones, and data from five users. With 158 sequences, the dataset covers a total walking distance and recording time of 42.5 km and 14.72 h.
+
+TABLE V  
+THE PERFORMANCE COMPARISON OF REPRESENTATIVE TRADITIONAL AND LEARNING BASED INERTIAL POSITIONING SOLUTIONS ON TWO PUBLIC DATASETS. METRIC DATA IS FROM [62]
+<table><tr><td colspan="3">OxIOD dataset</td><td colspan="2">RONIN dataset</td></tr><tr><td></td><td>ATE (m)</td><td>RTE (m)</td><td>ATE (m)</td><td>RTE (m)</td></tr><tr><td>PDR</td><td>3.47</td><td>3.24</td><td>34.81</td><td>23.62</td></tr><tr><td>SINS</td><td>9119.50</td><td>247.53</td><td>12398.00</td><td>59.85</td></tr><tr><td>IONet</td><td>5.95</td><td>2.84</td><td>22.52</td><td>7.63</td></tr><tr><td>RoNIN</td><td>1.95</td><td>0.42</td><td>4.73</td><td>1.21</td></tr><tr><td>TinyOdom</td><td>2.80</td><td>1.26</td><td>27.36</td><td>5.84</td></tr></table>
+
+• The RONIN dataset [49], containing inertial motion data from 100 human subjects, enables users to handle smartphones naturally as in day-to-day activities. It supports unrestricted phone orientation and placement, presenting a challenging task for developing inertial models invariant to device orientation or placement. Additionally, trajectories in the RONIN dataset have a larger spatial span compared to those in the OxIOD dataset.
+
+• The SIMD dataset [69] encompasses over 4500 walking trajectories, totaling approximately 190 hours and covering more than 700 km. It includes diverse scenarios in four cities, both indoors and outdoors, seven phone attitudes, and involves more than 150 volunteers with their smartphones. The inertial data, collected by embedded smartphone IMU sensors, have synchronized timestamps and include specific force, angular rates, magnetic fields, and GPS-derived location information. Movement readings are also calculated by internal algorithms.
+
+## B. Evaluation Metrics and Results
+
+To assess the efficacy of inertial positioning, researchers commonly employ two evaluation metrics: Absolute Trajectory Error (ATE) and Relative Trajectory Error (RTE) in the domain of deep learning-based inertial positioning.
+
+• Absolute Trajectory Error (ATE): ATE is quantified as the average root-mean-squared-error (RMSE) between the actual and predicted locations throughout the entire trajectory. A lower ATE signifies superior performance.
+
+• Relative Trajectory Error (RTE): RTE is determined as the average root-mean-squared-error (RMSE) between the actual and predicted locations within a specified time interval. A lower RTE indicates more accurate predictions.
+
+Here, we leverage the OxIOD and RoNIN datasets, which are widely used for pedestrian inertial navigation. Following the methods and results outlined in [62], we selected two traditional inertial positioning solutions, namely PDR and SINS, along with three representative learning-based models— IONet [37], RoNIN [49], and TinyOdom [62] — to compare their performance on these datasets. The performance comparison is summarized in Table V, where ATE and RTE values for each model on both datasets are presented.
+
+PDR, a mainstream classical solution for pedestrian inertial navigation, employs a threshold-based step detector based on accelerometer peaks. Displacement is updated via Weinberg’s stride length estimation model, and the heading is computed from the gyroscope readings. Traditional strapdown inertial navigation systems (SINS) integrate IMU measurements directly into position, velocity, and orientation based on Newtonian mechanics. However, due to error propagation from measurement noises, SINS quickly drifts and fails to provide reasonable results. IONet regresses heading and location displacement from data, demonstrating superior performance in relative trajectory estimation on both datasets. Notably, PDR exhibits good performance on the OxIOD dataset, characterized by simpler and smoother pedestrian trajectories. However, IONet outperforms PDR on the RoNIN dataset, highlighting the effectiveness of learning-based motion modeling in complex scenarios. RoNIN employs a heading-agnostic coordinate frame aligned with gravity, assuming correct orientation for learning inertial motion. In comparison, IONet and PDR do not make such an assumption. Consequently, RoNIN outperforms IONet and PDR significantly. TinyOdom represents a lightweight learning-based inertial positioning model with significantly fewer neural network weights than RoNIN. While TinyOdom’s performance is comparable to RoNIN on the OxIOD dataset, it lags behind RoNIN on the RoNIN dataset.
+
+## XI. CONCLUSION AND DISCUSSIONS
+
+In recent years, there has been a growing interest in using deep learning to address the problem of inertial positioning. This article provides a comprehensive review of the area of deep learning-based inertial positioning. The rapid advances in this field have already provided promising solutions to address problems such as inertial sensor calibration, the compensation of error drifts in inertial positioning, and multimodal sensor fusion. This section concludes and discusses the benefits that deep learning can bring to inertial navigation research, analyzes the challenges that existing research faces, and highlights the future opportunities of this evolving field.
+
+## A. Benefits
+
+Unlike traditional geometric or physical inertial positioning models, the integration of deep learning into inertial positioning has led to the development of a range of alternative solutions to address the issue of positioning error drifts. The corresponding benefits can be summarized as follows:
+
+1) Learn to Approximate Complex and Varying Function: The deep neural network has proven to be a powerful and versatile nonlinear function that can approximate the complex and variable factors involved in inertial positioning, which are difficult to model manually. For example, when calibrating sensors, the corrupt noises that exist in inertial measurements can be modeled and eliminated in a data-driven way by training on a large dataset using a DNN. Deep learning can also directly generate absolute velocity and position displacement from data, without the need for IMU integration, thus reducing positioning drifts. In pedestrian dead reckoning (PDR), deep learning can estimate step length based on data, rather than empirical equations, and implicitly remove the effects of different users. These works demonstrate that using a large dataset to build a data-driven model can produce more accurate motion estimates, as well as reduce and constrain the rapid error drifts of inertial navigation systems.
+
+2) Learn to Estimate Parameters: Automatic identification of parameters through data-driven models contributes to paving the way for next-generation intelligent navigation systems that can actively exploit input data and evolve over time without human intervention. In classical inertial navigation mechanisms, certain parameters or modules need to be manually set and tuned before use. For instance, experts with experience need to settle parameters in Kalman filtering, such as observation noise, covariance, and process noise. Deep learning has proven effective in automatically producing suitable parameters for Kalman filtering based on input data [45], [50], [85]. In sensor calibration, reinforcement learning algorithms are used to discover optimal parameters for inertial calibration algorithms [30]. In ZUPT-based pedestrian inertial positioning, deep learning is a viable solution for classifying zero-velocity phases and determining when to update system states.
+
+3) Learn to Self-Adapt in New Domains: Unforeseen or ever-changing issues in new application domains, such as changes in motion mode, carrier, and sensor noise, can significantly impact the performance of inertial systems. Learning models offer opportunities for inertial systems to adapt to new changes and overcome these influential factors implicitly by discovering and exploiting the differences in data distributions between domains. For instance, [41] leverages transfer learning to allow INS to extract domain-invariant features from data, maintaining localization accuracy when sensor attachment is changed. The introduction of self-supervised learning enables navigation systems to learn from data without high-precision pose as training labels, allowing unlabelled inertial data to be effectively used for model performance improvement. In visual-inertial odometry, [79], [81], [84] introduce novel view synthesis as a supervision signal to train deep VIO in a self-supervised learning way. This self-adaptation ability is promising for mobile agents to continuously improve their localization performance in new application scenes.
+
+## B. Challenges and Opportunities
+
+Despite the impressive and promising results that deep learning has already offered in inertial positioning, there are still challenges in existing methods when they are applied and deployed in real-world scenarios. To overcome these limitations, several opportunities and potential research directions are discussed below.
+
+1) Generalization and Self-Learning: The generalization problem is a major concern for deep learning-based methods because these models are trained on one domain (i.e., training set) but need to be tested on other domains (i.e., testing set). The possible differences in data between domains can lead to a degradation of prediction performance. Although deep learning-based inertial navigation models have reported impressive results on the author’s own datasets, these works have not been evaluated in comprehensive experiments during long-term operation and across various devices, users, and application scenes. Thus, it is challenging to determine the real performance of these models in open environments. To address the generalization problem, new learning techniques such as transfer learning [121], lifelong learning, and contrastive learning [122] can be introduced into inertial positioning systems, which is a promising direction. For instance, in the future, by exploiting information from physical/geometric rules or other sensors (e.g., GNSS, camera), the learning-based inertial positioning model can be self-supervisedly trained and enable mobile agents to learn from data in a lifelong manner.
+
+2) Black-Box and Explainability: Deep neural networks have been criticized as being a ‘black-box’ model due to their lack of explainability and interpretability. As these models are often used to support real-world tasks, it is crucial to investigate what is learned inside deep nets before deploying them to ensure their safety and reliability. Despite the good results shown by deep learning models in estimating important terms such as location displacement, sensor measurement errors, and filtering parameters, these terms lack concrete mathematical models, unlike traditional inertial navigation. To determine whether these terms are trustworthy, uncertainties should be estimated in conjunction with the inertial positioning method [75] and used as indicators for users or systems to understand the extent to which model predictions can be trusted. In future research, it is important to reveal the governing mathematical or physical models behind the learned inertial positioning neural model and identify which parts of inertial positioning can be learned by deep nets. Introducing Bayesian deep learning into inertial positioning is also a promising direction that could offer interpretability for model predictions [123].
+
+3) Efficiency and Real-World Deployment: When deploying deep positioning models on user devices, it is crucial to consider the consumption of computation, storage, and energy in system design, in addition to prediction accuracy. Compared to classical inertial navigation algorithms, DNN-based inertial positioning models have a relatively large computational and memory burden, as they contain millions of neural parameters that require GPUs for parallel training and testing. Therefore, online inference of learning models, especially on low-end devices such as IoT consoles, VR/AR devices, and miniature drones, requires lightweight, efficient, and effective models. To achieve this goal, neural model compression techniques, such as knowledge distillation [124], should be introduced to discover the optimal neural structure that balances prediction accuracy and model size. References [48] and [66] have conducted initial trials on minimizing the model size of inertial odometry. Moreover, safety and reliability are also crucial factors to consider. In the future, it is worth exploring the optimal structure of learning-based inertial positioning models, considering model performance, parameter size, latency, safety, and reliability for real-world deployment.
+
+4) Data Collection and Benchmark: Deep learning models performance relies heavily on data quality, including dataset size, diversity, and consistency between training and testing sets. Ideally, deep learning-based inertial positioning models should be trained on diverse data across users, platforms, motion dynamics, and sensors to improve generalization.
+
+However, acquiring such data can be costly and timeconsuming, and obtaining accurate ground-truth labels can be challenging. Previous research has varied in training data, model parameters, and evaluation metrics, hindering fair comparisons. In visual navigation tasks, such as visual odometry/SLAM, the KITTI dataset [91] is commonly used as a benchmark to train and evaluate learning-based VO models. However, although published datasets for inertial navigation exist [48], [49], there is still a lack of a common benchmark that is adopted and recognized by mainstream methods in inertial positioning. In the future, a widely adopted dataset and benchmark, covering a variety of application scenarios, will greatly benefit and foster research in data-driven inertial positioning.
+
+5) Failure Cases and Physical Constraints: Deep learning has demonstrated its capability in reducing the drifts of inertial positioning and contributing to various aspects of inertial navigation systems, as discussed in Section IV. However, DNN models are not always reliable and may occasionally produce large and abrupt prediction errors. Unlike traditional inertial navigation algorithms that are based on concrete physical and mathematical rules, DNN predictions lack constraints, and the failure cases must be considered in real-world applications with safety concerns. To enhance the robustness of DNN predictions, possible solutions include imposing physical constraints on DNN models or combining deep learning with physical models as hybrid inertial positioning models. By doing so, the benefits from both learning and physics-based positioning models can be leveraged.
+
+6) New Deep Learning Methods: Machine/deep learning is one of the fastest growing areas of AI, and its advances have influenced numerous fields such as computer vision, robotics, natural language processing, and signal processing. There are significant opportunities for applying deep learning techniques to inertial navigation and analyzing their effectiveness and theoretical underpinnings. In the future, new model structures such as transformer [76], diffusion models [125], and generative models [73], and new learning methods such as transfer learning, reinforcement learning, contrastive learning [122], unsupervised learning, and meta-learning [126], all hold promise for enhancing inertial positioning systems. Furthermore, advances in other domains such as neural rendering [127] and voice synthesis [128] may provide valuable insights into developing more effective inertial positioning systems. Therefore, incorporating these rapidly-evolving deep learning methods into inertial navigation will be a significant area of research in the future.
+
+7) Deep Sensor Fusion: Sensor fusion faces challenges like diverse sensor data formats, temporal sync issues, and sensor calibration complexity. Real-time processing needs, adapting to dynamic environments, and limited labeled data for multi-sensory models add more complexity. Deep learning in sensor fusion improves accuracy by merging inertial sensor data with others, learning fusion strategies, synchronization, and calibration from data. It adapts and customizes continuously for better performance in various applications like vehicles, robots, pedestrians, and drones.
+
+8) Robustness and Reliability: In practical applications, the challenges associated with handling unforeseen situations and ensuring reliability become particularly critical, especially in safety-critical domains such as autonomous vehicles. The learning models employed may encounter difficulties in adapting to extreme conditions, thereby introducing risks to robust and reliable positioning. To solve these problems, prospective solutions such as diversifying training data, implementing adversarial testing and new learning models can contribute to the overall reliability of positioning system. In addition, continuous monitoring, adaptive algorithms, and strict certification standards play pivotal roles in enhancing the overall trustworthiness of the positioning system.
+
+## REFERENCES
+
+[1] M. G. Puyol, D. Bobkov, P. Robertson, and T. Jost, “Pedestrian simultaneous localization and mapping in multistory buildings using inertial sensors,” IEEE Trans. Intell. Transp. Syst., vol. 15, no. 4, pp. 1714–1727, Aug. 2014.
+
+[2] J.-O. Nilsson, J. Rantakokko, P. Händel, I. Skog, M. Ohlsson, and K. V. S. Hari, “Accurate indoor positioning of firefighters using dual foot-mounted inertial sensors and inter-agent ranging,” in Proc. IEEE/ION Position, Location Navigat. Symp. (PLANS), May 2014, pp. 631–636.
+
+[3] A. Bulling, U. Blanke, and B. Schiele, “A tutorial on human activity recognition using body-worn inertial sensors,” ACM Comput. Surveys, vol. 46, no. 3, pp. 1–33, Jan. 2014.
+
+[4] P. G. Savage, “Strapdown inertial navigation integration algorithm design—Part 1: Attitude algorithms,” J. Guid., Control, Dyn., vol. 21, no. 1, pp. 19–28, Jan. 1998.
+
+[5] P. G. Savage, “Strapdown inertial navigation integration algorithm design—Part 2: Velocity and position algorithms,” J. Guid., Control, Dyn., vol. 21, no. 2, pp. 208–221, Mar. 1998.
+
+[6] R. Harle, “A survey of indoor inertial positioning systems for pedestrians,” IEEE Commun. Surveys Tuts., vol. 15, no. 3, pp. 1281–1293, 3rd Quart., 2013.
+
+[7] I. Skog, P. Handel, J. O. Nilsson, and J. Rantakokko, “Zero-velocity detection—An algorithm evaluation,” IEEE Trans. Biomed. Eng., vol. 57, no. 11, pp. 2657–2666, Nov. 2010.
+
+[8] M. Li and A. I. Mourikis, “High-precision, consistent EKF-based visual-inertial odometry,” Int. J. Robot. Res., vol. 32, no. 6, pp. 690–711, May 2013.
+
+[9] T. Qin, P. Li, and S. Shen, “VINS-mono: A robust and versatile monocular visual-inertial state estimator,” IEEE Trans. Robot., vol. 34, no. 4, pp. 1004–1020, Aug. 2018.
+
+[10] W. Xu, Y. Cai, D. He, J. Lin, and F. Zhang, “FAST-LIO : Fast direct LiDAR-inertial odometry,” IEEE Trans. Robot., vol. 38, no. 4, pp. 2053–2073, Aug. 2022.
+
+[11] Y. Bengio, I. Goodfellow, and A. Courville, Deep Learning, vol. 1. Cambridge, MA, USA: MIT Press, 2017.
+
+[12] Z.-Q. Zhao, P. Zheng, S.-T. Xu, and X. Wu, “Object detection with deep learning: A review,” IEEE Trans. Neural Netw. Learn. Syst., vol. 30, no. 11, pp. 3212–3232, Nov. 2019.
+
+[13] S. Hao, Y. Zhou, and Y. Guo, “A brief survey on semantic segmentation with deep learning,” Neurocomputing, vol. 406, pp. 302–321, Sep. 2020.
+
+[14] N. Sünderhauf et al., “The limits and potentials of deep learning for robotics,” Int. J. Robot. Res., vol. 37, nos. 4–5, pp. 405–420, 2018.
+
+[15] Y. Li et al., “Inertial sensing meets machine learning: Opportunity or challenge?” IEEE Trans. Intell. Transp. Syst., vol. 23, no. 8, pp. 9995–10011, Aug. 2022.
+
+[16] P. S. Farahsari, A. Farahzadi, J. Rezazadeh, and A. Bagheri, “A survey on indoor positioning systems for IoT-based applications,” IEEE Internet Things J., vol. 9, no. 10, pp. 7680–7699, May 2022.
+
+[17] L. E. Díez, A. Bahillo, J. Otegui, and T. Otim, “Step length estimation methods based on inertial sensors: A review,” IEEE Sensors J., vol. 18, no. 17, pp. 6908–6926, Sep. 2018.
+
+[18] Y. Wu, H.-B. Zhu, Q.-X. Du, and S.-M. Tang, “A survey of the research status of pedestrian dead reckoning systems based on inertial sensors,” Int. J. Autom. Comput., vol. 16, no. 1, pp. 65–83, Feb. 2019.
+
+[19] X. Ru, N. Gu, H. Shang, and H. Zhang, “MEMS inertial sensor calibration technology: Current status and future trends,” Micromachines, vol. 13, no. 6, p. 879, May 2022.
+
+[20] N. El-Sheimy, H. Hou, and X. Niu, “Analysis and modeling of inertial sensors using Allan variance,” IEEE Trans. Instrum. Meas., vol. 57, no. 1, pp. 140–149, Jan. 2008.
+
+[21] H. Weinberg, “Using the ADXL202 in pedometer and personal navigation applications,” Analog Devices, Wilmington, MA, USA, Appl. Note AN-602, 2002, pp. 1–6, vol. 2.
+
+[22] L. Fang et al., “Design of a wireless assisted pedestrian dead reckoning system—The NavMote experience,” IEEE Trans. Instrum. Meas., vol. 54, no. 6, pp. 2342–2358, Dec. 2005.
+
+[23] P. Goyal, V. J. Ribeiro, H. Saran, and A. Kumar, “Strap-down pedestrian dead-reckoning system,” in Proc. Int. Conf. Indoor Positioning Indoor Navigat., Sep. 2011, pp. 1–7.
+
+[24] B. Huang, G. Qi, X. Yang, L. Zhao, and H. Zou, “Exploiting cyclic features of walking for pedestrian dead reckoning with unconstrained smartphones,” in Proc. ACM Int. Joint Conf. Pervasive Ubiquitous Comput., 2016, pp. 374–385.
+
+[25] D. Feng, C. Wang, C. He, Y. Zhuang, and X.-G. Xia, “Kalmanfilter-based integration of IMU and UWB for high-accuracy indoor positioning and navigation,” IEEE Internet Things J., vol. 7, no. 4, pp. 3133–3146, Apr. 2020.
+
+[26] S. Yang, J. Liu, X. Gong, G. Huang, and Y. Bai, “A Robust heading estimation solution for smartphone multisensor-integrated indoor positioning,” IEEE Internet Things J., vol. 8, no. 23, pp. 17186–17198, Dec. 2021.
+
+[27] C. Xiyuan, “Modeling random gyro drift by time series neural networks and by traditional method,” in Proc. Int. Conf. Neural Netw. Signal Process., Dec. 2003, pp. 810–813.
+
+[28] H. Chen, P. Aggarwal, T. M. Taha, and V. P. Chodavarapu, “Improving inertial sensor by reducing errors using deep learning methodology,” in Proc. IEEE Nat. Aerosp. Electron. Conf. (NAECON), Jul. 2018, pp. 197–202.
+
+[29] M. A. Esfahani, H. Wang, K. Wu, and S. Yuan, “OriNet: Robust 3- D orientation estimation with a single particular IMU,” IEEE Robot. Autom. Lett., vol. 5, no. 2, pp. 399–406, Apr. 2020.
+
+[30] F. Nobre and C. Heckman, “Learning to calibrate: Reinforcement learning for guided calibration of visual–inertial rigs,” Int. J. Robot. Res., vol. 38, nos. 12–13, pp. 1388–1402, Oct. 2019.
+
+[31] M. Brossard, S. Bonnabel, and A. Barrau, “Denoising IMU gyroscopes with deep learning for open-loop attitude estimation,” IEEE Robot. Autom. Lett., vol. 5, no. 3, pp. 4796–4803, Jul. 2020.
+
+[32] X. Zhao, C. Deng, X. Kong, J. Xu, and Y. Liu, “Learning to compensate for the drift and error of gyroscope in vehicle localization,” in Proc. IEEE Intell. Vehicles Symp. (IV), Oct. 2020, pp. 852–857.
+
+[33] F. Huang, Z. Wang, L. Xing, and C. Gao, “A MEMS IMU gyroscope calibration method based on deep learning,” IEEE Trans. Instrum. Meas., vol. 71, pp. 1–9, 2022.
+
+[34] R. Li, C. Fu, W. Yi, and X. Yi, “Calib-Net: Calibrating the lowcost IMU via deep convolutional neural network,” Frontiers Robot. AI, vol. 8, Jan. 2022, Art. no. 772583.
+
+[35] S.-I. Amari, “Backpropagation and stochastic gradient descent method,” Neurocomputing, vol. 5, nos. 4–5, pp. 185–196, 1993.
+
+[36] A. K. Jain, J. Mao, and K. M. Mohiuddin, “Artificial neural networks: A tutorial,” Computer, vol. 29, no. 3, pp. 31–44, Mar. 1996.
+
+[37] C. Chen, X. Lu, A. Markham, and N. Trigoni, “IONet: Learning to cure the curse of drift in inertial odometry,” in Proc. Conf. Artif. Intell. (AAAI), 2018, pp. 6468–6476.
+
+[38] H. Yan, Q. Shan, and Y. Furukawa, “RIDI: Robust IMU double integration,” in Proc. Eur. Conf. Comput. Vis. (ECCV), 2018, pp. 621–636.
+
+[39] S. Cortés, A. Solin, and J. Kannala, “Deep learning based speed estimation for constraining strapdown inertial navigation on smartphones,” in Proc. IEEE 28th Int. Workshop Mach. Learn. Signal Process. (MLSP), Sep. 2018, pp. 1–6.
+
+[40] B. Wagstaff and J. Kelly, “LSTM-based zero-velocity detection for robust inertial navigation,” in Proc. Int. Conf. Indoor Position. Indoor Navig. (IPIN), Sep. 2018, pp. 1–8.
+
+[41] C. Chen et al., “Motiontransformer: Transferring neural inertial tracking between domains,” in Proc. Conf. Artif. Intell. (AAAI), vol. 33, 2019, pp. 8009–8016.
+
+[42] M. Abolfazli Esfahani, H. Wang, K. Wu, and S. Yuan, “AbolDeepIO: A novel deep inertial odometry network for autonomous vehicles,” IEEE Trans. Intell. Transp. Syst., vol. 21, no. 5, pp. 1941–1950, May 2020.
+
+[43] M. Brossard, A. Barrau, and S. Bonnabel, “RINS-W: Robust inertial navigation system on wheels,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS), Nov. 2019, pp. 2068–2075.
+
+[44] T. Feigl, S. Kram, P. Woller, R. H. Siddiqui, M. Philippsen, and C. Mutschler, “A bidirectional LSTM for estimating dynamic human velocities from a single IMU,” in Proc. Int. Conf. Indoor Positioning Indoor Navigat. (IPIN), Sep. 2019, pp. 1–8.
+
+[45] Q. Wang et al., “Pedestrian heading estimation based on spatial transformer networks and hierarchical LSTM,” IEEE Access, vol. 7, pp. 162309–162322, 2019.
+
+[46] X. Yu et al., “AZUPT: Adaptive zero velocity update based on neural networks for pedestrian tracking,” in Proc. IEEE Global Commun. Conf. (GLOBECOM), Dec. 2019, pp. 1–6.
+
+[47] W. Liu et al., “TLIO: Tight learned inertial odometry,” IEEE Robot. Autom. Lett., vol. 5, no. 4, pp. 5653–5660, Oct. 2020.
+
+[48] C. Chen, P. Zhao, C. X. Lu, W. Wang, A. Markham, and N. Trigoni, “Deep-learning-based pedestrian inertial navigation: Methods, data set, and on-device inference,” IEEE Internet Things J., vol. 7, no. 5, pp. 4431–4441, May 2020.
+
+[49] S. Herath, H. Yan, and Y. Furukawa, “RoNIN: Robust neural inertial navigation in the wild: Benchmark, evaluations, new methods,” in Proc. IEEE Int. Conf. Robot. Autom. (ICRA), May 2020, pp. 3146–3152.
+
+[50] M. Brossard, A. Barrau, and S. Bonnabel, “AI-IMU dead-reckoning,” IEEE Trans. Intell. Vehicles, vol. 5, no. 4, pp. 585–595, Dec. 2020.
+
+[51] I. Klein and O. Asraf, “StepNet—Deep learning approaches for step length estimation,” IEEE Access, vol. 8, pp. 85706–85713, 2020.
+
+[52] Y. Wang, H. Cheng, and M. Q.-H. Meng, “Pedestrian motion tracking by using inertial sensors on the smartphone,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS), Oct. 2020, pp. 4426–4431.
+
+[53] X. Teng et al., “ARPDR: An accurate and robust pedestrian dead reckoning system for indoor localization on handheld smartphones,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS), Oct. 2020, pp. 10888–10893.
+
+[54] S. Sun, D. Melamed, and K. Kitani, “IDOL: Inertial deep orientationestimation and localization,” in Proc. AAAI Conf. Artif. Intell., vol. 35, 2021, pp. 6128–6137.
+
+[55] O. Asraf, F. Shama, and I. Klein, “PDRNet: A deep-learning pedestrian dead reckoning framework,” IEEE Sensors J., vol. 22, no. 6, pp. 4932–4939, Mar. 2022.
+
+[56] R. Buchanan, M. Camurri, F. Dellaert, and M. Fallon, “Learning inertial odometry for dynamic legged robot state estimation,” in Proc. 5th Conf. Robot Learn., vol. 164, 2022, pp. 1575–1584.
+
+[57] M. Zhang, M. Zhang, Y. Chen, and M. Li, “IMU data processing for inertial aided navigation: A recurrent neural network based approach,” in Proc. IEEE Int. Conf. Robot. Autom. (ICRA), May 2021, pp. 3992–3998.
+
+[58] J. Gong, X. Zhang, Y. Huang, J. Ren, and Y. Zhang, “Robust inertial motion tracking through deep sensor fusion across smart earbuds and smartphone,” Proc. ACM Interact., Mobile, Wearable Ubiquitous Technol., vol. 5, no. 2, pp. 1–26, Jun. 2021.
+
+[59] S. Herath, D. Caruso, C. Liu, Y. Chen, and Y. Furukawa, “Neural inertial localization,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), Jun. 2022, pp. 6594–6603.
+
+[60] X. Cao, C. Zhou, D. Zeng, and Y. Wang, “RIO: Rotationequivariance supervised learning of robust inertial odometry,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), Jun. 2022, pp. 6604–6613.
+
+[61] Y. Wang, J. Kuang, Y. Li, and X. Niu, “Magnetic field-enhanced learning-based inertial odometry for indoor pedestrian,” IEEE Trans. Instrum. Meas., vol. 71, pp. 1–13, 2022.
+
+[62] S. S. Saha, S. S. Sandha, L. A. Garcia, and M. Srivastava, “TinyOdom: Hardware-aware efficient neural inertial navigation,” Proc. ACM Interact. Mobile Wearable Ubiquitous Technol., vol. 6, no. 2, pp. 1–32, 2022.
+
+[63] B. Rao, E. Kazemi, Y. Ding, D. M. Shila, F. M. Tucker, and L. Wang, “CTIN: Robust contextual transformer network for inertial navigation,” in Proc. AAAI Conf. Artif. Intell., vol. 36, no. 5, 2022, pp. 5413–5421.
+
+[64] B. Zhou et al., “DeepVIP: Deep learning-based vehicle indoor positioning using smartphones,” IEEE Trans. Veh. Technol., vol. 71, no. 12, pp. 13299–13309, Dec. 2022.
+
+[65] F. Bo, J. Li, and W. Wang, “Mode-independent stride length estimation with IMUs in smartphones,” IEEE Sensors J., vol. 22, no. 6, pp. 5824–5833, Mar. 2022.
+
+[66] H. Tang, X. Niu, T. Zhang, Y. Li, and J. Liu, “OdoNet: Untethered speed aiding for vehicle navigation without hardware wheeled odometer,” IEEE Sensors J., vol. 22, no. 12, pp. 12197–12208, Jun. 2022.
+
+[67] Y. Wang, H. Cheng, and M. Q.-H. Meng, “A2DIO: Attention-driven deep inertial odometry for pedestrian localization based on 6D IMU,” in Proc. Int. Conf. Robot. Autom. (ICRA), May 2022, pp. 819–825.
+
+[68] Y. Wang, J. Kuang, X. Niu, and J. Liu, “LLIO: Lightweight learned inertial odometer,” IEEE Internet Things J., vol. 10, no. 3, pp. 2508–2518, Feb. 2023.
+
+[69] F. Liu, H. Ge, D. Tao, R. Gao, and Z. Zhang, “Smartphone-based pedestrian inertial tracking: Dataset, model, and deployment,” IEEE Trans. Instrum. Meas., vol. 73, pp. 1–13, 2024.
+
+[70] S. Hochreiter and J. Schmidhuber, “Long short-term memory,” Neural Comput., vol. 9, no. 8, pp. 1735–1780, Nov. 1997.
+
+[71] F. Yu and V. Koltun, “Multi-scale context aggregation by dilated convolutions,” in Proc. Int. Conf. Learn. Represent. (ICLR), 2016, pp. 1–10.
+
+[72] R. S. Sutton and A. G. Barto, Reinforcement Learning: An Introduction. Cambridge, MA, USA: MIT Press, 2018.
+
+[73] I. Goodfellow, “Generative adversarial networks,” Commun. ACM, vol. 63, no. 11, pp. 139–144, 2020.
+
+[74] E. Tzeng, J. Hoffman, K. Saenko, and T. Darrell, “Adversarial discriminative domain adaptation,” in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), Jul. 2017, pp. 7167–7176.
+
+[75] C. Chen, C. X. Lu, J. Wahlström, A. Markham, and N. Trigoni, “Deep neural network based inertial odometry using low-cost inertial measurement units,” IEEE Trans. Mobile Comput., vol. 20, no. 4, pp. 1351–1364, Apr. 2021.
+
+[76] A. Vaswani et al., “Attention is all you need,” in Proc. Adv. Neural Inf. Process. Syst., vol. 30, 2017, pp. 1–9.
+
+[77] D. Ramachandram and G. W. Taylor, “Deep multimodal learning: A survey on recent advances and trends,” IEEE Signal Process. Mag., vol. 34, no. 6, pp. 96–108, Nov. 2017.
+
+[78] R. Clark, S. Wang, H. Wen, A. Markham, and N. Trigoni, “VINet: Visual-inertial odometry as a sequence-to-sequence learning problem,” in Proc. Conf. Artif. Intell. (AAAI), 2017, pp. 3995–4001.
+
+[79] E. J. Shamwell, K. Lindgren, S. Leung, and W. D. Nothwang, “Unsupervised deep visual-inertial odometry with online error correction for RGB-D imagery,” IEEE Trans. Pattern Anal. Mach. Intell., vol. 42, no. 10, pp. 2478–2493, Oct. 2020.
+
+[80] C. Chen et al., “Selective sensor fusion for neural visual-inertial odometry,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), Jun. 2019, pp. 10534–10543.
+
+[81] L. Han, Y. Lin, G. Du, and S. Lian, “DeepVIO: Self-supervised deep learning of monocular visual inertial odometry using 3D geometric constraints,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS), Nov. 2019, pp. 6906–6913.
+
+[82] M. R. U. Saputra et al., “DeepTIO: A deep thermal-inertial odometry with visual hallucination,” IEEE Robot. Autom. Lett., vol. 5, no. 2, pp. 1672–1679, Apr. 2020.
+
+[83] C. X. Lu et al., “MilliEgo: Single-chip mmWave radar aided egomotion estimation via deep sensor fusion,” in Proc. 18th Conf. Embedded Netw. Sensor Syst., Nov. 2020, pp. 109–122.
+
+[84] P. Wei, G. Hua, W. Huang, F. Meng, and H. Liu, “Unsupervised monocular visual-inertial odometry network,” in Proc. 29th Int. Joint Conf. Artif. Intell., Jul. 2020, pp. 2347–2354.
+
+[85] C. Chen, C. X. Lu, B. Wang, N. Trigoni, and A. Markham, “DynaNet: Neural Kalman dynamical model for motion estimation and prediction,” IEEE Trans. Neural Netw. Learn. Syst., vol. 32, no. 12, pp. 5479–5491, Dec. 2021.
+
+[86] Y. Almalioglu, M. Turan, M. R. U. Saputra, P. P. B. de Gusm ao, A. Markham, and N. Trigoni, “SelfVIO: Self-supervised deep monocular visual–inertial odometry and depth estimation,” Neural Netw., vol. 150, pp. 119–136, Jun. 2022.
+
+[87] Y. Tu and J. Xie, “UnDeepLIO: Unsupervised deep LiDAR-inertial odometry,” in Proc. Asian Conf. Pattern Recognit. Cham, Switzerland: Springer, 2022, pp. 189–202.
+
+[88] E. S. Jones and S. Soatto, “Visual-inertial navigation, mapping and localization: A scalable real-time causal approach,” Int. J. Robot. Res., vol. 30, no. 4, pp. 407–430, Apr. 2011.
+
+[89] S. Leutenegger, S. Lynen, M. Bosse, R. Siegwart, and P. Furgale, “Keyframe-based visual–inertial odometry using nonlinear optimization,” Int. J. Robot. Res., vol. 34, no. 3, pp. 314–334, 2015.
+
+[90] C. Forster, L. Carlone, F. Dellaert, and D. Scaramuzza, “On-manifold preintegration for real-time visual–inertial odometry,” IEEE Trans. Robot., vol. 33, no. 1, pp. 1–21, Feb. 2017.
+
+[91] A. Geiger, P. Lenz, C. Stiller, and R. Urtasun, “Vision meets robotics: The KITTI dataset,” Int. J. Robot. Res., vol. 32, no. 11, pp. 1231–1237, Sep. 2013.
+
+[92] M. Burri et al., “The EuRoC micro aerial vehicle datasets,” Int. J. Robot. Res., vol. 35, no. 10, pp. 1157–1163, Sep. 2016.
+
+[93] D.-J. Jwo, C.-H. Chuang, J.-Y. Yang, and Y.-H. Lu, “Neural network assisted ultra-tightly coupled GPS/INS integration for seamless navigation,” in Proc. 12th Int. Conf. ITS Telecommun., Nov. 2012, pp. 385–390.
+
+[94] Z. Li, J. Wang, B. Li, J. Gao, and X. Tan, “GPS/INS/odometer integrated system using fuzzy neural network for land vehicle navigation applications,” J. Navigat., vol. 67, no. 6, pp. 967–983, Nov. 2014.
+
+[95] S. Hosseinyalamdary, “Deep Kalman filter: Simultaneous multi-sensor integration and modelling; a GNSS/IMU case study,” Sensors, vol. 18, no. 5, p. 1316, Apr. 2018.
+
+[96] C. Shen, Y. Zhang, J. Tang, H. Cao, and J. Liu, “Dual-optimization for a MEMS-INS/GPS system during GPS outages based on the cubature Kalman filter and neural networks,” Mech. Syst. Signal Process., vol. 133, Nov. 2019, Art. no. 106222.
+
+[97] S. Lu, Y. Gong, H. Luo, F. Zhao, Z. Li, and J. Jiang, “Heterogeneous multi-task learning for multiple pseudo-measurement estimation to bridge GPS outages,” IEEE Trans. Instrum. Meas., vol. 70, pp. 1–16, 2021.
+
+[98] C. Shen et al., “Seamless GPS/Inertial navigation system based on self-learning square-root cubature Kalman filter,” IEEE Trans. Ind. Electron., vol. 68, no. 1, pp. 499–508, Jan. 2021.
+
+[99] F. Wu, H. Luo, H. Jia, F. Zhao, Y. Xiao, and X. Gao, “Predicting the noise covariance with a multitask learning model for Kalman filterbased GNSS/INS integrated navigation,” IEEE Trans. Instrum. Meas., vol. 70, pp. 1–13, 2021.
+
+[100] Y. Xiao et al., “Residual attention network-based confidence estimation algorithm for non-holonomic constraint in GNSS/INS integrated navigation system,” IEEE Trans. Veh. Technol., vol. 70, no. 11, pp. 11404–11418, Nov. 2021.
+
+[101] N. A. Abiad, Y. Kone, V. Renaudin, and T. Robert, “Smartstep: A robust STEP detection method based on SMARTphone inertial signals driven by gait learning,” IEEE Sensors J., vol. 22, no. 12, pp. 12288–12297, Jun. 2022.
+
+[102] M. Jaderberg et al., “Spatial transformer networks,” in Proc. Adv. Neural Inf. Process. Syst., vol. 28, 2015, pp. 1–12.
+
+[103] A. Manos, T. Hazan, and I. Klein, “Walking direction estimation using smartphone sensors: A deep network-based framework,” IEEE Trans. Instrum. Meas., vol. 71, pp. 1–12, 2022.
+
+[104] C. Lea, M. D. Flynn, R. Vidal, A. Reiter, and G. D. Hager, “Temporal convolutional networks for action segmentation and detection,” in Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR), Jul. 2017, pp. 156–165.
+
+[105] P. Ren et al., “A comprehensive survey of neural architecture search: Challenges and solutions,” ACM Comput. Surv., vol. 54, no. 4, pp. 1–34, 2021.
+
+[106] M. R. U. Saputra, P. Gusmao, Y. Almalioglu, A. Markham, and N. Trigoni, “Distilling knowledge from a deep pose regressor network,” in Proc. IEEE/CVF Int. Conf. Comput. Vis. (ICCV), Oct. 2019, pp. 263–272.
+
+[107] S. Ahuja, W. Jirattigalachote, and A. Tosborvorn, “Improving accuracy of inertial measurement units using support vector regression,” Stanford Univ., CA, USA, Tech. Rep., Oct. 2016.
+
+[108] A. Parate, M.-C. Chiu, C. Chadowitz, D. Ganesan, and E. Kalogerakis, “RisQ: Recognizing smoking gestures with inertial sensors on a wristband,” in Proc. 12th Annu. Int. Conf. Mobile Syst., Appl., Services, Jun. 2014, pp. 149–161.
+
+[109] A. Mannini and A. M. Sabatini, “Machine learning methods for classifying human physical activity from on-body accelerometers,” Sensors, vol. 10, no. 2, pp. 1154–1175, 2010.
+
+[110] A. Valtazanos, D. K. Arvind, and S. Ramamoorthy, “Using wearable inertial sensors for posture and position tracking in unconstrained environments through learned translation manifolds,” in Proc. ACM/IEEE Int. Conf. Inf. Process. Sensor Netw. (IPSN), Apr. 2013, pp. 241–252.
+
+[111] M. Yuwono, S. W. Su, Y. Guo, B. D. Moulton, and H. T. Nguyen, “Unsupervised nonparametric method for gait analysis using a waistworn inertial sensor,” Appl. Soft Comput., vol. 14, pp. 72–80, Jan. 2014.
+
+[112] Y. Huang, M. Kaufmann, E. Aksan, M. J. Black, O. Hilliges, and G. Pons-Moll, “Deep inertial poser: Learning to reconstruct human pose from sparse inertial measurements in real time,” ACM Trans. Graph., vol. 37, no. 6, pp. 1–15, Dec. 2018.
+
+[113] X. Yi, Y. Zhou, and F. Xu, “TransPose: Real-time 3D human translation and pose estimation with six inertial sensors,” ACM Trans. Graph., vol. 40, no. 4, pp. 1–13, Aug. 2021.
+
+[114] X. Yi et al., “Physical inertial poser (PIP): Physics-aware realtime human motion tracking from sparse inertial sensors,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR), Jun. 2022, pp. 13167–13178.
+
+[115] D. Anguita et al., “A public domain dataset for human activity recognition using smartphones,” in Proc. 21st Int. Eur. Symp. Artif. Neural Netw., Comput. Intell. Mach. Learn., 2013, pp. 437–442.
+
+[116] G. Chevalier, “LSTMs for human activity recognition,” Laval Univ., Quebec, Canada, Tech. Rep., 2016.
+
+[117] T. Zebin, P. J. Scully, and K. B. Ozanyan, “Human activity recognition with inertial sensors using a deep learning approach,” in Proc. IEEE Sensors, Oct. 2016, pp. 1–3.
+
+[118] D. Ravì, C. Wong, B. Lo, and G.-Z. Yang, “A deep learning approach to on-node sensor data analytics for mobile or wearable devices,” IEEE J. Biomed. Health Informat., vol. 21, no. 1, pp. 56–64, Jan. 2017.
+
+[119] B. M. Eskofier et al., “Recent machine learning advancements in sensor-based mobility analysis: Deep learning for Parkinson’s disease assessment,” in Proc. 38th Annu. Int. Conf. IEEE Eng. Med. Biol. Soc. (EMBC), Aug. 2016, pp. 655–658.
+
+[120] J. Windau and L. Itti, “Inertial-based motion capturing and smart training system,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst. (IROS), Nov. 2019, pp. 4027–4034.
+
+[121] K. Weiss, T. M. Khoshgoftaar, and D. Wang, “A survey of transfer learning,” J. Big Data, vol. 3, no. 1, pp. 1–40, May 2016.
+
+[122] Y. Tian, C. Sun, B. Poole, D. Krishnan, C. Schmid, and P. Isola, “What makes for good views for contrastive learning?” in Proc. Adv. Neural Inf. Process. Syst., vol. 33, 2020, pp. 6827–6839.
+
+[123] A. Kendall and Y. Gal, “What uncertainties do we need in Bayesian deep learning for computer vision?” in Proc. Adv. Neural Inf. Process. Syst., vol. 30, 2017, pp. 1–13.
+
+[124] J. Gou, B. Yu, S. J. Maybank, and D. Tao, “Knowledge distillation: A survey,” Int. J. Comput. Vis., vol. 129, no. 6, pp. 1789–1819, Jun. 2021.
+
+[125] C. Saharia et al., “Photorealistic text-to-image diffusion models with deep language understanding,” in Proc. Neural Inf. Process. Syst., 2022, pp. 1–16.
+
+[126] C. Finn, P. Abbeel, and S. Levine, “Model-agnostic meta-learning for fast adaptation of deep networks,” in Proc. Int. Conf. Mach. Learn., 2017, pp. 1126–1135.
+
+[127] B. Mildenhall, P. P. Srinivasan, M. Tancik, J. T. Barron, R. Ramamoorthi, and R. Ng, “NeRF: Representing scenes as neural radiance fields for view synthesis,” Commun. ACM, vol. 65, no. 1, p. 99, Dec. 2021.
+
+[128] A. Oord et al., “Parallel WaveNet: Fast high-fidelity speech synthesis,” in Proc. 35th Int. Conf. Mach. Learn., 2018, pp. 3918–3926.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/ef39ce8bf0a0345baa51bbe8c0b57cccb51bc5259fe030ef5f185a360867fd7c.jpg)  
+Changhao Chen (Member, IEEE) received the B.Eng. degree from Tongji University, China, the M.Eng. degree from the National University of Defense Technology, China, and the Ph.D. degree from the University of Oxford, U.K. He is currently an Assistant Professor with the College of Intelligence Science and Technology, National University of Defense Technology. His research interests lie in robotics, computer vision, and cyber-physical systems.
+
+![](images/2024_Deep_Learning_for_Inertial_Positioning__A_Survey/4498d274abb163aef4106b4dda6587043287c6ac66cf078856930c83b7f5cd16.jpg)
+
+Xianfei Pan received the Ph.D. degree in control science and engineering from the National University of Defense Technology, Changsha, China, in 2008. Currently, he is a Professor with the College of Intelligence Science and Technology, National University of Defense Technology. His current research interests include inertial navigation systems and indoor navigation systems.

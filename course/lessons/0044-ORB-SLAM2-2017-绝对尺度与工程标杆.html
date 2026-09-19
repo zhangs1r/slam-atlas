@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ORB-SLAM2（2017）：绝对尺度与工程标杆 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0044</div>
+      <h1>ORB-SLAM2（2017）：绝对尺度与工程标杆</h1>
+      <p class="subtitle">双目与深度，把单目的「尺度病」一次性根治 📏</p>
+      <div class="hero-meta">
+        <span>🎯 主题：单目 / 双目 / RGB-D 通吃的开源系统</span>
+        <span>👥 作者：Mur-Artal &amp; Tardós</span>
+        <span>📅 2017 · <i>ORB-SLAM2: An Open-Source SLAM System for Monocular, Stereo, and RGB-D Cameras</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">相对 ORB-SLAM 的增量</a>
+        <a href="#b">双目深度与近远点</a>
+        <a href="#c">三种传感器下的 BA</a>
+        <a href="#d">工程化与第 4 线程</a>
+        <a href="#e">实验数字</a>
+        <a href="#f">局限与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 ORB-SLAM2 相对 ORB-SLAM 多出的「绝对尺度」从哪来；讲清双目深度如何用水平极线搜索 + SSD 亚像素求解；区分近点 / 远点（40 倍基线分界）及其在 BA 中的不同待遇；抄准三种传感器下 BA 的写法；并说出它为何成为工业首选。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>本篇定位是「把 ORB-SLAM 的尺度病根治掉」。直接收束 <b>0024 VO 教程</b> 的「单目尺度不可观」——双目 / 深度让尺度直接可观，于是闭环从 Sim(3) 退化成 SE(3)；与 <b>0026 SGM</b> 对照：ORB-SLAM2 只做水平 1D 极线 + 稀疏特征匹配，是「稀疏立体匹配」的极简版；与 <b>0019 BA</b> 接：它的 BA 是「混合约束 BA」（同一目标函数同时含 2 维与 3 维残差）。</p></div>
+      </div>
+
+      <h2>1. 相对 ORB-SLAM 的增量：绝对尺度从哪来</h2>
+      <p>ORB-SLAM2 是「在 ORB-SLAM 之上的增量系统」——论文 §III 直接说「we refer the reader to our monocular publication」。它新增的能力，全都围绕一句话：<b>双目 / RGB-D 让尺度变成可观测量</b>。</p>
+      <p>单目那套脆弱的 SfM 初始化（等视差、再三角化）和 sim(3) 尺度漂移纠正，在双目 / RGB-D 下都不需要了：单帧即可建点，尺度由硬件基线直接给出。</p>
+      <ul>
+        <li><b>初始化更快更稳</b>：第一帧就能建图，不再需要「跑一段、等视差」。这对高速低帧率场景（如 KITTI 01 高速路）是决定性的——单目在那里直接失败，双目成功。</li>
+        <li><b>双目深度估计</b>：只对显著特征在水平极线上搜，用 SSD + 亚像素细化，并做网格均匀化（下一节细讲）。</li>
+        <li><b>近点 vs 远点</b>：用深度 $d$ 与立体基线的倍数关系区分；远点深度不可信，但方向仍有用，所以「远点几乎不清除」。</li>
+      </ul>
+      <p>论文给出的四条 contributions：① 三模态（单目 / 双目 / RGB-D）开源系统；② BA 比 ICP / 直接法更准且更省（不需 GPU）；③ 近 / 远点立体组合；④ 定位模式（map reuse，关掉建图只做轻量定位）。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 双目深度估计与近点 / 远点</h2>
+      <h3>双目极线搜索：为什么只搜一条水平线</h3>
+      <p>双目相机做了<b>立体校正</b>（stereo rectification）后，两个成像面共面、光轴平行、且极线落在同一行。于是左图里的某个特征，在右图里一定出现在<b>同一行</b>上——只在那条水平线上做 1D 搜索即可，又快又准。匹配用 patch correlation 做亚像素细化。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="38" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">双目极线搜索：只搜一条水平线</text>
+          <!-- 左相机 -->
+          <g>
+            <rect x="60" y="120" width="120" height="90" fill="#eef3fb" stroke="#1565c0" stroke-width="2.5"/>
+            <circle cx="120" cy="165" r="16" fill="none" stroke="#37474f" stroke-width="2"/>
+            <text x="120" y="240" fill="#0d3c75" font-size="13" text-anchor="middle">左相机</text>
+            <ellipse cx="120" cy="165" rx="40" ry="28" fill="none" stroke="#9aa7ad" stroke-width="1.5" opacity="0.6"/>
+          </g>
+          <!-- 右相机 -->
+          <g>
+            <rect x="720" y="120" width="120" height="90" fill="#eef3fb" stroke="#1565c0" stroke-width="2.5"/>
+            <circle cx="780" cy="165" r="16" fill="none" stroke="#37474f" stroke-width="2"/>
+            <text x="780" y="240" fill="#0d3c75" font-size="13" text-anchor="middle">右相机</text>
+            <ellipse cx="780" cy="165" rx="40" ry="28" fill="none" stroke="#9aa7ad" stroke-width="1.5" opacity="0.6"/>
+          </g>
+          <!-- 中间的杯子 + 3D 点 -->
+          <rect x="400" y="150" width="60" height="80" rx="8" fill="#d8c6a0" stroke="#8a7a5c" stroke-width="2.5"/>
+          <text x="430" y="250" fill="#6b5b3e" font-size="13" text-anchor="middle">真实杯子</text>
+          <circle cx="430" cy="170" r="6" fill="#c62828"/>
+          <!-- 投影连线到左右像面 -->
+          <line x1="120" y1="165" x2="430" y2="170" stroke="#7b1fa2" stroke-width="1.5" opacity="0.6"/>
+          <line x1="780" y1="165" x2="430" y2="170" stroke="#7b1fa2" stroke-width="1.5" opacity="0.6"/>
+          <!-- 左图上特征点 -->
+          <circle cx="120" cy="165" r="6" fill="#c62828"/>
+          <text x="120" y="285" fill="#c62828" font-size="12" text-anchor="middle">特征点（左）</text>
+          <!-- 右图水平极线 -->
+          <line x1="720" y1="165" x2="840" y2="165" stroke="#2e7d32" stroke-width="4"/>
+          <text x="780" y="300" fill="#2e7d32" font-size="12" text-anchor="middle">水平极线（只在这条线上搜）</text>
+          <circle cx="800" cy="165" r="6" fill="#c62828"/>
+          <text x="800" y="320" fill="#c62828" font-size="11" text-anchor="middle">匹配点（右）</text>
+          <!-- 视差箭头 -->
+          <line x1="120" y1="200" x2="800" y2="200" stroke="#e67e22" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="460" y="218" fill="#e67e22" font-size="12" text-anchor="middle">视差 = 左右横坐标差</text>
+          <text x="450" y="360" fill="#888" font-size="12" text-anchor="middle">已做立体校正：极线 = 水平线，所以只需 1D 搜索（对照：未校正时极线是斜的，见右下）</text>
+          <!-- 未校正对照 -->
+          <line x1="720" y1="150" x2="840" y2="180" stroke="#888" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="800" y="200" fill="#888" font-size="11" text-anchor="middle">未校正→斜极线</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一套真实的双目相机（左右两个镜头）对着一个真实杯子。杯子上红点投影到左图是一个特征点；投影到右图后，它必定落在<b>同一条水平极线</b>上，于是只在这条水平线上做 1D 搜索找匹配。<br>
+          <b>怎么看这张图：</b>① 紫色虚线是两个相机看向同一个 3D 点的投影线；② 绿色粗线就是右图上的水平极线，匹配点（红）就落在上面；③ 右下灰色斜线说明「如果不做立体校正，极线是斜的，就得 2D 搜」——这正是必须先校正的原因。<br>
+          <b>要记住的一句话：</b>立体校正把极线压成水平，双目匹配从 2D 退化成 1D，又快又省。
+        </figcaption>
+      </figure>
+
+      <h3>近点 vs 远点：40 倍基线分界</h3>
+      <p>论文 §III-A 把立体关键点分成两类：深度 <b>小于 40 倍立体基线</b> 的叫近点（close），更远的叫远点（far）。为什么用「相对基线的倍数」而不是绝对距离？因为可可靠三角化的深度范围<b>随基线长度变化</b>——KITTI 基线约 54 cm，40 倍 ≈ 21.6 m；EuRoC 基线约 11 cm，40 倍 ≈ 4.4 m。同一个阈值在两个数据集对应<b>物理距离差 5 倍</b>，所以必须用相对倍数。</p>
+      <p>关键结论：<b>远点深度不可信，但方向仍有用，所以远点几乎不清除。</b>远点贡献于估计朝向，但对平移和尺度提供的信息很弱。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="38" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">近点视差大，远点视差极小（同一水平基线）</text>
+          <!-- 基线 -->
+          <line x1="120" y1="200" x2="780" y2="200" stroke="#37474f" stroke-width="3"/>
+          <circle cx="120" cy="200" r="14" fill="#1565c0"/>
+          <circle cx="780" cy="200" r="14" fill="#1565c0"/>
+          <text x="120" y="232" fill="#0d3c75" font-size="12" text-anchor="middle">左相机</text>
+          <text x="780" y="232" fill="#0d3c75" font-size="12" text-anchor="middle">右相机</text>
+          <text x="450" y="190" fill="#37474f" font-size="12" text-anchor="middle">立体基线 b</text>
+          <!-- 近处花瓶 -->
+          <rect x="430" y="150" width="34" height="50" rx="6" fill="#d8c6a0" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="447" y="140" fill="#6b5b3e" font-size="12" text-anchor="middle">近处花瓶</text>
+          <line x1="120" y1="200" x2="447" y2="175" stroke="#c62828" stroke-width="2"/>
+          <line x1="780" y1="200" x2="447" y2="175" stroke="#c62828" stroke-width="2"/>
+          <text x="447" y="232" fill="#c62828" font-size="11" text-anchor="middle">视差大</text>
+          <!-- 远处楼 -->
+          <rect x="440" y="95" width="30" height="45" fill="none" stroke="#37474f" stroke-width="2"/>
+          <text x="455" y="85" fill="#37474f" font-size="12" text-anchor="middle">远处楼</text>
+          <line x1="120" y1="200" x2="455" y2="118" stroke="#2e7d32" stroke-width="1.5"/>
+          <line x1="780" y1="200" x2="455" y2="118" stroke="#2e7d32" stroke-width="1.5"/>
+          <text x="455" y="252" fill="#2e7d32" font-size="11" text-anchor="middle">视差极小</text>
+          <!-- 数轴 -->
+          <line x1="120" y1="300" x2="780" y2="300" stroke="#888" stroke-width="2"/>
+          <rect x="120" y="293" width="420" height="14" fill="#bbdefb"/>
+          <rect x="540" y="293" width="240" height="14" fill="#c8e6c9"/>
+          <text x="330" y="328" fill="#0d3c75" font-size="12" text-anchor="middle">近点 d &lt; 40b（深度可靠）</text>
+          <text x="660" y="328" fill="#1b5e20" font-size="12" text-anchor="middle">远点 d ≥ 40b（深度弱，不清除）</text>
+          <text x="540" y="345" fill="#e67e22" font-size="12" text-anchor="middle">↑ 分界 = 40 × 基线</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一条水平基线上的一对双目相机，分别看近处花瓶与远处楼。近处物体投影到左右相机的横坐标差（视差）很大；远处物体视差极小。<br>
+          <b>怎么看这张图：</b>① 红线是近点（花瓶）的两条投影线，夹角大、视差大；② 绿线是远点（楼）的投影线，几乎平行、视差极小；③ 下方数轴标出「深度 $d$ 与基线 $b$ 的 40 倍」分界：左蓝区近点深度可靠，右绿区远点深度弱但不清除。<br>
+          <b>要记住的一句话：</b>视差小的远点深度不可信、但方向仍有用，所以「远点几乎不清除」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_ORB-SLAM2__An_Open-Source_SLAM_System_for_Monocular__Ste/052e27c851785bf7f94a6a1e861c2b82e2fd863c135ada17ad9883a9d21ff681.jpg" alt="Tracked points near far KITTI 01">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Tracked points in KITTI 01. Green points have a depth less than 40 times the stereo baseline, while blue points are further away… Far points contribute to estimate orientation but provide weak information for translation and scale.（KITTI 01 跟踪到的点；绿点深度小于 40 倍基线，蓝点更远；远点有助于估计朝向但对平移和尺度信息很弱。）<br>
+          <b>怎么看这张图：</b>① 满屏点被分成绿（近）与蓝（远）两色；② 绿色密集在近处车辆 / 路沿，蓝色铺在远处建筑与天空；③ 它把「近点 / 远点」从抽象判据变成了肉眼可辨的实拍图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 三种传感器下的 BA：单目 vs 双目 / RGB-D</h2>
+      <p>ORB-SLAM2 的 BA 目标函数，在同一套框架里容纳了三种观测。核心是<b>投影函数</b>：单目投影 $\pi_m$ 输出 2 维，双目 / RGB-D 投影 $\pi_s$ 多一维——把右图（或虚拟右坐标）也写进残差。</p>
+      <div class="formula-box"><div class="flow-formula">$$\pi_m\!\left(\begin{bmatrix}X\\Y\\Z\end{bmatrix}\right)=\begin{bmatrix}f_x X/Z+c_x\\ f_y Y/Z+c_y\end{bmatrix}\;,\quad \pi_s\!\left(\begin{bmatrix}X\\Y\\Z\end{bmatrix}\right)=\begin{bmatrix}f_x X/Z+c_x\\ f_y Y/Z+c_y\\ f_x (X-b)/Z+c_x\end{bmatrix}$$</div></div>
+      <p>★ $\pi_s$ 的<b>第三行就是立体项</b>：它把「观测到的深度」也作为一条约束直接塞进 BA。于是双目 / RGB-D 一次优化就能定尺度。单目则只有 2 维重投影误差，且要额外处理尺度 $s$ 的退化。</p>
+      <p>RGB-D 用一个巧妙把戏：用已知深度把像素合成一个「虚拟右坐标」$u_R=u_L-f_x b/d$（$b\approx 8$ cm），于是深度不确定度就等价于虚拟右坐标的不确定度，直接进 $\Sigma$。</p>
+      <p>Local BA 的写法：优化共视关键帧与可见点，而「不在局部窗口但看到这些点的关键帧（集合 $\mathcal K_F$）只贡献代价、位姿固定」。Full BA 则是「除原点关键帧（消 gauge）外全优化」的特例——闭环后由第 4 线程执行。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>ORB-SLAM2 里双目 / RGB-D 的投影函数 $\pi_s$ 比单目 $\pi_m$ 多出来的第三行，代表什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="第三行是立体项（右图/虚拟右坐标的水平观测），把深度也作为一条约束写进残差，所以双目 BA 一次就能定出尺度。" onclick="lessonKit.answer(this,'q0044a')">立体观测项</button>
+          <button data-correct="no" data-explanation="不是尺度因子本身。尺度因子 s 是单目 Sim(3) 才显式出现的；双目靠硬件基线直接可观，无需显式 s，第三行是「把深度观测写进 BA」。" onclick="lessonKit.answer(this,'q0044a')">尺度因子 s</button>
+        </div>
+        <div class="quiz-feedback" id="q0044a"></div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="36" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">三种传感器，同一场景各得到什么</text>
+          <!-- 三格 -->
+          <rect x="40" y="70" width="250" height="220" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="165" y="100" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">单目</text>
+          <polygon points="165,150 120,210 210,210" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <text x="165" y="245" fill="#0d3c75" font-size="13" text-anchor="middle">只有方向（射线）</text>
+          <text x="165" y="268" fill="#888" font-size="12" text-anchor="middle">尺度未知、需 sim(3)</text>
+
+          <rect x="325" y="70" width="250" height="220" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="450" y="100" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">双目 / RGB-D</text>
+          <polygon points="450,150 405,210 495,210" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <line x1="450" y1="150" x2="450" y2="210" stroke="#c62828" stroke-width="3"/>
+          <text x="450" y="245" fill="#0d3c75" font-size="13" text-anchor="middle">方向 + 尺度</text>
+          <text x="450" y="268" fill="#888" font-size="12" text-anchor="middle">一帧建点、尺度可观</text>
+
+          <rect x="610" y="70" width="250" height="220" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="735" y="100" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">RGB-D（额外）</text>
+          <rect x="690" y="150" width="90" height="60" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="735" y="245" fill="#0d3c75" font-size="13" text-anchor="middle">方向 + 尺度</text>
+          <text x="735" y="268" fill="#888" font-size="12" text-anchor="middle">+ 稠密深度图</text>
+
+          <text x="450" y="320" fill="#888" font-size="12" text-anchor="middle">（格内为简化示意：单目只有射线、双目多一根尺度轴、RGB-D 还多一片深度面）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三格对照——单目只给出方向（一条射线，尺度未知）；双目 / RGB-D 多一根尺度轴，一帧就能定尺度；RGB-D 在这之外还多一片稠密深度面。<br>
+          <b>怎么看这张图：</b>① 左格三角是「射线」，长度未知；② 中格三角 + 红竖线＝「方向 + 尺度」，红竖线就是可靠深度；③ 右格多一个蓝色方块＝稠密深度图。<br>
+          <b>要记住的一句话：</b>尺度从「不可观」到「可观」，是 ORB-SLAM2 根治单目尺度病的根本所在。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 工程化：为什么它成为工业首选</h2>
+      <p>ORB-SLAM2 之所以成为工业界事实标准，靠的是四条：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 真正开源</h4><p>代码公开、可商用改造；同一套代码跑单目 / 双目 / RGB-D，不用为每种传感器重写。</p></div>
+        <div class="mini-card"><h4>② 多传感器通吃</h4><p>统一的混合约束 BA，传感器只是「输入预处理」：跟踪线程先把双目 / RGB-D 转成统一的 Stereo / Mono Keypoints（见 Fig.2(b)），后续模块完全不关心传感器。</p></div>
+        <div class="mini-card"><h4>③ 单核 CPU 也能跑</h4><p>论文实验在桌面 i7-4790 上实时；多数序列每帧耗时低于帧间隔。不依赖 GPU。</p></div>
+        <div class="mini-card"><h4>④ 第 4 线程做 full BA</h4><p>闭环后派生一个独立线程跑 full BA（Fig.2(a) 的 Update Map / Full BA 框），不阻塞实时跟踪。full BA 算完，沿生成树把修正传播给未优化的帧与点。</p></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_ORB-SLAM2__An_Open-Source_SLAM_System_for_Monocular__Ste/f6ac36f239ac82e48f8c70e460085f8a2a5bcbd98b1ac0da78e20adef65b88d3.jpg" alt="ORB-SLAM2 system threads">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>ORB-SLAM2 is composed of three main parallel threads… which can create a fourth thread to perform full BA after a loop closure… (a) System threads and modules. (b) Input preprocessing.（三主线程 + 闭环后可派生第 4 线程做 full BA；(a) 线程与模块，(b) 输入预处理。）<br>
+          <b>怎么看这张图：</b>① (a) 与 ORB-SLAM Fig.1 几乎同构，但多出 Update Map / Full BA 框，且回环节点是 Compute SE3（不是 Sim3）；② (b) 清晰画出两条预处理管线：Rectified Stereo 与 Registered RGB-D，都输出 Stereo / Mono Keypoints 两个绿框——这就是「与传感器无关」的工程落点。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 实验数字</h2>
+      <p>平台：i7-4790 桌面机 + 16 GB。每条序列跑 5 次报中位。挑硬数字：</p>
+      <ul>
+        <li><b>KITTI（双目，11 序列，10 Hz）</b>：相对误差 $t_{rel}$ 普遍低于 1%。如序列 00 为 0.70% / 1.3 m（绝对）、序列 03 0.71% / 0.6 m；序列 01（高速路）平移较差但朝向仍达 0.21 deg/100 m（靠大量远点保住朝向）。</li>
+        <li><b>EuRoC（双目，11 序列，20 Hz，基线约 11 cm）</b>：平移 RMSE 多在 0.02–0.05 m；V2_03_difficult 因严重运动模糊丢失跟踪（作者指出用 IMU 可解，即 VI ORB-SLAM）。</li>
+        <li><b>TUM RGB-D（7 序列）</b>：ORB-SLAM2 普遍优于 ElasticFusion / Kintinuous / DVO-SLAM / RGBD-SLAM。如 fr1_desk 0.016 m、fr2_xyz 0.004 m、fr3_office 0.010 m。</li>
+        <li><b>每帧耗时（Table IV，均值）</b>：Tracking 总耗时 EuRoC 41.66 ms、KITTI 49.47 ms、TUM 25.58 ms——均低于各自帧间隔，实时。其中 Stereo Matching 分别为 11.26 / 15.51 / 0.02 ms（RGB-D 走虚拟右坐标故近零）。</li>
+      </ul>
+      <p>最有说服力的对照是 KITTI 08：左为单目 ORB-SLAM（严重尺度漂移，尤其转弯），右为 ORB-SLAM2 双目（贴合真值、无尺度漂移）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_ORB-SLAM2__An_Open-Source_SLAM_System_for_Monocular__Ste/3193296b9f8310d18cd9eeeee0ca9bdfa9aabe3af77cff3cec0d3ce87a44ce98.jpg" alt="KITTI 08 monocular vs stereo">
+        <figcaption>
+          <b>原图注（Fig. 5，左）：</b>Estimated trajectory (black) and ground truth (red) in KITTI 08. Left: Monocular ORB-SLAM [1]… suffers from severe scale drift… In contrast, the proposed stereo version is able to estimate the true scale of the trajectory and map without scale drift.（左：单目 ORB-SLAM 有严重尺度漂移，尤其转弯处；右：双目能估计真实尺度且无漂移。）<br>
+          <b>怎么看这张图：</b>① 左图（单目）黑线明显偏离红真值、且在转弯处扭掉；② 右图（双目）黑线贴合红真值；③ 这张左/右并排就是「双目/RGB-D 带来什么」最直接的可视化回答。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_ORB-SLAM2__An_Open-Source_SLAM_System_for_Monocular__Ste/57ff14303214130bc11b45cba4c8b12cf06c4947a3aa98e95f57912aac78e47a.jpg" alt="KITTI 00 01 05 07 trajectories">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Estimated trajectory (black) and ground truth (red) in KITTI 00, 01, 05, and 07.（KITTI 00/01/05/07 的估计轨迹（黑）与真值（红）。）<br>
+          <b>怎么看这张图：</b>① 四幅里黑线基本贴合红线，说明双目 ORB-SLAM2 在城区序列上很准；② 注意这是双目结果，没有单目那种系统性尺度漂移；③ 可与 Fig.5 左的单目结果对照看差距。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 局限与衔接</h2>
+      <p>论文没有独立的 Limitations 小节，但正文明确承认这些边界：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① V2_03_difficult 失败</h4><p>因严重运动模糊丢失跟踪（§IV-B）；作者指出该序列用 IMU 可处理。</p></div>
+        <div class="mini-card"><h4>② KITTI 01 平移略差</h4><p>高速 + 低帧率导致可跟踪近点很少；靠大量远点保住朝向精度（§IV-A）。</p></div>
+        <div class="mini-card"><h4>③ 回路未必能检测到</h4><p>KITTI 09 的回路只在末尾极少数帧发生，不总能检测到（§IV-A）。</p></div>
+        <div class="mini-card"><h4>④ 单目模式的固有缺陷</h4><p>若只用单目，深度不可观、尺度未知、启动需多视图、尺度漂移、纯旋转可能失败——这些双目/深度只是绕开，并未消除。</p></div>
+      </div>
+      <p>★ <b>收束一条线：</b>本课把 0024 VO 教程的「单目尺度不可观」用工程手段根治——双目 / 深度让尺度直接可观，闭环从 Sim(3) 退化成 SE3（对比 ORB-SLAM Fig.1 的 Compute Sim3 与 ORB-SLAM2 Fig.2 的 Compute SE3 两个框）。与 0026 SGM 形成对照：ORB-SLAM2 只做水平 1D 极线 + 稀疏特征匹配，是「稀疏立体匹配」极简版；与 0019 BA 接：它的混合约束 BA 是「BA 如何容纳异构观测」的现成范例。下一课 ORB-SLAM3 会进一步把「双目 / 深度 + IMU + 多地图」全塞进来，并偿还第二季的悬念⑤（IMU 初始化）。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么 ORB-SLAM2 把回环优化从 ORB-SLAM 的 Sim(3) 改成 SE(3)？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="因为双目/RGB-D 让尺度可观，不再有尺度漂移，所以刚体变换 SE(3) 就够了，无需带尺度因子的 Sim(3)。" onclick="lessonKit.answer(this,'q0044b')">尺度已可观</button>
+          <button data-correct="no" data-explanation="不是图省事。Sim(3) 是单目处理尺度漂移才需要的；尺度一旦可观（双目/深度硬件给出），SE(3) 就够，多出来的尺度维反而是累赘。" onclick="lessonKit.answer(this,'q0044b')">因为 SE3 更省事</button>
+        </div>
+        <div class="quiz-feedback" id="q0044b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>ORB-SLAM2 相对 ORB-SLAM，「绝对尺度」是从哪来的？这解决了单目的哪两个毛病？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>来自双目/RGB-D 的硬件基线（或深度）：单帧即可三角化出带尺度深度的点，尺度直接可观。它解决了单目的「地图/轨迹尺度未知」和「启动需多视图等视差」以及「尺度漂移需 sim(3) 纠正」三个毛病。</div></details>
+          </li>
+          <li>为什么双目极线搜索可以只在一条水平线上做？为什么必须先做立体校正？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>立体校正后两成像面共面、光轴平行、极线落在同一行，所以左图某特征在右图必在同一条水平线上，只需 1D 搜索。若不校正，极线是斜的，就得 2D 搜索且匹配更不可靠。</div></details>
+          </li>
+          <li>近点 / 远点的分界为什么用「深度 < 40 倍基线」而不是绝对距离？远点为什么「几乎不清除」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为可可靠三角化的深度范围随基线变：KITTI 54 cm→21.6 m，EuRoC 11 cm→4.4 m，同阈值物理距离差 5 倍，故必须用相对倍数。远点视差极小、深度不可信，但方向仍可约束朝向，所以保留而不清除。</div></details>
+          </li>
+          <li>双目/RGB-D 的投影函数 $\pi_s$ 比单目 $\pi_m$ 多出来的第三行，在 BA 里起什么作用？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>第三行是立体项（右图/虚拟右坐标的水平观测），把观测到的深度也作为一条残差约束直接写进目标函数，因此双目 BA 一次优化就能定出尺度，无需额外的 sim(3) 尺度纠正。</div></details>
+          </li>
+          <li>为什么 ORB-SLAM2 成为工业首选？举出至少三条理由。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① 真正开源、可商用改造；② 同一套代码多传感器（单目/双目/RGB-D）通吃，跟踪线程把传感器统一成 Stereo/Mono Keypoints；③ 单核 CPU 实时、不依赖 GPU；④ 闭环后第 4 线程跑 full BA 不阻塞实时跟踪。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0043-ORB-SLAM2015-一套特征服务所有任务.html">← ORB-SLAM（2015）：一套特征服务所有任务</a>
+        <a class="next" href="0045-ORB-SLAM3-2021-多地图与视觉惯性.html">ORB-SLAM3（2021）：多地图与视觉惯性 →</a>
+      </div>
+      <p class="foot-note">ORB-SLAM2 用双目与深度把尺度病根治，又用开源与单核实时成为工业标杆。但它仍怕运动模糊、低纹理，且丢了就重来。下一课 ORB-SLAM3 用 Atlas 多地图和视觉惯性来补这些洞，并偿还第二季的 IMU 初始化悬念 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

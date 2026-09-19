@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAST-LIO（2021）：迭代卡尔曼与一个新公式 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0083</div>
+      <h1>FAST-LIO（2021）：迭代卡尔曼与一个新公式</h1>
+      <p class="subtitle">一行公式，把「必须当场求逆的那个矩阵」从上千阶压到 18 阶 🧱</p>
+      <div class="hero-meta">
+        <span>🎯 主题：紧耦合 iEKF · 新卡尔曼增益公式 · 流形状态</span>
+        <span>👥 作者：Wei Xu、Fu Zhang（香港大学 MaRS 实验室）</span>
+        <span>📅 2021 · <i>FAST-LIO: A Fast, Robust LiDAR-Inertial Odometry Package by Tightly-Coupled Iterated Kalman Filter</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">一句话结论</a>
+        <a href="#b">它要解决的瓶颈</a>
+        <a href="#c">新增益公式：求逆变小了</a>
+        <a href="#d">迭代卡尔曼 iEKF</a>
+        <a href="#e">18 维状态向量</a>
+        <a href="#f">滤波派 vs 优化派</a>
+        <a href="#g">四旋翼上跑出来的数字</a>
+        <a href="#h">局限与练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清旧的卡尔曼增益公式为什么「养不起」上千个特征点；写出新的增益公式，并解释为什么求逆的矩阵从「测量维度」变成了「状态维度」；讲明白 iEKF 里的「迭代」二字到底在迭代什么；以及它和 LIO-SAM 的分歧究竟在哪。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节要回链三条线：第二季 <b>0019</b>（BA 的 Schur 消元——同样是「换个消元顺序，把大矩阵变小」）、第二季 <b>0020</b>（流形上的 $\boxplus/\boxminus$）、第二季 <b>0028</b>（MSCKF 的误差状态与逐测量更新）；横向对照本季 <b>0078</b> LIO-SAM（因子图优化派）。第二季 <b>0023</b> 课讲过的 k-d 树，在本文里仍然要在找近邻时用到——它要到下一节才被换掉。</p>
+        </div>
+      </div>
+
+      <h2>1. 先记住一句话：FAST-LIO 干的是「改写一个公式」</h2>
+
+      <p>先把结论放在最前面，剩下的整节课都在解释这句话。</p>
+
+      <div class="callout">
+        <h4>本节的灵魂</h4>
+        <p>激光惯性里程计（LIO）要把激光测到的几何结构和 IMU 测到的运动揉在一起。过去大家用卡尔曼滤波时，每一步更新里都必须<b>反演一个和「这一帧用了多少个特征点」一样大的矩阵</b>。特征点一多，这个矩阵就上千阶，求逆变慢，实时算不动——<b>于是过去的紧耦合方案被迫只用一点点特征点</b>。<br>
+        FAST-LIO 做的事，是把卡尔曼增益<b>等价地写成另一个形式</b>，使得必须求逆的矩阵只和「状态有多少维」一样大，也就是 <b>18 阶</b>。<br>
+        <b>问题没变，答案也没变，变的只是「先消掉谁」——要算逆的那个矩阵，缩水了。</b></p>
+      </div>
+
+      <p>这不是我们的发挥，是原文摘要里自己写下的目标。原文的原话是：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「To lower the computation load in the presence of a large number of measurements, we present a new formula to compute the Kalman gain. The new formula has computation load depending on the state dimension instead of the measurement dimension.」<br>
+      （中译：为了在测量数量很大时降低计算负担，我们给出了一个计算卡尔曼增益的新公式。新公式的计算量取决于状态维度，而不是测量维度。）</p>
+
+      <p>而它换来的效果同样是原文原话：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「running on a quadrotor onboard computer, it fuses more than 1200 effective feature points in a scan and completes all iterations of an iEKF step within 25 ms.」<br>
+      （中译：在一台四旋翼机载计算机上运行时，它融合一帧中<b>超过 1200 个有效特征点</b>，并在 <b>25 毫秒内</b>完成一次 iEKF 的全部迭代。）</p>
+
+      <p>一台小四旋翼上的电脑，25 毫秒里处理 1200 多个特征点——这个数字在 2021 年是相当刺眼的。它靠的不是更强的 CPU，也不是更聪明的近似，而是一个<b>数学上的等价改写</b>。下面我们就一步一步把它拆开。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它要解决什么：为什么当时的方案「融合不了很多特征点」</h2>
+
+      <p>先交代背景。激光雷达给的是环境几何，IMU 给的是高频运动，这两样东西要合起来用。合的方式分两大类，原文在第二节里划分得很清楚：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>松耦合（loosely coupled）</b>
+          <p>两个传感器各算各的，再把各自算出来的「结果」（比如各自的位姿）拿去融合。简单，但两边的信息已经各自被压缩过一遍，精度上限低。</p>
+        </div>
+        <div class="mini-card">
+          <b>紧耦合（tightly coupled）</b>
+          <p>把激光的原始观测（特征点）和 IMU 的原始观测放到<b>同一个状态估计</b>里一起解。信息不丢，精度高，但计算量也大——这正是本文的战场。</p>
+        </div>
+      </div>
+
+      <p>原文进一步说，紧耦合内部还有两条路：<b>基于优化的</b>（optimization-based，比如把 IMU 预积分约束和激光平面约束一起建成图优化）与<b>基于滤波的</b>（filter-based）。本文走的是后者。为什么不用粒子滤波？原文给的理由非常直白：<b>粒子滤波的计算复杂度会随特征点数量和系统维度迅速增长</b>，所以大家更愿意用卡尔曼滤波及其变体（EKF、UKF、迭代卡尔曼）。</p>
+
+      <p>但卡尔曼滤波本身也有一个天花板。原文是这样写的：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「Kalman filter (and its variants) has a time complexity $\mathcal{O}(m^2)$ where $m$ is the measurement dimension. This may lead to remarkably high computation load when dealing with a large number of LiDAR measurements.」<br>
+      （中译：卡尔曼滤波及其变体的时间复杂度是 $\mathcal{O}(m^2)$，其中 $m$ 是测量维度。当测量数量很大时，这会带来高得离谱的计算负担。）</p>
+
+      <p>这里 $m$ 就是「一帧里用了多少个特征点」。注意是 <b>平方</b>——1000 个特征点，代价是 100 万的量级；2000 个就是 400 万。这不是「慢一点」的问题，是「根本跑不动」的问题。</p>
+
+      <p>于是当年的做法只有两条，原文也一并点破了：</p>
+
+      <ul>
+        <li><b>朴素降采样</b>：少用一些点。原文的评价是：「Naive downsampling would reduce the number of measurements but at the cost of information loss.」（朴素降采样能减少测量数，但代价是<b>信息丢失</b>。）</li>
+        <li><b>只挑特定几何</b>：比如前人的工作 [22] 通过「提取并拟合地平面」来减少测量数。原文指出这条路对空中平台不成立：「This, however, does not apply to aerial applications where the ground plane may not always present.」（然而这不适用于空中应用，因为地面平面不一定总是存在。）</li>
+      </ul>
+
+      <p>所以困境很清楚：<b>想准就要多用点，多用点就算不动。</b>本文要做的，是把这个二选一拆掉。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_FAST-LIO__A_Fast__Robust_LiDAR-Inertial_Odometry_Package/70e890ad81d3c5790b832f6461b576dc551babdbc6327128a98aea1677f820ae.jpg" alt="System overview of FAST-LIO">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System overview of FAST-LIO. (a): the overall pipeline; (b): the forward and backward propagation.<br>
+          （中译：FAST-LIO 的系统总览。(a)：整体管线；(b)：前向与后向传播。）<br>
+          <b>怎么看这张图：</b>① 先看 (a) 的整体管线——最左边是点云输入，然后<b>先提取「面特征 / 边特征」</b>，再送进紧耦合的迭代卡尔曼滤波；② 再看 (b)，它画的是两种传播：<b>前向传播</b>用 IMU 把状态从上一帧推到当前帧，<b>后向传播</b>则从当前时刻倒着推回去，为每个特征点找到它<b>被采到的那一瞬间</b>的位姿，从而补偿运动畸变（这就是第一季 <b>0008</b> 课与本季 <b>0074</b> 课讲过的去畸变问题，只是这次用的是严密的运动学模型而不是匀速假设）；③ 请特别记住这一点：<b>本文的管线里仍然有「提特征」这一步</b>——彻底删掉它是下一节 FAST-LIO2 的贡献。<br>
+          <b>要记住的一句话：</b>本文改的是「怎么把大量特征点算得动」，还没动「要不要提特征」这个问题。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 核心创新：一个新的卡尔曼增益公式</h2>
+
+      <p>现在进入本节的灵魂。卡尔曼滤波每融合一次观测，都要算一个 <b>卡尔曼增益</b> $K$。它的作用可以这样理解：<b>新来的这次观测，我该信它几分？</b>信得多，状态就往观测那边多挪一点；信得少，就多保留原来的预测。这个「挪多少」的系数就是 $K$。</p>
+
+      <p>计算 $K$ 的式子里有一项必须求逆。<b>问题不在「要不要求逆」，而在「对谁求逆」。</b></p>
+
+      <h3>3.1 旧形式：要反演的矩阵 = 测量维度</h3>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$K_{\text{旧}} = P H^{\top}\left(H P H^{\top} + R\right)^{-1}$$</div>
+      </div>
+
+      <p>括号里那个要被反演的矩阵是 $H P H^{\top} + R$，它的维度等于<b>测量维度</b>——也就是这一帧里用了多少个特征点。原文对这一点的描述是（这段话值得逐字读一遍）：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「A problem with the commonly used Kalman gain form in (18) is that it requires to invert the matrix $HPH^{\top}+R$ which is in the dimension of the measurements. In practice, the number of LiDAR feature points are very large in number, inverting a matrix of this size is prohibitive. As such, existing works only use a small number of measurements.」<br>
+      （中译：常用的增益形式（式 18）有个问题：它要反演矩阵 $HPH^{\top}+R$，而该矩阵处于测量维度。实践当中激光特征点的数量非常巨大，<b>对这个规模的矩阵求逆是令人却步的</b>。因此，已有工作只能使用<b>少量</b>测量。）</p>
+
+      <p>注意最后半句：<b>「已有工作只能使用少量测量」</b>——这就是第 2 节那个困境的数学根源。</p>
+
+      <h3>3.2 新形式：要反演的矩阵 = 状态维度（18 维）</h3>
+
+      <p>原文的思路是：与其在「测量」那一侧硬求逆，不如回到代价函数去看——代价函数是写在<b>状态</b>上的，所以解的东西理应只和状态维度有关。顺着这个念头直接解，就得到同一个解的另一种写法：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$K_{\text{新}} = \left(H^{\top} R^{-1} H + P^{-1}\right)^{-1} H^{\top} R^{-1}$$</div>
+      </div>
+
+      <p>现在要反演的矩阵变成了 $H^{\top} R^{-1} H + P^{-1}$，它的维度等于<b>状态维度</b>。而 FAST-LIO 的状态只有 <b>18 维</b>——和「这一帧用了一千个还是一万个特征点」完全无关。</p>
+
+      <p>原文在这里补了两句关键的话：</p>
+
+      <ul>
+        <li><b>两者是严格等价的，不是近似。</b>原文说：「We prove in Appendix B that the two forms of Kalman gains are indeed equivalent based on the matrix inverse lemma.」（我们在附录 B 中基于矩阵求逆引理证明<b>两种增益形式确实等价</b>。）所以这不是拿精度换速度。</li>
+        <li><b>为什么新形式只需要对「小矩阵」求逆。</b>原文说：「Since the LiDAR measurements are independent, the covariance matrix $R$ is (block) diagonal and hence the new formula only requires to invert two matrices both in the dimension of state instead of measurements.」（由于激光测量之间相互独立，协方差矩阵 $R$ 是（分块）对角的，因此新公式只需要对<b>两个都是状态维度的矩阵</b>求逆，而不是测量维度。）</li>
+        <li>它顺手把量级也交代了：「more than 1000 effective feature points in a scan for 10 Hz scan rate while the state dimension is only 18.」（10 Hz 扫描率下，一帧里有<b>超过 1000 个</b>有效特征点，而状态维度<b>只有 18</b>。）</li>
+      </ul>
+
+      <p>换句话说：<b>过去求逆的矩阵是「一千多阶」，现在求逆的矩阵是「18 阶」。</b>矩阵求逆的代价随阶数大约按立方增长——差两个数量级的阶数，代价差六个数量级。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="195" y="32" text-anchor="middle" font-size="16" font-weight="700" fill="#9b2c2c">旧写法：求逆矩阵 = 测量维度</text>
+          <rect x="70" y="58" width="250" height="250" fill="#f7d9d9" stroke="#9b2c2c" stroke-width="2.5"/>
+          <path d="M82.5 58V308 M95 58V308 M107.5 58V308 M120 58V308 M132.5 58V308 M145 58V308 M157.5 58V308 M170 58V308 M182.5 58V308 M195 58V308 M207.5 58V308 M220 58V308 M232.5 58V308 M245 58V308 M257.5 58V308 M270 58V308 M282.5 58V308 M295 58V308 M307.5 58V308"
+                fill="none" stroke="#d99b9b" stroke-width="1"/>
+          <path d="M70 70.5H320 M70 83H320 M70 95.5H320 M70 108H320 M70 120.5H320 M70 133H320 M70 145.5H320 M70 158H320 M70 170.5H320 M70 183H320 M70 195.5H320 M70 208H320 M70 220.5H320 M70 233H320 M70 245.5H320 M70 258H320 M70 270.5H320 M70 283H320 M70 295.5H320"
+                fill="none" stroke="#d99b9b" stroke-width="1"/>
+          <text x="195" y="340" text-anchor="middle" font-size="13.5" fill="#555">一帧上千个特征点 → 上千阶方阵</text>
+          <text x="195" y="364" text-anchor="middle" font-size="13.5" fill="#b00000">要算逆，代价随阶数炸开</text>
+
+          <text x="455" y="176" text-anchor="middle" font-size="13" fill="#666">同一个问题</text>
+          <text x="455" y="198" text-anchor="middle" font-size="13" fill="#666">换个写法</text>
+          <path d="M368 230H542" stroke="#666" stroke-width="2"/>
+          <path d="M542 230 L530 224 L530 236 Z" fill="#666"/>
+
+          <text x="705" y="32" text-anchor="middle" font-size="16" font-weight="700" fill="#1d6f3c">新写法：求逆矩阵 = 状态维度</text>
+          <rect x="645" y="140" width="120" height="120" fill="#dff0e2" stroke="#1d6f3c" stroke-width="2.5"/>
+          <line x1="685" y1="140" x2="685" y2="260" stroke="#8fc39c" stroke-width="1.5"/>
+          <line x1="725" y1="140" x2="725" y2="260" stroke="#8fc39c" stroke-width="1.5"/>
+          <line x1="645" y1="180" x2="765" y2="180" stroke="#8fc39c" stroke-width="1.5"/>
+          <line x1="645" y1="220" x2="765" y2="220" stroke="#8fc39c" stroke-width="1.5"/>
+          <text x="705" y="292" text-anchor="middle" font-size="13.5" fill="#555">只有 18 阶</text>
+          <text x="705" y="316" text-anchor="middle" font-size="13.5" fill="#1d6f3c">要算逆的只剩这么大</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是被放弃的旧增益公式——要反演的矩阵由「这一帧用了多少特征点」决定，格子密不透风，上千阶；右边是新公式——要反演的矩阵只由「状态有多少维」决定，也就是 18 阶，小到可以当场算完。中间那句「同一个问题，换个写法」是全图的重点：<b>问题没换、答案也没换，只是换了个消元顺序。</b><br>
+          <b>怎么看这张图：</b>① 左联的密集格子代表「测量维度」，格子数越多，求逆越慢，而且它<b>随每帧特征点数浮动</b>——你没法控制它；② 中间那支箭头不是「改进」，是「<b>等价改写</b>」，两边解出来的是同一个 $K$；③ 右联的 3×3 格子代表「状态维度」，是<b>一个固定不变的 18</b>，跟环境复杂度、跟激光线数都没关系。<br>
+          <b>要记住的一句话：</b>这就是 FAST-LIO 能实时融合超过 1200 个特征点的全部原因——把求逆的对象从「测量维度」换成了「状态维度」。
+        </figcaption>
+      </figure>
+
+      <p>这个思路你其实在第二季见过一次。第二季 <b>0019</b> 课讲 BA 的时候，Schur 消元做的就是同一件事：<b>换个消元顺序，把大矩阵变小</b>——先消掉那些「数目很多但结构简单」的测量块，再解一个很小的状态块。FAST-LIO 这一步是同一个思想在滤波里的翻版：与其反演庞大的测量协方差，不如反演小小的状态量。手法同源，战场不同。</p>
+
+      <h3>3.3 原文把它实测了：一张很有说服力的表</h3>
+
+      <p>光讲复杂度还不够，原文做了一个非常干脆的实验：<b>在同一个系统、同一条管线里，只是把卡尔曼增益的计算换成旧公式</b>，然后测量不同特征点数下的耗时。结果是这样的（原文 TABLE II，单位毫秒）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">一帧特征点数</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem">307</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem">717</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem">998</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem">1243</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem">1453</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem">1802</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>旧公式（ms）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">7.1</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">23.4</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">109.3</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">251</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">1219</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">1621</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>新公式（ms）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.07</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.11</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.25</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.37</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">0.59</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">1.16</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>请横向读一遍这张表的<b>第一行</b>：特征点从 307 涨到 1802（不到 6 倍），旧公式的耗时从 7.1 ms 涨到 <b>1621 ms</b>——涨了两百多倍，整整 1.6 秒。而一帧的扫描周期通常只有 10 到 100 毫秒。<b>也就是说，用旧公式，连一帧都算不完。</b></p>
+
+      <p>再读<b>第二行</b>：同样的特征点数下，新公式从 0.07 ms 涨到 1.16 ms。哪怕取最极端的 1802 个点，新公式也只要 1.16 毫秒。</p>
+
+      <p>把两行并排看：在 1802 个特征点时，<b>1621 ms 对 1.16 ms，差了约 1400 倍</b>。这张表就是「本文为什么不惜写一整篇 letter 来推一个等价公式」的答案。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文 TABLE II 里，当一帧的特征点数从 307 涨到 1802 时，<b>旧公式</b>的耗时变化最接近下面哪一种描述？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。旧公式从 7.1 ms 涨到 1621 ms，涨了两百多倍，彻底超过了一帧的扫描周期，也就是说根本没法实时运行。这正是本文要改写它的理由。" onclick="lessonKit.answer(this,'q0083a')">七毫秒涨到一千六百</button>
+          <button data-correct="no" data-explanation="错。「始终停在一毫秒以内」其实是新公式的表现：新公式从 0.07 ms 到 1.16 ms，全程都很快。旧公式会随特征点数爆炸式增长。" onclick="lessonKit.answer(this,'q0083a')">始终停在一毫秒以内</button>
+        </div>
+        <div class="quiz-feedback" id="q0083a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 迭代卡尔曼滤波（iEKF）：为什么还要「迭代」</h2>
+
+      <p>新增益公式解决了「算得动」，但还有第二个问题：<b>算得准吗？</b></p>
+
+      <p>问题的根源在于<b>非线性</b>。激光点落在哪个平面上、这个平面在你的位姿变换下会被投影到哪里——这一串关系不是直线关系。而卡尔曼滤波的整套推导默认「观测和状态之间的关系是线性的」。所以标准 EKF 的做法是：<b>在当前的预测位姿处，把这条非线性曲线用一条切线代替</b>，然后在这条切线上求出解。这个过程叫<b>线性化</b>。</p>
+
+      <p>问题在于：如果你当前的预测位姿<b>离真值很远</b>，那条切线就代表不了真实的曲线，解出来的位置自然也是偏的。原文说的是「to mitigate linearization errors」——为了缓解线性化误差。</p>
+
+      <p><b>iEKF（iterated extended Kalman filter，迭代扩展卡尔曼滤波）的做法是：一次不够，就再来一次。</b>具体而言：</p>
+
+      <ol>
+        <li>在当前的估计处线性化，得到一个新的估计；</li>
+        <li><b>不急着收工</b>，把这个新估计当作新的「当前估计」；</li>
+        <li>在<b>新估计处重新线性化</b>（切线换了一个位置），再解一次；</li>
+        <li>反复迭代，直到前后两次估计几乎不再变化——这叫<b>收敛</b>。</li>
+      </ol>
+
+      <p>原文给出的收敛判据只有一个不等式：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\left\| \hat{\mathbf{x}}_k^{\kappa+1} \boxminus \hat{\mathbf{x}}_k^{\kappa} \right\| < \varepsilon$$</div>
+      </div>
+
+      <p>逐项读：<b>$\hat{\mathbf{x}}_k^{\kappa}$</b> 是第 $k$ 帧、第 $\kappa$ 次迭代时的状态估计；<b>$\boxminus$</b> 是<b>流形上的减法</b>（不是普通向量相减）；<b>$\varepsilon$</b> 是一个很小的阈值。<b>整句话的意思就是：这次和上次的估计如果已经差不多了，就停。</b></p>
+
+      <p>为什么减法要写成 $\boxminus$ 而不直接减？因为状态里包含了姿态，姿态是一个旋转，<b>旋转不能直接相减</b>——两个旋转之间的「差」要在流形（这里就是 $SO(3)$ 旋转群）上度量。这套 $\boxplus/\boxminus$ 的写法，第二季 <b>0020</b> 课（GraphSLAM 教程）里已经详细讲过，这里只是把同一套记号搬到了滤波里。</p>
+
+      <p>还有一点值得知道：原文没有把 $\hat{\mathbf{x}}_k^{\kappa+1}$ 直接当作最终结果就完事，而是先检查收敛，收敛之后才把最终的估计和协方差固定下来。所以 iEKF 的每一次「迭代」都是<b>一次完整的小型卡尔曼更新</b>，而不只是算个残差。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="220" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#9b2c2c">普通 EKF：只线性化一次</text>
+          <polyline points="70,151 73,162 76,173 79,183 82,192 85,201 88,210 91,218 94,225 97,233 100,240 103,246 106,252 109,258 112,264 115,269 118,274 121,278 124,282 127,286 130,290 133,294 136,297 139,300 142,303 145,306 148,308 151,311 154,313 157,315 160,317 163,318 166,320 169,321 172,323 175,324 178,325 181,326 184,327 187,328 190,329 193,329 196,330 199,330 202,331 205,331 208,331 211,332 214,332 217,332 220,332 223,332 226,332 229,332 232,331 235,331 238,331 241,330 244,330 247,329 250,329 253,328 256,327 259,326 262,325 265,324 268,323 271,321 274,320 277,318 280,317 283,315 286,313 289,311 292,308 295,306 298,303 301,300 304,297 307,294 310,290 313,286 316,282 319,278 322,274 325,269 328,264 331,258 334,252 337,246 340,240 343,233 346,225 349,218 352,210 355,201 358,192 361,183 364,173 367,162 370,151"
+                    fill="none" stroke="#333" stroke-width="2.4"/>
+          <line x1="65" y1="154" x2="121" y2="295" stroke="#c0392b" stroke-width="2.2"/>
+          <circle cx="93" cy="224" r="5" fill="#777"/>
+          <circle cx="149" cy="309" r="6" fill="#c0392b"/>
+          <circle cx="220" cy="332" r="6" fill="#1d6f3c"/>
+          <line x1="55" y1="352" x2="385" y2="352" stroke="#777" stroke-width="1.6"/>
+          <text x="40" y="250" font-size="11.5" fill="#666">残差</text>
+          <text x="300" y="100" text-anchor="middle" font-size="12.5" fill="#c0392b">只线性化一次</text>
+          <text x="228" y="368" text-anchor="middle" font-size="11.5" fill="#1d6f3c">真值</text>
+          <text x="380" y="368" text-anchor="end" font-size="11.5" fill="#666">状态估计 →</text>
+
+          <text x="640" y="28" text-anchor="middle" font-size="15" font-weight="700" fill="#1d6f3c">iEKF：在当前估计处反复线性化</text>
+          <polyline points="490,151 493,162 496,173 499,183 502,192 505,201 508,210 511,218 514,225 517,233 520,240 523,246 526,252 529,258 532,264 535,269 538,274 541,278 544,282 547,286 550,290 553,294 556,297 559,300 562,303 565,306 568,308 571,311 574,313 577,315 580,317 583,318 586,320 589,321 592,323 595,324 598,325 601,326 604,327 607,328 610,329 613,329 616,330 619,330 622,331 625,331 628,331 631,332 634,332 637,332 640,332 643,332 646,332 649,332 652,331 655,331 658,331 661,330 664,330 667,329 670,329 673,328 676,327 679,326 682,325 685,324 688,323 691,321 694,320 697,318 700,317 703,315 706,313 709,311 712,308 715,306 718,303 721,300 724,297 727,294 730,290 733,286 736,282 739,278 742,274 745,269 748,264 751,258 754,252 757,246 760,240 763,233 766,225 769,218 772,210 775,201 778,192 781,183 784,173 787,162 790,151"
+                    fill="none" stroke="#333" stroke-width="2.4"/>
+          <line x1="485" y1="154" x2="541" y2="295" stroke="#1f6fb0" stroke-width="2"/>
+          <line x1="541" y1="287" x2="597" y2="331" stroke="#1f6fb0" stroke-width="2"/>
+          <line x1="582" y1="322" x2="638" y2="335" stroke="#1f6fb0" stroke-width="2"/>
+          <circle cx="513" cy="224" r="5" fill="#777"/>
+          <circle cx="569" cy="309" r="5" fill="#1f6fb0"/>
+          <circle cx="610" cy="329" r="5" fill="#1f6fb0"/>
+          <circle cx="640" cy="332" r="6" fill="#1d6f3c"/>
+          <line x1="475" y1="352" x2="805" y2="352" stroke="#777" stroke-width="1.6"/>
+          <text x="460" y="250" font-size="11.5" fill="#666">残差</text>
+          <text x="720" y="100" text-anchor="middle" font-size="12.5" fill="#1f6fb0">反复线性化</text>
+          <text x="648" y="368" text-anchor="middle" font-size="11.5" fill="#1d6f3c">真值</text>
+          <text x="800" y="368" text-anchor="end" font-size="11.5" fill="#666">状态估计 →</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两联画的是同一条曲线——横轴是「状态估计」，纵轴是「残差」，曲线的最低点就是真值（残差最小的地方）。<b>普通 EKF（左）</b>只在起点做一次线性化，画一条切线就定案；<b>iEKF（右）</b>在同一段路上换了三次切线，每次都在上一次的解处重新画，一步步逼近最低点。<br>
+          <b>怎么看这张图：</b>① 灰点是起点估计，绿点是真值；② 左联那条红色切线只画了一次，解（红点）落在离真值还有一段距离的地方——这就是「一次线性化，有偏差」；③ 右联三条蓝线是三次重新线性化，切点（蓝点）一次比一次靠近绿点，最后几乎重合——这就是「在当前估计处反复重新线性化，直到 $\|\hat{\mathbf{x}}^{\kappa+1}\boxminus\hat{\mathbf{x}}^{\kappa}\|<\varepsilon$」。<br>
+          <b>要记住的一句话：</b>「迭代」两个字的含义，就是<b>不在起点的一次近似上将就</b>；每得到一个新估计，就回到曲线上的新位置再画一条切线。曲线越弯，迭代越值钱。<br>
+          <b>关于这张图的诚实说明：</b>图中曲线是一条真实的非线性代价函数（由 $0.5t^2+0.25t^4$ 生成），几个切点位置是按标准牛顿步算出来的，不是随手画的示意点；但本文并未给出这张图，它由我们为了解释概念而绘制。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 状态向量：18 维，装在一个流形上</h2>
+
+      <p>前面反复出现「18 维」，现在看看这 18 维里到底装了什么。原文把状态定义在一个<b>流形</b>上：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{M} = SO(3) \times \mathbb{R}^{15}, \qquad \dim(\mathcal{M}) = 18$$</div>
+      </div>
+
+      <p>拆开读：$SO(3)$ 是<b>三维旋转群</b>，代表机器人的姿态，占 3 个自由度；$\mathbb{R}^{15}$ 是 15 维的普通实数向量。3 + 15 = <b>18</b>。</p>
+
+      <p>那么这 15 维里是什么？从原文的运动学模型（式 1）可以一一对上：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">装的东西</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">维度</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">大白话</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>姿态</b> $^{G}\mathbf{R}_I$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3（属于 $SO(3)$）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">我现在朝哪</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>位置</b> $^{G}\mathbf{p}_I$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">我在哪</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>速度</b> $^{G}\mathbf{v}_I$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">我在多快往哪走</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>陀螺零偏</b> $\mathbf{b}_\omega$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">陀螺仪每次都偏一点，偏多少</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>加计零偏</b> $\mathbf{b}_a$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">加速度计每次都偏一点，偏多少</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>重力向量</b> $^{G}\mathbf{g}$</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">哪边是下（顺便还能顺便估出来）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>合计</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>18</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">这就是「状态维度」的全部家当</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>请注意最后一列那个「顺便」：<b>重力向量是被当成状态估出来的，而不是当成已知常数写死。</b>这在实践中很实用——不需要事先知道机器的安装倾角。</p>
+
+      <p>为什么非要用「流形」这种说法，而不是干脆当成 18 个实数？因为姿态那一块是旋转。旋转矩阵不能随便加减、也不能随便线性插值，它必须保持正交、行列式为 1 这些约束。把姿态放在 $SO(3)$ 这个流形上，误差就只在切空间里定义，既<b>避免了参数冗余</b>（用四元数会多一维、用欧拉角会有奇异点），也避免了每步之后要做归一化。第三季 <b>0059</b> 课 ROVIO 讲的「robocentric」、<b>0061</b> 课 OpenVINS 讲的「误差状态」都是同一个大家族的手法。</p>
+
+      <p>顺带说一句下一节的伏笔：本文的状态是 <b>18 维</b>；到了 FAST-LIO2，为了把「激光和 IMU 之间的外参」也一起估出来，状态会扩到 <b>24 维</b>（多出一组 $SO(3)\times\mathbb{R}^3$ 的外参）。这是后话，先记下这个数字。</p>
+
+      <p>最后补一句测量侧。每一个激光特征点贡献的残差长这样：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{z}_j^{\kappa} = \mathbf{G}_j\left({}^{G}\hat{\mathbf{p}}_{f_j}^{\kappa} - {}^{G}\mathbf{q}_j\right)$$</div>
+      </div>
+
+      <p>其中 $\mathbf{u}_j$ 是地图中对应平面（或边缘）的法向，而原文说 $\mathbf{G}_j = \mathbf{u}_j^{\top}$ 用于<b>面特征</b>，$\mathbf{G}_j = \lfloor \mathbf{u}_j \rfloor_\wedge$ 用于<b>边特征</b>；${}^{G}\mathbf{q}_j$ 是那个平面（或边缘线）上的一点。整式的意思很朴素：<b>把点投影到地图里，量它离最像的那块平面（或那条线）有多远。</b>残差的模超过某个阈值（原文举例 0.5 m）就会被当作外点或新观测扔掉。</p>
+
+      <p>这里有一个值得注意的细节：找这些「邻近的面/边」用的还是 <b>k-d 树</b>——原文写「is achieved by building a KD-tree of the points in the most recent map」。也就是说，<b>本文还在用 k-d 树</b>。下一节我们会看到，FAST-LIO2 正是从这棵树上开刀。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 它与 LIO-SAM 的根本分歧：滤波派 vs 优化派</h2>
+
+      <p>同一时期，激光惯性里程计还有另一条主流路线，代表是本季 <b>0078</b> 课讲的 <b>LIO-SAM</b>：把 IMU 预积分因子、激光配准因子、回环因子……统统写进一个<b>因子图</b>，然后用非线性最小二乘去解。这是「优化派」。</p>
+
+      <p>原文在第二节里把这两派摆得非常清楚。它先列举了优化派的代表：「Geneva et al. use a graph optimization with IMU pre-integration constraints and plane constraints from LiDAR feature points.」——用图优化，把 IMU 预积分约束和激光平面约束放在一起；还点名了 LIOM 用的也是类似的图优化，只是基于边缘和平面特征。</p>
+
+      <p>然后它给出了自己的站位：「Our method falls into the tightly-coupled approach. We adopt an iterated extended Kalman filter similar to [22] to mitigate linearization errors.」——<b>本文属于紧耦合路线，采用迭代扩展卡尔曼滤波。</b></p>
+
+      <p>而对「为什么不用粒子滤波」这个问题，原文的回答是算力：「Since the computation complexity of particle filter grows quickly with the number of feature points and the system dimension, Kalman filter and its variants are usually more preferred.」——粒子滤波的复杂度会随特征点数量和系统维度迅速增长，所以卡尔曼滤波及其变体更受欢迎。</p>
+
+      <p>把两派的取舍摆成一张表：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">滤波派（FAST-LIO 本文）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">优化派（LIO-SAM 等）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>核心对象</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">当前状态 + 协方差</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">一张因子图</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>处理方式</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">每来一帧观测，就地更新一次（迭代若干轮）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">把新约束加进图里，整体（或局部）重新求解</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>历史信息</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">被压缩进协方差矩阵（不再回看）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">以节点—边的形式留在图里，可回环、可全局一致</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>优势</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">结构轻、单步延迟低、好上机载</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">方便插入回环、GPS 等全局约束</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>代价</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">没有回环修正，长距离会漂</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">后端更重，求解耗时随图变大</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>需要强调的是：<b>原文并没有说优化派不好。</b>它只是在自己的赛道上（小四旋翼、机载算力、需要低延迟）选了滤波，并且用一个新公式把这条赛道上最大的那块石头搬开了。这两条路线在之后的几年里各自继续演进——本季后面讲 Point-LIO、iG-LIO 时会看到，滤波派一直活得很滋润。</p>
+
+      <p>另外值得留个心：本文与第二季 <b>0028</b> 课的 MSCKF 在思路上有亲缘关系——都是「误差状态 + 用一批测量更新同一个状态」，区别在于 MSCKF 用零空间投影把状态维度降下来，而本文用矩阵求逆引理把求逆维度降下来。<b>两者都是「找一个更省钱的等价写法」。</b></p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验：一台小四旋翼上跑出来的数字</h2>
+
+      <p>公式讲完了，看它到底跑成什么样。原文的实验分三块，我们挑最能说明问题的。</p>
+
+      <h3>7.1 四旋翼飞行实验</h3>
+
+      <p>平台是一台 <b>280 毫米轴距</b>的小四旋翼，挂着 Livox AVIA 固态激光（70° 视场）和一块 DJI Manifold 2-C 机载电脑（1.8 GHz 四核 Intel i7-8550U、8 GB 内存）。按原文的描述，激光雷达是<b>直接装机体上的</b>——也就是说，没有云台、没有减震，IMU 会直接吃到螺旋桨和电机的振动。</p>
+
+      <p>在室内飞行中，原文给出的数字是：<b>最高 50 Hz 的实时里程计与建图</b>；一帧里平均 <b>270 个有效特征点</b>，处理耗时 <b>6.7 毫秒</b>；漂移<b>小于 0.3%</b>（在 32 米的轨迹上漂了 0.08 米）。</p>
+
+      <p>注意这里的 270 个特征点与摘要里的「1200 个」并不矛盾——它们是不同实验（不同环境、不同扫描配置）下的数字。<b>1200 是能力上限的展示，270 是这次实际飞行中环境的实际产出。</b>两个数字都是原文给的，我们照实都写上。</p>
+
+      <h3>7.2 大转速室内实验</h3>
+
+      <p>第二块实验更狠：手持设备在室内<b>快速甩动</b>，制造很大的角速度。原文说这个实验里「the angular velocity often exceeds 100 deg/s」（角速度经常超过 100 度每秒）。对照组是两套 LOAM 实现（一套用 Livox 的官方版，一套 LOAM+IMU）。原文的结论是：FAST-LIO 输出里程计更快也更稳定；并且特别点出 <b>LOAM+IMU 是松耦合方法，因此建图结果不一致</b>——这个批评很直接，也正好呼应我们在第 2 节讲的松耦合/紧耦合之分。</p>
+
+      <h3>7.3 手持建图</h3>
+
+      <p>最后一块是港大主楼的手持扫描：拿着同一套设备随机走动去扫楼，<b>起点和终点故意设在同一个地方</b>，这样起终点在地图上的重合程度就直接反映了漂移。原文的说法是「In order to show the drift, the experiment are started and ended at the same place.」</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_FAST-LIO__A_Fast__Robust_LiDAR-Inertial_Odometry_Package/ee6b8c3cef8686c39e2ba923cfdbaea13f330337ea471eebd0c9d0606b309a19.jpg" alt="FAST-LIO system on a small quadrotor with Livox AVIA">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Our LiDAR-inertial navigation system runs on a Livox AVIA LiDAR and a DJI Manifold 2-C onboard computer, all on a customized small-scale quadrotor UAV (280 mm wheelbase). The RGB camera is not used in our algorithm, but only for visualization.<br>
+          （中译：我们的激光惯性导航系统运行在一台 Livox AVIA 激光雷达与一块 DJI Manifold 2-C 机载计算机上，整体装在一台定制的 280 毫米轴距小型四旋翼无人机上。RGB 相机不参与我们的算法，仅用于可视化。）<br>
+          <b>怎么看这张图：</b>① 先找那台<b>小四旋翼</b>——280 毫米轴距比一张 A4 纸大不了多少，这是本文的算力约束舞台；② 再找上面挂的两样东西：<b>固态激光雷达</b>和<b>机载电脑</b>，它们直接绑在机体上，没有减震；③ 图注特意声明「RGB 相机不参与算法」——所以这不是视觉惯性方案，是纯激光惯性。<br>
+          <b>要记住的一句话：</b>这篇文章证明的不是「在服务器上跑得动」，而是「在一台小无人机的机上电脑上，也能实时融合上千个特征点」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_FAST-LIO__A_Fast__Robust_LiDAR-Inertial_Odometry_Package/db4ca6734ae3159899b13245f9d9b64c77e88e0da72599a7f5af4b79296c1393.jpg" alt="Circle flight experiment of FAST-LIO">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>During the flight experiment, the UAV is automatically flying in a circle path with 1.8 m radius and 1.4 m height. The circle path is conducted repeatedly for 4 times with different periods (6-10 s). The yaw command of the UAV maintains constant during the flight. In the end, the UAV is manually controlled to land at the take-off point, which enables us to measure the drift.<br>
+          （中译：飞行实验中，无人机自动沿半径 1.8 米、高度 1.4 米的圆形轨迹飞行。该圆轨迹以不同周期（6–10 秒）重复进行 4 次，飞行过程中无人机的偏航指令保持恒定。最后无人机被手动控制降落在起飞点，以便我们测量漂移。）<br>
+          <b>怎么看这张图：</b>① 盯住「<b>1.8 米半径</b>」这个数字——转这么小的圈，角速度其实不小；② 再看「<b>周期 6–10 秒</b>、<b>重复 4 次</b>」——四次不同的速度剖面，是在压不同的运动状态；③ 最后看那句「降落在起飞点」——<b>用起终点的重合度来量漂移</b>，这是没有外部真值设备时最朴素也最诚实的量化方式。<br>
+          <b>要记住的一句话：</b>这是 iEKF 在持续强转动下仍能稳定融合特征点的实证场景。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_FAST-LIO__A_Fast__Robust_LiDAR-Inertial_Odometry_Package/a862fe2b015b682c91b9115ea5f1885077ce12d6916bf3b489a4d7976867ea03.jpg" alt="Mapping of the Main Building, University of Hong Kong">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Mapping results of the Main Building, University of Hong Kong. The LiDAR platform, the same one in Fig. 1, is handheld randomly walking to scan the building. In order to show the drift, the experiment are started and ended at the same place.<br>
+          （中译：香港大学主楼的建图结果。使用与 Fig. 1 相同的激光平台，手持并随机行走扫描该建筑。为展示漂移，实验的起点与终点设在同一处。）<br>
+          <b>怎么看这张图：</b>① 「handheld randomly walking」——不是推小车走规整路线，而是<b>手持随便走</b>，这会带来更多角速度和高度变化；② 看建出来的点云结构是否<b>平整、有没有出现「两层墙」那样的重影</b>——重影是配准系统性偏差的典型痕迹；③ 记住它与上一张的区别：上一张量的是「小范围重复转圈」，这一张量的是「较大范围随意行走」。<br>
+          <b>要记住的一句话：</b>新增益公式带来的不只是「快」，还让系统有余力吃进更多特征点，从而把地图建得更干净。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 局限：本文没写的一节，下一节点名了</h2>
+
+      <p>必须诚实地说明：<b>本文没有单独的 limitations 小节。</b>它像典型的 RA-L letter 那样，把篇幅给了方法与实验，而没有专门罗列自己的边界。所以我们不编造，只写两类「有出处」的边界。</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>① 它仍然依赖「提特征」</b>
+          <p>从 Fig. 2 的管线可以看到，本文先把点云变成「面特征 / 边特征」，再把特征点送进滤波器。这意味着两件事：一是<b>特征提取本身要额外耗时</b>；二是<b>环境的形态会影响提特征的质量</b>——在结构化场景（墙、地面、建筑）里好使，在稀疏、非结构化的场景里就会挑不出足够的点。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 后向传播补偿在大运动下会吃力</b>
+          <p>本文用「后向传播」把每个特征点搬回它被采到的那一刻，这依赖于 IMU 在这段时间里的积分。当运动非常剧烈（大角速度、强振动）时，这个补偿的准确性会下降。这不是本文自己的说法，而是后续工作（包括下一节的 FAST-LIO2）在论述自己贡献时点名的背景问题。</p>
+        </div>
+      </div>
+
+      <p>这两条里，<b>第 ① 条正是下一节的主战场</b>。FAST-LIO2 会直接把整个特征提取模块删掉——不再挑点，原始点云直接配准。而要做到这一点，它必须先解决「点多了以后地图管不动」的问题，答案就是那棵我们欠了两季的 <b>ikd-Tree</b>。</p>
+
+      <p>另外还有一个更根本的边界，本文与下一节都绕不开：<b>如果环境本身不提供几何结构</b>（比如正对着开阔海面、天空、纯地面，或者贴着单一的墙面），那么无论融合多少特征点，某些自由度就是估不出来。这个「退化」问题，下一节有原文的明确点名，我们在那里展开。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在本文（FAST-LIO 2021）的系统里，点云进入滤波器之前<b>是否</b>还要先经过「提取面特征 / 边特征」这一步？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。Fig. 2 的管线里明确有特征提取这一环。彻底删掉这一步是下一节 FAST-LIO2 的贡献，本文还没做到。" onclick="lessonKit.answer(this,'q0083b')">仍要先提取特征</button>
+          <button data-correct="no" data-explanation="错。「不提特征、直接配准原始点云」是 FAST-LIO2 的主张。本文的贡献在另一个地方——那个把求逆矩阵从上千阶压到 18 阶的新增益公式。" onclick="lessonKit.answer(this,'q0083b')">已改为直接配准</button>
+        </div>
+        <div class="quiz-feedback" id="q0083b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请写出 FAST-LIO 的新卡尔曼增益公式，并指出其中「必须求逆的那个矩阵」的维度等于什么。它替换掉的旧公式又是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>新公式：</b>$K = \left(H^{\top} R^{-1} H + P^{-1}\right)^{-1} H^{\top} R^{-1}$。括号里要反演的矩阵 $H^{\top} R^{-1} H + P^{-1}$ 的维度等于<b>状态维度</b>，也就是 <b>18</b>。</p>
+              <p><b>被替换的旧公式：</b>$K = P H^{\top}\left(H P H^{\top} + R\right)^{-1}$。它要反演的 $HPH^{\top}+R$ 处于<b>测量维度</b>，也就是一帧里特征点的个数——上千阶。</p>
+              <p>两者<b>严格等价</b>（原文附录 B 用矩阵求逆引理证明），所以这不是拿精度换速度，而是把一个代价高昂的等价写法换成一个代价低廉的等价写法。</p>
+            </div></details>
+          </li>
+          <li>原文说「已有工作只能使用少量测量」。请说明这句话背后的计算原因，以及它带来了什么后果。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>计算原因：</b>卡尔曼滤波及其变体的时间复杂度是 $\mathcal{O}(m^2)$，其中 $m$ 是测量维度。旧增益公式要反演 $HPH^{\top}+R$，其阶数等于 $m$。所以特征点越多，求逆的矩阵越大、越慢——原文的用词是「prohibitive」（令人却步）。</p>
+              <p><b>后果：</b>为了保住实时性，紧耦合方法只能被迫只用少量特征点。原文还否掉了两条捷径：朴素降采样会丢信息；靠拟合地平面降测量数的办法不适用于空中平台（地面不一定出现）。</p>
+              <p>最终后果是<b>精度与实时性被绑成了一个二选一</b>，而本文把这个二选一拆掉了。</p>
+            </div></details>
+          </li>
+          <li>iEKF 的收敛判据是 $\|\hat{\mathbf{x}}_k^{\kappa+1} \boxminus \hat{\mathbf{x}}_k^{\kappa}\| < \varepsilon$。这里的 $\boxminus$ 是什么？为什么不能直接写成普通的减号？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>$\boxminus$ 是<b>流形上的减法</b>（与之配套的是流形上的加法 $\boxplus$）。</p>
+              <p>不能直接用普通减号，是因为状态里的姿态那一部分是 $SO(3)$ 上的旋转。旋转不能当成三个实数直接相减，也不能直接线性插值——它必须保持正交、行列式为 1 等约束。把姿态放在流形上处理，误差就只在切空间里定义，既避免了参数冗余（四元数多一维、欧拉角有奇异点），也免去了每步之后再做归一化。</p>
+              <p>这套记号在第二季 <b>0020</b> 课（GraphSLAM 教程）里已经出现过，本文只是把它搬到了滤波里。</p>
+            </div></details>
+          </li>
+          <li>本文的状态维度是 18，被写作 $\mathcal{M} = SO(3)\times\mathbb{R}^{15}$。请至少列举其中四类物理量，并说明为什么要把重力也放进状态里。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>18 维包含（从原文式 1 的运动学模型可以一一对上）：<b>姿态</b>（3，属于 $SO(3)$）、<b>位置</b>（3）、<b>速度</b>（3）、<b>陀螺零偏</b>（3）、<b>加速度计零偏</b>（3）、<b>重力向量</b>（3）。任举四类即可。</p>
+              <p>把重力放进状态的实用理由是：<b>不必事先标定机器的安装倾角</b>。如果重力当成已知常数写死，那么装歪一点就会引入系统性误差；把它作为状态估计出来，系统可以自己把「哪边是下」和姿态一起解出来。这也让系统在上电初始化时更省事。</p>
+            </div></details>
+          </li>
+          <li>把 FAST-LIO 的新增益公式与第二季 0019 课的 Schur 消元放在一起看，它们在「省钱」这件事上的共同点是什么？再说明这一节与下一节的关系。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>共同点：都是「换个消元顺序，把大矩阵变小」。</b>Schur 消元在 BA 里先消掉那些数目众多但结构简单的测量（路标）块，把问题压缩成一个小得多的状态（位姿）块来解；FAST-LIO 则把「对测量维度的矩阵求逆」改写成「对状态维度的矩阵求逆」。两者的答案不变，变的是计算路径，而且新路径的规模由<b>状态</b>而不是由<b>测量数量</b>决定。</p>
+              <p><b>与下一节的关系：</b>本文解决的是「算得动」的问题——用新公式把上千个特征点塞进滤波器。但它仍然要求先提特征，而且找近邻还要靠 k-d 树（原文明确写了用 KD-tree 找最近的平面/边）。下一节 FAST-LIO2 会把这两个遗留问题一起处理：<b>删掉特征提取（直接配准原始点云）</b>，并且用 <b>ikd-Tree</b> 让地图能一边长一边查——那正是从第一季 0006 课挂起、第二季 0022 课明确推迟到阶段 D 的债。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0082-SuMa-2019-面片地图与语义.html">← SuMa++（2019）：面片地图与语义</a>
+        <a class="next" href="0084-FAST-LIO2-2022-ikd-Tree与不再提特征.html">FAST-LIO2（2022）：ikd-Tree 与「不再提特征」 →</a>
+      </div>
+      <p class="foot-note">一个等价改写，把滤波派的实时天花板顶高了一个数量级。下一节，我们去还那笔挂了两季的 ikd-Tree 的债 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

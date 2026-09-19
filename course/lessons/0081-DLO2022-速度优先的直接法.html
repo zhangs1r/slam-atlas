@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DLO（2022）：速度优先的直接法 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0081</div>
+      <h1>DLO（2022）：速度优先的直接法</h1>
+      <p class="subtitle">不挑特征，但要挑「代表」——一帧一万个点，怎么在一个算力可怜的机器人上跑得比谁都准？⚡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：直接法激光里程计 · 关键帧空间子图 · 数据结构复用</span>
+        <span>👥 作者：Kenny Chen、Brett T. Lopez、Ali-akbar Agha-mohammadi、Ankur Mehta（NASA JPL Team CoSTAR）</span>
+        <span>📅 2022 · <i>Direct LiDAR Odometry: Fast Localization With Dense Point Clouds</i>（RA-L / ICRA）</span>
+      </div>
+      <div class="toc">
+        <a href="#problem">它想解决什么</a>
+        <a href="#direct">Direct 指什么</a>
+        <a href="#submap">关键帧空间子图</a>
+        <a href="#fast">为什么这么快</a>
+        <a href="#imu">它是松耦合</a>
+        <a href="#exp">数字与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="problem">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能说清：DLO 里的「Direct（直接法）」到底指什么、它和「稠密」是不是一回事；它怎么用<b>关键帧</b>而不是「关键点」来管地图；以及为什么它能在只有几百克算力的机器人上跑到 20 ms 一帧。最后你会看到一条诚实的说明：<b>它的 IMU 是松耦合的。</b></p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>上一节 <b>0080</b>（MULLS）走的是「先把点分成六类、再按类配准」的特征法路线，本篇是它的正对面——<b>一个特征都不提</b>。这条「提特征 vs 不提特征」的暗线，第一季 <b>0006</b> 课就埋下过，前面 <b>0074</b>（LOAM 提角点/平面点）与 <b>0084</b>（FAST-LIO2 彻底不提）是它的两端，本篇正好夹在中间。另外接第二季 <b>0023</b> 课：本篇用的 GICP 就是那一课讲过的 GICP 的加速版。</p>
+        </div>
+      </div>
+
+      <h2>1. 速度优先：它想解决的是一个很现实的问题</h2>
+
+      <p>先把背景交代清楚。现代的激光雷达每秒产出海量点。面对这么多点，主流做法分成两派：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>特征法（如 0074 的 LOAM、0080 的 MULLS）</b>
+          <p>先花力气把点筛一遍，只留下墙角、平面这类「有代表性的点」去配准。好处是快、抗噪；坏处是<b>筛的过程本身要花时间</b>，而且<b>很可能把有用的点也筛掉了</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>直接法</b>
+          <p>不筛特征，<b>把整片点云直接拿去配准</b>。好处是信息一点不丢；坏处是——点数太多，算不动。所以过去的直接法往往要<b>重度下采样</b>才能实时，而重度下采样又会丢细节。</p>
+        </div>
+      </div>
+
+      <p>DLO 的作者选了第三种姿态，原文叫 <b>speed-first（速度优先）哲学</b>：<b>允许点云「几乎不做预处理」，然后靠数据结构上的巧劲把速度抠出来。</b>它的目标平台是 NASA JPL 的 Team CoSTAR 参加 DARPA 地下挑战赛用的一批机器人——自研四旋翼和波士顿动力的 Spot 机器狗，这些平台<b>算力都非常有限</b>。</p>
+
+      <div class="callout">
+        <h4>先说一个必须纠正的名字问题</h4>
+        <p>这篇论文的作者是 <b>Kenny Chen、Brett T. Lopez、Ali-akbar Agha-mohammadi、Ankur Mehta</b>（NASA JPL 的 Team CoSTAR，IEEE RA-L 2022）。<b>原文里没有 Ryan，也没有 Zhang 这两位作者。</b>如果之前在哪看到「Ryan / Zhang 的 DLO」，那是记错了。本篇课程以原文署名页为准。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DLO/032cc73d51bf66615a8afd5ca18a0436c394410725f2954e7c849cedaf3c22ae.jpg" alt="DLO quadrotor platform with Ouster OS1">
+        <figcaption>
+          <b>原图注（Fig. 1，A 子图）：</b>Fast and lightweight LiDAR odometry. Two of Team CoSTAR’s robotic platforms which have limited computational resources. (A) Our custom quadrotor platform which features an Ouster OS1 LiDAR sensor on top. (B) A Boston Dynamics Spot robot with a mounted custom payload and a Velodyne VLP-16 with protective guards. (C) Top-down view of a mapped limestone mine using our lightweight odometry method on these robots during testing and integration for the DARPA Subterranean Challenge.<br>
+          （中译：快速、轻量的激光里程计。Team CoSTAR 的两台算力受限机器人平台。(A) 我们自研的四旋翼平台，顶部装有 Ouster OS1 激光雷达。(B) 一台波士顿动力 Spot 机器人，搭载定制负载和带防护罩的 Velodyne VLP-16。(C) 用我们这套轻量里程计，在 DARPA 地下挑战赛测试与集成期间由这些机器人建出的石灰岩矿俯视图。）<br>
+          <b>怎么看这张图：</b>这里展示的是<b>本篇报告的 (A) 子图</b>（按原文顺序推断，(B) 是 Spot、(C) 是矿洞俯视地图）。请重点看两件事：① 这是一台<b>小小的四旋翼</b>——上面能装的计算机有多寒酸，你可以想象一下；② 顶上的 Ouster OS1 是<b>360° 机械旋转式</b>激光雷达，也就是原文假设的输入类型。图注里的关键信息是最后半句：<b>这两台平台的共同点是「computationally limited（算力受限）」</b>——这正是 DLO 全部设计的出发点。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="direct">
+      <h2>2. ★ 「Direct」在这里指什么：不提取特征</h2>
+
+      <p>这是本篇最容易被误解的一个词。先看原文的原话，它说得非常直接：</p>
+
+      <div class="callout">
+        <h4>原文原话</h4>
+        <p>「……<b>we directly use the dense point cloud rather than extracting features as most works do</b>」<br>
+        （中译：我们<b>直接使用稠密点云，而不是像大多数工作那样提取特征</b>。）</p>
+        <p>「Direct（直接）」这个词，在这里指的就是：<b>不挑特征，直接拿点云去配准。</b>它对应的是 LOAM / MULLS 那种「先提取角点、平面点」的特征法路线。</p>
+      </div>
+
+      <p>那么它到底对点云做了什么处理？原文说得很节俭——<b>只有两步</b>：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 1 m³ 的盒子滤波：去掉机器人自己</b>
+          <p>以激光雷达原点为中心，划一个 1 立方米的盒子，把盒子里的点全部丢掉。为什么要丢？因为四旋翼的<b>螺旋桨</b>、机器狗的<b>防护罩</b>会出现在雷达视野里——那是「机器人自己」，不是环境，留着只会捣乱。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 0.25 m 体素网格：轻下采样</b>
+          <p>用 0.25 米见方的三维小格子铺满空间，<b>每个格子里最多保留一个点</b>。原文特意强调这是「lightly（轻量）下采样」——保留周围环境里的主要结构。</p>
+          <p>下采样之后，<b>平均每帧约 10,000 个点</b>。</p>
+        </div>
+      </div>
+
+      <p>还有一个坦白，原文写在同一个段落里，值得单独记住：<b>DLO 不做运动畸变校正。</b>原文的理由是：非刚体变换的计算代价太贵，所以干脆直接跳过。（运动畸变是什么、为什么麻烦，第一季 <b>0074</b> 课里专门讲过一整节——DLO 的选择是「承认它存在，但这次不算」。）</p>
+
+      <div class="callout">
+        <h4>★ 千万别把「稠密」和「直接」当成同一个词</h4>
+        <p>这两个词经常被混着用，但它们描述的是两件不同的事：<br>
+        ① <b>「稠密」描述的是点云的状态</b>——经过上面两步处理后，一帧还剩约 <b>10,000 个点</b>。对比一下 LOAM 那种提完特征只剩几百个点的情况，这个数量确实算「稠密」。<br>
+        ② <b>「直接」描述的是技术路线</b>——不经过「提取特征」这一步，直接拿点云做配准。<br>
+        所以：<b>「稠密」是「还没被筛掉」，而「直接」是「不去筛」。</b>前者说的是结果，后者说的是做法。它们经常一起出现，但你完全可以在稠密点云上做特征提取，也可以对稀疏点云用直接法——两者不是同义词。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <defs>
+            <pattern id="denseDLO" width="9" height="9" patternUnits="userSpaceOnUse">
+              <circle cx="2" cy="2" r="1.7" fill="#8fa6bb"/>
+              <circle cx="6.5" cy="6.5" r="1.7" fill="#8fa6bb"/>
+            </pattern>
+          </defs>
+
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">轻下采样：不是挑特征，是挑「代表」</text>
+
+          <!-- 面板 1 -->
+          <rect x="40" y="56" width="820" height="150" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="60" y="82" font-size="13.5" font-weight="700" fill="#3b4a5e">① 原始一帧：密到看不出结构</text>
+          <rect x="70" y="96" width="760" height="96" fill="url(#denseDLO)" stroke="#dbe3ea" stroke-width="1"/>
+          <rect x="140" y="110" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="340" y="110" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="540" y="110" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="740" y="110" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+
+          <!-- 面板 2 -->
+          <rect x="40" y="238" width="820" height="150" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="60" y="264" font-size="13.5" font-weight="700" fill="#2f6d51">② 轻下采样后：平均约 10,000 点，每个 0.25 m 小格只留一个代表</text>
+          <g fill="#8fa6bb">
+            <circle cx="90" cy="300" r="3"/><circle cx="120" cy="330" r="3"/><circle cx="105" cy="365" r="3"/>
+            <circle cx="250" cy="305" r="3"/><circle cx="285" cy="345" r="3"/><circle cx="245" cy="370" r="3"/>
+            <circle cx="450" cy="300" r="3"/><circle cx="470" cy="340" r="3"/><circle cx="440" cy="372" r="3"/>
+            <circle cx="650" cy="305" r="3"/><circle cx="690" cy="340" r="3"/><circle cx="640" cy="370" r="3"/>
+            <circle cx="200" cy="295" r="3"/><circle cx="360" cy="370" r="3"/><circle cx="560" cy="300" r="3"/>
+            <circle cx="770" cy="330" r="3"/><circle cx="815" cy="365" r="3"/>
+          </g>
+          <rect x="140" y="292" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="340" y="292" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="540" y="292" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="740" y="292" width="70" height="70" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <circle cx="175" cy="327" r="6" fill="#2f6d51"/>
+          <circle cx="375" cy="327" r="6" fill="#2f6d51"/>
+          <circle cx="575" cy="327" r="6" fill="#2f6d51"/>
+          <circle cx="775" cy="327" r="6" fill="#2f6d51"/>
+
+          <text x="450" y="418" text-anchor="middle" font-size="12.5" fill="#5a4a42">它不挑「有特征的点」，只是让每个小格派一个代表出来</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一帧点云在「原始状态」与「轻下采样后」的样子。<b>红虚线小格代表 0.25 米的体素格。</b><br>
+          <b>怎么看这张图：</b>① 上看：原始点云密得几乎看不出任何结构，红框里挤满了点；② 下看：每个红框里只剩下<b>一个绿色的代表点</b>，框外的点也变疏了；③ 注意对比上下两格的<b>红框位置完全相同</b>——它们框的是同一小块区域，只是里面的内容从「一堆点」变成了「一个代表」。<br>
+          <b>要记住的一句话：</b>DLO 的「不挑特征」不等于「随便扔点」。它<b>不判断哪个点更像墙角</b>，但它确实在挑「代表」——每个小格留一个，这样既压下了点数，又不至于把结构丢光。（此图为示意，简化了真实体素格的均匀划分方式。）
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面哪句话最准确地说出了 DLO 里「Direct（直接法）」的含义？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文的原话是「we directly use the dense point cloud rather than extracting features as most works do」，也就是跳过「提取特征」这一步，直接拿（轻下采样后的）稠密点云做配准。" onclick="lessonKit.answer(this,'q0081a')">跳过提特征这一步</button>
+          <button data-correct="no" data-explanation="这是把「稠密」当成「直接」了。这两个词描述的是不同的事：稠密说的是点云的「状态」（还有约一万点），直接说的是「做法」（不提特征）。" onclick="lessonKit.answer(this,'q0081a')">一帧点数实在很多</button>
+          <button data-correct="no" data-explanation="恰恰相反。DLO 明确说它不做运动畸变校正，理由是非刚体变换的算力代价太贵。所以「直接」二字跟去畸变没有关系。" onclick="lessonKit.answer(this,'q0081a')">不做运动畸变补偿</button>
+        </div>
+        <div class="quiz-feedback" id="q0081a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="submap">
+      <h2>3. ★ 核心数据结构：关键帧空间里的子图</h2>
+
+      <p>不提特征，那拿什么跟什么配？DLO 的答案不是「这一帧配上一帧」，而是<b>「这一帧配一个子图（submap）」</b>——一个由若干历史关键帧的扫描拼起来的局部地图。</p>
+
+      <p>这里有一个术语必须钉死，因为它很容易被带偏：</p>
+
+      <div class="callout">
+        <h4>★ 是「关键帧」，不是「关键点」</h4>
+        <p>DLO 用的是 <b>keyframe（关键帧）</b>——<b>一整帧点云</b>加上它当时的位姿，存成一个「帧—点云」的键值对数据库。<br>
+        它<b>不是</b> keypoint（关键点 / 特征点）——原文没有「先挑出一批有代表性的点，再拿这些点去配准」这一步。<br>
+        也不要把它想成别的系统里的「子关键帧（sub-keyframe）」——DLO 没有这个层级。<br>
+        原文对自己的总结是：用<b>一个关键帧—点云的数据库</b>（原文写作 keyframe-space，关键帧空间）来派生局部子图，而不是在<b>点云空间</b>里按半径圈一块。</p>
+      </div>
+
+      <p>那么子图具体由哪些关键帧拼出来？原文给了一个很有讲究的配方（Sec. II-E）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$S_k=Q_k\oplus H_k$$</div>
+      </div>
+
+      <p>这个式子左边是第 $k$ 帧对应的子图 $S_k$；$\oplus$ 表示把多帧点云拼在一起。右边两项是：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>$Q_k$：K 个最近邻关键帧</b>
+          <p>找离当前位姿<b>最近</b>的 K 个关键帧，把它们的扫描拼进来。这一项管的是<b>近处的重叠</b>——身边的东西一定要对得上。（原文的消融用 K = 10。）</p>
+        </div>
+        <div class="mini-card">
+          <b>$H_k$：构成凸包的关键帧</b>
+          <p>再找一些关键帧，让它们<b>围成整个关键帧集合的凸包</b>——也就是处在最外围的那些帧。这一项管的是<b>远处的点</b>：当前帧里那些离得很远的点（比如走廊尽头），只有靠外围关键帧才能「兜住」它们。（原文同样用 10 个。）</p>
+        </div>
+      </div>
+
+      <p>原文对这个配方的解释只有一句话，但很关键：<b>这两种关键帧的组合，既提供了近处的重叠，又提供了远处的锚点，从而最大化「当前扫描与子图的重叠面积」，同时给系统多尺度的几何参照。</b>顺带一个实现细节：如果某个关键帧既属于最近邻、又属于凸包，那它<b>只会被用一次</b>。</p>
+
+      <p>还有一个自适应机制值得知道。关键帧不是每帧都存——只有当位姿变化超过阈值才存。但阈值不是固定的：原文用了一个「宽敞度」指标 $m_k=\alpha m_{k-1}+\beta M_k$（$\alpha=0.95$、$\beta=0.05$，$M_k$ 是当前点云到原点的中值距离）来度量环境有多开阔，然后用它缩放平移阈值：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.93rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">宽敞度 $m_k$</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">平移阈值</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">场景例子</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">效果</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">&gt; 20 m</td><td style="border:1px solid #cbd3dc;padding:8px">10 m</td><td style="border:1px solid #cbd3dc;padding:8px">大厂房、开阔地</td><td style="border:1px solid #cbd3dc;padding:8px">关键帧很稀</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">&gt; 10 m</td><td style="border:1px solid #cbd3dc;padding:8px">5 m</td><td style="border:1px solid #cbd3dc;padding:8px">一般室内</td><td style="border:1px solid #cbd3dc;padding:8px">—</td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">&gt; 5 m</td><td style="border:1px solid #cbd3dc;padding:8px">1 m</td><td style="border:1px solid #cbd3dc;padding:8px">走廊</td><td style="border:1px solid #cbd3dc;padding:8px">开始加密</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">&le; 5 m</td><td style="border:1px solid #cbd3dc;padding:8px">0.5 m</td><td style="border:1px solid #cbd3dc;padding:8px">窄斜坡、小房间</td><td style="border:1px solid #cbd3dc;padding:8px">关键帧很密，抓细节</td></tr>
+        </tbody>
+      </table>
+
+      <p>旋转阈值则固定为 <b>30°</b>，不随宽敞度变化。原文的用意是：<b>地方越窄，越要密地存关键帧</b>，否则转过一个拐角就把参照全丢了。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">子地图跟着车走：永远只保留「我附近这一块」</text>
+
+          <!-- 建筑 -->
+          <rect x="40" y="76" width="180" height="44" fill="#d9dee5" stroke="#9aa3ad" stroke-width="1.2"/>
+          <rect x="280" y="76" width="200" height="44" fill="#d9dee5" stroke="#9aa3ad" stroke-width="1.2"/>
+          <rect x="540" y="76" width="320" height="44" fill="#d9dee5" stroke="#9aa3ad" stroke-width="1.2"/>
+          <rect x="40" y="260" width="180" height="44" fill="#d9dee5" stroke="#9aa3ad" stroke-width="1.2"/>
+          <rect x="280" y="260" width="200" height="44" fill="#d9dee5" stroke="#9aa3ad" stroke-width="1.2"/>
+          <rect x="540" y="260" width="320" height="44" fill="#d9dee5" stroke="#9aa3ad" stroke-width="1.2"/>
+
+          <!-- 道路 -->
+          <rect x="40" y="120" width="820" height="140" fill="#eef1f4" stroke="#cbd3dc" stroke-width="1.2"/>
+          <line x1="40" y1="190" x2="860" y2="190" stroke="#c3ccd6" stroke-width="1.4" stroke-dasharray="9 8"/>
+
+          <!-- 释放区 / 新增区 -->
+          <rect x="90" y="126" width="210" height="128" fill="#dbe0e5"/>
+          <rect x="390" y="126" width="210" height="128" fill="#dff0e5"/>
+
+          <!-- 旧框 -->
+          <rect x="90" y="126" width="300" height="128" fill="none" stroke="#9aa3ad" stroke-width="1.6" stroke-dasharray="7 5"/>
+          <text x="240" y="144" text-anchor="middle" font-size="11" fill="#7a8a99">t 时刻的子地图</text>
+
+          <!-- 新框 -->
+          <rect x="300" y="126" width="300" height="128" fill="none" stroke="#c0392b" stroke-width="2"/>
+          <text x="450" y="144" text-anchor="middle" font-size="11" fill="#c0392b">t+1 时刻的子地图</text>
+
+          <!-- 车 A（旧，淡出） -->
+          <rect x="228" y="169" width="34" height="18" rx="4" fill="#b8c2cc" stroke="#8a99a8" stroke-width="1.2" stroke-dasharray="3 2"/>
+          <!-- 车 B（新） -->
+          <rect x="438" y="169" width="34" height="18" rx="4" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="448" cy="189" r="3.4" fill="#37474f"/>
+          <circle cx="462" cy="189" r="3.4" fill="#37474f"/>
+
+          <!-- 标注 -->
+          <text x="195" y="214" text-anchor="middle" font-size="11.5" fill="#7a8a99">后面的部分：释放</text>
+          <text x="495" y="236" text-anchor="middle" font-size="11.5" fill="#2f6d51">新扫到的部分：加入</text>
+
+          <text x="450" y="336" text-anchor="middle" font-size="12.5" fill="#5a4a42">子地图永远只有「附近这一块」的大小，所以它不会越跑越慢</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条街道的俯视图。<b>虚线灰框</b>是上一时刻的子地图，<b>实线红框</b>是这一时刻的子地图。灰色小方块是被淡出的旧车位置，蓝色是当前的车。<br>
+          <b>怎么看这张图：</b>① 车往前开，红框跟着往前挪；② 框<b>左边</b>那块灰色区域是「已经落在我身后」的部分——它不再属于子地图，被<b>释放</b>掉了；③ 框<b>右边</b>的绿色区域是「刚刚扫到」的部分——它被<b>加进</b>子地图；④ 最要紧的是：不管车开多远，<b>框的大小始终不变</b>。这就是「永远只有附近这一块」。<br>
+          <b>要记住的一句话：</b>不提取特征也要有取舍——DLO 的取舍不在「点」上，而在「<b>范围</b>」上。地图不长大，配准的负担就不会随行驶距离变大，这是它快的第一个原因。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DLO/116511cda92d9c105347becb4b0813b05668debb92bb0db7aeba68fffde7c4c6.jpg" alt="keyframe-based submapping vs radius-based submapping">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Keyframe-based submapping. A comparison between the different submapping approaches, visualizing the current scan (white), the derived submap (red), and the full map (blue). (A) A common radius-based submapping approach of $r=20$ m retrieved in point cloud-space. (B) Our keyframe-based submapping approach, which concatenates a subset of keyed scans and helps anchor even the most distant points in the current scan (green box) during the scan-to-map stage.<br>
+          （中译：基于关键帧的子图法。不同子图取法之间的对比，其中当前扫描为白色、派生出的子图为红色、完整地图为蓝色。(A) 一种常见的、在<b>点云空间</b>里按半径 $r=20$ m 取子图的做法。(B) 我们基于关键帧的子图法，它把若干关键帧的扫描拼接起来，从而在帧对图配准阶段<b>连当前扫描里最远的那些点（绿框）也能被锚住</b>。）<br>
+          <b>怎么看这张图：</b>这是本篇的<b>核心图</b>，请盯住那个<b>绿框</b>。① 上半 (A) 是按 20 米半径圈出来的子图（红色）——它只罩住了车的近处，<b>远处那个绿框里的点</b>完全落在红子图外面，找不到对应的东西来对齐，只能漂；② 下半 (B) 是关键帧子图——因为子图是由<b>整帧扫描</b>拼起来的，一帧扫描本来就能打到很远处，所以红色区域把绿框也罩住了；③ 原文的结论是：半径法想靠「把半径开大」来补救，但那会让后续的协方差计算显著变慢；而关键帧法天然就是「要多大有多大」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="fast">
+      <h2>4. ★ 为什么快：三件事，一件都不能少</h2>
+
+      <p>上一节是「范围」上的取舍。这一节拆开讲速度到底从哪来。原文的做法可以拆成三件事。</p>
+
+      <h3>第一件：在「关键帧空间」里搜索，而不是在「点云空间」里搜索</h3>
+
+      <p>这是全篇最核心的招。原文的说法是：大多数方法都是「在机器人当前位置的邻域里捞点」，而 DLO 反过来——<b>先看有哪些关键帧在我附近，再把这些关键帧的一整帧扫描拼起来。</b></p>
+
+      <p>为什么这一下差这么多？因为搜索的<b>对象数量</b>变了：在一个不断长大的点云里找近邻，候选是<b>几十万个点</b>；而在关键帧数据库里找近邻，候选只有<b>几百个关键帧</b>。原文原话说得很直接：<b>搜索是在几百个关键帧上做的，而不是在几十万个点上做的，所以计算量能保持稳定。</b></p>
+
+      <h3>第二件：把数据结构当接力棒，跨模块复用</h3>
+
+      <p>DLO 的配准分成两段：先 <b>scan-to-scan（S2S）</b>求一个相对变换，再 <b>scan-to-map（S2M）</b>精化。如果老老实实做，这两段会各自建一次 k-d 树、各自算一遍点云协方差——而这些数据结构其实<b>很多是可以共用的</b>。</p>
+
+      <p>原文的 Table I 列出了哪些东西需要显式重建、哪些可以复用，结论是：<b>只有 2 个 k-d 树需要显式构建，其余全部复用。</b>原文把这个说成是「消除两阶段之间的冗余操作」。</p>
+
+      <div class="callout">
+        <h4>复用带来的差别有多大（原文明说）</h4>
+        <p>① <b>不复用</b>（每个模块都自己重算 k-d 树和协方差）：平均 <b>69.8 ms/帧</b>，而且有<b>接近 10% 的帧因为处理不过来被丢掉</b>；<br>
+        ② <b>全复用</b>：平均 <b>21.9 ms/帧</b>、CPU 占用 <b>9.5%</b>，<b>一帧都没丢</b>。<br>
+        ⚠️ 注意：21.9 ms 对应的频率是约 45 Hz，而激光雷达本身只有 10 Hz——所以原文的结论不是「勉强跟上」，而是「绰绰有余，可以承受更稠密的点云」。</p>
+      </div>
+
+      <h3>第三件：自己写一个更快的 GICP 求解器（NanoGICP）</h3>
+
+      <p>配准本身用的是 <b>GICP</b>（Generalized ICP，广义 ICP）——如果你还有印象，第二季 <b>0023</b> 课讲 PCL 时介绍过它：它不只比点的距离，还把点云建模成一堆小平面分布来比。DLO 的做法是把 <b>FastGICP</b> 和 <b>NanoFLANN</b> 拼起来定制了一个求解器，命名叫 <b>NanoGICP</b>。</p>
+
+      <p>原文用 100 次基准配准测了平均收敛时间：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.93rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">求解器</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">平均收敛时间</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>NanoGICP（本文）</b></td><td style="border:1px solid #cbd3dc;padding:8px"><b>42.53 ms</b></td><td style="border:1px solid #cbd3dc;padding:8px">FastGICP + NanoFLANN 定制</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">FastGICP</td><td style="border:1px solid #cbd3dc;padding:8px">72.88 ms</td><td style="border:1px solid #cbd3dc;padding:8px">多线程实现</td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">PCL 的 GICP</td><td style="border:1px solid #cbd3dc;padding:8px">178.24 ms</td><td style="border:1px solid #cbd3dc;padding:8px">PCL 库自带实现</td></tr>
+        </tbody>
+      </table>
+
+      <p>另外原文还说明了一个细节：它<b>没有</b>把结果和 FastGICP 的「体素化变体」比较，理由是那个变体用「一组平面去近似一个平面」，会降低整体精度。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DLO/e95615cc1e1a5d367f3f903fa0e3c09dc33e852888ff2f9cff88440917903206.jpg" alt="DLO system architecture S2S and S2M">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>LiDAR odometry architecture. Our system first retrieves a relative transform between two temporally-adjacent scans of times k and k&minus;1 through scan-to-scan (S2S) matching with RANSAC outlier rejection and an optional rotational prior from IMU. This initial estimate is then propagated into the world frame and used as the initialization point for our secondary GICP module for scan-to-map optimization (S2M), which scan-matches the current point cloud with a derived submap consisting of scans from nearby and boundary keyframes. The output of this is a globally-consistent pose estimate which is subsequently checked against several metrics to determine if the current pose should be stored as a new keyframe.<br>
+          （中译：激光里程计架构。系统先通过带 RANSAC 外点剔除和<b>可选 IMU 旋转先验</b>的帧对帧（S2S）匹配，求出时刻 $k$ 与 $k-1$ 两帧相邻扫描之间的相对变换。这个初值随后被传播到世界坐标系，作为第二个模块——用于帧对图优化（S2M）的 <b>GICP</b> 模块的初始化点；S2M 把当前点云与一个由<b>邻近关键帧和边界关键帧</b>的扫描派生出的子图做匹配。输出是一个全局一致的位姿估计，随后用若干指标检查它是否应被存为新的关键帧。）<br>
+          <b>怎么看这张图：</b>① 顺着箭头读一遍就是整条流水线：<b>S2S 求初值 → 传播到世界系 → S2M 的 GICP 精化 → 判断要不要存关键帧</b>；② 请找到图注里那句 <b>optional rotational prior from IMU</b>——「可选的、来自 IMU 的<b>旋转</b>先验」。注意它说的是 <b>rotational（旋转）</b>，不是完整位姿，也不是「IMU 参与优化」。这个措辞是下一节判定的第一手证据；③ 图注里还有一句 <b>nearby and boundary keyframes</b>（邻近关键帧 + 边界关键帧），正是上一节讲的 $Q_k$ 与 $H_k$。<br>
+          <b>一处 OCR 修正：</b>原文这一句在原始转换里写作「times k and k 1」，减号丢了，按上下文应为 <b>k 与 k&minus;1</b>（两个时间上相邻的扫描）。此处已修正。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="imu">
+      <h2>5. ★ 诚实说明：DLO 的 IMU 是「松耦合」，不是紧耦合</h2>
+
+      <p>这一节必须单独讲，因为它是<b>这一季里唯一一个「反例」</b>，很容易被人看漏。</p>
+
+      <p>先看原文怎么写的。原文对 IMU 的描述只有一句关键的话：系统可以<b>可选地</b>接受一个来自 IMU 的初始化先验，而且是<b>以松耦合（loosely-coupled）的方式</b>；并且这个先验<b>只取旋转部分</b>。原文在实现细节里把这句说得更死——它只对陀螺仪做四元数积分</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$q_{k+1}=q_{k}+\tfrac{1}{2}\,q_{k}\otimes\omega_{k}\,\Delta t$$</div>
+      </div>
+
+      <p>然后<b>只把旋转部分拿出来当初值，平移的先验留到未来工作里</b>。到结论一节，作者把这一点写进了未来工作：<b>我们未来感兴趣的方向是更紧的 IMU 融合（tighter IMU integration）以及运动畸变校正。</b></p>
+
+      <div class="callout">
+        <h4>所以，一句话说清 DLO 在模块里的位置</h4>
+        <p>本模块（阶段 D 的激光惯性紧耦合与因子图）的主线是「<b>把 IMU 的测量真正塞进优化问题里，和激光残差一起解</b>」——前面 <b>0077</b>（LIO-mapping）、<b>0078</b>（LIO-SAM）就是这条主线上的两站。<br>
+        而 <b>DLO 不在这条主线上</b>：它的 IMU 只提供<b>一个旋转初值</b>，<b>不参与配准的优化</b>，平移先验更是明确留白。所以本篇的角色是<b>「效率对照」</b>——它用来回答另一个问题：<b>如果干脆不追求 IMU 的深度融合，一心只把速度做到极致，能跑到什么程度？</b><br>
+        换句话说：<b>它是一场「速度的极限测试」，不是「紧耦合的又一个例子」。</b></p>
+      </div>
+
+      <p>为什么要专门强调这一点？因为如果把 DLO 误记成紧耦合，会连带得出两个错误结论：① 以为「不提特征」和「紧耦合」是配套的（其实两者完全无关）；② 以为它跑得快是因为 IMU 融合得好（其实它跑得快靠的是关键帧空间搜索 + 数据结构复用）。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.93rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">松耦合（本篇 DLO）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">紧耦合（0077 / 0078 那一类）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>IMU 给什么</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">只给一个<b>旋转初值</b>（陀螺积分），平移先验都没用</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">预积分量进代价函数，同时还在优化里<b>估 IMU 零偏</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>IMU 进不进优化</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>不进</b>——它是配准的起点，不是残差项</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>进</b>——和激光残差在同一个目标函数里一起最小化</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>IMU 错了会怎样</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">初值差一点，配准还能自己纠回来</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">会直接拉偏整个解，所以需要更仔细的加权与偏置建模</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>好处</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">实现简单、算力省、模块清晰</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">在快速运动、几何退化时更稳，精度更高</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DLO 里的 IMU 扮演什么角色？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文明确写 IMU 只以松耦合方式提供「可选的旋转先验」，实现上只对陀螺积分、只取旋转部分当初值，平移先验留作未来工作；结论一节也把「更紧的 IMU 融合」列为未来方向。所以在模块里它扮演的是效率对照，不是紧耦合主线。" onclick="lessonKit.answer(this,'q0081b')">只给一个旋转初值</button>
+          <button data-correct="no" data-explanation="不对。IMU 的预积分残差并没有被写进 DLO 的优化目标里——它只提供初值，不参与最小化，也没有联合估计零偏。把 IMU 残差塞进同一个代价函数，是 0077 / 0078 那一类紧耦合系统的做法。" onclick="lessonKit.answer(this,'q0081b')">和激光残差一起解</button>
+          <button data-correct="no" data-explanation="DLO 恰恰不做运动畸变校正。原文的理由是非刚体变换的算力代价太贵，所以直接跳过——这也被列进了未来工作。所以 IMU 在这里连去畸变的任务都没承担。" onclick="lessonKit.answer(this,'q0081b')">负责做去畸变补偿</button>
+        </div>
+        <div class="quiz-feedback" id="q0081b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>6. 数字与边界</h2>
+
+      <p>DLO 的验证分两部分：公开化的赛道数据 + 真实实地部署。先看赛道数据。原文用了 DARPA 地下挑战赛 Urban 赛道的两个数据段：<b>Alpha Course（757.4 m）</b>与 <b>Beta Course（631.5 m）</b>，用的是 VLP-16 + VectorNav VN-100，对标 BLAM、Cartographer、LIO-Mapping、LOAM、LOCUS。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">项目</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">原文数字</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">精度（Alpha Course）</td><td style="border:1px solid #cbd3dc;padding:8px">DLO 的绝对位姿误差 APE：最大 0.40 m、均值 0.18 m、RMSE 0.19 m；对比 LOCUS 为 0.63 / 0.26 / 0.28 m</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">精度（Beta Course）</td><td style="border:1px solid #cbd3dc;padding:8px">DLO 最大 0.50 m、均值 0.16 m、RMSE 0.19 m；原文称在 Beta 段<b>最大值、均值、标准差上都有两倍以上的精度优势</b></td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">CPU 占用</td><td style="border:1px solid #cbd3dc;padding:8px">原文称其 CPU 负载<b>在均值与峰值上都「不到一个核」</b>，低于所有对比方法</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">子图取法对比（同一数据）</td><td style="border:1px solid #cbd3dc;padding:8px">半径法 74.2 ms/帧、37.5% CPU；关键帧固定阈值 21.6 ms/帧、10.2%；关键帧自适应阈值 <b>19.1 ms/帧、9.1%</b></td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">NanoGICP 对比</td><td style="border:1px solid #cbd3dc;padding:8px">42.53 ms vs FastGICP 72.88 ms vs PCL GICP 178.24 ms（100 次基准配准的平均收敛时间）</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">数据结构复用</td><td style="border:1px solid #cbd3dc;padding:8px">不复用 69.8 ms/帧、近 10% 掉帧；全复用 <b>21.9 ms/帧、9.5% CPU、0 掉帧</b></td></tr>
+        </tbody>
+      </table>
+
+      <p>再看出题人对「没测的方法」的交代——这一点原文很坦率：<b>LIO-SAM 与 LVI-SAM 这两个紧耦合的代表方法，因为标定流程敏感、输入数据要求严格，在当时没能测。</b>也就是说，上面那张表里<b>并没有</b>「DLO 打败了紧耦合方法」这个结论；原文能给的是「在同样的算力受限平台上，DLO 比他测过的这些方法更快更准」。</p>
+
+      <p>真实实地部署的数字：</p>
+
+      <ul>
+        <li><b>洛杉矶废弃地铁</b>：人工遥控走过 <b>856 m</b>、三层楼，端到端漂移只有 <b>10 cm</b>；</li>
+        <li><b>肯塔基石灰岩矿洞</b>：在毫无外部照明的矿洞里，<b>自主飞行 348 m</b>；</li>
+        <li><b>Mega Cavern</b>：总轨迹估计 <b>9057.66 m</b>。</li>
+      </ul>
+
+      <p>实地用的计算机是 <b>Intel NUC NUC7i7DNBE（1.9 GHz）</b>——纯 CPU、<b>没有 GPU、没有协处理器</b>。这一点值得停一下：前面那些 20 ms 级的数字，不是在一台工作站上刷出来的。</p>
+
+      <h3>原文承认的边界（逐条）</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 不做运动畸变校正</b>
+          <p>原文在方法一节就说了：非刚体变换算力太贵，所以直接跳过；结论里又把「加畸变校正」列为未来工作。快速转向时，一帧内的点会失真。</p>
+        </div>
+        <div class="mini-card">
+          <b>② IMU 只是松耦合的旋转先验</b>
+          <p>只用陀螺积分出旋转初值，<b>平移先验都还没有</b>。原文把「更紧的 IMU 融合」写进未来工作——这句话反过来就是它对现状的承认。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 依赖关键帧质量与阈值自适应</b>
+          <p>整套机制建立在「关键帧存得合适」之上：存太稀会丢参照，存太密会拖慢。宽敞度指标与自适应阈值是这套机制的命门。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 没有回环（本篇是纯前端）</b>
+          <p>原文的定位是「前端的定位方案」，全篇没有回环检测或全局位姿图。它能压住漂是因为子图选得好，而不是因为能纠全局。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DLO/3a8424bf37b348780f8bfcdb2a3aeb085672e075e0678be7180833fc79c472e7.jpg" alt="DLO in extreme environments mine and abandoned subway">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Extreme environments. Top: A section of an underground mine in Lexington, KY mapped autonomously using our custom drone while running DLO. This environment contained challenging conditions such as: (A) low illuminance, (B) object obstructions, and (C) wet and muddy terrain. Bottom: Top-down (D) and side (E) views of the three levels of an abandoned subway located in Downtown Los Angeles, CA mapped via DLO using a Velodyne VLP-16 on a quadruped. In this run, we manually tele-operated the legged robot to walk up, down, and around each floor for a total of 856 m.<br>
+          （中译：极端环境。上图：肯塔基州列克星敦的井下矿洞一段，由自研无人机在运行 DLO 时自主建图。该环境包含这些挑战条件：(A) 低照度、(B) 物体遮挡、(C) 湿滑泥泞地形。下图：加州洛杉矶市中心一处废弃地铁的<b>三层</b>结构的俯视 (D) 与侧视 (E)，由搭载在四足机器人上的 Velodyne VLP-16 运行 DLO 建出。本次运行中人工遥控这台足式机器人走遍每层，总里程 856 m。）<br>
+          <b>怎么看这张图：</b>这张图回答的是「实验室数字能不能搬到真实世界」。① 先看上半部分的三个字母标注：<b>(A) 低照度</b>——矿洞里没有光，但激光不依赖光，所以对 DLO 无影响；<b>(B) 物体遮挡</b>——通道里堆着东西，这正是子图法「远处点也能锚住」要解决的；<b>(C) 湿滑泥泞</b>——地面反射条件变了，考验点云质量的鲁棒性。② 再看下半部分 (D) 侧的<b>三层结构</b>：能在立体多层里不串层，说明子图管理是有效的。③ 最后记住那个数字：<b>856 m、端到端漂移 10 cm</b>——这个精度是纯 CPU、无 GPU 的嵌入式板子跑出来的，而且<b>没有任何回环</b>。<br>
+          <b>要记住的一句话：</b>本篇所有「快」的数字，最终都要能在这张图里的机器人和环境上兑现，才算数。而它没做的那些事（畸变校正、紧耦合、回环），也同样写在这里——成绩和边界是同一份报告里的两页。
+        </figcaption>
+      </figure>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请解释：DLO 里「稠密」和「直接」这两个词分别指什么？为什么不能当成同义词？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>「稠密」描述的是点云的状态。</b>DLO 只做了两步预处理——1 m³ 的盒子滤波去掉机器人自身点、0.25 m 的体素网格轻下采样——处理之后平均每帧还有<b>约 10,000 个点</b>，相对于特征法提完只剩几百个点来说，这算是稠密的。</p>
+              <p><b>「直接」描述的是技术路线。</b>原文的原话是「we directly use the dense point cloud rather than extracting features as most works do」，也就是<b>跳过「提取特征」这一步</b>，直接拿点云做配准（用 GICP 的平面-平面度量）。</p>
+              <p>两者不能混为一谈：前者说的是「结果里还剩多少点」，后者说的是「做不做筛选这个动作」。你完全可以在稠密点云上提取特征，也可以对稀疏点云用直接法——现实里它们常常一起出现，但逻辑上互不蕴含。</p>
+            </div></details>
+          </li>
+          <li>DLO 的子图 $S_k=Q_k\oplus H_k$ 里，$Q_k$ 和 $H_k$ 各管什么？为什么两个都要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>$Q_k$ 是<b>K 个最近邻关键帧</b>（原文消融用 10 个），管的是<b>近处的重叠</b>——身边的地面、墙面一定要和当前扫描对得上。</p>
+              <p>$H_k$ 是<b>构成关键帧集合凸包的那些关键帧</b>（同样 10 个），管的是<b>远处的点</b>。当前扫描里那些打得很远的点（走廊尽头、大厅对面），附近的最近邻关键帧其实离它们很远，罩不住；只有处在最外围的关键帧，它们的扫描才打到过那些远处的地方。</p>
+              <p>原文对此的解释是：这个组合<b>最大化了当前扫描与子图的重叠</b>，同时给系统提供了<b>多个尺度的几何参照</b>。少了 $Q_k$ 近处对不准，少了 $H_k$ 远处没人管——这正是 Fig. 3 里那个绿框想说明的事。</p>
+              <p>顺带一个实现细节：如果某个关键帧既是最近邻、又属于凸包，它只会在子图里被用一次。</p>
+            </div></details>
+          </li>
+          <li>DLO 的 IMU 是哪一种耦合？请给出原文中的至少两处依据。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>是<b>松耦合</b>，而且比一般的松耦合还更弱——只用到旋转。</p>
+              <p><b>依据一（Fig. 2 图注与 Sec. II）：</b>原文写系统「optionally accepts an initialization prior from an IMU in a <b>loosely-coupled</b> fashion」，即可选地以松耦合方式接受一个 IMU 初始化先验；实现上只对陀螺做四元数积分 $q_{k+1}=q_k+\frac{1}{2}q_k\otimes\omega_k\Delta t$，<b>只取旋转部分</b>，平移先验明确留作未来工作。</p>
+              <p><b>依据二（结论）：</b>原文把「tighter IMU integration（更紧的 IMU 融合）」列为未来感兴趣的方向——如果它已经是紧耦合，就不会把这句写成未来工作。</p>
+              <p><b>所以：</b>IMU 在 DLO 里只提供配准的<b>起点</b>，不进入配准的<b>优化目标</b>，也不参与联合估计零偏。它是本模块「紧耦合主线」之外的一个<b>效率对照</b>案例。</p>
+            </div></details>
+          </li>
+          <li>DLO 跑得快主要靠哪三件事？请分别说出它省掉的是什么代价。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>① 在关键帧空间搜索，而不是在点云空间搜索。</b>省掉的是「在几十万个点里找近邻」的代价——搜索对象变成了几百个关键帧。原文说这使计算量得以保持稳定。</p>
+              <p><b>② 数据结构跨阶段复用。</b>省掉的是「S2S 与 S2M 各自重建 k-d 树、各自重算协方差」的代价。原文的对比很直白：不复用是 69.8 ms/帧且丢掉近 10% 的帧，全复用是 21.9 ms/帧、9.5% CPU、<b>零掉帧</b>（原文 Table I 里写明只有 2 个 k-d 树需要显式构建）。</p>
+              <p><b>③ 定制的 NanoGICP。</b>省掉的是通用 GICP 求解器的时间——平均收敛 42.53 ms，对比 FastGICP 的 72.88 ms 与 PCL GICP 的 178.24 ms。</p>
+              <p>这三件事是配套的：搜索范围小 → 单次配准便宜；数据结构复用 → 两阶段之间不重复劳动；求解器快 → 单次迭代便宜。合起来才有 21.9 ms/帧 这个数。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0080-MULLS2021-三种度量一起算.html">← MULLS（2021）：三种度量一起算</a>
+        <a class="next" href="0082-SuMa-2019-面片地图与语义.html">SuMa++（2019）：面片地图与语义 →</a>
+      </div>
+      <p class="foot-note">这一节我们看的是「不提特征能多快」。下一节换一个完全不同的角度：地图不再是一堆点，而是一片片带着标签的「面片」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

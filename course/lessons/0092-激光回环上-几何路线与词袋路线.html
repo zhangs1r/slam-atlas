@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>激光回环（上）：几何路线与词袋路线 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0092</div>
+      <h1>激光回环（上）：几何路线与词袋路线</h1>
+      <p class="subtitle">车绕了一大圈回到原点，激光怎么知道自己「来过这儿」？有两条完全不同的路可走 🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：分支定界 · 3D 词袋 · 线性关键点 · 回环指标</span>
+        <span>👥 作者：Hess 等（Google）；Cui、Chen、Zhang 等</span>
+        <span>📅 2016 / 2023 / 2024 · <i>Real-Time Loop Closure in 2D LIDAR SLAM；BoW3D；LinK3D</i></span>
+      </div>
+      <div class="toc">
+        <a href="#framing">回环的两件事</a>
+        <a href="#carto">Cartographer 与子图</a>
+        <a href="#bb">分支定界</a>
+        <a href="#bow3d">3D 词袋</a>
+        <a href="#link3d">线性关键点</a>
+        <a href="#metric">回环的指标</a>
+        <a href="#compare">三篇对比</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="framing">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清回环为什么必须拆成「找候选」与「对齐确认」两步；讲出分支定界凭什么能在巨大的搜索窗口里实时找到最优位姿；解释 3D 词袋和视觉词袋到底差在哪；并且知道回环的评价指标在激光侧和视觉侧有什么不一样。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第一季 <b>0014</b> 课（回环检测的指标与假阳性铁律）与 <b>0013</b> 课（评测协议的坑）；接第三季 <b>0043</b> 课（ORB-SLAM 的 DBoW2 —— 本篇要拿它对照）；接第二季 <b>0020</b>–<b>0023</b> 课（位姿图与图优化）。第四季内部接 <b>0074</b> 课（LOAM 把回环明确列为未来工作）。</p>
+        </div>
+      </div>
+
+      <h2>1. 回环要解决的两件事</h2>
+
+      <p>先说清楚问题。<b>回环（loop closure）</b>要回答的是：<b>我此刻站的这个地方，以前是不是来过？如果来过，当时的位姿和我现在算出来的位姿，差了多少？</b></p>
+
+      <p>把它想成一件很日常的事：你在一个巨大的地下停车场里绕，手里有一张自己边走边画的地图。走到某个角落，你觉得「这堵墙好像见过」。但要确认这件事，你得做两步：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>第一步：快速找出候选</b>
+          <p>停车场里停着上千辆车、有几百个柱子。你不可能把当前看到的画面，和记忆里<b>每一帧</b>都仔细比一遍——那是几万次精细比对，算不过来。所以你必须先<b>粗筛</b>出「有那么几帧值得细看」。</p>
+        </div>
+        <div class="mini-card">
+          <b>第二步：把候选对齐并确认</b>
+          <p>粗筛出来的候选未必是真的。你得把它和当前帧<b>精细对齐</b>（算出一个确切的相对位姿），再判断这个对齐结果<b>是不是站得住脚</b>。这一步就是第一季 <b>0014</b> 课讲的「假阳性铁律」——<b>一次错误的回环，足以把整张地图拧坏。</b></p>
+        </div>
+      </div>
+
+      <p>本节要讲的三个系统，正是围绕这两步展开的。而它们走了<b>两条完全不同的路线</b>：</p>
+
+      <div class="callout">
+        <h4>本节的骨架：两条路线</h4>
+        <p><b>路线甲 · 几何路线（Cartographer，2016）：</b>我不做「描述子」，我直接把当前帧拿去和子图做<b>几何扫描匹配</b>，靠<b>分支定界（branch and bound）</b>把搜索空间剪到可以实时算完。它的聪明之处不在「算得快」，而在<b>知道哪些地方不用算</b>。</p>
+        <p><b>路线乙 · 外观路线（BoW3D，2023）：</b>我把视觉里的<b>词袋（Bag of Words）</b>思想搬到三维点云上——把一帧点云「拆成词」，查索引找候选，再算 6 自由度位姿。而它的「词」从哪来？来自它使用的描述子 <b>LinK3D（2024）</b>。</p>
+        <p>所以这三篇是一条链：<b>LinK3D 提供「词」，BoW3D 用「词」搭检索，Cartographer 则压根不走这条路。</b></p>
+      </div>
+
+      <p>还有一个前提要交代清楚，否则后面会一直别扭：<b>为什么「对齐确认」这么难？</b></p>
+
+      <p>因为激光 SLAM 跑了一段时间以后，位姿是有<b>累积漂移</b>的。你回到一个来过的地方时，你以为自己在 $(x_1,y_1)$，实际上可能在离它几米外。所以「对齐」不是在一个小范围里微调，而是要在<b>一个相当大的搜索窗口</b>里找最优解。Cartographer 原文用的窗口是：水平方向各 $W_x=W_y=7$ 米，角度方向 $W_\theta = 30^\circ$。在一个 14 米 × 14 米 × 30 度的空间里暴力搜索，就是这一节要讲的第一个技术核心。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>假设你在一个 5 公里长的园区里跑 SLAM，总共攒下了 5000 帧点云。现在不做任何筛选，直接拿当前帧和历史上每一帧做一次精细配准（每帧耗时按 5 毫秒算），这一轮要多久？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="5 毫秒是单次配准的耗时，不是总耗时。5000 帧要配 5000 次，所以总时间要把这个数乘上去。" onclick="lessonKit.answer(this,'q0092a')">大约 5 毫秒左右</button>
+          <button data-correct="yes" data-explanation="对。5000 × 5 毫秒 = 25 秒。而激光雷达每 0.1 秒就来一帧——也就是说，一帧还没比完，你已经落后了两百多帧。这就是为什么回环的第一个硬约束是「先快速粗筛出极少数候选」，而不是「比得更准」。" onclick="lessonKit.answer(this,'q0092a')">大约 25 秒钟左右</button>
+          <button data-correct="no" data-explanation="不会瞬间完成。帧数越多，两两比较的次数增长得越快，这正是朴素做法不可行的原因。" onclick="lessonKit.answer(this,'q0092a')">几乎瞬间就能完成</button>
+        </div>
+        <div class="quiz-feedback" id="q0092a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="carto">
+      <h2>2. Cartographer：两层架构与子图</h2>
+
+      <div class="callout">
+        <h4>★ 先纠一个名字（本节必须交代清楚）</h4>
+        <p>课程路线图给这一篇的显示名是「<b>2D 激光实时回环（2016）</b>」。这个名字<b>没有点出它的真实身份</b>——它的正文标题是 <i>Real-Time Loop Closure in 2D LIDAR SLAM</i>，作者是 Hess、Kohler、Rapp、Andor，<b>四位全部来自 Google</b>。论文正文在介绍相关工作时的原话是：<i>Google's Cartographer provides a real-time solution for indoor mapping in the form of a sensor equipped backpack that generates 2D grid maps with a r = 5 cm resolution.</i>（Google 的 Cartographer 以背负式传感器的方式，提供了一套生成 5 厘米分辨率 2D 栅格地图的室内实时建图方案。）</p>
+        <p><b>判定依据：</b>① 正文明确把 Cartographer 作为本系统指称；② 参考文献与致谢指向同一个 Google 团队；③ 摘要里说的 backpack mapping platform + branch-and-bound，与开源项目 Cartographer 的实现一致。</p>
+        <p><b>结论：这一篇就是 Cartographer 的回环论文，不是一篇泛泛的「2D 回环综述」。</b>把它当成综述读会完全读错——它讲的是一个具体系统的具体机制。</p>
+      </div>
+
+      <p>Cartographer 的架构只有两层，原文讲得非常干脆：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        <b>局部 SLAM</b>（local SLAM）：把每一帧扫描配到一小块刚建好的世界上 → 得到<b>子图（submap）</b>与局部位姿<br>
+        ↓<br>
+        <b>全局 SLAM</b>（global SLAM）：在后台把「扫描 ↔ 子图」这个图优化一遍 → 消掉累积误差
+      </div>
+
+      <p>先说下面这个零件：<b>子图（submap）</b>。</p>
+
+      <p>原文的原话是：<i>A few consecutive scans are used to build a submap.</i>（若干帧连续的扫描被用来构建一个子图。）子图的形式是<b>概率栅格</b>：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$M: r\mathbb{Z}\times r\mathbb{Z} \to [p_{\min},\,p_{\max}]$$</div>
+      </div>
+
+      <p>这句话的读法是：<b>把世界切成边长为 $r$ 的小方格，每个格子放一个数，这个数表示「这个格子被占据的概率」。</b>原文取 $r = 5$ 厘米。你打到一个点，那个格子就往「占据」那一侧挪一点；激光从雷达到这个点之间穿过的那些格子，就往「空闲」那一侧挪一点。</p>
+
+      <p>为什么要有子图这个概念？因为「拿当前帧直接配整张全球地图」在大场景里既慢又不稳（地图一直在长大）。而「拿当前帧配一小块刚建好的局部地图」又快又准——代价是，<b>误差会慢慢累积</b>。</p>
+
+      <p>原文说得很直白：<i>As scans are only matched against a submap containing a few recent scans, the approach described above slowly accumulates error.</i>（由于扫描只与包含最近若干帧的子图匹配，上述做法会缓慢累积误差。）</p>
+
+      <p>于是就有了全局 SLAM。它的关键设计有两条，都值得记住：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 子图「完工」之后才参与回环</b>
+          <p>原文：<i>When a submap is finished, that is no new scans will be inserted into it anymore, it takes part in scan matching for loop closure.</i>（当一个子图完工——也就是不再有新的扫描插入时——它才参与回环的扫描匹配。）</p>
+          <p>这一点有个必须知道的代价：<b>回环检测天然是有延迟的</b>。你刚走过的地方所在的那个子图还没完工，就没法用它做回环。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 优化用的是 Sparse Pose Adjustment</b>
+          <p>原文说这套「把所有扫描位姿与子图位姿一起优化」的做法<b>follows Sparse Pose Adjustment</b>（SPA，即第二季 <b>0020</b> 课讲过的位姿图那一族）。</p>
+          <p>具体求解器是 <b>Ceres</b>；对离群约束，原文明确用了 <b>Huber 损失</b>——这正是第二季 <b>0019</b> 课「鲁棒核」在激光侧的又一次露面。</p>
+        </div>
+      </div>
+
+      <p>还有一个必须点明的性质：<b>Cartographer 的这一篇是一个纯 2D 系统。</b>位姿只有三个自由度 $(x, y, \theta)$。这个平面假设带来了非常实在的简化，你会在下一节看到它的好处：</p>
+
+      <ul>
+        <li><b>搜索窗口只有三个维度</b>，不是六个。原文直接把窗口取成 $W_x = W_y = 7$ 米、$W_\theta = 30^\circ$。</li>
+        <li><b>栅格是 2D 的</b>，所以「预计算最大值」这件事可以在二维数组上做（下一节的核心）。</li>
+        <li><b>旋转步长有一个干净的闭式解</b>：取「离雷达最远的点转一步，位移不超过一个像素宽 $r$」作为准则，用余弦定理推出来就是下一节那个公式。</li>
+      </ul>
+
+      <p>原文在结论里也老老实实承认了这套设计的天花板：系统是 <b>2D</b> 的、依赖概率栅格、大场景内存开销高（Deutsches 博物馆那次实测用掉了 2.2 GB）。</p>
+    </section>
+
+    <section class="section-card" id="bb">
+      <h2>3. ★ 分支定界：知道哪些不用算</h2>
+
+      <p>这一节是本篇的技术核心，也是整个模块最值得反复看的一段。</p>
+
+      <p>先把问题摆出来。回环匹配要解的是：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\xi^{\star} = \arg\max_{\xi \in \mathcal{W}} \sum_{k=1}^{K} M_{\mathrm{nearest}}\!\left(T_{\xi}\, h_k\right)$$</div>
+      </div>
+
+      <p>逐项读：$h_k$ 是这一帧扫描里的第 $k$ 个点；$T_\xi$ 是「按位姿 $\xi$ 把这个点搬到子图坐标系」的变换；$M_{\mathrm{nearest}}$ 是子图的概率值（查询时取最近的栅格）；把这些概率值加起来，就是<b>这个位姿的得分</b>。我们想找的是<b>得分最高的那个位姿</b>，而且是在整个搜索窗口 $\mathcal{W}$ 里找。</p>
+
+      <p>暴力做法（原文 Algorithm 1）是把窗口里每一个位姿都算一遍。原文对它的评价是：<i>for the search window sizes we have in mind it would be far too slow</i>（对我们设想的搜索窗口规模来说，这远远太慢了）。</p>
+
+      <p>于是它换了一个思路。这个思路本身一点都不新——它在混合整数线性规划里早就被用过——但被搬到激光回环上之后，效果极好。</p>
+
+      <div class="callout">
+        <h4>分支定界的一句话版本</h4>
+        <p><b>把「所有可能的位姿」组织成一棵树：根节点代表整个搜索窗口，每个节点的孩子把父节点的范围切成几块（合起来还是原来那一堆可能），叶子节点就是一个具体的位姿。</b></p>
+        <p>然后你只要做一件事：<b>对每个节点，算一个「这个节点里所有位姿的得分上界」。</b>如果这个上界已经低于你已经找到的最优解，那这个节点整个子树里<b>不可能</b>存在更好的解——<b>整片剪掉，一眼都不用看。</b></p>
+      </div>
+
+      <p>这就是「知道哪些不用算」。注意原文特意强调的一点：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「注意，这个算法是<b>精确的</b>。只要内节点 $c$ 的 $\text{score}(c)$ 确实是它所有元素得分的上界，它就给出与朴素做法完全相同的结果。」</p>
+
+      <p>这句话非常关键：<b>分支定界不是近似加速，它是无损的。</b>它不牺牲最优性，只是把「明显不可能更好」的分支提前砍掉。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">分支定界：把房间切成子图，再用一圈圈收窄的搜索窗找最匹配的位姿</text>
+
+          <!-- 左格 -->
+          <rect x="18" y="46" width="400" height="300" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="218" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">一个真实的房间（俯视）</text>
+
+          <!-- 房间墙 -->
+          <rect x="60" y="86" width="320" height="8" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <rect x="60" y="292" width="320" height="8" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <rect x="60" y="86" width="8" height="214" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <rect x="372" y="86" width="8" height="88" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <rect x="372" y="212" width="8" height="88" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <text x="392" y="196" font-size="10" fill="#7a8a99">门</text>
+
+          <!-- 桌椅 -->
+          <rect x="196" y="176" width="72" height="38" rx="5" fill="#e8d9c8" stroke="#b08a5e" stroke-width="1.2"/>
+          <circle cx="178" cy="176" r="8" fill="#efe4d6" stroke="#b08a5e" stroke-width="1.1"/>
+          <circle cx="212" cy="166" r="8" fill="#efe4d6" stroke="#b08a5e" stroke-width="1.1"/>
+          <circle cx="252" cy="166" r="8" fill="#efe4d6" stroke="#b08a5e" stroke-width="1.1"/>
+          <circle cx="286" cy="176" r="8" fill="#efe4d6" stroke="#b08a5e" stroke-width="1.1"/>
+          <circle cx="212" cy="226" r="8" fill="#efe4d6" stroke="#b08a5e" stroke-width="1.1"/>
+          <circle cx="252" cy="226" r="8" fill="#efe4d6" stroke="#b08a5e" stroke-width="1.1"/>
+
+          <!-- 子图网格 -->
+          <line x1="166" y1="86" x2="166" y2="300" stroke="#c0653f" stroke-width="1.3" stroke-dasharray="6 4"/>
+          <line x1="272" y1="86" x2="272" y2="300" stroke="#c0653f" stroke-width="1.3" stroke-dasharray="6 4"/>
+          <line x1="60" y1="158" x2="380" y2="158" stroke="#c0653f" stroke-width="1.3" stroke-dasharray="6 4"/>
+          <line x1="60" y1="232" x2="380" y2="232" stroke="#c0653f" stroke-width="1.3" stroke-dasharray="6 4"/>
+          <text x="113" y="126" text-anchor="middle" font-size="10" fill="#c0653f">子图 1</text>
+          <text x="219" y="126" text-anchor="middle" font-size="10" fill="#c0653f">子图 2</text>
+          <text x="326" y="126" text-anchor="middle" font-size="10" fill="#c0653f">子图 3</text>
+          <text x="113" y="278" text-anchor="middle" font-size="10" fill="#c0653f">子图 4</text>
+          <text x="219" y="278" text-anchor="middle" font-size="10" fill="#c0653f">子图 5</text>
+          <text x="326" y="278" text-anchor="middle" font-size="10" fill="#c0653f">子图 6</text>
+
+          <text x="218" y="328" text-anchor="middle" font-size="11.5" fill="#3b4a5e">有墙、有门、有桌椅；虚线把房间切成一块块子图</text>
+
+          <!-- 右格 -->
+          <rect x="448" y="46" width="434" height="300" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="665" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">同一张地图：一层层收窄的搜索窗</text>
+
+          <!-- 房间（浅色） -->
+          <rect x="490" y="86" width="270" height="214" rx="4" fill="#ffffff" stroke="#e0c4b8" stroke-width="1.2"/>
+          <rect x="528" y="118" width="60" height="32" rx="4" fill="#f2e4d8" stroke="#d6b79b" stroke-width="1"/>
+
+          <!-- 搜索窗 -->
+          <rect x="500" y="92" width="250" height="202" rx="6" fill="#5a8fc7" opacity="0.10" stroke="#5a8fc7" stroke-width="2" stroke-dasharray="8 5"/>
+          <rect x="548" y="126" width="154" height="134" rx="5" fill="#e08a3c" opacity="0.13" stroke="#e08a3c" stroke-width="2" stroke-dasharray="6 4"/>
+          <rect x="588" y="152" width="74" height="82" rx="4" fill="#4a9c76" opacity="0.16" stroke="#4a9c76" stroke-width="2"/>
+          <rect x="619" y="186" width="14" height="14" rx="2" fill="#c0392b"/>
+
+          <!-- 引线 -->
+          <line x1="752" y1="112" x2="770" y2="112" stroke="#5a8fc7" stroke-width="1.4"/>
+          <line x1="704" y1="142" x2="770" y2="142" stroke="#e08a3c" stroke-width="1.4"/>
+          <line x1="664" y1="172" x2="770" y2="172" stroke="#4a9c76" stroke-width="1.4"/>
+          <line x1="635" y1="202" x2="770" y2="202" stroke="#c0392b" stroke-width="1.4"/>
+
+          <text x="778" y="116" font-size="11" fill="#2c5f8a">最粗一层</text>
+          <text x="778" y="146" font-size="11" fill="#a8622a">细一层</text>
+          <text x="778" y="176" font-size="11" fill="#2f6d51">最细一层</text>
+          <text x="778" y="206" font-size="11" fill="#c0392b">一个位姿</text>
+
+          <text x="665" y="328" text-anchor="middle" font-size="11.5" fill="#a8563a">上界不够好的整片剪掉，只在剩下的范围里细找</text>
+
+          <text x="450" y="384" text-anchor="middle" font-size="13" font-weight="700" fill="#5a4a42">它的聪明之处不是算得快，而是知道哪些不用算</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一个真实房间的俯视图——有墙、有门、有桌椅；虚线把房间切成一块块「子图」。右边是同一张地图，上面叠了一层比一层小的搜索框：先用最大的框粗粗试一遍，再在留下的范围里用中等框试，最后只剩一个小格子。<br>
+          <b>怎么看这张图：</b>① 先看左格那几条<b>橙红色虚线</b>——它们不是房间的一部分，而是 Cartographer 把世界切成 5 厘米概率栅格、再由若干帧合成子图的示意；② 再看右格最外面那圈<b>蓝色大虚线框</b>——它代表「所有可能的位姿」，也就是分支定界树的根；③ 往内看橙框、绿框、红点——每进一层，范围就被切成四份、只留下最有希望的那一份；④ 那些从框里引出来的细线，对应的是「这一层的上界是多少」。<br>
+          <b>要记住的一句话：</b>分支定界不改变答案，它只改变「要走多少步」——<b>真正省下来的时间，全部来自那些被证明「不可能更好」的分支。</b>
+        </figcaption>
+      </figure>
+
+      <p>那么问题来了：<b>「一个节点里所有位姿的得分上界」，凭什么能很快算出来？</b>如果算上界本身就很贵，那这套方法就白搭了。原文的答案很漂亮。</p>
+
+      <p>先把节点说清楚。树上的每个节点是一个四元组：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$c = (c_x,\ c_y,\ c_\theta,\ c_h) \in \mathbb{Z}^4$$</div>
+      </div>
+
+      <p>它的含义是：<b>高度为 $c_h$ 的节点，覆盖 $2^{c_h}\times 2^{c_h}$ 种可能的平移位置，但只对应一个确定的旋转角。</b>叶节点的高度是 $c_h=0$，就是一个具体的位姿：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\xi_c = \xi_0 + \left(r\,c_x,\ r\,c_y,\ \delta_\theta\, c_\theta\right)$$</div>
+      </div>
+
+      <p>接下来是核心。原文对内节点的得分取了一个「先取最大再求和」的形式：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{score}(c) = \sum_{k=1}^{K} \max_{j \in \overline{\mathcal{W}}_c} M_{\mathrm{nearest}}\!\left(T_{\xi_j}h_k\right) \;\ge\; \max_{j \in \overline{\mathcal{W}}_c} \sum_{k=1}^{K} M_{\mathrm{nearest}}\!\left(T_{\xi_j}h_k\right)$$</div>
+      </div>
+
+      <p>请盯着这个不等式看。左边是「<b>每个点各自挑一个最好的位置</b>，再把所有点的分数加起来」；右边是「<b>先固定一个位姿，再把所有点在这个位姿下的分数加起来</b>，然后从所有位姿里挑最好的」。</p>
+
+      <p>左边一定<b>不小于</b>右边。道理很朴素：<b>「让每个点各挑各的最优」显然是比「让所有点共用一个位姿」更宽松的条件</b>，所以它给出来的分数只会更高。而右边恰恰是我们真正想要的东西（所有位姿中得分最高的那一个）。所以左边的值就是<b>合法上界</b>。</p>
+
+      <p>更关键的是：<b>左边这个量可以很快算出来。</b>因为它把「$\max$」提到了求和号<b>里面</b>——每个点只需要在它自己的位置上查一次「这一片区域里的最大值」，不用去试每一个位姿。原文为此预计算了一组栅格：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$M^{h}_{\mathrm{precomp}}(x,y) = \max_{x' \in [x,\ x+r(2^{h}-1)],\ y'} M_{\mathrm{nearest}}(x',y')$$</div>
+      </div>
+
+      <p>翻译一下：$M^{h}_{\mathrm{precomp}}$ 和原来的栅格<b>像素结构完全一样</b>，只是每个像素里装的不是「这一格的占用概率」，而是「<b>从这个格子开始的 $2^h\times 2^h$ 方块里的最大值</b>」。有了它，内节点的得分就变成一次简单的求和：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{score}(c) = \sum_{k=1}^{K} M^{c_h}_{\mathrm{precomp}}\!\left(T_{\xi_c}h_k\right)$$</div>
+      </div>
+
+      <p>原文特别指出：<b>这个式子的计算量只和扫描点数成线性关系</b>。也就是说，无论节点覆盖多大的平移范围，算上界的代价都一样。这就是整套方法能跑起来的原因。</p>
+
+      <p>剩下两个工程细节，也很值得知道：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>预计算栅格怎么来、什么时候算</b>
+          <p>原文说，<b>要等到一个概率栅格不再被更新（也就是子图完工）时才去算它的预计算栅格</b>——这跟上一节讲的「完工的子图才参与回环」是同一件事。</p>
+          <p>实现上是逐层递推：先算「从每个像素开始的 $2^h$ 宽一行」的最大值，用这个中间结果构造下一层。整体复杂度是 $O(n)$，$n$ 是像素数。原文还提到一个漂亮的技巧：如果数值是按加入顺序被移除的，那么「变化集合的最大值」可以在<b>均摊 $O(1)$</b> 内维护。</p>
+        </div>
+        <div class="mini-card">
+          <b>旋转方向的步长怎么定</b>
+          <p>搜平移时步长就是栅格宽度 $r$。但搜角度时，角度步长太大就会<b>漏掉最优解</b>。原文的准则很好懂：<b>让离雷达最远的那个点（距离 $d_{\max}$）转一步之后，位移不超过一个像素宽 $r$。</b></p>
+          <p>用余弦定理一推，就得到那个干净的闭式解（原文式 7）。这正是第 2 节说的「2D 假设带来的简化」之一——在 3D 里就没有这么干净的形式了。</p>
+        </div>
+      </div>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\delta_\theta = \arccos\!\left(1 - \frac{r^2}{2\,d_{\max}^2}\right)$$</div>
+      </div>
+
+      <p>最后是搜索策略本身。原文用的是 <b>深度优先（DFS）</b>，理由是：「算法效率取决于树被剪掉多少，而这取决于两件事——<b>一个好的上界</b>，和<b>一个足够好的当前最优解</b>。」DFS 能很快摸到很多叶节点，正好帮忙把「当前最优解」抬上去。另外，访问子节点时是<b>按上界从大到小</b>排的，先走最有希望的那一支。原文还设了一个<b>得分阈值</b>：低于这个分数的解，它根本不关心——因为差的匹配本来就不该被当成回环约束加进去。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Real-time_loop_closure_in_2D_LIDAR_SLAM/e109d0d28ddf6040564a6e8fc93eae7cf9e787dbe4f4af35c24c8729b54c1732.jpg" alt="Cartographer Fig.3 precomputed grids of size 1, 4, 16 and 64">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Precomputed grids of size 1, 4, 16 and 64.<br>
+          （中译：尺寸为 1、4、16、64 的预计算栅格。）<br>
+          <b>怎么看这张图：</b>① 这是把刚才那个「从每个格子开始的 $2^h\times 2^h$ 方块取最大值」画了出来；② 四张图从左上到右下对应 $h$ 越来越大——格子的「粒度」越来越粗：尺寸 1 就是原栅格，尺寸 4 是每 $2\times2$ 取最大，尺寸 16 是 $4\times4$，尺寸 64 是 $8\times8$；③ 请盯着看<b>越粗的那张图里高值区域铺得越开</b>——因为取最大值会把局部的高点「撑大」成一个方块；④ 想知道某个节点（覆盖某个平移范围）的得分上界时，只要在这个点数上查<b>对应粗糙度</b>的那一张，就能一次拿到「这片范围里最好能有多好」。<br>
+          <b>要记住的一句话：</b>这几张图就是分支定界的「作弊小抄」——<b>把「搜索」预先熬成了「查表」。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="bow3d">
+      <h2>4. BoW3D：把词袋搬到三维点云</h2>
+
+      <p>现在换到另一条路线。先把视觉侧的老朋友请出来。</p>
+
+      <p>第三季 <b>0043</b> 课里，ORB-SLAM 用的检索机制是 <b>DBoW2</b>：把图像里提取出来的 ORB 特征，通过一棵离线训练好的<b>词汇树</b>，映射成一堆「视觉词（word）」；一张图就变成「用了哪些词、各用了多少次」的一个向量；两张图比一比向量，就知道像不像。这个机制非常好用，因为它把「图像 vs 图像」的比较，换成了「词袋 vs 词袋」的比较。</p>
+
+      <p>那么问题来了：<b>为什么激光 SLAM 里不是早就该有这个东西了？</b></p>
+
+      <p>BoW3D 的引言正面回答了这个疑问，理由可以归成三层：视觉侧有成熟好用的 2D 特征（SIFT、SURF、BRIEF、ORB）；相机本来就是在做 2D 特征，检索需求天然匹配；而词袋把图像信息压缩成了紧凑的向量，还建了树来加速——三件事凑齐了，才有 DBoW2 的成功。</p>
+
+      <p>但到了 3D 激光这边，原文的原话是：点云的<b>不规则、稀疏、无序</b>给 3D 特征提取与表示带来了挑战，而「为 3D 特征建词袋、把它用到实时回环、并且校正完整 6 自由度位姿」这几件事，<b>仍然是未解决的</b>。</p>
+
+      <p>BoW3D 做的就是把它们解决掉。它的做法可以拆成三个问题：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>问题一：3D 关键点怎么定义？</b>
+          <p>它直接用 <b>LinK3D</b> 的关键点（下一节细讲）。这里先记住一件事：LinK3D 的关键点是「<b>带邻域结构</b>」的，不是孤零零一个点。</p>
+        </div>
+        <div class="mini-card">
+          <b>问题二：词怎么来？词典要不要离线训练？</b>
+          <p>这是本篇最巧的一步。<b>它不需要额外的词典文件。</b>原因是 LinK3D 的描述子本身就是 180 维、<b>每一维固定对应一个扇区</b>——也就是说，「维」天生就是有含义的。</p>
+          <p>于是 BoW3D 把一个「词」定义成两件事的组合：<b>非零的那一维的值（Dim-value）</b>加<b>那一维的编号（Dim-ID）</b>。这样就不需要再去聚类、训练一棵词汇树了。</p>
+        </div>
+        <div class="mini-card">
+          <b>问题三：怎么快速检索？</b>
+          <p>用<b>哈希表</b>：词 → 出现过这个词的地点集合（place set）。哈希表理论上 $O(1)$，这正是它敢做实时检索的底气。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">3D 词袋：先把一帧点云拆成词，再查卡槽、取交集</text>
+
+          <!-- 卡槽 A -->
+          <rect x="56" y="66" width="150" height="160" rx="8" fill="#f7f9fb" stroke="#8fb3cc" stroke-width="1.6"/>
+          <text x="131" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="#2c5f8a">卡槽 · 词 A</text>
+          <g fill="#5a8fc7">
+            <circle cx="92" cy="112" r="3.2"/><circle cx="110" cy="120" r="3.2"/>
+            <circle cx="128" cy="110" r="3.2"/><circle cx="146" cy="122" r="3.2"/>
+            <circle cx="166" cy="114" r="3.2"/>
+          </g>
+          <line x1="92" y1="112" x2="146" y2="122" stroke="#5a8fc7" stroke-width="1.3"/>
+          <rect x="72" y="152" width="118" height="28" rx="4" fill="#ffffff" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="131" y="171" text-anchor="middle" font-size="11" fill="#3b4a5e">帧 17</text>
+          <rect x="72" y="186" width="118" height="28" rx="4" fill="#ffffff" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="131" y="205" text-anchor="middle" font-size="11" fill="#3b4a5e">帧 42</text>
+
+          <!-- 卡槽 B -->
+          <rect x="236" y="66" width="150" height="160" rx="8" fill="#f7f9fb" stroke="#8fb3cc" stroke-width="1.6"/>
+          <text x="311" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="#2c5f8a">卡槽 · 词 B</text>
+          <g fill="#5a8fc7">
+            <circle cx="272" cy="112" r="3.2"/><circle cx="290" cy="122" r="3.2"/>
+            <circle cx="310" cy="110" r="3.2"/><circle cx="330" cy="124" r="3.2"/>
+            <circle cx="350" cy="112" r="3.2"/>
+          </g>
+          <line x1="272" y1="112" x2="350" y2="112" stroke="#5a8fc7" stroke-width="1.3"/>
+          <rect x="252" y="152" width="118" height="28" rx="4" fill="#ffffff" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="311" y="171" text-anchor="middle" font-size="11" fill="#3b4a5e">帧 17</text>
+          <rect x="252" y="186" width="118" height="28" rx="4" fill="#ffffff" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="311" y="205" text-anchor="middle" font-size="11" fill="#3b4a5e">帧 63</text>
+
+          <!-- 卡槽 C -->
+          <rect x="416" y="66" width="150" height="160" rx="8" fill="#f7f9fb" stroke="#8fb3cc" stroke-width="1.6"/>
+          <text x="491" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="#2c5f8a">卡槽 · 词 C</text>
+          <g fill="#5a8fc7">
+            <circle cx="452" cy="114" r="3.2"/><circle cx="470" cy="110" r="3.2"/>
+            <circle cx="492" cy="124" r="3.2"/><circle cx="514" cy="110" r="3.2"/>
+            <circle cx="532" cy="118" r="3.2"/>
+          </g>
+          <path d="M452 114 L490 122 L514 110" fill="none" stroke="#5a8fc7" stroke-width="1.3"/>
+          <rect x="432" y="152" width="118" height="28" rx="4" fill="#ffffff" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="491" y="171" text-anchor="middle" font-size="11" fill="#3b4a5e">帧 17</text>
+          <rect x="432" y="186" width="118" height="28" rx="4" fill="#ffffff" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="491" y="205" text-anchor="middle" font-size="11" fill="#3b4a5e">帧 42</text>
+
+          <!-- 新的一帧 -->
+          <rect x="56" y="252" width="510" height="76" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.5"/>
+          <text x="76" y="280" font-size="12" font-weight="700" fill="#2f6d51">新的一帧</text>
+          <g fill="#4a9c76">
+            <circle cx="200" cy="278" r="3.4"/><circle cx="220" cy="292" r="3.4"/>
+            <circle cx="244" cy="274" r="3.4"/><circle cx="268" cy="290" r="3.4"/>
+            <circle cx="292" cy="276" r="3.4"/><circle cx="318" cy="294" r="3.4"/>
+            <circle cx="344" cy="278" r="3.4"/><circle cx="370" cy="288" r="3.4"/>
+            <circle cx="396" cy="274" r="3.4"/><circle cx="422" cy="292" r="3.4"/>
+            <circle cx="450" cy="280" r="3.4"/><circle cx="478" cy="290" r="3.4"/>
+          </g>
+          <text x="76" y="308" font-size="11" fill="#2f6d51">把它拆出的几个局部结构，分别投进对应的卡槽</text>
+
+          <!-- 箭头 -->
+          <path d="M131 250 L131 232" stroke="#4a9c76" stroke-width="1.8"/>
+          <path d="M131 230 L126 240 L136 240 Z" fill="#4a9c76"/>
+          <path d="M311 250 L311 232" stroke="#4a9c76" stroke-width="1.8"/>
+          <path d="M311 230 L306 240 L316 240 Z" fill="#4a9c76"/>
+          <path d="M491 250 L491 232" stroke="#4a9c76" stroke-width="1.8"/>
+          <path d="M491 230 L486 240 L496 240 Z" fill="#4a9c76"/>
+
+          <!-- 结果 -->
+          <rect x="600" y="66" width="280" height="262" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.5"/>
+          <text x="624" y="112" font-size="15" font-weight="700" fill="#a8563a">取交集</text>
+          <text x="624" y="152" font-size="14" font-weight="700" fill="#c0392b">候选帧：17</text>
+          <text x="624" y="188" font-size="11" fill="#a8846f">只有它同时出现在</text>
+          <text x="624" y="206" font-size="11" fill="#a8846f">三个卡槽里</text>
+          <text x="624" y="246" font-size="11" fill="#a8846f">帧 42 只命中两个，</text>
+          <text x="624" y="264" font-size="11" fill="#a8846f">帧 63 只命中一个</text>
+
+          <text x="450" y="376" text-anchor="middle" font-size="13" font-weight="700" fill="#5a4a42">先查卡槽，再取交集 —— 检索不必遍历每一帧</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把 BoW3D 的数据库想象成一座图书馆的索引卡柜。上面那排是三个「卡槽」，每个卡槽代表一个<b>视觉词</b>（也就是 LinK3D 描述子里某一维的那个非零值），卡槽里插着的白卡片写着<b>哪些历史帧用过这个词</b>。下面那一片绿点是我们刚收到的新一帧点云，它被拆成几个局部结构，各自投进对应的卡槽。<br>
+          <b>怎么看这张图：</b>① 先看三个卡槽里<b>卡片内容的差别</b>——帧 17 在三个卡槽里都出现了，帧 42 只在 A 和 C，帧 63 只在 B；② 再看底下那条绿色箭头——每个局部结构「投递」的方向是<b>由它自己的维编号决定的</b>，不是随便投；③ 最后看右边的结果：<b>取交集</b>之后只剩帧 17。<br>
+          <b>要记住的一句话：</b>这就是为什么检索不用遍历全部——<b>先查卡槽，再取交集。</b>哈希表让「查卡槽」这一步几乎是常数时间，交集运算又天然把候选压得极小。
+        </figcaption>
+      </figure>
+
+      <p>检索出来候选之后，还要做两件事：<b>打分</b>和<b>校正</b>。</p>
+
+      <p><b>打分</b>用的是「出现次数 + 一个类似 tf-idf 的过滤」。原文的逻辑是：如果一个词<b>在到处都出现</b>（比如每一帧里都有），那它就没有区分度，还会拖慢检索。所以它定义了一个比值：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$ratio = N_{set} \Big/ \left(\frac{N}{n_w}\right)$$</div>
+      </div>
+
+      <p>其中 $N_{set}$ 是当前这个地点集合的大小，$N$ 是到目前为止见过的地点总数，$n_w$ 是词表里的词数——所以 $\frac{N}{n_w}$ 就是「平均每个地点集合有多大」。<b>如果某个词的集合明显大于平均（$ratio$ 超过阈值 $Th_r = 4$），它就不参与计数了。</b>至于候选，要它被命中的次数超过 <b>$Th_f = 5$</b> 才被认可。</p>
+
+      <p>这两个阈值不是拍脑袋定的。原文专门做了参数实验（它的 Fig. 6 就是把 $F_1$ 分数和运行时间随这两个阈值变化画出来）：$Th_r$ 增大时运行时间上升，$F_1$ 也上升，但超过 3 之后 $F_1$ 变化不大、时间还在涨；$Th_f$ 小于 5 时虽然 $F_1$ 更高，但要多花很多时间；大于 8 又会因为 $F_1$ 太低而降低鲁棒性。折中下来取了 $Th_r=4$、$Th_f=5$。</p>
+
+      <p><b>校正</b>则是这条路线真正的杀手锏。LinK3D 能给出<b>点对点</b>的匹配，所以 BoW3D 可以拿匹配点集，先用 <b>RANSAC</b> 把外点剔掉，再用 <b>SVD</b> 解出最优的刚体变换 $\mathbf{R}, \mathbf{t}$——也就是<b>完整的 6 自由度</b>回环位姿。这一点在它的对比表里非常突出：Scan Context 这一类方法只能给 1 自由度（偏航角），SSC-RN 给 3 自由度，<b>只有 BoW3D 给 6 自由度</b>。</p>
+
+      <p>拿到回环位姿后，剩下的就是第二季 <b>0020</b> 课的老流程：建位姿图，节点是全局位姿，边是「相邻帧的相对位姿」+「校正后的回环位姿」，用 <b>g2o</b> 的 Levenberg–Marquardt 求解，然后把优化后的位姿反馈回去更新局部地图。</p>
+
+      <h3>实时性：它最硬的卖点</h3>
+
+      <p>原文强调的重点几乎全在速度上。在 KITTI 00（4000 多帧 64 线激光扫描）上，用一台 <b>Intel Core i7 @2.2 GHz 的笔记本</b>，BoW3D <b>平均 48 毫秒</b>完成「识别 + 校正」。原文还补充：单帧整体处理<b>不超过 100 毫秒</b>；建图和位姿图优化虽然单次超过 100 毫秒，但因为频率低，仍可在线跑。</p>
+
+      <p>更要紧的一句在结论里：<b>与基于深度学习的方法相比，它不需要预训练，也不需要 GPU。</b>这是纯 CPU 的方法。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_BoW3D__Bag_of_Words_for_Real-Time_Loop_Closing_in_3D_LiD/0f9722ad3ba54777c35954cea9617e3fa16d2ce107d013728c99c017d674d388.jpg" alt="BoW3D Fig.3 data structure of the hash table">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The data structure of BoW3D. The hash table is used for the retrieval. The word of BoW3D consists of the non-zero value (Dim-value) in the descriptor and the corresponding dimension (Dim-ID). Each word corresponds to a place set, in which the word has appeared. The place also consists of two parts, one is frame ID, the other is the descriptor ID in the frame.<br>
+          （中译：BoW3D 的数据结构。哈希表用于检索。BoW3D 的词由描述子中的非零值（Dim-value）与对应的维度（Dim-ID）构成。每个词对应一个「地点集合」，也就是这个词出现过的那些地方。地点又由两部分组成：帧 ID，以及该描述子在这一帧里的编号。）<br>
+          <b>怎么看这张图：</b>① 看它把「一个词」拆成了哪两部分——<b>非零值 + 维度编号</b>。这一对组合起来才是一个词，只给值不给维度是不行的；② 看「地点」被拆成了哪两部分——<b>帧 ID + 帧内描述子编号</b>，后者意味着它连「是这一帧里的哪个关键点」都记住了，这才有可能回过去做点对点匹配、进而算出 6 自由度位姿；③ 图里的箭头方向就是检索的走向：从词出发，一路走到具体帧。<br>
+          <b>要记住的一句话：</b>这张图里的结构之所以成立，前提是<b>「维」本身有意义</b>——如果描述子的每一维说不清代表什么，就没法用它当词的编号。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>BoW3D 声称「不需要额外加载词典文件」，而 ORB-SLAM 的 DBoW2 必须先加载一棵离线训练好的词汇树。造成这个差别的最根本原因是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不是因为激光点云比图像小。恰恰相反，KITTI 每帧有十几万个点，是很多的。词典要不要训练，和输入数据量没有直接关系。" onclick="lessonKit.answer(this,'q0092b')">因为激光点云数据量更小</button>
+          <button data-correct="yes" data-explanation="对。ORB 这类描述子是「学习/聚类出来的一串无名字的数」，每一维没有天然含义，所以要靠词汇树把连续空间切成离散的「词」。而 LinK3D 的 180 维与 180 个扇区一一对应，维编号本身就带语义，于是「哪一维非零」直接就是一个词，不必再训练。" onclick="lessonKit.answer(this,'q0092b')">因为它的维有对应的含义</button>
+          <button data-correct="no" data-explanation="不需要 GPU 是事实，但那只是「训练不必在线做」的一个体现。DBoW2 的词汇树也是离线训练的，同样不需要在线 GPU。所以这不是造成差别的根本原因。" onclick="lessonKit.answer(this,'q0092b')">因为它完全不依赖 GPU 计算</button>
+        </div>
+        <div class="quiz-feedback" id="q0092b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="link3d">
+      <h2>5. LinK3D：BoW3D 的描述子底座</h2>
+
+      <p>上一节一直说「BoW3D 的词来自 LinK3D」。这一节把那个「词」拆开来看。</p>
+
+      <p>按课程合成时的判断，<b>LinK3D 更适合作为 BoW3D 的铺垫放在本节，不必单开一节</b>——因为它的定位是描述子基础设施，而不是一个完整的回环系统。但它本身值得认真讲，理由有两个：它解释了「3D 词袋」为什么可行；而且在它的实验里有一批非常干净的性能对比数字。</p>
+
+      <h3>① 「线性关键点」到底是什么</h3>
+
+      <p>先说常见的做法。3D 里传统的局部描述子（PFH、FPFH、SHOT、3DSC 这些）基本都在做同一件事：<b>围绕一个点，统计它周围邻域的各种几何量，装进一个直方图。</b></p>
+
+      <p>LinK3D 认为这类做法在激光点云上会失灵，原因写得很具体：激光点云里有<b>大量不连续而且彼此相似的局部表面</b>（相似的平面、树、杆子），直方图统计很容易混；而且点云很稀疏、分布不均，<b>在固定大小的空间里往往凑不够点</b>，统计量就出不来。</p>
+
+      <p>它的替代方案是：<b>不要用一个孤立的点来描述一个地方，用「这个点 + 它的一圈邻居」来描述。</b>原文的说法是 <i>represents the keypoint with its robust neighbor keypoints, which provide strong constraints in the description of the keypoint</i>（用稳健的邻域关键点来表示这个关键点，邻点为描述提供了强约束）。</p>
+
+      <p>整体流程分三步走，原文把它画成一张工作流图（它的 Fig. 2）：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        ① 提出<b>边缘点</b>（按局部平滑度过阈值筛）<br>
+        ↓<br>
+        ② <b>扇区聚合</b>：在 XoY 平面上按角度把点分进不同扇区，然后<b>只在每个扇区内部</b>做聚类，得到稳健的聚合关键点<br>
+        ↓<br>
+        ③ <b>生成描述子</b>：以关键点为中心切 180 个扇区，每维填「该扇区内最近关键点的距离」
+      </div>
+
+      <p>第 ② 步里那个「只在扇区内部聚类」的细节值得多说一句。原文特意强调：<i>the clustering operation is only performed within each sector area, rather than directly within the whole space</i>（聚类只在每个扇区内部进行，而不是直接在整个空间里做）。这是一个很接地气的工程妥协——整个空间聚类的代价和不确定性都更高。</p>
+
+      <p>至于「线性」这个词：<b>一个关键点是用它和最近邻连成的那条向量的方向来定向的</b>——从 $k_0$ 指向离它最近的关键点 $k_1$，这条向量就是它的<b>主方向</b>。为了让描述子在视点变化下更稳，它还会算 Des1、Des2、Des3 三份（对应最近、次近、第三近的关键点），然后<b>按优先级取每一维上第一个非零的值</b>：Des1 优先级最高，因为它最近、最可靠。原文解释得很清楚：<i>the algorithm is sensitive to the closest keypoint. In the presence of interference from an outlier keypoint, the matching will fail.</i>（算法对最近的那个关键点很敏感。一旦被一个离群关键点干扰，匹配就会失败。）所以它不押注在一个点上。</p>
+
+      <h3>② 「免训练」指什么</h3>
+
+      <p>很直白：<b>它不需要训练，因为它是手工设计的特征</b>——原文把做法归在 hand-crafted 一类，并在讨论中拿它和 DNN 方法对照（后者通常需要 GPU 加速，泛化性也还有待改进）。它的参照物是视觉里的 SIFT 和 ORB：一套由人设计、有明确几何含义、拿来即用的规则。</p>
+
+      <p>这带来两个直接好处：<b>没有训练集依赖，也没有 GPU 依赖。</b>这也正是它能被 BoW3D 拿去做实时系统底座的原因。</p>
+
+      <h3>③ 轻量性：一组很能说明问题的数字</h3>
+
+      <p>LinK3D 的描述子是 <b>180 维</b>——因为 XoY 平面被切成 180 个扇区。用 64 线激光（i7 处理器，纯 CPU）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$T_{\text{提取}} = 0.030\ \text{s}, \qquad T_{\text{匹配}} = 0.020\ \text{s}, \qquad T_{\text{总}} = 0.050\ \text{s}$$</div>
+      </div>
+
+      <p>原文的对比表里，同表的手工特征方法耗时是：<b>SHOT 2.696 秒、3DSC 7.129 秒</b>（表中还列了 PFH 11.225 秒、FPFH 5.616 秒）。也就是说，在同一个任务上，LinK3D 比别人快一到两个数量级，而且<b>它的那一行 GPU 一栏写着不需要，深度学习方法那一栏全都写着需要</b>。</p>
+
+      <p>原文自己对这个速度的评价是：<i>faster than the sensor frame rate at 10 Hz of a typical rotating LiDAR sensor</i>（比典型旋转激光雷达 10 Hz 的传感器帧率还快）。</p>
+
+      <p>匹配质量方面，它在 KITTI 的三个「非结构化场景」序列上的成功率是：<b>KITTI 01 为 88.6%、KITTI 02 为 97.6%、KITTI 09 为 99.9%</b>。另外它还做了一次「接到里程计上」的实验：把 A-LOAM 的 scan-to-scan 配准换成由 LinK3D 匹配结果经 SVD 求解的配准，精度与原方法<b>可比</b>。</p>
+
+      <h3>④ 局限（原文承认的）</h3>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>非结构化场景会掉</b>
+          <p>原文的原话是：在有效边缘特征很少的非结构化 KITTI 01、02、09 上，RANSAC 之后<b>可能产生不出真正的匹配</b>。KITTI 01 是高速公路场景，02 与 09 的部分扫描来自森林。原文把「提升非结构化场景的鲁棒性」写进了未来工作。</p>
+        </div>
+        <div class="mini-card">
+          <b>旋转不变性是「部分」的</b>
+          <p>它的不变性靠的是<b>主方向</b>（$k_0$ 到最近邻的那条向量），而不是像 RING++ 那样从数学上保证的完整旋转不变。一旦主方向的选取被干扰，描述子就会偏。</p>
+          <p>另外原文把它归为纯几何描述子：<b>对动态物体与遮挡敏感</b>——同一块局部表面在前后两帧里可能被照成了两个样子。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LinK3D__Linear_Keypoints_Representation_for_3D_LiDAR_Poi/5a7640bd10755ec5b0e71d93baab6df5190bfeda3df2c9b84766832adf4a80ea.jpg" alt="LinK3D Fig.5 illustration of the descriptor generation">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Illustration of the descriptor generation. The XoY plane, centered on the current keypoint $k_o$ is divided into 180 sector areas. We first search for the closest keypoint k<sub>1</sub> of k<sub>0</sub>, then the main direction is the vector from $k_0$ to $k_1$. Then the closest keypoint in each sector area is searched for. The searched keypoints k<sub>1</sub>, k<sub>2</sub>, k<sub>3</sub>, etc., are used for describing the current $k_0$. Through the vectorizing operation, by using the distance values between $k_o$ and k<sub>1</sub>, k<sub>2</sub>, k<sub>3</sub>, etc., the 180-dimensional LinK3D descriptor will be obtained.<br>
+          （中译：描述子生成的示意。以当前关键点 $k_0$ 为中心的 XoY 平面被切成 180 个扇区。我们先搜索 $k_0$ 的最近关键点 $k_1$，主方向就是从 $k_0$ 指向 $k_1$ 的向量。然后在每个扇区里搜索最近的关键点。搜到的 $k_1$、$k_2$、$k_3$ 等被用来描述当前的 $k_0$。经过向量化操作，用 $k_0$ 与 $k_1$、$k_2$、$k_3$ 等的距离值，就得到 180 维的 LinK3D 描述子。）<br>
+          <b>怎么看这张图：</b>① 先找中心的那个关键点 $k_0$——它是被描述的对象；② 看从它伸出去的那条<b>带箭头的线</b>——那就是<b>主方向</b>（指向最近的关键点 $k_1$），整个扇区编号都以它为起点逆时针排；③ 再看那一圈像切披萨一样被分成的扇区，每个扇区里只留它自己最近的那一个关键点；④ 最后把「每个扇区里那个最近点到 $k_0$ 的距离」按扇区顺序排成一个 180 长的序列，里面很多位置是 0（那一片扇区没有点）——<b>这个序列就是描述子。</b><br>
+          <b>要记住的一句话：</b>它和直方图类描述子的根本区别在于——<b>直方图丢掉了「哪个方向」，而它保留了方向。</b>正因为保留了方向，「哪一维非零」才能直接当词用。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="metric">
+      <h2>6. 回环的评价指标：回到第一季 0014</h2>
+
+      <p>技术讲完了，来谈一个更「上头」的问题：<b>怎么判断一个回环系统是好是坏？</b></p>
+
+      <p>第一季 <b>0014</b> 课讲过两条：<b>precision / recall</b>，以及那条被反复提起的<b>假阳性铁律</b>——在回环这件事上，一次假阳性的破坏力远大于一次漏检。漏掉一个回环，你只是少了一条约束，地图略糙；把两处根本不同的地方认定成同一个地方，你会往优化里塞一条<b>错误的硬约束</b>，它会把两块本来对得上的地图<b>硬生生拧到一起</b>。地图从此扭曲，而且往往很难从结果上看出是哪一条约束出的问题。</p>
+
+      <p>那么激光侧的实践里，这个铁律是怎么落地的？两个样本给了两个略有不同的答案。</p>
+
+      <h3>Cartographer 的做法：先优化，再看谁被违反</h3>
+
+      <p>Cartographer 的 Table IV 报的成绩是这样的（测试用例 / 约束条数 / <b>精度</b>）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">测试场景</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">约束条数</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">精度</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Aces</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">971</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">98.1%</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Intel</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">5786</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">97.2%</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">MIT Killian Court</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">916</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">93.4%</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">MIT CSAIL</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1857</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">94.1%</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Freiburg bldg 79</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">412</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">99.8%</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Freiburg hospital</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">554</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>77.3%</b></td></tr>
+        </tbody>
+      </table>
+
+      <p>注意这张表里只有精度，<b>没有召回率</b>。那么「真阳性」是怎么定的？原文说得很清楚：<b>一条回环约束，只有在把它加进 SPA 优化之后，受到的违反不超过 20 厘米或 1 度，才算真阳性。</b></p>
+
+      <p>这句话有两层含义，都很有意思：</p>
+
+      <ul>
+        <li><b>它的「真伪」是事后判定的</b>——不是靠事先的距离或时间阈值，而是<b>看这条约束和整体最优解合不合得来</b>。思路有点像第一季 <b>0013</b> 课讲评测协议时的那些坑：判定标准会直接影响你报出来的数字。</li>
+        <li><b>原文并不掩饰假阳性</b>。原话是：<i>while our scan-to-submap matching procedure produces false positives which have to be handled in the optimization (SPA), it manages to provide a sufficient number of loop closure constraints in all test cases.</i>（我们的 scan-to-submap 匹配确实会产生假阳性，需要在优化里处理，但在所有测试用例里它都提供了足够多的回环约束。）</li>
+      </ul>
+
+      <p>而 hospital 那 77.3% 是怎么来的，原文也解释得很坦率：<b>在那个场景里，它选了一个较低的分辨率和一个较低的最低得分阈值</b>，于是假阳性率相对偏高。它还补了一句非常关键的权衡：「可以通过提高最低得分来改善精度，但这会<b>降低某些维度上的解的质量</b>」；并且明确表态——<b>作者认为真值（也就是最终地图质量）才是更好的基准。</b></p>
+
+      <p>这句话其实是在对第一季 <b>0014</b> 的铁律做一次「工程修正」：<b>精度不是唯一的裁判，最终地图才是。</b>为了地图质量，它愿意接受一部分假阳性，靠 Huber 损失（回到第二季 <b>0019</b> 课的鲁棒核）去兜。</p>
+
+      <h3>BoW3D 的做法：F1 与 EP</h3>
+
+      <p>BoW3D 用的是另一套语言：<b>最大 $F_1$ 分数</b>和<b>扩展精度 EP</b>。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$F_1 = 2\times\frac{P\times R}{P+R}, \qquad EP = \frac{1}{2}\left(P_{R0} + R_{P100}\right)$$</div>
+      </div>
+
+      <p>$P_{R0}$ 是「最小召回处的精度」，$R_{P100}$ 是「<b>100% 精度处的最大召回</b>」。</p>
+
+      <p>第二项值得停一下：<b>$R_{P100}$ 就是视觉侧那个我们很熟的 R@100P。</b>第一季 <b>0013</b> 课讲过它的来历与它「历史地位的变化」——它之所以流行，是因为它把「一次都不能错」这条铁律直接编码进了指标里：在保证零假阳性的前提下，你能唤回多少真回环。而 BoW3D 的 EP 正是把它和 $P_{R0}$ 平均了一下。换句话说，<b>词袋这条路线在评价语言上，是直接继承了视觉侧的。</b></p>
+
+      <h3>那么，激光侧的回环指标与视觉侧有何不同？</h3>
+
+      <p>按这三篇材料能如实说出来的差别有三条：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 视觉侧更依赖「纯检索」指标</b>
+          <p>视觉侧的图像数据库动辄上万张，检索本身就很难，所以 R@100P 这类「只看候选排序质量」的指标是标配。</p>
+          <p>而激光侧有些工作（比如 Cartographer）干脆<b>不报召回</b>，因为它更关心「这条约束加进去之后地图好不好」——精度只是中间量。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 激光侧更常报「最终地图/轨迹质量」</b>
+          <p>Cartographer 报的是相对位姿误差与最终地图；BoW3D 除了检索指标，还报了校正之后的角误差、平移误差和 RMSE 的下降（KITTI 00 为 0.685°/0.764 m，KITTI 08 为 1.480°/0.037 m）。</p>
+          <p>换句话说，激光侧的回环论文往往要证明「加上我之后，整条轨迹变好了」。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 维度也不一样：单帧信息量 vs 候选数量</b>
+          <p>激光单帧点云的信息量远大于一张灰度图，因此「区分一个地方」相对更容易；但一旦判错，它的破坏也更直接——它会把两块高精度的局部地图强行焊在一起。</p>
+          <p>这正好解释了为什么 Cartographer 宁可用一个较低的阈值换更多约束（再靠鲁棒核兜），而 BoW3D 要用 $R_{P100}$ 这种「零假阳性」口径来自证。</p>
+        </div>
+      </div>
+
+      <p>我们做这一节的判断：<b>两边其实在往中间走。</b>视觉侧越来越承认「检索分数高不等于最终地图好」（0013 课那些评测坑就是证据）；激光侧也开始引入 R@100P 这样的口径（BoW3D 的 EP）。<b>唯一没变的还是那条铁律：假阳性必须被当成一等公民来对待。</b></p>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>7. 三篇横向对比，以及我们的判断</h2>
+
+      <p>组课的老规矩：先用一张表把三篇的主干摆在一起，表里空着的地方写成「未提及」，一个字都不补。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">论文</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">输入传感器</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">描述子类型</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">是否需训练</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">是否旋转不变</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">检索方式</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">评估数据集</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">原文承认的短板</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>Cartographer</b><br>（2016）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">2D 激光</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">概率栅格子图<br>（纯几何）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否<br>（靠 CSM 搜索）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">分支定界 CSM</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">自采建筑 + Radish 公开集<br>（Aces / Intel / Killian / CSAIL / bldg79 / hospital）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">仅 2D；hospital 精度只有 77.3%；需子图完工，有延迟</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>BoW3D</b><br>（2023）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3D 激光</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">LinK3D 词袋</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否<br>（也不需要词典文件）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">部分<br>（靠主方向）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">哈希表 + 类 tf-idf 比值</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">KITTI 00/02/05/06/07/08</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">依赖 LinK3D 的特征质量；验证以 KITTI 为主；未充分处理动态物体</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>LinK3D</b><br>（2024）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">3D 激光</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">180 维扇区向量</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否<br>（手工特征）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">部分<br>（靠主方向）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">暴力匹配 + RANSAC</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">KITTI、M2DGR、Steven VLP16</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">非结构化场景（边缘特征少）成功率偏低；对动态与遮挡敏感</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>我们的判断（注意：以下是我们的评价，不是原文的自评）</h3>
+
+      <div class="callout">
+        <h4>哪几篇真的带来了新东西，哪几篇偏增量</h4>
+        <p><b>Cartographer 是真正的新东西。</b>它的贡献不是「用了扫描匹配」（那是老技术），而是把<b>一个精确的全局搜索算法</b>配上<b>为它量身定做的预计算栅格</b>，让 2D 回环第一次能在普通 CPU 上实时跑完——论文里 Deutsches 博物馆那一段（1913 秒数据、2253 米轨迹）在 4 线程下墙钟 360 秒、约 <b>5.3 倍实时</b>，这个数字是这套设计的直接后果。它的「上界」那一步是这个模块里最漂亮的一段数学。</p>
+        <p><b>BoW3D 的贡献在于「搬」。它把成熟的词袋机制搬到了激光上，并且证明在纯 CPU 上能实时（KITTI 00 约 48 毫秒）。</b>它的新颖性主要在工程侧：发现 LinK3D 的「维有含义」这一性质可以省掉整棵词汇树，以及把点对点匹配变成 6 自由度回环位姿——这一点确实是当时对比方法（只能给 1 自由度或 3 自由度）做不到的。</p>
+        <p><b>LinK3D 是一篇结构很干净的描述子论文</b>，它的价值主要在「底座」和那批耗时的对比数字上（0.050 秒 vs SHOT 2.696 秒、3DSC 7.129 秒）。按材料给的判断，<b>它是 BoW3D 的铺垫，不必单开一节</b>——本节的安排也遵循了这个判断。</p>
+        <p>一句话总结这三篇的关系：<b>Cartographer 告诉你「几何可以不用描述子」；BoW3D + LinK3D 告诉你「描述子可以不用训练」。</b>两条路各解决了「回环的第一步」里的一半问题——一个解决速度，一个解决「不用遍历」。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么回环必须拆成「快速找候选」与「对齐确认」两步，而不能一步做完？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为这两件事的<b>代价结构完全不同</b>。</p>
+              <p>「找候选」要面对的是<b>整个历史</b>——在 5 公里园区里可能攒下几千帧，每一帧都做一次精细配准（按每帧 5 毫秒算）就是 25 秒；而激光雷达每 0.1 秒就来一帧。也就是说，一步做完的代价是<b>指数级地落后于传感器</b>，系统根本没有实时性可言。</p>
+              <p>而「对齐确认」面对的是<b>极少数候选</b>，可以做得又慢又精。反过来，如果为了快而把「对齐」也做粗，就会直接撞上第一季 0014 课讲的假阳性铁律——<b>一次错误的回环会把两块地图强行拧在一起。</b></p>
+              <p>所以正确的分工是：<b>用一个极廉价（可能不太准）的粗筛把候选从几千压到几个，再在几个候选上花大代价做精确对齐与验证。</b>本节的三个系统，其实都在解决第一步；区别只是路径不同——Cartographer 靠几何搜索加速，BoW3D 靠描述子检索。</p>
+            </div></details>
+          </li>
+          <li>分支定界为什么能保证「不丢解」？请说清楚「上界」在这件事里扮演的角色。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>关键在于剪枝的<b>判定条件</b>：只有当某个节点的上界<b>已经低于当前已知的最优解</b>时才剪掉它。</p>
+              <p>因为上界的定义是「这个节点子树里所有可能解的得分都<b>不会超过</b>这个值」。如果连这个「最乐观的估计」都比不上已经找到的解，那么这一整片区域里确实不存在更好的解——<b>剪掉它不会漏掉任何东西</b>。原文因此明确说：<i>the algorithm is exact</i>（这个算法是精确的），它给出与朴素暴力搜索完全相同的结果。</p>
+              <p>反过来说，如果上界算错了（偏小），就会把真正的最优解剪掉——所以「上界必须是合法的上界」是整套方法的生命线。Cartographer 用的那个「先取最大再求和」的形式，正是为了保证这一点：<b>让每个点各自挑各自最优的位置，显然比让所有点共用一个位姿更宽松，因此得到的分数一定不小于真实的最优值。</b></p>
+              <p>顺带一提，上界的用途不止剪枝——DFS 访问子节点时也按上界从大到小排序，先走最有希望的那一支，这能让「当前最优解」更快被抬高，进而剪掉更多分支。</p>
+            </div></details>
+          </li>
+          <li>BoW3D 为什么不需要离线训练词典，而 ORB-SLAM 的 DBoW2 需要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>差别出在<b>描述子的每一维有没有天然含义</b>。</p>
+              <p>ORB 这类描述子是一串在优化/聚类过程中形成的数值，<b>哪一维代表什么，是说不出来的</b>。所以必须先用大量图像离线训练一棵词汇树，把连续的高维空间切成一个个离散的「词」，之后才能谈「词袋」。</p>
+              <p>而 LinK3D 的描述子是<b>按几何定义手工构造</b>的：XoY 平面被切成 180 个扇区，<b>第 $i$ 维就对应第 $i$ 个扇区</b>。既然「维」本身就有含义，那么「第 $i$ 维非零、值是 $d$」这件事本身就可以直接拿来当词——原文把词定义成<b>非零维值（Dim-value）+ 维编号（Dim-ID）</b>这一对组合。</p>
+              <p>所以 BoW3D 不需要额外的词典文件，内存里的结构直接就是哈希表：词 → 出现过它的地点集合。原文也把这当成一个实用优点：<i>our BoW3D does not require to load additional vocabulary file, which is more convenient for users.</i></p>
+              <p>代价是：<b>它的描述子质量上限被 LinK3D 锁死了。</b>原文自己承认的短板之一就是「依赖 LinK3D 特征质量」。</p>
+            </div></details>
+          </li>
+          <li>Cartographer 的 Table IV 只报精度、不报召回，而且把「真阳性」定义为「加进 SPA 优化后违反不超过 20 厘米或 1 度」。这种判定方式有什么好处和风险？请结合第一季 0014 课的假阳性铁律来谈。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>好处：它衡量的是「这条约束在地图里到底站不站得住脚」。</b>回环约束的最终用途就是喂给位姿图优化，所以「加进去之后和整体解合不合得来」其实是最贴近用途的判据。这也解释了为什么作者敢说「真值才是更好的基准」——它在意的是<b>最终地图</b>，不是检索分数。</p>
+              <p><b>风险有两个。</b>其一，这个判据<b>依赖后面那一步优化</b>：如果优化器本身就不够好（比如外点太多、Huber 核的阈值不合适），它会把一些本来合理的约束判成「被违反」，真阳性率就被低估了。其二，它<b>不是一个可跨方法比较的口径</b>——别人报召回、它报「优化后的约束精度」，数字之间没法直接对齐。</p>
+              <p>但把它放回 0014 课的铁律里看，它的取舍其实很清楚：<b>hospital 那 77.3% 是因为主动选了低分辨率 + 低最低得分阈值</b>，也就是主动放宽了「宁可漏不可错」这条线，换更多约束。原文还坦率地承认，提高最低得分能改善精度，<b>但会降低某些维度上的解的质量</b>。</p>
+              <p>所以这是一次<b>有意识的权衡</b>，而不是疏忽：它选择让假阳性进到优化里，再用鲁棒核（Huber 损失）去吸收它们。这也说明 0014 的铁律在工程里不是教条——<b>它真正约束的是「你不能对假阳性视而不见」，而不是「你必须把它降到零」。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0091-退化环境与配准-可切换方案与低重叠对齐.html">← 退化环境与配准：可切换方案与低重叠对齐</a>
+        <a class="next" href="0093-激光回环下-旋转平移不变的地点识别.html">激光回环（下）：旋转平移不变的地点识别 →</a>
+      </div>
+      <p class="foot-note">这一节把「找回环」的两条路都摆出来了。下一节只剩一篇，但那一篇的数学密度是整季最高的——慢慢来 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

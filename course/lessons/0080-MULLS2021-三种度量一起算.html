@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MULLS（2021）：三种度量一起算 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0080</div>
+      <h1>MULLS（2021）：三种度量一起算</h1>
+      <p class="subtitle">同一帧点云里有地面、有墙、还有一根电线杆——能不能让每种东西用最合身的那种「距离」去配准？📐</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多度量线性最小二乘 ICP · 六类几何特征 · TEASER 回环</span>
+        <span>👥 作者：Yue Pan、Pengchuan Xiao、Yujie He、Zhenlei Shao、Zesong Li</span>
+        <span>📅 2021 · <i>MULLS: Versatile LiDAR SLAM via Multi-metric Linear Least Square</i>（ICRA）</span>
+      </div>
+      <div class="toc">
+        <a href="#problem">它想解决什么</a>
+        <a href="#metric">多度量指什么</a>
+        <a href="#feature">六类特征</a>
+        <a href="#coarse">粗到细两级</a>
+        <a href="#loop">回环用 TEASER</a>
+        <a href="#exp">实验数字</a>
+        <a href="#limit">局限与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="problem">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能说清：<b>点-点、点-面、点-线</b>三种误差分别用在哪些特征上；MULLS 把「六类几何特征 + 三种度量」压成一个<b>线性最小二乘</b>一次解出六自由度的做法；以及 TEASER 在这套系统里到底出现在哪一步。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>第二季 <b>0022</b> 课讲过的「点到面残差」，就是本篇三种度量里的一种；第二季 <b>0023</b> 课的 PCL（ICP / GICP / NDT）是「整片点云用统一度量」，本篇正是它的升级版。另外接第一季 <b>0006</b> 课（特征法 vs 直接法——本篇是特征法）与 <b>0014</b> 课（回环检测——本篇不走词袋，走几何全局配准）。</p>
+        </div>
+      </div>
+
+      <h2>1. 它想解决的，是一个「通用」的难题</h2>
+
+      <p>先讲人话。很多激光 SLAM 方法提特征的方式，是<b>绑死在某一类雷达上</b>的。比如有的方法先按「扫描线号」把点排成一张距离图像，再在图像上找边缘；有的方法假设雷达一圈一圈均匀扫过去。这些做法在原来的雷达上很好用，但<b>换一台雷达就可能直接废掉</b>——固态激光雷达视场角小、扫描线不是一圈圈的；不同线束的机械雷达，扫描模式也天差地别。</p>
+
+      <p>MULLS 的作者想做的，是一个<b>跟雷达型号无关、也跟场景无关</b>的通用前端。它的做法是：<b>绕开「扫描线」这种依赖硬件的结构，直接从原始三维点云的几何本身下手。</b>先把点按几何形状分成六类，再让每一类用最合身的那种「距离」去配准，三种距离一起写进同一个线性最小二乘，一次解出位姿。后端再用子图位姿图（PGO）+ TEASER 回环把长时的漂移压住。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_MULLS__Versatile_LiDAR_SLAM_via_Multi-metric_Linear_Leas/828b235c9dc820a3c094c156d7861f2524b7ac9da1117cd49a7933b1929b9f1c.jpg" alt="MULLS system overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Overview of the proposed MULLS-SLAM system: (a) the point cloud from a single scan of a multi-beam spinning LiDAR, (b) various types of feature points (ground, facade, pillar, beam) extracted from the scan, (c) registered point cloud of the local map, (d) feature points of the local map, (e) global registration between revisited submaps by TEASER [46], (f) loop closure edges among submaps, (g) generated consistent map and trajectory.<br>
+          （中译：所提出 MULLS-SLAM 系统的总览：(a) 多线束旋转激光雷达的单帧点云；(b) 从该帧中提取的各类特征点（地面、立面、柱、梁）；(c) 配准后的局部地图点云；(d) 局部地图的特征点；(e) 用 TEASER 在重访的子图之间做全局配准；(f) 子图之间的回环边；(g) 最终一致的地图与轨迹。）<br>
+          <b>怎么看这张图：</b>这是一张「一图看全」的总纲图，请按字母顺序从左往右读。① 先看 (a)→(b)：<b>一帧点云被切成了一层一层的彩色特征点</b>，这就是本课第 3 节要讲的「六类特征」；② 再看 (e)：图上标的就是 <b>TEASER</b>，它出现的位置是<b>子图与子图之间</b>，不是帧与帧之间——这一点后面会专门澄清，是个高频误解点；③ 最后看 (g)：所有回环边连上之后，地图与轨迹被拉成一致的一整条。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="metric">
+      <h2>2. ★ 多度量（multi-metric）到底指什么</h2>
+
+      <p>「多度量」是这篇论文名字的来源，也是它最核心的一招。要理解它，先要接受一个很朴素的事实：<b>场景里的几何不是只有一种。</b></p>
+
+      <p>想一想你站在一个街角看到的东西：脚下是一整片<b>地面</b>，左边是一整面<b>墙</b>，前面立着一根<b>电线杆</b>。这三样东西的「形状」完全不同——地面和墙是<b>面</b>，电线杆是<b>线</b>。传统 ICP 的做法是：<b>用同一种距离标准去衡量所有点</b>，比如一律算「点到点的距离」。那么结果一定是：在面上表现还行，在杆子上就吃亏。</p>
+
+      <p>MULLS 的观点是：<b>既然几何有好几类，就让每一类用它最合身的那把尺子。</b>它同时用了三把尺子：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>点-点（point-to-point）</b>
+          <p>直接量「一个点和另一个点」之间的距离。原文说它用在<b>顶点 V</b> 上——那些高曲率、孤零零的角点，周围既没有稳定的面、也没有稳定的线，只能和最近的另一个点直接比。</p>
+          <p>原文式：$d_i^{\text{po}\to\text{po}}=\|r_i\|$。</p>
+        </div>
+        <div class="mini-card">
+          <b>点-面（point-to-plane）</b>
+          <p>把一个点<b>垂直投到</b>一个平面上，量「点到平面的距离」。原文说它用在<b>地面 G、立面 F、屋顶 R</b> 上——这些大片平坦的地方，用「面」来描述比用「点」稳得多。</p>
+          <p>原文式：$d_j^{\text{po}\to\text{pl}}=r_j\cdot n_j$。</p>
+        </div>
+        <div class="mini-card">
+          <b>点-线（point-to-line）</b>
+          <p>把一个点投到一条<b>直线的垂足</b>上，量「点到直线的距离」。原文说它用在<b>柱 P、梁 B</b> 上——细长结构用一条线来描述最自然。</p>
+          <p>原文式：$d_k^{\text{po}\to\text{li}}=\|r_k\times v_k\|$。</p>
+        </div>
+      </div>
+
+      <p>然后关键的一步来了：<b>这三把尺子不是分开用三次，而是拼在一起、一次解。</b>原文把它们写进同一个最小化目标（Eq.5），每一项带上自己的权重：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\{R^{*},t^{*}\}=\arg\min\sum_{\text{顶点}} w\,(d^{\text{po}\to\text{po}})^2+\sum_{\text{面}} w\,(d^{\text{po}\to\text{pl}})^2+\sum_{\text{线}} w\,(d^{\text{po}\to\text{li}})^2$$</div>
+      </div>
+
+      <p>这里要接一下第二季 <b>0022</b> 课：那一课讲的「点到面残差」正是上面第二项；再往上追，第二季 <b>0019</b> 课讲过，把残差累加成平方和、再用迭代方法求解，就是最小二乘的标准套路。<b>MULLS 的新意不在残差形式，而在「按几何类型分配不同的残差形式，然后一次联合求解」。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <defs>
+            <marker id="m80g" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#2e7d4f"/></marker>
+            <marker id="m80b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 Z" fill="#2f5e92"/></marker>
+          </defs>
+
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一个街角：三种几何，三种尺子</text>
+          <text x="450" y="54" text-anchor="middle" font-size="12" fill="#7a8a99">让点去找它该待的那个面 / 那条线，而不是去找另一个点</text>
+
+          <!-- 建筑立面 -->
+          <rect x="90" y="86" width="160" height="254" fill="#d9dee5" stroke="#9aa3ad" stroke-width="2"/>
+          <text x="170" y="322" text-anchor="middle" font-size="12" fill="#5b6571">建筑立面</text>
+
+          <!-- 地面 -->
+          <rect x="90" y="340" width="770" height="50" fill="#e6f4ea" stroke="#9ecaa8" stroke-width="2"/>
+          <text x="742" y="372" text-anchor="middle" font-size="12" fill="#2e7d4f">地面</text>
+
+          <!-- 电线杆 -->
+          <rect x="650" y="86" width="16" height="254" fill="#bcd4ea" stroke="#5a86b3" stroke-width="2"/>
+          <text x="712" y="112" font-size="12" fill="#2f5e92">电线杆</text>
+
+          <!-- 点-面（立面） -->
+          <circle cx="300" cy="180" r="5.5" fill="#2e7d4f"/>
+          <line x1="300" y1="180" x2="256" y2="180" stroke="#2e7d4f" stroke-width="2" marker-end="url(#m80g)"/>
+          <text x="278" y="170" text-anchor="middle" font-size="11" fill="#2e7d4f">点-面</text>
+
+          <!-- 点-面（地面） -->
+          <circle cx="430" cy="296" r="5.5" fill="#2e7d4f"/>
+          <line x1="430" y1="296" x2="430" y2="336" stroke="#2e7d4f" stroke-width="2" marker-end="url(#m80g)"/>
+          <text x="452" y="320" font-size="11" fill="#2e7d4f">垂到地面</text>
+
+          <!-- 点-线（杆） -->
+          <circle cx="596" cy="212" r="5.5" fill="#2f5e92"/>
+          <line x1="596" y1="212" x2="646" y2="212" stroke="#2f5e92" stroke-width="2" marker-end="url(#m80b)"/>
+          <text x="622" y="202" text-anchor="middle" font-size="11" fill="#2f5e92">点-线</text>
+
+          <!-- 点-点（顶点） -->
+          <circle cx="258" cy="94" r="5.5" fill="#c79a00"/>
+          <circle cx="276" cy="108" r="5.5" fill="#c79a00"/>
+          <line x1="258" y1="94" x2="276" y2="108" stroke="#c79a00" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="267" y="80" text-anchor="middle" font-size="11" fill="#a87f00">点-点</text>
+
+          <!-- 图例 -->
+          <rect x="80" y="424" width="14" height="14" fill="#2e7d4f"/>
+          <text x="100" y="436" font-size="12.5" fill="#2e7d4f">点-面（地面 / 立面 / 屋顶）</text>
+          <rect x="360" y="424" width="14" height="14" fill="#2f5e92"/>
+          <text x="380" y="436" font-size="12.5" fill="#2f5e92">点-线（柱 / 梁）</text>
+          <rect x="570" y="424" width="14" height="14" fill="#c79a00"/>
+          <text x="590" y="436" font-size="12.5" fill="#a87f00">点-点（顶点）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个真实街角——地面、建筑立面、一根电线杆——三类几何各配一把最合身的尺子。<br>
+          <b>怎么看这张图：</b>① <b>绿色的两处「点-面」</b>：地面上的那个点，沿垂线方向投到地面上（画了一条向下的垂线）；立面上的那个点，沿水平方向投到墙面上（画了一条向左的箭头）。两者量的都是「点到面的垂直距离」；② <b>蓝色的「点-线」</b>：电线杆旁边的那个点，投到杆子的轴线上，量的是「点到直线的距离」；③ <b>黄色的「点-点」</b>：建筑顶角那两个孤立的高曲率点，附近没有稳定的面或线可投，只能两点之间直接量距离。三种颜色 = 三种度量。<br>
+          <b>要记住的一句话：</b>点和点直接比最笨；让点去找它<b>该待的那个面、或那条线</b>，才更准。这就是「多度量」三个字的全部意思。
+        </figcaption>
+      </figure>
+
+      <p>最后还有一个「便宜」的好处，值得单独说，因为它解释了为什么 MULLS 快：<b>三种残差拼好之后，可以用一次线性最小二乘直接解出位姿。</b>秘诀是一个<b>小角度近似</b>——把旋转矩阵近似写成 $R\approx I+[\alpha\ \beta\ \gamma]_\times$（原文 Eq.6），其中 $\alpha,\beta,\gamma$ 都被看成小量。这样一来，残差对位姿就变成了线性的，于是设计矩阵 $A$ 和观测向量 $b$ 按三类度量拼起来（Eq.7–8），位姿就能用高斯-马尔可夫公式闭式解出：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\hat{\xi}=(A^{T}PA)^{-1}A^{T}Pb$$</div>
+      </div>
+
+      <p>说得直白一点：<b>别人要反复迭代好几次非线性优化，MULLS 一次线性解就出结果。</b>原文 Table V 里，每一次变换估计只花 <b>0.2 ms</b>。当然代价也是明显的——小角度近似只在「两帧之间姿态变化不大」时成立，所以它必须要有一个还算靠谱的初值。这就引出了下一节。
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>MULLS 的三种度量（点-点、点-面、点-线），是用来描述哪一类点的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文 Eq.5 与 Fig.4 写得很清楚：点-点只用于顶点 V，点-面用于地面 G / 立面 F / 屋顶 R，点-线用于柱 P / 梁 B，三者带权重联合最小化。" onclick="lessonKit.answer(this,'q0080a')">按特征分着用</button>
+          <button data-correct="no" data-explanation="如果所有点都套同一种度量，那就退回成普通 ICP 了。MULLS 的「多」恰恰在于：先把点按几何类型分好，再给每一类配最合身的度量。" onclick="lessonKit.answer(this,'q0080a')">所有点一起用</button>
+        </div>
+        <div class="quiz-feedback" id="q0080a"></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_MULLS__Versatile_LiDAR_SLAM_via_Multi-metric_Linear_Leas/286f021c71b94bbf3140333895f39a5e2c2353b79c59ee973d0cf9079e09a601.jpg" alt="three distance error metrics">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Overview of three different distance error metrics.<br>
+          （中译：三种不同距离误差度量的总览。）<br>
+          <b>怎么看这张图：</b>这是「多度量」的核心图，正是原文自己画的三把尺子。① 左图是<b>点-点</b>：两个点之间连一条线，量这条线的长度；② 中图是<b>点-面</b>：点沿法向投到平面上，量这段垂线的长度；③ 右图是<b>点-线</b>：点投到一条直线上，量垂线的长度。请把它和上面那张自绘的街角图对着看——<b>抽象公式里的三种符号，一一对应到真实场景里的三样东西</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="feature">
+      <h2>3. ★ 一根点云怎么被分成六类特征</h2>
+
+      <p>要用「三种尺子」，前提是<b>你得先知道每个点属于哪一类</b>。MULLS 分类的方式，完全不看雷达的扫描线，只看<b>局部点云的形状</b>。</p>
+
+      <p>第一步，先把地面摘出来。原文用的是<b>双阈值地面滤波</b>（Eq.2）+ RANSAC：对每个点算它和所在局部区域最低点的相对高度 $h_k-h_{\min}^{(i)}$，如果这个差超过阈值 $\delta h_1$，或者它相对邻域的高度差超过 $\delta h_2$，就判为<b>非地面</b>。剩下的就是 <b>地面 G</b>。</p>
+
+      <p>第二步，对剩下的非地面点，取它的邻域做 <b>PCA（主成分分析）</b>——也就是算出这堆邻居点的协方差矩阵，再求它的三个特征值 $\lambda_1>\lambda_2>\lambda_3$。不知道 PCA 也没关系，一句话说清：</p>
+
+      <div class="callout">
+        <h4>特征值在看什么</h4>
+        <p>把一小撮点想象成一把撒开的沙子。<b>特征值就是「这些点在哪个方向上铺得最开」。</b><br>
+        ① 只在一个方向铺得开、另外两个方向都很薄 → 这些点挤在一条线上 → 这是<b>线</b>；<br>
+        ② 在两个方向铺得开、第三个方向很薄 → 这些点摊在一个平面上 → 这是<b>面</b>；<br>
+        ③ 三个方向都差不多散 → 乱糟糟一团 → 这是<b>散点</b>（原文归为顶点一类）。</p>
+      </div>
+
+      <p>基于这三个特征值，原文定义了三个量来量化上面的直觉：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\sigma_{1D}=\frac{\lambda_1-\lambda_2}{\lambda_1}\quad(\text{线度}),\qquad \sigma_{2D}=\frac{\lambda_2-\lambda_3}{\lambda_1}\quad(\text{面度}),\qquad \sigma_c=\frac{\lambda_3}{\lambda_1+\lambda_2+\lambda_3}\quad(\text{曲率})$$</div>
+      </div>
+
+      <p>于是整帧点云被分成<b>六类</b>：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.93rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">类别</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">中文</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">真实世界里是什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">配准用哪种度量</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>G</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">地面</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">路面、广场（由双阈值 + RANSAC 单独分出）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点-面</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>F</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">立面</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">墙面、围栏面</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点-面</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>R</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">屋顶</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">房顶、雨棚一类的水平面</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点-面</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>P</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">柱</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">电线杆、路灯杆、树干</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点-线</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>B</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">梁</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">护栏、路缘、门框横梁</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点-线</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>V</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">顶点</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">屋角、墙与墙交汇的尖角（高曲率、孤立）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点-点</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>分类完之后还有两个收尾动作：一是做 <b>NMS（非极大抑制）</b>，二是<b>等向下采样</b>——目的是别让特征全挤在某一面墙上。另外还有一个细节很关键：顶点还会额外编码一个 <b>NCC</b> 描述子（Eq.3），这个描述子不是给前端配准用的，而是留给<b>后端回环</b>做候选筛选用的（见第 5 节）。</p>
+    </section>
+
+    <section class="section-card" id="coarse">
+      <h2>4. ★ 粗到细：两级配准，一次线性解</h2>
+
+      <p>上一节说到，线性最小二乘只在「姿态变化不大」时成立。为了让这个近似站得住，MULLS 的前端是<b>两级（coarse-to-fine，粗到细）</b>的。</p>
+
+      <p>具体是哪两级？原文 Fig. 5(a) 写得明确：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>第一级：scan-to-scan（帧对帧）</b>
+          <p>拿<b>当前帧的稀疏特征点</b>配<b>上一帧的稠密特征点</b>，只跑<b>很少几次迭代</b>。它的任务不是求准，而是给出一个「大概在哪」的初值——就像你出门前先看一眼大致方向。</p>
+        </div>
+        <div class="mini-card">
+          <b>第二级：scan-to-map（帧对局部地图）</b>
+          <p>把<b>局部地图里的特征点</b>当目标点云，拿第一级的估计结果当起点，<b>一直迭代到收敛</b>。这一级才是真正出精度的。</p>
+        </div>
+      </div>
+
+      <p>这里必须诚实地补一句原文的消融结论，因为它容易让人误解：<b>原文并没有说 scan-to-scan 这一级是必需的。</b>它在 Table II 里对比了几种配置，其中 (s1) 表示「只跑 1 次迭代的 scan-to-scan」，ATE 明显变差（平均 2.57%）；而 (s5m5)「先扫对扫 5 次、再扫对图 5 次」和 (m5)「只扫对图 5 次」<b>表现接近</b>。原文的原话大意是：<b>一旦局部地图建起来了，scan-to-map 之前再做 scan-to-scan 就不必要了。</b>所以 MULLS 最终采用的配置是「scan-to-map 迭代到收敛」。</p>
+
+      <p>那为什么还要保留「粗到细」这个说法？因为它描述的是<b>整个系统层面的层级结构</b>：前端用（可选的）帧对帧给初值、帧对图收敛；后端用 TEASER 给回环的初值、再用 map-to-map 精修。两层都是「先给个大概、再抠细节」——这才是「层级」的完整含义。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <defs>
+            <marker id="m80ar" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#7a8a99"/></marker>
+          </defs>
+
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">粗配准 → 精配准：两级接力</text>
+
+          <!-- 面板 1 -->
+          <rect x="40" y="58" width="240" height="200" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="160" y="48" text-anchor="middle" font-size="13.5" font-weight="700" fill="#3b4a5e">① 粗配准前：错开一大截</text>
+          <rect x="66" y="96" width="66" height="66" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.4"/>
+          <rect x="156" y="160" width="66" height="66" fill="#f0c9a8" stroke="#c98a55" stroke-width="1.4"/>
+          <line x1="60" y1="164" x2="170" y2="164" stroke="#90a4ae" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <line x1="150" y1="228" x2="240" y2="228" stroke="#c98a55" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="160" y="246" text-anchor="middle" font-size="11" fill="#8a99a8">灰色 = 地图　橙色 = 当前帧</text>
+
+          <!-- 箭头 -->
+          <line x1="286" y1="158" x2="322" y2="158" stroke="#7a8a99" stroke-width="2.4" marker-end="url(#m80ar)"/>
+
+          <!-- 面板 2 -->
+          <rect x="330" y="58" width="240" height="200" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="450" y="48" text-anchor="middle" font-size="13.5" font-weight="700" fill="#3b4a5e">② 粗配准后：大致重合</text>
+          <rect x="376" y="118" width="66" height="66" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.4"/>
+          <rect x="388" y="130" width="66" height="66" fill="#f0c9a8" stroke="#c98a55" stroke-width="1.4"/>
+          <line x1="370" y1="186" x2="470" y2="186" stroke="#90a4ae" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="450" y="246" text-anchor="middle" font-size="11" fill="#8a99a8">大致对上，够给初值了</text>
+
+          <!-- 箭头 -->
+          <line x1="576" y1="158" x2="612" y2="158" stroke="#7a8a99" stroke-width="2.4" marker-end="url(#m80ar)"/>
+
+          <!-- 面板 3 -->
+          <rect x="620" y="58" width="240" height="200" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="740" y="48" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2f6d51">③ 精配准后：严丝合缝</text>
+          <rect x="666" y="122" width="66" height="66" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.4"/>
+          <rect x="668" y="123" width="66" height="66" fill="#f0c9a8" stroke="#c98a55" stroke-width="1.4" opacity="0.72"/>
+          <line x1="660" y1="190" x2="760" y2="190" stroke="#90a4ae" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <text x="740" y="246" text-anchor="middle" font-size="11" fill="#4a8a6a">两块几乎重叠，细节贴合</text>
+
+          <text x="450" y="330" text-anchor="middle" font-size="12.5" fill="#5a4a42">前端两级都是多度量线性最小二乘 ICP；TEASER 只出现在后端回环的粗配准里</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条「从错开 → 大致重合 → 严丝合缝」的配准流水线。每一格里灰色代表「地图里已经有的东西」，橙色代表「当前这一帧扫到的东西」。<br>
+          <b>怎么看这张图：</b>① 第一格里，橙色的墙角与灰色的墙角<b>错开一大截</b>——这时候直接做精细匹配很容易掉进错误答案，所以先别急；② 第二格，橙色被搬到了灰色附近，位置<b>大致对上了</b>，但两块的边还没贴合——这就是粗配准的作用，它只负责「别跑太远」；③ 第三格，两块几乎完全重叠——这是精配准收敛后的结果。<br>
+          <b>要记住的一句话：</b>粗配准负责「把大概位置对上」，精配准负责「把细节贴合」。<b>但请注意底部那行字</b>：MULLS 前端两级用的都是线性最小二乘 ICP，TEASER 只在后端回环里当粗配准——这一点下一节会专门讲。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_MULLS__Versatile_LiDAR_SLAM_via_Multi-metric_Linear_Leas/d8bf9ffdc9a25786ac60755e2c43b68e5a9da2d3e51119c221a65e96943b7eb2.jpg" alt="MULLS overall workflow front-end and back-end">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Overall workflow of MULLS-SLAM: (a) front-end, (b) back-end.<br>
+          （中译：MULLS-SLAM 的整体工作流：(a) 前端，(b) 后端。）<br>
+          <b>怎么看这张图：</b>① 左半边 (a) 是前端：特征提取 → 帧对帧 → 帧对局部地图，最后把当前帧的特征加进局部地图（原文明说局部地图按固定半径裁剪）；② 右半边 (b) 是后端：把周期性保存的<b>子图</b>当处理单元，子图之间的相邻边与回环边由 <b>TEASER 全局配准</b>来构建和验证；③ 请特别留意 (a) 与 (b) 是<b>分开画的两块</b>——原文把 TEASER 放在 (b) 里，这正是「前端不用 TEASER」这条判断的出处。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="loop">
+      <h2>5. ★ 回环：TEASER 把重访的子图重新对齐</h2>
+
+      <p>前端只管相邻帧，跑久了必然会漂。MULLS 的后端用<b>分层位姿图优化（PGO）</b>兜底。这里「分层」的意思是：<b>子图内部先各自配准好，子图之间再连边</b>——原文 Fig. 6 画的就是这两个层次（inter-submap 与 inner-submap）。</p>
+
+      <p>当机器人重访某地，后端要判断「这两个子图是不是同一个地方」，然后把它对齐。原文的流程是三步：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        ① <b>初选候选</b>：用顶点特征编码的 <b>NCC 描述子</b>，算余弦相似度，挑出可能的子图对<br>
+        ↓<br>
+        ② <b>TEASER 全局配准</b>：对候选子图做鲁棒的全局配准，得到一个初值<br>
+        ↓<br>
+        ③ <b>map-to-map 精修</b>：拿 TEASER 的结果当初值，再用 MULLS-ICP 把这条子图间边精修到位，最后 PGO 把整张图拉直
+      </div>
+
+      <p>这里要专门澄清一个<b>高频误解点</b>：经常有人以为「MULLS 的配准靠 TEASER」。<b>不是。</b>原文 Fig. 1(e) 和 Fig. 5(b) 都把 TEASER 放在<b>子图与子图之间</b>这一环，也就是后端回环；<b>前端 scan-to-scan / scan-to-map 用的始终是多度量线性最小二乘 ICP</b>。TEASER 在这里的角色是「鲁棒的粗配准」——原文说它用截断最小二乘估计加半定松弛，比基于 RANSAC 或分支定界的方法更高效、更抗离群点。</p>
+
+      <p>这也接上了第一季 <b>0014</b> 课（回环检测综述）。视觉 SLAM 里找回环常用<b>词袋（BoW）</b>——把图像描述成「词」再比对；而 MULLS 走的是另一条路：<b>几何描述子初选 + 几何全局配准验证</b>，不做词袋。两条路的目的一样（找到「我是不是来过」），但判据完全不同。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>MULLS 的前端精配准（scan-to-map），是用 TEASER 这类全局配准完成的吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文 Fig. 1(e) 与 Fig. 5(b) 把 TEASER 明确放在子图间的全局配准（回环）这一环：先用顶点 NCC 描述子初选候选，再用 TEASER 求初值，最后由 map-to-map 的 MULLS-ICP 精修子图间边。前端两级自始至终是多度量线性最小二乘 ICP。" onclick="lessonKit.answer(this,'q0080b')">TEASER 只管回环</button>
+          <button data-correct="no" data-explanation="这是常见误解。TEASER 在原文里的位置是「重访子图之间的全局配准」，属于后端回环流程；前端 scan-to-scan 与 scan-to-map 两级都是多度量线性最小二乘 ICP。" onclick="lessonKit.answer(this,'q0080b')">TEASER 做精配准</button>
+        </div>
+        <div class="quiz-feedback" id="q0080b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>6. 实验数字：跨雷达、跨场景、快不快</h2>
+
+      <p>MULLS 最大的卖点是<b>通用</b>。原文在 KITTI（Velodyne HDL-64E，22 个序列、4.3 万帧以上）、MIMAP 室内数据集（VLP32C 与 HDL32E）、以及 HESAI 数据集（Pandar128 / 64 / XT / QT Lite 等 4 种雷达，约 3 万帧）上做了验证，加起来是 <b>7 类雷达、超过 10 万帧</b>。几个关键数字如下。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">项目</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">原文数字</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">KITTI 定位精度</td>
+            <td style="border:1px solid #cbd3dc;padding:8px">MULLS-LO（不带回环）在 seq. 00–10 上取得最佳 <b>ATE 0.49%</b>；加上回环与 PGO 后，MULLS-SLAM 取得最佳 <b>ARE 0.13°/100m</b>，但 ATE 反而略差</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">为什么 ATE 会变差</td>
+            <td style="border:1px solid #cbd3dc;padding:8px">原文明说：ATE 与 ARE 是<b>在 800 m 距离内局部测量</b>的，反映不出回环带来的全局定位增益</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">单帧耗时（Table V）</td>
+            <td style="border:1px solid #cbd3dc;padding:8px">特征提取 <b>29 ms</b> + 地图更新 <b>3 ms</b> + 配准 <b>48 ms</b> ≈ <b>80 ms/帧</b>，快于 10 Hz；<b>变换估计仅 0.2 ms/次迭代</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">MIMAP 室内建图质量</td>
+            <td style="border:1px solid #cbd3dc;padding:8px">与地基激光扫描（TLS）真值相比，平均误差 <b>6.7 cm</b>（逐点最近邻距离的均值）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">高速场景（KITTI seq. 01）</td>
+            <td style="border:1px solid #cbd3dc;padding:8px">在几乎无特征的长直高速上，末端只有<b>车道级</b>漂移；原文称此场景「特征少且高度相似」</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>还有一组消融值得记：原文 Table IV 逐项拆掉三种权重（残差伪-Huber 权重、类别间平衡权重、强度权重），ATE 都会变差；其中<b>强度权重</b>的影响在高速场景上尤其明显（KITTI 01 从 0.62% 掉到 0.83%）。这说明「反射强度」在这里也被当成了一种可靠度信号——把强度当额外信息的这条线，本季后面还有专门的一课。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_MULLS__Versatile_LiDAR_SLAM_via_Multi-metric_Linear_Leas/3444e8402daea1563fa1467ecb9d39126802e259fe8890ce39bdcbd6a9cd2b12.jpg" alt="MULLS result on highway scenario KITTI seq 01">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>MULLS's result on highway scenarios (KITTI seq.01): (a) overview, (b) map and trajectory (black: ground truth) at the end of the sequence, (c) lane-level final drift, (d) map and trajectory of a challenging scene with high similarity and few features, (e) trajectory comparison (almost overlapped).<br>
+          （中译：MULLS 在高速场景（KITTI seq.01）上的结果：(a) 总览；(b) 序列末端的地图与轨迹（黑线为真值）；(c) 车道级的末端漂移；(d) 高相似、少特征挑战场景的地图与轨迹；(e) 轨迹对比（几乎重合）。）<br>
+          <b>怎么看这张图：</b>① 先把注意力放在 (c)——它专门放大了一个「几车道宽」的局部偏差，原文用它来说明<b>漂移是「车道级」的，也就是几十厘米量级</b>；② 再对比 (e)，各条轨迹几乎叠在一起；③ 请注意这个场景的特点：长直高速上几乎没有立面和屋顶，能靠的主要是<b>护栏、路缘这类「梁」和「柱」</b>——正好对应上一节的线特征用点-线度量。这也反过来解释了为什么消融实验里「去掉线性点」会在这个场景退化。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>7. 局限与诚实边界</h2>
+
+      <p>原文自己承认的失败边界有这几条，逐条照抄，不替它遮掩：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>① 结构化特征稀少时会出问题</b>
+          <p>消融实验显示：一旦缺了<b>线性点</b>（柱 / 梁），在高速路这类场景就会退化——因为这套方法正是靠线特征来补约束的。原文把这一点写在 Table III 的注里。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 顶点（高曲率点）不可靠</b>
+          <p>顶点大多落在植被上，用它做配准<b>反而会伤精度</b>。所以原文只把顶点当作后端的关键点点（用于 NCC 描述子初选候选），不让它进前端配准。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ ATE 指标本身有盲区</b>
+          <p>ATE 与 ARE 只在 800 m 内局部测量，<b>体现不出回环带来的全局定位增益</b>。这就是为什么带上回环之后 ATE 看起来「反而变差」。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 没有 IMU，靠匀速假设兜底</b>
+          <p>运动补偿在 IMU 不可用时退化成<b>匀速假设</b>（Eq.1 的 slerp 插值）。剧烈运动时，这个假设自然会不准。</p>
+        </div>
+      </div>
+
+      <p>一句话收束：MULLS 是「<b>激光-only 的通用前端</b>」——它用「六类几何特征 + 三种度量 + 一次线性最小二乘」换来了跨雷达、跨场景的通用性与速度，再用 TEASER 回环 + 分层 PGO 兜住长时漂移。它和下一节的 DLO（不提特征的直接法）、再下一节的 SuMa++（面片地图 + 语义）一起，恰好构成激光 SLAM 前端的<b>三条不同思路</b>。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>点-点、点-面、点-线三种度量，分别用在 MULLS 的哪几类特征上？为什么顶点只能用点-点？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>点-点</b> 用于<b>顶点 V</b>；<b>点-面</b> 用于<b>地面 G、立面 F、屋顶 R</b>；<b>点-线</b> 用于<b>柱 P、梁 B</b>。</p>
+              <p>顶点之所以只能用点-点，是因为它是<b>高曲率、孤立</b>的点——周围既没有稳定的平面可以投影，也没有稳定的直线可以投影，所以只能和最邻近的点直接比距离。原文 Table III 的消融还发现：顶点用在配准里反而会伤精度（它大多落在植被上），所以最终只把顶点留给后端的 NCC 描述子做候选初选。</p>
+            </div></details>
+          </li>
+          <li>MULLS 为什么能用<b>一次线性</b>最小二乘解出六自由度位姿，而不是反复做非线性迭代？这个做法付出了什么代价？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为它用了一个<b>小角度近似</b>：$R\approx I+[\alpha\ \beta\ \gamma]_\times$（Eq.6），把旋转矩阵近似成「单位矩阵 + 三个小量的反对称矩阵」。这样一来，旋转就不再是三角函数，残差对位姿变成了线性的，三类度量的设计矩阵 $A$ 与观测 $b$ 可以拼在一起（Eq.7–8），位姿用高斯-马尔可夫公式 $(A^{T}PA)^{-1}A^{T}Pb$ 一次解出。</p>
+              <p>代价是：<b>这个近似只在「姿态变化不大」时成立。</b>所以它必须靠一个还算靠谱的初值——这就是 scan-to-scan（给初值）与 scan-to-map（收敛）这套「粗到细」结构存在的理由。原文 Table V 显示，每一次变换估计只花 0.2 ms，省下来的时间正是靠这个近似。</p>
+            </div></details>
+          </li>
+          <li>MULLS 里「粗到细」具体指哪两级？原文的消融实验对其中一级给出了什么结论？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>在原文 Fig. 5(a) 的描述里，前端是：<b>先用 scan-to-scan（当前帧的稀疏特征点 ↔ 上一帧的稠密特征点，只跑少数几次迭代）给出一个初值</b>，再把它交给 <b>scan-to-map（当前帧 ↔ 局部地图，迭代到收敛）</b>。</p>
+              <p>但原文 Table II 的消融给出了一个容易被忽略的结论：<b>一旦局部地图已经建起来，scan-to-map 之前再做 scan-to-scan 就不是必需的。</b>证据是 (s5m5) 与 (m5) 表现接近，而只用 1 次 scan-to-scan 的 (s1) 明显变差（ATE 均值 2.57%）。因此 MULLS 最终采用的配置是「scan-to-map 迭代到收敛」。</p>
+              <p>放到整个系统看，「粗到细」还有第二层含义：后端回环里，<b>TEASER 当粗配准、map-to-map 的 MULLS-ICP 当精修</b>。</p>
+            </div></details>
+          </li>
+          <li>TEASER 在 MULLS 里出现在哪一步？在它之前还要靠什么先挑出候选？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>TEASER 出现在<b>后端回环</b>这一环，具体是「重访子图之间的全局配准」（对应原文 Fig. 1(e) 与 Fig. 5(b)）。</p>
+              <p>在它之前，系统会先用<b>顶点特征编码出的 NCC 描述子</b>（Eq.3）做<b>余弦相似度</b>比较，挑出可能的子图对作为候选；然后 TEASER 对这些候选做全局配准、给出初值；最后用 <b>map-to-map 的 MULLS-ICP</b> 把这条子图间边精修到位，并算出信息矩阵，配上阈值筛掉质量差的边，最后交给 PGO。原文特别说明：TEASER 用截断最小二乘估计 + 半定松弛，比基于 RANSAC 或分支定界的方法更高效、更鲁棒。</p>
+            </div></details>
+          </li>
+          <li>把 MULLS 和第二季 0023 课的 PCL 对比，「多度量」到底「多」在哪里？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>PCL 里的 ICP / GICP / NDT，是<b>对整片点云使用同一种度量</b>：ICP 用点-点，GICP 用平面-平面的分布匹配，NDT 用网格内的概率分布。</p>
+              <p>MULLS 的升级有两层：① <b>先把点按几何形状分成六类</b>（地面 / 立面 / 屋顶 / 柱 / 梁 / 顶点）；② <b>再给每一类分配最合身的度量</b>（点-面 / 点-线 / 点-点），三类带权重联合最小化。所以「多」体现在两点上——<b>度量本身的多样性</b>，以及<b>度量与几何类型之间的分配关系</b>。这也是它在不同雷达、不同场景下都能用的原因。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0079-BALM2021-把BA搬到激光上.html">← BALM（2021）：把 BA 搬到激光上</a>
+        <a class="next" href="0081-DLO2022-速度优先的直接法.html">DLO（2022）：速度优先的直接法 →</a>
+      </div>
+      <p class="foot-note">下一节换个极端：不提任何特征、直接用稠密点云硬上的 DLO，看看「快」究竟能快到什么程度 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

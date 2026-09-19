@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>g²o：因子图求解器的工程实现 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0021</div>
+      <h1>g²o：因子图求解器的工程实现</h1>
+      <p class="subtitle">上一节讲了「数学怎么推」，这一节讲「工程怎么落地」——把最小二乘抽象成顶点 + 边 + 求解器 + 线性求解器四层 🛠️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：通用图优化框架的工程实现</span>
+        <span>👥 作者：Kümmerle, Grisetti, Strasdat, Konolige, Burgard</span>
+        <span>📅 2011 · ICRA（正文未标卷期页码）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. g²o 是什么</a>
+        <a href="#b">2. 为什么还要造框架</a>
+        <a href="#c">3. 四层抽象</a>
+        <a href="#d">4. 金句：H 的块结构 = 邻接矩阵</a>
+        <a href="#e">5. 两组正交选择</a>
+        <a href="#f">6. ⊞ 与自动求导</a>
+        <a href="#g">7. 实验数字与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 g²o 为什么能把 SLAM 和 BA 装进同一框架；讲清「Plain vs Schur」「CSparse/CHOLMOD/PCG」这两组正交选择；看懂为什么「没有万能的线性求解器」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 0019（Schur 的工程收益：Table III 就是它的实测）与 0020（流形增量的接口化：本节的 $\boxplus$ 就是上一节 Algorithm 2 的工程版）。它排在 BA 与 GraphSLAM 之后，正是因为它把那两套推导「统一成一个可复用的 C++ 框架」。</p></div>
+      </div>
+
+      <h2>1. g²o 是什么：把 SLAM 和 BA 装进同一个框架</h2>
+      <p>g²o（general graph optimization，通用图优化）是一个<b>开源 C++ 框架</b>，用来优化「可以用图表示的非线性误差函数」（Abstract，原话）。它最诱人的一点：一个 2D SLAM 算法「<b>can be implemented in less than 30 lines of C++ code</b>」（不到 30 行 C++ 就能实现）——你只需要告诉它误差函数和它的参数。</p>
+      <p>它的<b>核心统一性</b>在于：SLAM 和 BA 都能写成 <b>graph-embeddable least squares problems</b>（可嵌入图的二乘问题）。原文一句话定性（§I）：</p>
+      <div class="callout">
+        <h4>统一视角</h4>
+        <p>「each node of the graph represents a state variable to optimize, each edge between two variables represents a <b>pairwise observation</b> of the two nodes it connects.」（图的每个节点是一个待优化状态变量，每条边连接两个变量、表示对这两个变量的「成对观测」。）</p>
+      </div>
+      <p>于是：SLAM 里节点 = 位姿（或路标），BA 里节点 = 相机位姿 + 3D 点——<b>两种问题落在同一个框架里</b>。这正是它要排在 BA 与 GraphSLAM 之后的原因。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2011_g2o/d03e2845fccac9fec288aa1cf577d25f52586016885fe6c236368aa227a840df.jpg" alt="Fig. 2 This example illustrates how to represent an objective function by a graph">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b><i>This example illustrates how to represent an objective function by a graph.</i>（示例说明如何把目标函数表示为图。）</p>
+          <p><b>怎么看这张图：</b>它把目标函数 $\mathbf{F}(\mathbf{x})=\sum \mathbf{e}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{e}_{ij}$ 的每一项「求和」画成节点与边——左上是数学式，右下是图。这正好接上 0020 的 Fig. 6/7：<b>两节的接口就在这张图</b>，g²o 把那套推导接上了代码。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 为什么还要造一个框架：已有系统的短板</h2>
+      <p>在 g²o 之前，各家系统各管一摊（§II）：√SAM / iSAM 只面向 SLAM；<b>SPA 限于 2D 位姿图</b>；sSBA 面向 BA。g²o 的优势是「<b>can be applied to both SLAM and BA optimization problems in all their variants</b>」（SLAM 和 BA 的所有变体都能用）。</p>
+      <p>原文还顺手批评了一类方法（Olson / Grisetti 的梯度下降）：它们「<i>assume that the covariance is roughly spherical and thus have difficulties… where some constraints have covariances with null spaces or substantial differences in the eigenvalues</i>」（假设协方差大致是球形的，因此当某些约束的协方差带有零空间、或特征值差异巨大时就吃力）。换句话说，<b>只靠朴素梯度下降不够稳</b>，需要正经的最小二乘求解器——这正是 g²o 要补的洞。</p>
+      <p>效率的四个来源（§I，原文列出）：① 利用图的<b>稀疏连接</b>；② 利用常见的<b>特殊结构</b>（如 BA 的分块）；③ 先进的<b>稀疏线性求解器</b>；④ 现代处理器特性（<b>SIMD 指令、cache 优化</b>）。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 四层抽象：顶点 · 边 · 求解器 · 线性求解器</h2>
+      <p>g²o 把整个优化拆成干净的四层，用户只需要填「灰色框」。下面这张图是本节头号图。</p>
+      <div class="figure">
+        <img src="../../md/images/2011_g2o/eeb9c762ae4b4b53b71b6ff004d4fdb1f5f04f6ba8ae88d468790c0d4fe53db2.jpg" alt="Fig. 3 Overview of our framework">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b><i>Overview of our framework. For addressing a new optimization problem, only the boxes in gray need to be specified.</i>（框架总览——只需指定灰色框。）</p>
+          <p><b>怎么看这张图：</b>数据流是：误差函数 $\mathbf{e}_{ij}$ →（经 $\boxplus$ 回到误差函数）→ 雅可比 $\mathbf{J}_{ij}$ → 组装成 $(\mathbf{H}+\lambda\mathbf{I})\Delta\mathbf{x}=\mathbf{b}$ → <b>Linear Structure</b>（Plain / Schur / …）→ <b>Linear Solver</b>（CSparse / CHOLMOD / PCG / …）→ Apply increments（施加增量）。灰框 = 你作为用户只需写的两样：误差函数、$\boxplus$ 算子。</p>
+        </figcaption>
+      </div>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>顶点 Vertex</h4><p>一个待优化参数块 $\mathbf{x}_i$（位姿、路标、相机…）。继承基类，定义 $\boxplus$ 即可。</p></div>
+        <div class="mini-card"><h4>边 Edge</h4><p>连接两个顶点，给出误差函数 $\mathbf{e}_{ij}(\cdot)$。雅可比默认数值求，可覆写。</p></div>
+        <div class="mini-card"><h4>求解器 Solver</h4><p>高斯-牛顿 / LM，决定线性结构与阻尼，循环线性化-求解-更新。</p></div>
+        <div class="mini-card"><h4>线性求解器</h4><p>CSparse / CHOLMOD / PCG，真正去解那一步线性系统。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 金句：H 的块结构 = 图的邻接矩阵</h2>
+      <p>这节的数学和 0020 完全一样，但 g²o 把它说得更「工程」。因为一条约束只涉及两个节点，雅可比长这样（式23）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{J}_{ij} = \bigl(\mathbf{0}\cdots\underbrace{\mathbf{A}_{ij}}_{\text{node }i}\cdots\mathbf{0}\cdots\underbrace{\mathbf{B}_{ij}}_{\text{node }j}\cdots\mathbf{0}\bigr)$$
+      </div>
+      <p>装配时（§III-C）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{b}=\sum_{\langle i,j\rangle\in\mathcal{C}}\mathbf{b}_{ij},\quad \mathbf{b}_{ij}=\mathbf{J}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{e}_{ij},\quad \mathbf{H}=\sum_{\langle i,j\rangle\in\mathcal{C}}\mathbf{H}_{ij},\quad \mathbf{H}_{ij}=\mathbf{J}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{J}_{ij}$$
+      </div>
+      <div class="callout">
+        <h4>★ 本节金句</h4>
+        <p>原文：「<b>the block structure of the matrix H is the adjacency matrix of the graph</b>」（$\mathbf{H}$ 的块结构就是图的邻接矩阵）。因此非零块数量与<b>边数同阶</b> → 天然稀疏。请和上一节「非零块数 = 2×边数 + 节点数」并排着看：一个说「同阶」，一个给精确计数，<b>说的是同一件事</b>。</p>
+      </div>
+      <p>还有一个工程红利（§IV，自动稀疏）：迭代过程中 $\mathbf{H}$ 的<b>非零模式是恒定不变的</b>。所以「we are able to <b>reuse a symbolic decomposition computed within the first iteration</b>」，后续迭代只做数值填充——减少了 fill-in（填充），整体更快。这呼应了 0020 讲的「稀疏模式事先已知、可预分配 Hessian」。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 两组正交选择：线性结构 × 线性求解器</h2>
+      <p>图 3 里有两个可以独立切换的维度，理解它们就理解了 g²o 的「灵活」。</p>
+
+      <h3>维度一：线性结构（怎么消元）</h3>
+      <div class="grid-2">
+        <div class="mini-card"><h4>Plain（式14）</h4><p>直接解 $\mathbf{H}\Delta\mathbf{x}^*=-\mathbf{b}$，不利用特殊结构。通用但大系统慢。</p></div>
+        <div class="mini-card"><h4>Schur（式25）</h4><p>先对路标/点做 Schur 消元，得到只含相机位姿的缩减系统：<br>$\bigl(\mathbf{H}_{pp}-\mathbf{H}_{pl}\mathbf{H}_{ll}^{-1}\mathbf{H}_{pl}^{\top}\bigr)\Delta\mathbf{x}_p^* = -\mathbf{b}_p + \mathbf{H}_{pl}\mathbf{H}_{ll}^{-1}\mathbf{b}_l$。<br>当 $\mathbf{H}_{ll}$ 块对角时求逆很便宜——这正是 0019 课 Schur 消元的工程版。</p></div>
+      </div>
+
+      <h3>维度二：线性求解器（怎么解那一步）</h3>
+      <div class="grid-3">
+        <div class="mini-card"><h4>CSparse</h4><p>稀疏 Cholesky 直接法，轻量。小问题最快。</p></div>
+        <div class="mini-card"><h4>CHOLMOD</h4><p>稀疏 Cholesky 直接法，利用 <b>supernodal</b>（超节点）结构，大模型快。</p></div>
+        <div class="mini-card"><h4>PCG</h4><p>预处理共轭梯度（<b>block-Jacobi</b> 预条件，迭代法）。终止条件看平方残差相对下降，阈值 $10^{-8}$。</p></div>
+      </div>
+
+      <h3>维度三：算法变体</h3>
+      <div class="grid-2">
+        <div class="mini-card"><h4>Gauss-Newton（式14/15）</h4><p>直接解 $\mathbf{H}\Delta\mathbf{x}^*=-\mathbf{b}$ 后更新。</p></div>
+        <div class="mini-card"><h4>Levenberg-Marquardt（式16）</h4><p>解 $(\mathbf{H}+\lambda\mathbf{I})\Delta\mathbf{x}^*=-\mathbf{b}$；$\lambda$ 是阻尼，含「误差变大就回退并调大 $\lambda$」的 <b>backup action</b>。</p></div>
+      </div>
+
+      <p>实测对比（Table II，原文，时间单位秒；列为 CHOLMOD / CSparse / PCG）：</p>
+      <table>
+        <tr><th>数据集</th><th>CHOLMOD</th><th>CSparse</th><th>PCG</th></tr>
+        <tr><td>MIT</td><td>0.0086</td><td>0.0077</td><td>0.381</td></tr>
+        <tr><td>New College</td><td>6.19</td><td>200.6</td><td>0.778</td></tr>
+        <tr><td>Venice</td><td>1.86</td><td>39.1</td><td>0.287</td></tr>
+      </table>
+      <p>原文结论（§V-C）：PCG 在 New College / Venice 上约比 CHOLMOD <b>快 7 倍</b>；CHOLMOD 在大数据集上比 CSparse 快<b>多达 30 倍</b>；但「<i>surprisingly CSparse is the fastest solver on the smaller instances like the MIT dataset</i>」（令人意外地，CSparse 在 MIT 这种小实例上最快）。→ <b>没有万能的求解器</b>，比记住数字更重要。</p>
+
+      <p>Schur 的收益与代价（Table III，每迭代平均秒；Plain 直接解 vs Schur 的 build/solve/total）：</p>
+      <table>
+        <tr><th>数据集</th><th>Plain 直接解</th><th>Schur（build / solve / total）</th></tr>
+        <tr><td>Victoria</td><td>0.026</td><td>0.029 / 0.121 / 0.150</td></tr>
+        <tr><td>Grid5000</td><td>0.18</td><td>0.12 / 0.16 / 0.28</td></tr>
+        <tr><td>New College</td><td>15.18</td><td>3.37 / 7.07 / 10.44</td></tr>
+        <tr><td>Venice</td><td>33.87</td><td>11.25 / 1.78 / 13.03</td></tr>
+      </table>
+      <p>结论：当 <b>landmark 远多于 pose</b>（BA 的典型情形）时，Schur 大幅提速（New College 15.18→10.44，Venice 33.87→13.03）。但原文也警告：<i>when the number of poses becomes dominant, performing the Schur marginalization leads to a highly connected system that is only slightly reduced in size, and requires more effort to be solved.</i>（当位姿占主导时，Schur 反而得到一个高度连通、几乎没缩小多少的系统，<b>更费劲</b>。）</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在 g²o 的图表示里，一条「边」代表什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。边连接的是两个变量，不是单个节点自己。" onclick="lessonKit.answer(this,'q0021a')">一个待优化的状态变量（节点）</button>
+          <button data-correct="yes" data-explanation="答对。原文原话：each edge represents a pairwise observation of the two nodes it connects。" onclick="lessonKit.answer(this,'q0021a')">对它所连接的两个节点的成对观测约束</button>
+          <button data-correct="no" data-explanation="不对。边是约束/观测，地图是节点位置的副产品，不是一条边。" onclick="lessonKit.answer(this,'q0021a')">整张地图本身</button>
+        </div>
+        <div class="quiz-feedback" id="q0021a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 参数块与增量的分离：⊞ 与自动求导</h2>
+      <p>g²o 把 0020 的流形增量做成了<b>工程接口</b>。原文原话（§III-B）：要「<b>express the increments $\Delta\mathbf{x}_i$ in a space different from the one of the parameters $\mathbf{x}_i$</b>」（把增量 $\Delta\mathbf{x}_i$ 表示在与参数 $\mathbf{x}_i$ 不同的空间里）。具体说：$\mathbf{x}_i$ 用<b>过参数化</b>表示（如四元数），$\Delta\mathbf{x}_i$ 用<b>最小表示</b>，再经非线性算子 $\boxplus$ 施加（式17）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{x}_i^* = \breve{\mathbf{x}}_i\boxplus\Delta\mathbf{x}_i^*$$
+      </div>
+      <p>这就是上一节 GraphSLAM Algorithm 2 的工程版——同一个 $\boxplus$，只是现在由用户写进「灰色框」。无论怎么选参数化，$\mathbf{H}$ 的结构都保留。</p>
+
+      <div class="grid-2">
+        <div class="mini-card"><h4>雅可比：默认数值求</h4><p>快速原型时不用手推导数，框架自动数值微分；要更快可覆写提供<b>解析式</b>。</p></div>
+        <div class="mini-card"><h4>Eigen + 编译期优化</h4><p>底层用 Eigen（SSE 指令、lazy evaluation、loop unrolling）。变量维度已知时用<b>固定尺寸矩阵</b>运算，触发编译期循环展开（loop unrolling）。</p></div>
+      </div>
+      <p>实测（§V-A）：Garage 数据集上，一次迭代时间从用数值雅可比的 <b>80 ms 降到解析雅可比的 40 ms</b>，而且「<i>we did not observe a decrease in the accuracy</i>」（没观察到精度下降）。参数化对比（§V-B，Fig. 9）：在 New College / Venice 上比较「平移 + 单位四元数轴」与「$\mathfrak{se}(3)$」，结论是「<b>Both parameterizations converge to the same solution, but convergence occurs faster using se(3)</b>」（都收敛到同一解，但 se(3) 收敛更快）。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2011_g2o/1e99564f6747f2cdd2aef95a7fd9868bc1f7a1b004a356ef489cd717b48eb0d5.jpg" alt="Fig. 5 The BA real world datasets and the scale-drift dataset">
+        <figcaption>
+          <p><b>原图注（Fig. 5）：</b><i>The BA real world datasets and the scale-drift dataset used for evaluating g²o…</i>（用于评测 g²o 的 BA 真实数据集与 scale-drift 数据集；Venice 有 871 个相机位姿、2,838,740 个投影。）</p>
+          <p><b>怎么看这张图：</b>左边 Venice、中间 New College 都是真实 BA 数据集。数字很冲击：<b>Venice = 871 个相机位姿、2,838,740 个投影</b>——这就是 g²o 要啃的「规模」。能解这种量，靠的正是第 4、5 节的稀疏与 Schur。</p>
+        </figcaption>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_g2o/0b0ec9a4e0d9f94ce611a175661e8875fd01b42c07574d202af05626e16b726f.jpg" alt="Fig. 9 Evolution of F(x) using unit quaternions versus se(3) on the New College dataset">
+        <figcaption>
+          <p><b>原图注（Fig. 9）：</b><i>Evolution of F(x) using unit quaternions versus the Lie algebra se(3) on the New College dataset (left) and Venice (right) dataset.</i>（单位四元数 vs 李代数 se(3) 的 $F(x)$ 演化，左 New College、右 Venice。）</p>
+          <p><b>怎么看这张图：</b>这是 Fig. 9 的<b>左半（New College）</b>。两条曲线最终落到同一低点（同一解），但 se(3) 那条（实线）下降更陡、更快收敛——证明「参数化只影响收敛速度，不影响最终解」。</p>
+        </figcaption>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_g2o/761b9df440bd633a71fa51032e2004b55c530874966e63cd50f791f21533e6a0.jpg" alt="Fig. 7 Time per iteration for each approach on each dataset (part 1)">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b><i>Time per iteration for each approach on each dataset.</i>（各方法在各数据集上的每迭代时间。）</p>
+          <p><b>怎么看这张图：</b>这是 Fig. 7 的<b>上半部分</b>（下半为同图另一张 43603e3f）。它把 g²o 与 √SAM、SPA、sSBA、RobotVision 的每迭代耗时并排画出来——g²o 的柱子普遍更短，直观说明「通用框架也能跑得和专用实现一样快」。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字总览与局限</h2>
+      <p>硬件：单核 <b>Intel Core i7-930 @ 2.8 GHz</b>。整体速度（§V-A）：g²o 在全部测试的 2D/3D 数据集上<b>快于 √SAM</b>；2D 位姿图与 SPA 相当；BA 与 sSBA 相近；比 RobotVision「<b>on average two times faster</b>」（平均快两倍）。在线方面：要在线跑，可以「<b>optimizing every 10 nodes</b> or by relaxing the termination criterion of PCG」（每 10 个节点优化一次，或放松 PCG 终止条件）。</p>
+
+      <div class="callout"><h4>明确局限（必须讲）</h4>
+        <ul>
+          <li><b>本质是 batch（批处理）</b>：真·增量/在线要靠 iSAM、HOG-Man，或「每 N 个节点优化一次」近似。</li>
+          <li><b>Cholesky 不利用参数块结构</b>：原文明说稀疏 Cholesky 没利用参数的分块结构（这点 Schur/PCG 更好）。</li>
+          <li><b>PCG 收敛依赖初值</b>：原文「<i>the PCG convergence depends on how close the initial guess is to the optimum</i>」。</li>
+          <li><b>Schur 在 pose 主导时反而更慢</b>：见第 5 节 Table III 结论。</li>
+          <li><b>假设数据关联已解决</b>：和 0020 一样，框架只吃「边」，不替你找回环。</li>
+        </ul>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在 BA 这种「landmark 远多于 camera pose」的问题里，开启 Schur 消元通常会？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。Table III 显示 New College/Venice 大幅提速；原文说 landmark 多于 pose 时 Schur 收益明显。" onclick="lessonKit.answer(this,'q0021b')">大幅提速</button>
+          <button data-correct="no" data-explanation="不对。Schur 消掉的是大量 landmark，省下的正是 BA 的主要成本。" onclick="lessonKit.answer(this,'q0021b')">毫无变化</button>
+          <button data-correct="no" data-explanation="不对。pose 占主导时 Schur 才会更慢；landmark 占主导时是它最快的场景。" onclick="lessonKit.answer(this,'q0021b')">明显变慢</button>
+        </div>
+        <div class="quiz-feedback" id="q0021b"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：一句话说明 SLAM 与 BA 为何共用 g²o</summary>
+          <div>
+            <p>二者都是「可嵌入图的二乘问题」：节点 = 待优化状态变量（SLAM 的位姿/路标，BA 的相机/3D 点），边 = 对两个节点的成对观测约束。只要给出误差函数与 $\boxplus$，框架一视同仁。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：写出 $\mathbf{b}_{ij}$、$\mathbf{H}_{ij}$ 的装配式，并解释为何 H 稀疏</summary>
+          <div>
+            <p>$\mathbf{b}_{ij}=\mathbf{J}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{e}_{ij}$，$\mathbf{H}_{ij}=\mathbf{J}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{J}_{ij}$；全图累加 $\mathbf{b}=\sum\mathbf{b}_{ij}$、$\mathbf{H}=\sum\mathbf{H}_{ij}$。因为一条边只连两个节点，雅可比除这两块外全为零，所以 $\mathbf{H}$ 只在被约束相连的位姿之间有非零块——原文称「$\mathbf{H}$ 的块结构 = 图的邻接矩阵」。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：Table II 里 MIT 上谁最快？为什么没有万能求解器</summary>
+          <div>
+            <p>MIT 上 CSparse = 0.0077 s 最快（CHOLMOD 0.0086、PCG 0.381）。原因在于问题规模与结构不同：CSparse 轻量适合小实例；CHOLMOD 的 supernodal 结构在大数据集上碾压 CSparse（快达 30 倍）；PCG 在 New College/Venice 这种又大又各向异性的系统上快约 7 倍，但在 MIT 上因需多轮迭代反而最慢。→ 选求解器要看数据。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：Schur 何时快、何时慢</summary>
+          <div>
+            <p>快：landmark/点 远多于 pose（BA 典型），消元后只剩相机的小系统。慢：pose 占主导时，Schur 消元得到的系统高度连通、几乎没缩小，反而更费劲（Table III 的 Victoria/Grid5000 已见端倪，New College/Venice 则是受益方）。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：$\boxplus$ 解决了什么根本问题？联系 0020</summary>
+          <div>
+            <p>它把「参数 $\mathbf{x}_i$（过参数化，如四元数）」和「增量 $\Delta\mathbf{x}_i$（最小表示）」分到不同空间，再用非线性 $\boxplus$ 施加，避免直接相加破坏旋转约束、撞上奇异点。这正是 0020 第 5 节 Algorithm 2 的「流形上做增量」的工程接口版。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0020-GraphSLAM教程2010-把SLAM变成一张图.html">← 上一课：把 SLAM 变成一张图（GraphSLAM 2010）</a>
+        <a class="next" href="0022-点云BA2023-高效与一致.html">下一课：点云上的高效一致 BA（2023） →</a>
+      </div>
+      <p class="foot-note">四层抽象一立，SLAM 和 BA 就成了同一台机器的两种进料 🔧</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

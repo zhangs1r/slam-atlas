@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IMU 预积分（下）：流形上的推导与雅可比 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0030</div>
+      <h1>IMU 预积分（下）：流形上的推导与雅可比</h1>
+      <p class="subtitle">上一节讲「为什么」，这一节讲「怎么做」——全季公式密度最高的一节，按「四件套」拆给你看 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：噪声分离 / 偏置修正 / 协方差传播 / 因子进图</span>
+        <span>👥 作者：Forster, Carlone, Dellaert, Scaramuzza</span>
+        <span>📅 2017 · IEEE T-RO · <i>On-Manifold Preintegration for Real-Time Visual–Inertial Odometry</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. ① 噪声模型与分离（式 38/39）</a>
+        <a href="#b">2. ② 偏置更新与雅可比预计算（式 44）</a>
+        <a href="#c">3. ③ 噪声传播与协方差递推（式 42/43）</a>
+        <a href="#d">4. ④ IMU 因子与残差构造（式 45）</a>
+        <a href="#e">5. ★ 全篇总目标函数（式 25/26）</a>
+        <a href="#f">6. ★ structureless 视觉因子 = Schur 消元</a>
+        <a href="#g">7. 实验、局限与 OCR 修正</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：讲清预积分量被写成「状态项 + 零均值高斯噪声」的形式；说出自偏置修正为什么「不必重积分」；复述协方差的卡尔曼式递推；并写出连接两关键帧的 9 维 IMU 因子残差。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0029</b>：上一节只给定义，这一节给推导、雅可比、协方差、因子。接 <b>0019</b>：本节的 structureless 视觉因子正是 0019 的 Schur 消元用在因子图里，且投影子维数 $2n_l-3$ 与 0028 的 $2M_j-3$ 是同一个「减 3」。接 <b>0002</b>：总目标函数就是第一季 MAP → 非线性最小二乘的直接实例。</p></div>
+      </div>
+
+      <h2>1. ① 噪声模型与分离（式 38/39）</h2>
+      <p>第一步：把上一节定义的预积分量，正式写成「<b>状态项 + 零均值高斯噪声</b>」的形式。先记一个新符号：带波浪的 $\Delta\tilde{\mathrm R}_{ij}$ 等是「带噪声的测量值」（从真实 IMU 读数算出来的），而 $\mathrm R_i^\top\mathrm R_j$ 等是「真值」。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Delta\tilde{\mathrm R}_{ij}=\mathrm R_i^\top\mathrm R_j\,\mathrm{Exp}(\delta\pmb\phi_{ij})$$</div>
+        <div class="flow-formula">$$\Delta\tilde{\mathbf v}_{ij}=\mathrm R_i^\top(\mathbf v_j-\mathbf v_i-\mathbf g\Delta t_{ij})+\delta\mathbf v_{ij}$$</div>
+        <div class="flow-formula">$$\Delta\tilde{\mathbf p}_{ij}=\mathrm R_i^\top\Big(\mathbf p_j-\mathbf p_i-\mathbf v_i\Delta t_{ij}-\tfrac12\mathbf g\Delta t_{ij}^2\Big)+\delta\mathbf p_{ij}$$</div>
+        <div class="flow-formula">$$\pmb\eta^\Delta_{ij}\doteq\begin{bmatrix}\delta\pmb\phi_{ij}^T & \delta\mathbf v_{ij}^T & \delta\mathbf p_{ij}^T\end{bmatrix}^T\sim\mathcal N(\mathbf 0_{9\times1},\Sigma_{ij})$$</div>
+      </div>
+      <p>大白话：带噪声的预积分量 = 真值（由状态算出的相对量）+ 一个小扰动（$\delta\pmb\phi,\delta\mathbf v,\delta\mathbf p$）。把这三项扰动打包成一个 9 维向量 $\pmb\eta^\Delta_{ij}$，它服从零均值高斯分布，协方差是 $\Sigma_{ij}$。</p>
+      <div class="callout">
+        <h4>为什么 $\delta\pmb\phi_{ij}$ 能当零均值高斯</h4>
+        <p>原文说得很直接：因为 $\delta\pmb\phi_{ij}$ 是「<i>a linear combination of zero-mean noise terms</i>」（零均值噪声项的线性组合）——传感器噪声本身是零均值高斯，而 $\delta\pmb\phi$ 只是它们的一阶线性组合，所以自然还是零均值高斯。正是这一条，让上面的式子刚好落回式 (12) 那种 SO(3) 上的高斯形式，整个概率框架才自洽。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. ② 偏置更新与雅可比预计算（式 44 + 附录 IX-B）</h2>
+      <p>现实里 IMU 的零偏 $\mathbf b^g,\mathbf b^a$ 不是固定的，会缓慢漂移。预积分量是在「旧偏置 $\bar{\mathbf b}_i$」下算的，当优化器更新了偏置估计时，怎么快速修正？答案是<b>一阶泰勒展开</b>：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Delta\tilde{\mathrm R}_{ij}(\mathbf b_i^g)\simeq\Delta\tilde{\mathrm R}_{ij}(\bar{\mathbf b}_i^g)\,\mathrm{Exp}\Big(\tfrac{\partial\Delta\bar{\mathrm R}_{ij}}{\partial\mathbf b^g}\delta\mathbf b^g\Big)$$</div>
+        <div class="flow-formula">$$\Delta\tilde{\mathbf v}_{ij}(\mathbf b_i^g,\mathbf b_i^a)\simeq\Delta\tilde{\mathbf v}_{ij}(\bar{\mathbf b}_i^g,\bar{\mathbf b}_i^a)+\tfrac{\partial\Delta\bar{\mathbf v}_{ij}}{\partial\mathbf b^g}\delta\mathbf b_i^g+\tfrac{\partial\Delta\bar{\mathbf v}_{ij}}{\partial\mathbf b^a}\delta\mathbf b_i^a$$</div>
+      </div>
+      <p>意思是：偏置从 $\bar{\mathbf b}$ 变到 $\bar{\mathbf b}+\delta\mathbf b$，预积分量的变化可以用「雅可比 × 偏置增量」近似补上，<b>而不必用新偏置从头重积分</b>。两条雅可比的闭式是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\frac{\partial\Delta\bar{\mathrm R}_{ij}}{\partial\mathbf b^g}=-\sum_{k=i}^{j-1}\Big[\Delta\bar{\mathrm R}_{k+1j}(\bar{\mathbf b}_i)^\top\mathrm J_r^k\Delta t\Big]$$</div>
+        <div class="flow-formula">$$\frac{\partial\Delta\bar{\mathbf v}_{ij}}{\partial\mathbf b^a}=-\sum_{k=i}^{j-1}\Delta\bar{\mathrm R}_{ik}\Delta t$$</div>
+      </div>
+      <div class="callout">
+        <h4>★ 本节的「实用结论」（务必凸显）</h4>
+        <p>原文说：「<i>The Jacobians remain constant and can be precomputed during the preintegration.</i>」又说「<i>the Jacobians can be computed incrementally, as new measurements arrive.</i>」——雅可比在预积分阶段就能算好、且可以随着新 IMU 数据增量更新。<b>这就是「偏置更新不必重积分」的全部依据</b>：偏置一变，只乘一个事先算好的雅可比，立刻修正，省掉整段重积分。</p>
+      </div>
+      <p>偏置本身也不是常量，而是<b>随机游走（random walk）</b>——意思是它每时刻被一小撮高斯噪声慢慢推动（式 46/47/48）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\dot{\mathbf b}^g=\pmb\eta^{bg},\qquad \dot{\mathbf b}^a=\pmb\eta^{ba}$$</div>
+        <div class="flow-formula">$$\|\mathbf r_{b_{ij}}\|^2\doteq\|\mathbf b_j^g-\mathbf b_i^g\|^2_{\Sigma^{bgd}}+\|\mathbf b_j^a-\mathbf b_i^a\|^2_{\Sigma^{bad}}$$</div>
+      </div>
+      <p>于是在因子图里还要额外加一项「偏置随机游走因子」$\mathbf r_{b_{ij}}$，约束相邻时刻的偏置之差要符合随机游走噪声（回忆 0029 的 Fig. 3 右图里那条偏置边）。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ③ 噪声传播与协方差递推（式 42/43 + 附录 IX-A）</h2>
+      <p>现在问：噪声 $\delta\pmb\phi,\delta\mathbf v,\delta\mathbf p$ 是怎么从一条条 IMU 测量累积出来的？逐条展开：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\delta\pmb\phi_{ij}\simeq\sum_{k=i}^{j-1}\Delta\tilde{\mathrm R}_{k+1j}^\top\mathrm J_r^k\,\pmb\eta_k^{gd}\Delta t$$</div>
+        <div class="flow-formula">$$\delta\mathbf v_{ij}\simeq\sum_{k=i}^{j-1}\Big[-\Delta\tilde{\mathrm R}_{ik}(\tilde{\mathbf a}_k-\mathbf b_i^a)^\wedge\delta\pmb\phi_{ik}\Delta t+\Delta\tilde{\mathrm R}_{ik}\pmb\eta_k^{ad}\Delta t\Big]$$</div>
+        <div class="flow-formula">$$\delta\mathbf p_{ij}\simeq\sum_{k=i}^{j-1}\Big[\delta\mathbf v_{ik}\Delta t-\tfrac12\Delta\tilde{\mathrm R}_{ik}(\tilde{\mathbf a}_k-\mathbf b_i^a)^\wedge\delta\pmb\phi_{ik}\Delta t^2+\tfrac12\Delta\tilde{\mathrm R}_{ik}\pmb\eta_k^{ad}\Delta t^2\Big]$$</div>
+      </div>
+      <p>看第一行：旋转噪声 $\delta\pmb\phi_{ij}$ 是每条 IMU 角速度噪声 $\pmb\eta_k^{gd}$ 经（带右雅可比 $\mathrm J_r^k$ 的）旋转搬运后求和。后两行：速度/位置噪声除了直接累加加速度噪声，还要经过「$\delta\pmb\phi$（姿态噪声）耦合」那一项（带 ${}^\wedge$ 表示取反对称矩阵）。</p>
+      <p>把这三行打包成线性递推 $\pmb\eta^\Delta_{ij}=\mathbf A_{j-1}\pmb\eta^\Delta_{ij-1}+\mathbf B_{j-1}\pmb\eta^d_{j-1}$，协方差就跟着<b>逐条 IMU 增量往前长</b>：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Sigma_{ij}=\mathbf A_{j-1}\Sigma_{ij-1}\mathbf A_{j-1}^\top+\mathbf B_{j-1}\Sigma_\eta\mathbf B_{j-1}^\top,\qquad \Sigma_{ii}=\mathbf 0_{9\times9}$$</div>
+      </div>
+      <div class="callout">
+        <h4>这是「卡尔曼滤波式」的递推</h4>
+        <p>留意它的长相：新协方差 = 旧协方差经 $\mathbf A$ 传播 + 新噪声经 $\mathbf B$ 注入。这正是卡尔曼滤波里协方差预测的那一步（上一节 0028 的 Lyapunov 方程是它的连续版）。每来一条 IMU 测量，就更新一次 $\Sigma$，直到 $j$。原文还点明离散噪声与连续谱噪声的关系：$\mathrm{Cov}(\pmb\eta^{gd})=\frac{1}{\Delta t}\mathrm{Cov}(\pmb\eta^g)$。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ④ IMU 因子与残差构造（式 45）</h2>
+      <p>攒齐了预积分量、偏置修正、协方差，就能把预积分量做成一个<b>因子（factor）</b>塞进因子图优化。残差（residual）的构造逻辑和上一节 MSCKF 的 $\mathbf r=\mathbf H\tilde{\mathbf X}+\text{noise}$ 是<b>同一件事的优化版</b>：</p>
+      <div class="callout">
+        <h4>残差逻辑（先建立直觉）</h4>
+        <p><b>左边</b>是用「当前状态估计」算出来的相对量；<b>右边</b>是用「IMU 测量」算出来的预积分量；两者相减，就是这条边的残差。优化器要找让所有残差都接近 0 的状态。</p>
+      </div>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf r_{\Delta\mathrm R_{ij}}=\mathrm{Log}\Big(\big(\Delta\tilde{\mathrm R}_{ij}(\bar{\mathbf b}_i^g)\mathrm{Exp}(\tfrac{\partial\Delta\tilde{\mathrm R}_{ij}}{\partial\mathbf b^g}\delta\mathbf b^g)\big)^\top\mathrm R_i^\top\mathrm R_j\Big)$$</div>
+        <div class="flow-formula">$$\mathbf r_{\Delta\mathbf v_{ij}}=\mathrm R_i^\top(\mathbf v_j-\mathbf v_i-\mathbf g\Delta t_{ij})-\Big[\Delta\tilde{\mathbf v}_{ij}(\cdots)+\tfrac{\partial\Delta\tilde{\mathbf v}_{ij}}{\partial\mathbf b^g}\delta\mathbf b^g+\tfrac{\partial\Delta\tilde{\mathbf v}_{ij}}{\partial\mathbf b^a}\delta\mathbf b^a\Big]$$</div>
+        <div class="flow-formula">$$\mathbf r_{\Delta\mathbf p_{ij}}=\mathrm R_i^\top\Big(\mathbf p_j-\mathbf p_i-\mathbf v_i\Delta t_{ij}-\tfrac12\mathbf g\Delta t_{ij}^2\Big)-\Big[\Delta\tilde{\mathbf p}_{ij}(\cdots)+\cdots\Big]$$</div>
+      </div>
+      <p>这是一条连接 $\{\mathrm R_i,\mathbf p_i,\mathbf v_i,\mathbf b_i\}$ 与 $\{\mathrm R_j,\mathbf p_j,\mathbf v_j\}$ 的 <b>9 维边</b>，$\mathbf r_{\mathcal T_{ij}}\in\mathbb R^9$。注意旋转残差外面套了 $\mathrm{Log}$（把旋转矩阵变回切空间里的向量，才能相减）；速度/位置残差则是「状态算的 − 预积分量」。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia/1b2df2b2b0080a2aaf79bb38cdf09be8f5f426be3f7bf5908119d30d0095b763.jpg" alt="Fig. 3（IMU 因子那条边）">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Left: visual and inertial measurements in VIO. Right: factor graph in which several IMU measurements are summarized in a single preintegrated IMU factor and a structureless vision factor constraints keyframes observing the same landmark.（左为 VIO 中的视觉与惯性测量；右为因子图——多条 IMU 测量被汇总为单个预积分 IMU 因子，structureless 视觉因子约束观测到同一路标的关键帧。）<br>
+          <b>怎么看这张图：</b>回到本节封面图。本节第 4 节讲的 IMU 因子，正是右图里那条把两关键帧连起来的粗边——它把中间所有密密的 IMU 测量「压缩」成了一个 9 维约束。视觉因子（细边）则把观测到同一路标的关键帧连起来，且不优化三维点（structureless）。</p>
+        </figcaption>
+      </figure>
+      <p>雅可比（附录 IX-C）有几条常用，比如 $\partial\mathbf r_{\Delta\mathrm R_{ij}}/\partial\delta\pmb\phi_j=\mathrm J_r^{-1}(\mathbf r_{\Delta\mathrm R})\mathrm R_j^\top\mathrm R_i^\top$、$\partial\mathbf r_{\Delta\mathbf v_{ij}}/\partial\delta\mathbf v_j=\mathrm R_i^\top$、$\partial\mathbf r_{\Delta\mathbf p_{ij}}/\partial\delta\mathbf p_i=-\mathbf I_3$。<b>不必抄全</b>——记住一句话即可：<b>这些雅可比都能解析写出，不必数值差分</b>，这正是本文「全部雅可比解析给出」贡献的落地。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 全篇总目标函数（式 25/26）</h2>
+      <p>把上面所有因子（IMU 因子 + 视觉因子 + 先验 + 偏置随机游走）拼起来，就是整个 VIO 的最大后验（MAP）问题。先写概率形式，再写它等价的最小二乘：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(\mathcal X_k|\mathcal Z_k)\propto p(\mathcal X_0)\prod_{(i,j)\in\mathcal K_k}p(\mathcal T_{ij}|\mathbf x_i,\mathbf x_j)\prod_{i\in\mathcal K_k}\prod_{l\in\mathcal C_i}p(\mathbf z_{il}|\mathbf x_i)$$</div>
+        <div class="flow-formula">$$\mathcal X_k^\star=\arg\min_{\mathcal X_k}\|\mathbf r_0\|^2_{\Sigma_0}+\sum_{(i,j)\in\mathcal K_k}\|\mathbf r_{\mathcal T_{ij}}\|^2_{\Sigma_{ij}}+\sum_{i\in\mathcal K_k}\sum_{l\in\mathcal C_i}\|\mathbf r_{\mathcal C_{il}}\|^2_{\Sigma_{\mathcal C}}$$</div>
+      </div>
+      <p>翻译：后验概率正比于「先验 × 所有 IMU 因子 × 所有视觉因子」。最小化时，每个因子贡献一个「残差的平方（按各自协方差加权）」。状态定义为 $\mathbf x_i\doteq[\mathrm R_i,\mathbf p_i,\mathbf v_i,\mathbf b_i]$，其中 $\mathbf b_i=[\mathbf b_i^g\ \mathbf b_i^a]\in\mathbb R^6$。</p>
+      <div class="callout">
+        <h4>★ 与第一季 0002 课的连接</h4>
+        <p>这就是第一季第 0002 课那个「MAP → 非线性最小二乘」的<b>直接实例</b>，只是边换成了 IMU 因子和视觉因子。整个 SLAM 的套路没变：把每个传感器读数变成一个残差，所有残差平方和最小，解就是位姿。区别只在于这次的边是「流形上的、预积分过的、解析雅可比的」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ structureless 视觉因子 = Schur 消元（式 50/54/55）</h2>
+      <p>视觉因子也很有讲究。作者用 <b>structureless（无结构）</b> 策略：<b>不把三维点放进状态</b>，而是当场消掉。视觉残差是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf r_{\mathcal C_{il}}=\mathbf z_{il}-\pi(\mathrm R_i,\mathbf p_i,\rho_l)$$</div>
+      </div>
+      <p>其中 $\pi$ 是投影函数，$\rho_l$ 是第 $l$ 个三维点。对点坐标 $\rho_l$ 求解（消去），得到：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\delta\rho_l=-(\mathbf E_l^T\mathbf E_l)^{-1}\mathbf E_l^T(\mathbf F_l\delta\mathbf T_{\mathcal X(l)}-\mathbf b_l)$$</div>
+        <div class="flow-formula">$$\sum_l\Big\|(\mathbf I-\mathbf E_l(\mathbf E_l^T\mathbf E_l)^{-1}\mathbf E_l^T)(\mathbf F_l\delta\mathbf T-\mathbf b_l)\Big\|^2$$</div>
+      </div>
+      <p>代回去之后，代价变成「只含位姿 $\delta\mathbf T$」的形式。原文点名这是 BA 里的 <b>Schur complement trick（舒尔补技巧）</b>。最关键的数字：那个投影子（左乘的 $\mathbf I-\mathbf E_l(\mathbf E_l^T\mathbf E_l)^{-1}\mathbf E_l^T$）把点的 3 个自由度消掉，<b>投影子维数是 $2n_l-3$</b>（$n_l$ 是观测到该点的帧数）。</p>
+      <div class="callout">
+        <h4>★ 请把这个数字钉死</h4>
+        <p>这个 <b>$2n_l-3$</b> 与上一节 0028 MSCKF 的 <b>$2M_j-3$</b> 是<b>同一个数字</b>——两种范式（优化 vs 滤波），同一个「减 3」。减掉的都是「一个三维点 / 路标的 3 个坐标自由度」。这也再次证明：无论你用优化还是滤波，「把不想估的变量消掉」都是同一个思想，只是工具不同（Schur 补 vs 零空间投影）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验、局限与 OCR 修正</h2>
+      <p>实验数字在上一节已详述（训练/推理约 10 ms、漂移 0.3 m vs 0.7 m、未边缘化旧状态），本节侧重讲<b>「算法复杂度与精度从何而来」</b>：来自三点——预积分把 IMU 压缩成常数时间的一条边（不重积分）、iSAM2 的增量平滑（只重算受影响区域）、以及全部雅可比解析可得（无数值差分开销）。Fig. 6 用数据说明了实时性：</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia/ab6df712495778b0a0e7b4d030c7c2a3c989d3b6263b7071a5a1b23f4eeb2e95.jpg" alt="Fig. 6">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Left: CPU time required for inference, comparing batch estimation against iSAM2. Right: histogram plot of CPU time for the proposed approach.（左为推理耗时对比，批估计 vs iSAM2；右为本方法耗时直方图。）<br>
+          <b>怎么看这张图：</b>这是「为什么能实时」的量化证据。左图说明 iSAM2 增量平滑比「每次从头批估计」省得多；右图显示本方法每次推理的耗时集中在很低的值（毫秒级），分布很稳。配合上一节的 10 ms/关键帧，足以支撑实时 VIO。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia/d7e12626e4edc2ec9c3bd9130c8ff6f9ccdf150ce1528958f2c8c4172b9b0e5f.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>$\mathrm T_{WB}\doteq(\mathrm R_{WB},{}_W\mathbf p)$ is the pose of the body frame B w.r.t. the world frame W. We assume that the body frame coincides with the IMU frame. T is the pose of the camera in the body frame, known from prior calibration.（$\mathrm T_{WB}$ 是机体系 B 相对世界系 W 的位姿；假设机体系与 IMU 系重合；相机在机体系中的位姿由事先标定已知。）<br>
+          <b>怎么看这张图：</b>这是坐标系约定图。它澄清了一个前提：机体系 B 就等同于 IMU 系，相机相对机体的外参 T 是事先标定好的。理解这个约定，才看得懂前面所有公式里 $\mathrm R_i,\mathbf p_i$ 指的是机体/IMU 的位姿。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>明确局限（逐条，与上一节一致）</h4>
+        <p>① 积分式本身是近似（假设两测量间朝向恒定，$\mathrm R(t)$ 常数）；② 偏置一阶修正只在 $\delta b$ 小时成立；③ 忽略地球自转（把世界系当惯性系）；④ 无初始化 / 重力方向估计章节（空白）；⑤ 前端会污染对比；⑥ Tango 对比非同传感器仅定性；⑦ 真实实验无法算 NEES（只能用单次 3σ 图，且对初始位姿/手眼标定极敏感）；⑧ 未做回环、未做长期一致性。</p>
+      </div>
+      <div class="callout">
+        <h4>OCR 提醒（务必说明你修正了什么）</h4>
+        <p>原始 PDF 文字里，式 (33) 的 <b>$\Delta L$ 共 6 处应为 $\Delta t$</b>（本课程已用 $\Delta t$）。附录式 (59)(61)(69)(83) 出现 <b>$\mathbf B^{\mathrm{sy}}_{1,1}$、$\Delta\Psi$、$y^k_{\tau_0}$ 这类原论文根本不存在的「幻觉符号」</b>，<b>不可照抄</b>。还有两处具体修正：<b>L851</b> 写的 $\partial\mathbf r_{\Delta\mathbf p}/\partial\delta\mathbf v_j=-\mathrm R_i^\top\Delta t_{ij}$ 是<b>错的，应为 $\mathbf 0$</b>（因为 $\mathbf r_{\Delta\mathbf p}$ 里不含 $\mathbf v_j$）；<b>L871</b> <b>漏掉了</b>一行 $\partial\mathbf r_{\Delta\mathbf v_{ij}}/\partial\delta\mathbf v_j=\mathrm R_i^\top$。总之：md 的公式抄写不可信，本课程一律用正确形式。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>偏置估计更新时，预积分量为什么「不必重积分」？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。偏置变化时，用事先算好、可增量更新的雅可比（∂ΔR/∂b^g 等）做一阶泰勒修正即可，无需用新偏置把整段 IMU 重新积分一遍。原文明确说雅可比可以在预积分阶段预计算。" onclick="lessonKit.answer(this,'q0030a')">因为偏置变化可由预计算好的雅可比一阶修正</button>
+          <button data-correct="no" data-explanation="不对。雅可比只做一次一阶近似修正，并不能让积分「绝对精确」；且偏置修正本身只在 δb 小时才准（局限②）。" onclick="lessonKit.answer(this,'q0030a')">因为雅可比能让积分变成绝对精确</button>
+          <button data-correct="no" data-explanation="不对。偏置是随机游走、会缓慢漂移，不是常量；正因它会变，才需要「修正而不重积分」这套机制。" onclick="lessonKit.answer(this,'q0030a')">因为偏置是常量不会变，所以不用重算</button>
+        </div>
+        <div class="quiz-feedback" id="q0030a"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>式 (38) 里 $\delta\pmb\phi_{ij}$ 为什么可以当作零均值高斯噪声？</p>
+          <p><b>答：</b>因为 $\delta\pmb\phi_{ij}$ 是一堆零均值传感器噪声项（$\pmb\eta_k^{gd}$ 等）的线性组合（见式 42），原文明确说它是「linear combination of zero-mean noise terms」，所以保持零均值高斯，从而整组预积分噪声 $\pmb\eta^\Delta_{ij}\sim\mathcal N(\mathbf 0,\Sigma_{ij})$ 自洽。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>协方差递推 $\Sigma_{ij}=\mathbf A_{j-1}\Sigma_{ij-1}\mathbf A_{j-1}^\top+\mathbf B_{j-1}\Sigma_\eta\mathbf B_{j-1}^\top$ 和哪种经典滤波步骤同构？它和 0028 的 Lyapunov 方程有什么关系？</p>
+          <p><b>答：</b>这是卡尔曼滤波的「协方差预测」步（旧协方差经 $\mathbf A$ 传播 + 新噪声经 $\mathbf B$ 注入）。0028 的 Lyapunov 方程 $\dot{\mathbf P}=\mathbf F\mathbf P+\mathbf P\mathbf F^T+\mathbf G\mathbf Q\mathbf G^T$ 是它的连续时间版本；本节是离散时间逐条 IMU 递推版。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>IMU 因子为什么是「9 维」的？它由哪三部分残差组成？</p>
+          <p><b>答：</b>因为预积分量有三类——相对旋转、相对速度、相对位置，各贡献 3 维，合起来 $\mathbf r_{\mathcal T_{ij}}\in\mathbb R^9$。三部分分别是 $\mathbf r_{\Delta\mathrm R}$、$\mathbf r_{\Delta\mathbf v}$、$\mathbf r_{\Delta\mathbf p}$（式 45）。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>structureless 视觉因子里的投影子维数 $2n_l-3$，和哪一节的哪个数字同源？为什么「减 3」？</p>
+          <p><b>答：</b>与 0028 MSCKF 的 $2M_j-3$ 同源，都是「减 3」。减掉的是被消去的那个三维点 / 路标的 3 个坐标自由度。两者分别是「优化里的 Schur 补」和「滤波里的零空间投影」对同一个思想的不同实现。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0029-IMU预积分上-为什么需要预积分.html">← 上一课：IMU 预积分（上）</a>
+        <a class="next" href="0031-连续时间vs离散时间2022-什么时候必须换建模.html">下一课：连续时间 vs 离散时间（2022） →</a>
+      </div>
+      <p class="foot-note">「四件套」吃透，你对 VIO 的后端就算入门了；下一站是连续时间建模 🚀</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

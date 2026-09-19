@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RGBD-SLAM-v2（2014）：稀疏特征 + EMM 回环 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0052</div>
+      <h1>RGBD-SLAM-v2（2014）：稀疏特征 + EMM 回环</h1>
+      <p class="subtitle">同一团队、同一基准，却和 DVO 走了完全相反的一条路：提稀疏特征、用 EMM 验回环、把地图存成八叉树 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稀疏特征、EMM、测地邻域采样、OctoMap</span>
+        <span>👥 作者：Endres, Hess, Sturm, Cremers, Burgard</span>
+        <span>📅 2014 · <i>3-D Mapping With an RGB-D Camera</i>（IEEE T-RO）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">与上一节的关系</a>
+        <a href="#b">★ OctoMap 不是体素哈希</a>
+        <a href="#c">★ 测地邻域采样</a>
+        <a href="#d">★ 批评前人与一个硬伤</a>
+        <a href="#e">实验数字与局限</a>
+        <a href="#f">巩固练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 RGBD-SLAM-v2 与上一节 DVO 是「同一团队同一基准的两条路线」；准确复述 OctoMap 八叉树与 Voxel Hashing 的差别；讲透三类回环候选尤其是测地邻域采样；复述 EMM 与 g2o + Mahalanobis 剪边；并诚实讲出「大回环后体素地图只能重建」这个硬伤。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>上一节 <b>0051 DVO</b> 是「RGB-D + 像素级直接法」。本节是<b>同一个慕尼黑/弗赖堡团队</b>、用<b>同一个 TUM RGB-D 基准</b>的另一条路线：<b>稀疏特征 + 图优化</b>。它还直接点了 <b>0033 KinectFusion</b> 和 Kintinuous 的名——说前者只能小房间、后者无回环会无限漂。地图表示上它用的是 <b>OctoMap 八叉树</b>，正好可以和第二季 <b>0034 Voxel Hashing</b> 对照：一个存占据概率 + 自由空间，一个存 TSDF 表面。</p></div>
+      </div>
+
+      <h2>1. 同一团队、同一 benchmark 的两条路</h2>
+      <p>先记住一个事实：<b>DVO（0051）和 RGBD-SLAM-v2（本节）是同一批人、在同一个 TUM RGB-D 基准上做的</b>。但他们对「RGB-D 该怎么 SLAM」给出了两种截然不同的答案：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>上一节 DVO</h4><p>像素级<b>直接法</b>：逐像素最小化光度 + 深度残差；地图是<b>一致点云</b>。</p></div>
+        <div class="mini-card"><h4>本节 RGBD-SLAM-v2</h4><p><b>稀疏特征</b> + 环境测量模型（EMM）验回环；地图用 <b>OctoMap 八叉树占据地图</b>。</p></div>
+      </div>
+      <p>也就是说，DVO 赌「信息越多越好（稠密）」，本节赌「特征更稳、地图更省（稀疏 + 八叉树）」。两条路没有谁绝对赢，但本节在工程落地上更讨喜：点云太占内存，而八叉树能压到几十 MB。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_3-D_Mapping_With_an_RGB-D_Camera/abd5921ec145bcc98682a3a7e13c86d6f15f9f679f0ac3a859510df67d6b63c8.jpg" alt="Schematic overview of RGBD-SLAM v2">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>We extract visual features that we associate to 3-D points. Subsequently, we mutually register pairs of image frames and build a pose graph, that is optimized using g2o. Finally, we generate a textured voxel occupancy map using the OctoMapping approach.<br>
+          <b>怎么看这张图：</b>这是整条流水线：从彩色图提特征 → 关联成 3D 点 → 帧间配准建位姿图 → 用 g2o 优化 → 最后用 OctoMap 生成<b>带纹理的体素占据地图</b>。注意末端是「voxel occupancy map（占据地图）」，不是「一致点云」——这正是它和 DVO 在地图表示上的分野。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 重要纠正：原文用的是 OctoMap 八叉树，不是体素哈希！</h2>
+      <p>这是本节<b>最容易写错</b>的地方，请逐字确认：<b>RGBD-SLAM-v2 的地图表示是 OctoMap 八叉树（octree），不是 Voxel Hashing 那种体素哈希。</b> 我们拿它和第二季 <b>0034 Voxel Hashing</b> 逐条比：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>RGBD-SLAM-v2 · OctoMap</h4><p>八叉树存<b>概率占据 + 自由空间</b>（每个体素是「占据/空闲/未知」的概率）；显式表达自由空间，利于避障；内存只需 <b>4.2–25 MB</b>（2 cm 分辨率）。</p></div>
+        <div class="mini-card"><h4>0034 · Voxel Hashing</h4><p>哈希表 + <b>体素块</b>存 <b>TSDF（截断符号距离场）表面</b>；表达的是「表面到体素的符号距离」；典型占用内存是<b>数 GB</b> 量级。</p></div>
+      </div>
+      <p>差别可以归纳成三句话：</p>
+      <ul>
+        <li><b>存什么：</b>OctoMap 存「占据/自由」的概率（占据栅格思想升级到 3D）；Voxel Hashing 存「TSDF 表面」。</li>
+        <li><b>用什么结构：</b>OctoMap 是<b>八叉树</b>（自适应分辨率、空白区域不占节点）；Voxel Hashing 是<b>哈希表 + 固定体素块</b>。</li>
+        <li><b>吃多少内存：</b>原文给的数字是 OctoMap 只要 <b>4.2–25 MB</b>，而等价的稠密点云要 <b>2–5 GB</b>（每帧点云约 3.6 MB）；Voxel Hashing 那种 TSDF 方案则是<b>数 GB</b>。</li>
+      </ul>
+      <p>为什么这很重要？因为八叉树「空白区域不分配节点」的特性，才让它能在普通内存里装下一整层楼的地图；而 TSDF 体素哈希为了保住精细表面，内存随场景体量直线上升。下一节 RTAB-Map 也会接着用 OctoMap——它是这一类「长期在线建图」事实上的地图标准。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_3-D_Mapping_With_an_RGB-D_Camera/49a550a5e91bf73d363ca60779acc0fc321b9cba53b2f902b9aac8dac65ca0f2.jpg" alt="OctoMap occupancy voxel fr1 desk">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Occupancy voxel representation of the sequence "fr1/desk" with 1 cm³ voxel size. Occupied voxels are represented with color for easier viewing.<br>
+          <b>怎么看这张图：</b>这是用 OctoMap 生成的占据体素地图（1 cm³ 分辨率，为了好看才上色）。它展示的就是「八叉树占据地图」长什么样——只把被占据的格子显式存下来，空白和未知区域几乎不占存储。对比 Voxel Hashing 那种把整个 TSDF 体素场都铺满的方案，你可以直观感到它为什么省内存。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 回环检测：三类候选 + 测地邻域采样</h2>
+      <p>视觉里程计（帧间配准）天生会漂。要消漂，就得找回环——把「当前帧」和「很久以前到过的地方」配准上。但候选帧太多（几千帧）不能全比，所以本节设计了一套<b>三类候选 + 测地邻域采样</b>的策略：</p>
+      <h3>3.1 三类候选</h3>
+      <ol>
+        <li><b>时序前驱（n 个紧邻前驱帧）：</b>和最近几帧做配准，抑制短期漂移。</li>
+        <li><b>测地邻域（geodesic neighborhood）采样：</b>在「位姿图」上从当前帧出发、限定深度生成一棵最小生成树，再从中<b>偏向更早的帧</b>随机抽 k 个。关键在「测地」——沿轨迹算距离，而不是直线距离。</li>
+        <li><b>关键帧集：</b>从一个指定的关键帧集合里随机抽 l 个帧，专门找<b>大回环</b>。</li>
+      </ol>
+      <h3>3.2 用 EMM 验候选、用 g2o 优化、用 Mahalanobis 剪边</h3>
+      <p>候选配准出来后，用<b>基于光束的 EMM（环境测量模型，beam-based EMM）</b>做校验：它利用稠密深度里的「自由空间」信息，判断一个位姿估计是不是合理（详见图 4）。通过后，用 <b>g2o</b> 把新边加进位姿图做优化；优化完，再用边的<b>Mahalanobis 距离</b>把离谱的边剪掉（prune）。</p>
+      <h3>3.3 为什么不能只靠随机采样</h3>
+      <p>原文专门做了对比（就是下面的 Fig. 5）：<b>上方</b>只用「紧邻前驱 + 随机采样帧」；<b>下方</b>加上了「测地邻域采样」。在挑战性强的 Robot SLAM 数据集上，光靠随机采样时很多潜在的回环没被发现，平均误差只靠这一改动就<b>降低了 26%</b>。原因很直观：随机采样会把候选连到「直线距离近、但轨迹上其实隔着墙和家具」的帧，这种配对物理上根本不可能，纯浪费；而测地邻域沿轨迹走，才更可能命中真正的旧地点。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 测地邻域采样 vs 随机采样（一张真实房间平面图）</text>
+          <!-- LEFT panel: random sampling -->
+          <rect x="30" y="50" width="400" height="360" fill="#fdecea" stroke="#c62828" stroke-width="2.5" rx="8"/>
+          <text x="230" y="78" fill="#7a1f00" font-size="15" text-anchor="middle" font-weight="700">随机采样（错误示范）</text>
+          <!-- room walls left -->
+          <rect x="60" y="100" width="340" height="300" fill="#ffffff" stroke="#37474f" stroke-width="2.5"/>
+          <line x1="230" y1="100" x2="230" y2="250" stroke="#90a4ae" stroke-width="2"/>
+          <line x1="230" y1="250" x2="400" y2="250" stroke="#90a4ae" stroke-width="2"/>
+          <rect x="90" y="130" width="60" height="40" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.5"/>
+          <text x="120" y="155" fill="#37474f" font-size="11" text-anchor="middle">家具</text>
+          <rect x="300" y="320" width="70" height="50" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.5"/>
+          <text x="335" y="350" fill="#37474f" font-size="11" text-anchor="middle">家具</text>
+          <!-- trajectory left -->
+          <polyline points="80,360 150,330 200,300 260,290 300,250 330,200 300,150 230,140" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <circle cx="230" cy="140" r="8" fill="#1565c0"/>
+          <text x="230" y="125" fill="#0d3c75" font-size="12" text-anchor="middle">当前相机</text>
+          <!-- random lines crossing walls -->
+          <line x1="230" y1="140" x2="90" y2="135" stroke="#c62828" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <line x1="230" y1="140" x2="380" y2="320" stroke="#c62828" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <line x1="230" y1="140" x2="320" y2="360" stroke="#c62828" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <text x="160" y="200" fill="#c62828" font-size="11" text-anchor="middle">穿过墙/家具</text>
+          <text x="320" y="300" fill="#c62828" font-size="11" text-anchor="middle">物理不可能</text>
+          <!-- RIGHT panel: geodesic -->
+          <rect x="470" y="50" width="400" height="360" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5" rx="8"/>
+          <text x="670" y="78" fill="#1b5e20" font-size="15" text-anchor="middle" font-weight="700">测地邻域采样（正确）</text>
+          <rect x="500" y="100" width="340" height="300" fill="#ffffff" stroke="#37474f" stroke-width="2.5"/>
+          <line x1="670" y1="100" x2="670" y2="250" stroke="#90a4ae" stroke-width="2"/>
+          <line x1="670" y1="250" x2="840" y2="250" stroke="#90a4ae" stroke-width="2"/>
+          <rect x="530" y="130" width="60" height="40" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.5"/>
+          <rect x="740" y="320" width="70" height="50" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.5"/>
+          <polyline points="520,360 590,330 640,300 700,290 740,250 770,200 740,150 670,140" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+          <circle cx="670" cy="140" r="8" fill="#1565c0"/>
+          <text x="670" y="125" fill="#0d3c75" font-size="12" text-anchor="middle">当前相机</text>
+          <!-- geodesic lines along trajectory -->
+          <line x1="670" y1="140" x2="740" y2="150" stroke="#2e7d32" stroke-width="1.8"/>
+          <line x1="670" y1="140" x2="700" y2="290" stroke="#2e7d32" stroke-width="1.8"/>
+          <line x1="670" y1="140" x2="640" y2="300" stroke="#2e7d32" stroke-width="1.8"/>
+          <text x="610" y="200" fill="#1b5e20" font-size="11" text-anchor="middle">只连轨迹</text>
+          <text x="610" y="215" fill="#1b5e20" font-size="11" text-anchor="middle">相邻的帧</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右是同一个房间平面图（有隔墙、家具、一条穿过房间的相机轨迹）。左格「随机采样」：从当前相机位置向远处随机连出几条候选线，结果线<b>穿过墙壁和家具</b>——物理上根本到不了。右格「测地邻域采样」：只把当前帧连到<b>沿轨迹相邻</b>的那些帧，线贴着轨迹走。<br>
+          <b>怎么看这张图：</b>① 左格红线说明「直线距离近 ≠ 真能回去」，隔一堵墙就不可能是回环；② 右格绿线说明「测地邻域＝沿轨迹算距离，而不是直线距离」，才能命中真正的旧地点；③ 这正是原文 Fig. 5 想证明的事——光靠随机采样会漏掉大量回环。<br>
+          <b>要记住的一句话：</b>测地邻域采样＝沿轨迹找邻居；随机采样会连到穿墙的「幽灵」帧。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_3-D_Mapping_With_an_RGB-D_Camera/c4873b3384e45507f3ecf62095aba96586be2aac0a2a51c456162f450d528226.jpg" alt="Pose graph with and without geodesic neighborhood sampling">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Pose graph for the sequence "fr1/floor." (Top) Transformation estimation to consecutive predecessors and randomly sampled frames. (Bottom) Additional exploitation of previously found matches using the geodesic neighborhood. In both runs, the same overall number of candidate frames for frame-to-frame matching were processed. On the challenging "Robot SLAM" dataset, the average error is reduced by 26%.<br>
+          <b>怎么看这张图：</b>上方是「紧邻前驱 + 随机采样帧」得到的位姿图，下方是加了「测地邻域采样」后的位姿图。你可以看到<b>下方明显多出了跨越大段的回环边</b>（那些长连线）。原文给出的最硬数字：在 Robot SLAM 数据集上，仅靠这一改动就让平均误差降低 26%。这正好印证了上面自绘图 A 的结论。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2014_3-D_Mapping_With_an_RGB-D_Camera/2f717f66a298cfe40bd6fae677c6eab52c2fb70308715cc580c1d78c0b7455c4.jpg" alt="Beam-based EMM two cameras">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Two cameras and their observations aligned by the estimated transformation. In the projection from camera A to camera B, the data association of y_i and y_j is counted as an inlier. The projection of y_q cannot be seen from camera B, as it is occluded by y_k...<br>
+          <b>怎么看这张图：</b>这张图解释 EMM 怎么「看一眼就知道配准合不合理」。把相机 A 的点投到相机 B：落在可见区域且对得上的算 inlier（绿），落在自由空间里、说明被错误穿透的算 outlier（红），被遮挡的算 occluded。EMM 就是靠这种「深度图里的自由空间」信息，给帧间配准一个<b>独立于特征匹配</b>的可靠性判据——这也是它能在特征稀少场景仍稳健的原因。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>RGBD-SLAM-v2 在回环候选搜索里，为什么要用「测地邻域」而不是纯随机？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="测地邻域沿位姿图（轨迹）算距离，只连真正可能回去的旧地点；随机采样会把候选连到隔着墙/家具的「幽灵」帧，物理上不可能，还会漏掉真回环（原文：Robot SLAM 误差因此高 26%）。" onclick="lessonKit.answer(this,'q0052a')">随机会连到穿墙的不可达帧</button>
+          <button data-correct="no" data-explanation="恰恰相反：随机采样漏掉大量回环、还连出物理不可能的候选；测地邻域才更准确，论文用它把 Robot SLAM 误差降了 26%。" onclick="lessonKit.answer(this,'q0052a')">随机采样能找到更多回环</button>
+        </div>
+        <div class="quiz-feedback" id="q0052a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 批评前人与一个硬伤</h2>
+      <h3>4.1 原文对前人的批评（直接引用）</h3>
+      <p>论文在 Related Work 里毫不客气地点名了几篇里程碑：</p>
+      <ul>
+        <li>对 <b>KinectFusion</b>（<b>0033</b>）：说它用体素网格存 TSDF，「<b>only applies to small workspaces（只能用于小工作空间）</b>」，而且「<b>lacks the capability to recover from accumulating drift by loop closures（没有靠回环纠正累积漂移的能力）</b>」。</li>
+        <li>对 <b>Kintinuous</b>：说它虽然把体素网格随相机移动来扩大范围，但「<b>cannot deal with loop closures, and therefore, may drift indefinitely（处理不了回环，因此可能无限漂移）</b>」。</li>
+      </ul>
+      <p>换句话说，本节的核心卖点就是：<b>它有回环、能消漂，所以不怕大场景</b>。这恰好是上一节 DVO 和 KinectFusion 都想要、而 Kintinuous 没有的东西。</p>
+
+      <h3>4.2 ★ 一个要诚实讲的硬伤：大回环后体素地图只能重建</h3>
+      <p>但本节有个<b>很诚实、也很扎心的局限</b>：它把深度图<b>按当时的位姿直接写进 OctoMap 体素</b>。一旦完成一次<b>大回环</b>，位姿图被全局优化、很多旧位姿被「拉正」了，可是<b>那些体素早就按旧的（有漂移的）位姿固化在地图里了</b>。原文原话：</p>
+      <div class="formula-box"><div class="flow-formula">「a voxel map cannot be updated efficiently in case of major corrections of the past trajectory as obtained by large loop closures. In most applications, it is, therefore, reasonable to recreate the map.」</div></div>
+      <p>翻译成人话：<b>大回环之后，体素地图只能「推倒重来」——把所有深度图按新位姿重新投一遍</b>。这正好暴露了「稠密体素地图」和「图优化回环」之间一个深层矛盾：图优化只改位姿，可体素是带位姿烘焙进去的；要地图也跟着正，就得重投。</p>
+      <p>这恰好是给下一节 <b>0053 RTAB-Map</b> 和第二季 <b>0034 Voxel Hashing</b> 埋的伏笔：RTAB-Map 怎么用「节点里存局部占据栅格、回环时按新位姿重拼全局栅格」来绕开这个坑。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="24" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">图 B · 回环后体素地图为什么必须重建</text>
+          <!-- left panel: before loop -->
+          <rect x="30" y="50" width="380" height="290" fill="#fff3e0" stroke="#ef6c00" stroke-width="2.5" rx="8"/>
+          <text x="220" y="78" fill="#bf4e00" font-size="14" text-anchor="middle" font-weight="700">回环前：体素按漂移位姿写入</text>
+          <line x1="60" y1="300" x2="380" y2="300" stroke="#90a4ae" stroke-width="2"/>
+          <!-- skewed wall (drifted) -->
+          <rect x="90" y="120" width="240" height="22" fill="#ffb74d" stroke="#ef6c00" stroke-width="1.5"/>
+          <text x="210" y="135" fill="#7a1f00" font-size="12" text-anchor="middle">墙（歪的/错开两层）</text>
+          <text x="210" y="200" fill="#37474f" font-size="12" text-anchor="middle">体素已固化在</text>
+          <text x="210" y="218" fill="#37474f" font-size="12" text-anchor="middle">旧位姿位置</text>
+          <!-- right panel: after loop only pose changed -->
+          <rect x="490" y="50" width="380" height="290" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5" rx="8"/>
+          <text x="680" y="78" fill="#1b5e20" font-size="14" text-anchor="middle" font-weight="700">回环后：只改位姿 → 重影</text>
+          <line x1="520" y1="300" x2="840" y2="300" stroke="#90a4ae" stroke-width="2"/>
+          <!-- corrected wall (straight) -->
+          <rect x="540" y="105" width="260" height="20" fill="#a5d6a7" stroke="#2e7d32" stroke-width="1.5"/>
+          <!-- ghost wall (old position) -->
+          <rect x="560" y="135" width="260" height="20" fill="#c8e6c9" stroke="#9e9e9e" stroke-width="1.2" stroke-dasharray="4,3"/>
+          <text x="690" y="160" fill="#7a1f00" font-size="12" text-anchor="middle">旧体素没动 → 重影</text>
+          <!-- rebuild arrow -->
+          <line x1="690" y1="240" x2="690" y2="285" stroke="#1565c0" stroke-width="3"/>
+          <polygon points="690,292 683,278 697,278" fill="#1565c0"/>
+          <text x="690" y="232" fill="#0d3c75" font-size="12" text-anchor="middle">按新位姿重投所有深度图 = 重建</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左联「回环前」：体素按当时有漂移的位姿写进 OctoMap，墙是歪的、甚至错开两层。右联「回环后只改位姿」：全局优化把位姿拉正了（绿墙摆直），但<b>旧体素还留在原地</b>，于是地图出现<b>重影</b>（虚线框）。最后用蓝箭头指出唯一下场：把所有深度图按新位姿重新投一遍，即「重建」。<br>
+          <b>怎么看这张图：</b>① 左联的歪墙 = 漂移被烘进了地图；② 右联的虚线框 = 位姿正了但体素没跟着正，这就是矛盾；③ 蓝箭头 = 唯一解法。这个矛盾正是「稠密体素地图 vs 图优化回环」的硬伤。<br>
+          <b>要记住的一句话：</b>大回环后体素地图只能重建——因为体素带着旧位姿「烘焙」进了地图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 实验数字、局限与小结</h2>
+      <h3>5.1 实验数字</h3>
+      <p>论文在 TUM 的 <b>fr1 / fr2 / fr3</b> 多序列、以及 <b>Robot SLAM / Pioneer SLAM</b>（Kinect 装在 Pioneer 3 机器人上）上做了详测。硬件是 Intel Core i7 3.40 GHz + nVidia GeForce GTX 570。挑几个有代表性的 ATE RMSE：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>fr1/desk</h4><p>ATE <b>0.026 m</b></p></div>
+        <div class="mini-card"><h4>fr1/room</h4><p>ATE <b>0.087 m</b></p></div>
+        <div class="mini-card"><h4>fr2/desk</h4><p>ATE <b>0.057 m</b></p></div>
+        <div class="mini-card"><h4>fr2/large（无回环）</h4><p>ATE <b>0.86 m</b>（长序列、没回环，漂得明显）</p></div>
+        <div class="mini-card"><h4>MIT Stata（229 m）</h4><p>ATE <b>1.65 m</b></p></div>
+        <div class="mini-card"><h4>处理速度</h4><p>fr1/desk 约 <b>15.2 Hz</b>，长序列降到 5–7 Hz</p></div>
+      </div>
+      <p>注意 fr2/large 那个 0.86 m：这是一段<b>没有回环</b>的长序列，漂移没法被纠正，误差就上去了——反过来证明回环 + 图优化在长轨迹上的价值。而带回环的室内序列普遍在几厘米量级。</p>
+
+      <h3>5.2 原文承认的局限</h3>
+      <ul>
+        <li><b>重复结构会骗出假变换：</b>厂房里同款椅子、同款窗户会触发错误的帧间配准（bogus transformation）。</li>
+        <li><b>EMM 不能随便套用：</b>每帧对全部点云做 3D 体素 raycasting 太贵，且 beam 模型只给单束概率密度、不是绝对质量判据，要另想办法做假设检验。</li>
+        <li><b>大回环要重建地图：</b>就是上一节讲的硬伤。</li>
+        <li><b>仍依赖特征：</b>和 DVO 不同，它靠提特征，所以「特征稀少 + 深度缺失」时吃紧（也正是它要用 EMM + 无深度特征兜底的原因）。</li>
+      </ul>
+
+      <section class="exercise-box" id="f">
+        <h3>课后练习</h3>
+        <ol>
+          <li>RGBD-SLAM-v2 和上一节的 DVO 是同一团队同一基准的两条路线，它们最大的三点不同是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① 前端：DVO 是像素级直接法（光度+深度残差），本节是稀疏特征 + RANSAC；② 地图：DVO 是一致点云，本节是 OctoMap 八叉树占据地图；③ 回环校验：本节额外用 beam-based EMM，DVO 用熵比。</div></details>
+          </li>
+          <li>为什么说本节用的是 OctoMap 八叉树、而不是 Voxel Hashing？用三句话对比二者。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① 存什么：OctoMap 存概率占据+自由空间，Voxel Hashing 存 TSDF 表面；② 结构：八叉树 vs 哈希表+体素块；③ 内存：OctoMap 4.2–25 MB，Voxel Hashing 数 GB。原文明确用的是 OctoMapping 八叉树。</div></details>
+          </li>
+          <li>三类回环候选分别是什么？为什么不能只靠随机采样？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>三类：① n 个紧邻前驱；② 测地邻域（位姿图最小生成树、限定深度、偏向更早帧随机抽 k 个）；③ 关键帧集随机抽 l 个找大回环。不能只靠随机：随机会把候选连到隔着墙/家具的不可达帧，漏掉真回环；原文在 Robot SLAM 上靠测地邻域把平均误差降了 26%。</div></details>
+          </li>
+          <li>原文点名批评了 KinectFusion 和 Kintinuous 的什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>KinectFusion：「只能用于小工作空间」「没有靠回环纠正累积漂移的能力」；Kintinuous：「处理不了回环，因此可能无限漂移」。本节正是以「有回环能消漂」为核心卖点。</div></details>
+          </li>
+          <li>大回环之后，为什么体素地图只能重建？这暴露了什么矛盾？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为深度图是按当时的位姿直接写进 OctoMap 的，体素带着旧位姿「烘焙」进了地图；大回环把位姿图全局拉正后，旧体素没跟着动，出现重影。要地图也正确，只能把所有深度图按新位姿重投一遍。这暴露了「稠密体素地图」与「图优化回环」的矛盾——也是 RTAB-Map 下一节要绕开的坑。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0051-DVO-SLAM2013-用现成深度做直接法.html">← 上一课：DVO-SLAM（2013）：用现成深度做直接法</a>
+        <a class="next" href="0053-RTAB-Map2019-记忆管理与长期建图.html">下一课：RTAB-Map（2019）：记忆管理与长期建图 →</a>
+      </div>
+      <p class="foot-note">一个能打大场景的 SLAM，难点往往不在「算出位姿」，而在「位姿改了之后地图怎么跟着改」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenVINS（2020）：一致性与 FEJ — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0061</div>
+      <h1>OpenVINS（2020）：一致性与 FEJ</h1>
+      <p class="subtitle">🛠️ 一个把「可扩展性」和「一致性」当成头等大事的 VIO 研究平台，核心武器是 FEJ</p>
+      <div class="hero-meta">
+        <span>🎯 主题：模块化 MSCKF 研究平台 + First-Estimates Jacobian</span>
+        <span>👥 作者：Patrick Geneva, Kevin Eckenhoff, Guoquan Huang 等</span>
+        <span>📅 2020 · <i>OpenVINS: A Research Platform for Visual-Inertial Estimation</i>（ICRA 2020）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">它是研究平台</a>
+        <a href="#b">模块化与三大组件</a>
+        <a href="#c">FEJ 核心</a>
+        <a href="#d">诚实说明 OC-EKF</a>
+        <a href="#e">不可观方向</a>
+        <a href="#f">实验与局限</a>
+        <a href="#g">本课要点</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能说清：为什么 OpenVINS 是一篇「研究平台」论文（依据）；FEJ 为什么要把线性化点钉在第一次估计上；以及它<b>没</b>讲什么（OC-EKF）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0028 MSCKF</b>（本文即其现代化、模块化版）、<b>0019 gauge freedom</b>（↔ 不可观方向）、<b>0022 NEES</b>（↔ 一致性评测）、<b>0029/0030 预积分</b>（闭式预积分 [45]）。</p></div>
+      </div>
+
+      <h2>1. 它是一篇「研究平台」论文（判定依据）</h2>
+      <p>和上一节 Basalt 类似，我们得先判断这篇论文的<b>性质</b>。它不是一个只提出一个新算法的「方法论文」，而是一篇<b>研究平台（platform）论文</b>——也就是说，它交付的是一套可复用、可替换、带文档和工具链的 codebase。依据来自原文多处：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>① 摘要自陈</b><br>「we present an open platform, termed OpenVINS, for visual-inertial estimation research」（第 5 行）。</p></div>
+        <div class="mini-card"><p><b>② 引言定位</b><br>「extendable, open sourced codebase … particularly designed for researchers」（第 21 行）。</p></div>
+        <div class="mini-card"><p><b>③ 三大组件</b><br>ov_core / ov_eval / ov_msckf 模块化拆分（第 23–27 行）。</p></div>
+        <div class="mini-card"><p><b>④ 专门章节</b><br>第 VI 章直接把系统「作为平台」来介绍（第 330 行）。</p></div>
+      </div>
+      <p>所以它最大的卖点不是某个孤立 trick，而是：<b>模块化、文档完备、带仿真器与 NEES 评测</b>的 MSCKF 系 VIO 平台。对研究者来说，这是一块能直接往上搭自己想法的「乐高底板」。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 模块化与三大组件</h2>
+      <p>OpenVINS 把系统拆成三个可独立调用的部分，这也是它「平台」属性的具体落地：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>ov_core</b><br>核心算法库：on-manifold 滑窗 EKF、状态管理、特征处理、标定等底层能力。</p></div>
+        <div class="mini-card"><p><b>ov_msckf</b><br>估计器本体：基于 MSCKF 的 VIO，包含路标更新、在线内外参/时标标定。</p></div>
+        <div class="mini-card"><p><b>ov_eval</b><br>评测工具箱：轨迹误差、NEES 一致性等指标的计算与可视化。</p></div>
+      </div>
+      <p>它的状态向量把惯性态、相机态、路标、世界项、时标都装在一起（第 36–53 行）：</p>
+      <div class="formula-box"><div class="flow-formula">$$x_k=\begin{bmatrix}x_I^T & x_C^T & x_M^T & x_W^T & c\,t_I\end{bmatrix}^T$$</div></div>
+      <p>惯性态 $x_I$ 定义在 $\mathbb{H}\times\mathbb{R}^{12}$ 流形上，共 15 个自由度（注意：原文第 55 行 OCR 把 $R^{12}$ 误识别成 $R^{1\hat{2}}$，我们已修正，$\hat{}$ 是帽子被错认）。</p>
+      <p>它的更新是「流形上」的（第 122–130 行），即在李群/流形上做 $\boxplus$ 更新，而不是在欧氏空间里硬加：</p>
+      <div class="formula-box"><div class="flow-formula">$$\hat x_{k|k}=\hat x_{k|k-1}\boxplus K_k\big(z-h(\hat x)\big),\qquad K=P H^T(HP H^T+R)^{-1}$$</div></div>
+      <p>预测（传播）阶段的协方差递推（第 86 行）则是标准 EKF 形式：</p>
+      <div class="formula-box"><div class="flow-formula">$$P_{k|k-1}=\Phi_{k-1}P_{k-1}\Phi_{k-1}^T+Q_{k-1}$$</div></div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ FEJ 核心：为什么要把线性化点钉在「第一次估计」</h2>
+      <p>FEJ 是本课的核心。先说它要解决的问题：在 EKF（扩展卡尔曼滤波）里，每次量测更新都要把非线性模型在某个「线性化点」附近展开成雅可比矩阵。如果这个线性化点<b>跟着估计值一路更新</b>，会带来一个隐蔽的毛病——</p>
+      <p><b>线性化点持续移动，会让滤波器的协方差收缩得过快，使滤波器「过度自信」，最终变得不一致（inconsistent）。</b></p>
+      <p>OpenVINS 的做法是 <b>First-Estimates Jacobian（FEJ，首次估计雅可比）</b>：对同一个状态变量，所有与之相关的雅可比都固定在它<b>第一次被估计出来时的那个线性化点</b>上，后续迭代不再挪动这个点。这样所有更新都基于<b>同一套线性化</b>，滤波器对不确定度的估计才诚实，零空间（nullspace）才不被破坏，一致性得以保持。</p>
+      <p>必须诚实说明两点（精读材料已标红）：</p>
+      <div class="callout"><h4>原文做了什么 / 没做什么</h4><p>OpenVINS 把 FEJ 作为特性列出（摘要 (iv)、第 27、274 行），并称实现基于 FEJ-EKF（引文 [21][22]）。但<b>本文正文并没有展开「线性化点持续更新→过度自信/不一致」的完整论证</b>——那套论证在它引用的 Huang et al. 2008（[20–22]）里。我们讲 FEJ 机制时可以解释原理，但要清楚这是引文的工作，不是本文新证。</p></div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="40" y="20" width="400" height="40" rx="8" fill="#e8f0fe"/>
+          <text x="240" y="46" font-size="18" font-weight="700" fill="#1a3a6b" text-anchor="middle">协方差椭圆越画越小</text>
+          <rect x="460" y="20" width="400" height="40" rx="8" fill="#fde8e8"/>
+          <text x="660" y="46" font-size="18" font-weight="700" fill="#8a1f1f" text-anchor="middle">真实误差没变小</text>
+
+          <!-- 左：同心椭圆 -->
+          <ellipse cx="240" cy="210" rx="150" ry="105" fill="none" stroke="#2b6cb0" stroke-width="2"/>
+          <ellipse cx="240" cy="210" rx="112" ry="78" fill="none" stroke="#2b6cb0" stroke-width="2"/>
+          <ellipse cx="240" cy="210" rx="74" ry="52" fill="none" stroke="#2b6cb0" stroke-width="2"/>
+          <ellipse cx="240" cy="210" rx="38" ry="26" fill="none" stroke="#2b6cb0" stroke-width="2"/>
+          <text x="240" y="78" font-size="15" fill="#2b6cb0" text-anchor="middle">滤波器越来越有把握</text>
+
+          <!-- 右：恒定误差带 + 散点 -->
+          <rect x="510" y="150" width="300" height="120" fill="#f3d6d6" opacity="0.5"/>
+          <line x1="510" y1="210" x2="810" y2="210" stroke="#c92a2a" stroke-width="3"/>
+          <circle cx="540" cy="200" r="5" fill="#8a1f1f"/>
+          <circle cx="590" cy="225" r="5" fill="#8a1f1f"/>
+          <circle cx="640" cy="195" r="5" fill="#8a1f1f"/>
+          <circle cx="690" cy="220" r="5" fill="#8a1f1f"/>
+          <circle cx="740" cy="205" r="5" fill="#8a1f1f"/>
+          <circle cx="780" cy="218" r="5" fill="#8a1f1f"/>
+          <text x="660" y="78" font-size="15" fill="#8a1f1f" text-anchor="middle">误差带保持不变</text>
+
+          <text x="450" y="200" font-size="22" font-weight="700" fill="#1a3a6b" text-anchor="middle">不一致</text>
+          <text x="450" y="230" font-size="13" fill="#555" text-anchor="middle">inconsistent</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「过度自信」是怎么发生的——一致性（consistency）被破坏的直观对照。<br>
+          <b>怎么看这张图：</b>① 左联：协方差椭圆一层套一层、越画越小，代表滤波器「觉得自己越来越有把握」；② 右联：真实误差其实是一条恒定宽度的带（红虚线附近散点），并没有变小；③ 中间「不一致」点题——当滤波器的自信程度（左）和实际误差（右）对不上，就是不一致。<br>
+          <b>要记住的一句话：</b>FEJ 就是把左联那条越缩越小的协方差「钉」住，让它别过度自信。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 坐标轴 -->
+          <line x1="80" y1="350" x2="840" y2="350" stroke="#555" stroke-width="2"/>
+          <line x1="80" y1="40" x2="80" y2="350" stroke="#555" stroke-width="2"/>
+          <text x="800" y="378" font-size="15" fill="#555" text-anchor="end">时间 →</text>
+          <text x="92" y="55" font-size="15" fill="#555">NEES →</text>
+
+          <!-- 理论 3σ 带 -->
+          <rect x="80" y="120" width="760" height="130" fill="#2f9e44" opacity="0.15"/>
+          <line x1="80" y1="120" x2="840" y2="120" stroke="#2f9e44" stroke-width="2"/>
+          <line x1="80" y1="250" x2="840" y2="250" stroke="#2f9e44" stroke-width="2"/>
+          <text x="120" y="135" font-size="14" fill="#2f9e44">理论 3σ 带（上界 / 下界）</text>
+
+          <!-- NEES 红色曲线：先在内，后越界 -->
+          <polyline points="100,235 200,225 300,215 400,205 500,195 600,180 700,150 745,118 800,92 840,78"
+                    fill="none" stroke="#c92a2a" stroke-width="3"/>
+          <text x="700" y="72" font-size="15" fill="#c92a2a" text-anchor="middle">NEES 越界 = 过度自信</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条 NEES（归一化估计误差平方）曲线该怎么读。<br>
+          <b>怎么看这张图：</b>① 绿色半透明带是理论上 NEES 应在的 3σ 区间（上下界两条绿线）；② 红色曲线是实际 NEES：前期落在带内（一致），后期冲破上界（跑到绿带上方）；③ 一旦红曲线长期待在带外、且数值远大于 1，就说明滤波器过度自信、不一致。<br>
+          <b>要记住的一句话：</b>NEES 是给「一致性」打分的标准尺，OpenVINS 用它来证明 FEJ 有效（如 Table I 坏标定无校准时 NEES 飙到 1045）。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>FEJ 把雅可比固定在「第一次估计的线性化点」上，主要是为了什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：固定线性化点可避免协方差过度收缩，防止滤波器过度自信，从而保持一致性（并保护零空间）。" onclick="lessonKit.answer(this,'q0061a')">保持一致性</button>
+          <button data-correct="no" data-explanation="错：提高单步精度不是 FEJ 的目的；它解决的是线性化点持续更新导致的过度自信/不一致问题。" onclick="lessonKit.answer(this,'q0061a')">提高精度</button>
+        </div>
+        <div class="quiz-feedback" id="q0061a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 诚实说明：本文并没有覆盖 OC-EKF</h2>
+      <p>这里要特别刹车，避免替论文「加戏」。在 VIO / 滤波器的文献里，有一支叫 <b>OC-EKF（Observability-Constrained EKF，可观性约束 EKF）</b> 的工作，它显式地把不可观子空间投影到估计里。但——</p>
+      <div class="callout"><h4>必须如实标注</h4><p>OpenVINS 本文<b>未涉及 OC-EKF</b>。它的「一致性」手段是 <b>FEJ + 零空间边缘化</b>（引文 [34] Null-space-based marginalization），而不是显式投影不可观子空间。VIO 有 4 个不可观方向这一结论，见于预积分文献与 Basalt 第 265 行，<b>并非本文在正文推导</b>。</p></div>
+      <p>所以如果你以后听到有人把「OC-EKF」安在 OpenVINS 头上，可以纠正：<b>那不是本文的范围</b>。OpenVINS 只是「用 FEJ 保一致」，并没有「显式投影不可观子空间」。这一条作为「不在本文范围内」的一句话带过即可，我们不去替它补 OC-EKF 的内容。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 OpenVINS 与 OC-EKF，下列哪种说法符合原文？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：OC-EKF 是另一支线（Huang 等），本文未涉及；它只用 FEJ + 零空间边缘化来保一致。" onclick="lessonKit.answer(this,'q0061b')">本文含 OC-EKF</button>
+          <button data-correct="yes" data-explanation="对：本文一致性手段是 FEJ + 零空间边缘化，OC-EKF 不在本文范围内，不可替它补。" onclick="lessonKit.answer(this,'q0061b')">未覆盖 OC-EKF</button>
+        </div>
+        <div class="quiz-feedback" id="q0061b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. VIO 有几个不可观方向</h2>
+      <p>虽然 OpenVINS 正文没有推导，但这个事实对理解 VIO 的一致性至关重要，我们据预积分文献与 Basalt 第 265 行说明：<b>VIO 有 4 个不可观方向</b>——全局的 <b>x / y / z 平移</b> 与 <b>yaw（航向角）</b>。</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>不可观（4 个）</b><br>全局位置 x/y/z 与 yaw。地图可以整体平移、整体转一个航向而不影响观测。</p></div>
+        <div class="mini-card"><p><b>可观（在非零加速度下）</b><br>roll（横滚）与 pitch（俯仰）在存在非零加速度时变得可观——因为重力方向把它们「钉」住了。</p></div>
+      </div>
+      <p>这也和上一节 Basalt 的 NFR 呼应：NFR 恢复出的 roll-pitch 因子，正是利用了「roll/pitch 在重力下可观」这一点。FEJ 要保护的零空间，本质上就对应这 4 个不可观方向——如果把它们错误地「观测」掉了，系统就会虚增置信度，回到第 3 节那张「过度自信」的图。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 估计器、仿真器、评测工具与实验数字</h2>
+      <p>作为平台，OpenVINS 还提供两块实用装备：一个 <b>B-spline 视觉-惯性仿真器</b>（用来造带噪声的真值数据），以及 <b>ov_eval 评测工具</b>。我们顺带看几个实验数字（均来自原文）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>在线标定多重要</b><br>坏初值且无在线标定 → ATE 508.719 m、Pos NEES 1045.174（直接发散）；证明在线标定不可或缺（第 300 行）。</p></div>
+        <div class="mini-card"><p><b>EuRoC Vicon 对标</b><br>stereo_ov_slam 平均 1.552 / 0.054，stereo_ov_vio 1.454 / 0.055，仅次于 Basalt（1.321 / 0.057）；mono_ov_slam 1.445 / 0.079（第 316 行）。</p></div>
+        <div class="mini-card"><p><b>实时性</b><br>Xeon 单线程 mono 2.7× / 4.3× 实时，stereo 1.2× / 1.9× 实时（第 326 行）。</p></div>
+        <div class="mini-card"><p><b>时标可观</b><br>相机-IMU 时标误差能被在线估出（Fig.4）。</p></div>
+      </div>
+      <p>原文承认的局限，我们也如实逐条抄：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>局限一：计时不严格</b><br>未严格逐帧计时，前端（OpenCV）与 SLAM 路标更新限制了速度（第 326 行）。</p></div>
+        <div class="mini-card"><p><b>局限二：只评 VIO</b><br>未含 VINS-Fusion / Basalt 的非实时后端（第 324 行）。</p></div>
+        <div class="mini-card"><p><b>局限三：Basalt 更快</b><br>在速度上 Basalt 更胜一筹（第 326 行）。</p></div>
+        <div class="mini-card"><p><b>未来</b><br>计划加滑窗优化后端（闭式预积分）、接建图/感知（第 330 行）。</p></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_OpenVINS/390bd3a6465feefdf21e9b554c33c04d0bf6595086fea9144669d9b96d410af1.jpg" alt="B-spline interpolation to a pose">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b> Illustrate the B-spline interpolation to a pose ${}_S^G \mathbf{T}$ which is bounded by four control poses.<br>
+          <b>怎么看这张图：</b>这是 OpenVINS 自带仿真器的原理示意——用 B 样条在四个控制位姿之间插值出平滑的真值位姿。研究者可以用它造出带噪声、可复现的数据来测自己的算法。看那条被四个控制点「框住」的连续曲线即可。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_OpenVINS/b104a20540d943f67e3657630d338bfd968ea8486c818c6b95891b68f3cf61f7.jpg" alt="Camera intrinsic and extrinsic calibration errors with 3 sigma">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b> Camera intrinsic projection and distortion along with extrinsic orientation and positions parameters error (blue-solid) and 3σ bounds (red-dashed) for a representative run. Note that we only plot the first sixty seconds of the dataset.<br>
+          <b>怎么看这张图：</b>蓝实线是各标定参数（内参、畸变、外参）的误差，红虚线是 3σ 边界。误差最终都收敛进 3σ 带里，说明 OpenVINS 的<b>在线标定</b>确实在收敛——这正是它能在坏初值下救回精度的底气。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_OpenVINS/35759d1afd42f345eb9b78116d392f569308440a95c6835b93881648652a4139.jpg" alt="IMU pose errors with 3 sigma bounds">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b> IMU pose errors (blue-solid) and 3σ bounds (reddashed) for a representative run of the proposed method with SLAM landmarks and online calibration.<br>
+          <b>怎么看这张图：</b>这是 FEJ-MSCKF <b>一致性</b> 的直接证据：蓝实线（位姿误差）始终待在红虚线（3σ）带内，没有冲出去。对照第 3 节那张 NEES 图——误差始终在理论带内，就是「一致」的样子。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_OpenVINS/7e47ba00bad9a4d11dc4df28ef30a5ea95b437b3fdeeba0c37acfa06edc87446.jpg" alt="Camera to IMU time offset error with 3 sigma">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b> Camera to IMU time offset error (blue-solid) and 3σ bounds (red-dashed) for a representative run.<br>
+          <b>怎么看这张图：</b>相机与 IMU 之间的<b>时间偏移（time offset）</b>误差也收敛进 3σ 带，证明这个原本难估的量在 OpenVINS 里是<b>可观的、能在线标定</b>的。时标不准是很多 VIO 系统翻车的原因，OpenVINS 把它当一等公民处理。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 本课要点（小结）</h2>
+      <ul>
+        <li><b>性质：</b>研究平台论文（codebase + 文档 + 仿真器 + 评测），不是孤立方法论文；三大组件 ov_core / ov_msckf / ov_eval。</li>
+        <li><b>FEJ 核心：</b>把雅可比钉在第一次估计的线性化点，避免协方差过度收缩 → 防止过度自信 → 保一致；但「过度自信论证」本身在引文 Huang 2008，非本文新证。</li>
+        <li><b>诚实边界：</b>本文<b>未覆盖 OC-EKF</b>，只用 FEJ + 零空间边缘化保一致，不可替它补。</li>
+        <li><b>不可观方向：</b>VIO 有 4 个（x/y/z + yaw）；roll/pitch 在非零加速度下可观。</li>
+        <li><b>证据：</b>NEES 始终在 3σ 带内（Fig.3），坏标定无校准时 NEES 飙到 1045，反衬 FEJ + 在线标定的价值。</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>凭什么说 OpenVINS 是一篇「研究平台」论文而不是普通方法论文？列出两条依据。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>摘要写明「we present an open platform … for visual-inertial estimation research」（第 5 行）；引言称其是「extendable, open sourced codebase … particularly designed for researchers」（第 21 行）；并拆出 ov_core / ov_msckf / ov_eval 三大组件（第 23–27 行），第 VI 章专门把它作为平台介绍（第 330 行）。</div></details>
+        </li>
+        <li>用你自己的话解释：为什么线性化点「一直跟着估计值更新」会让滤波器变得不一致？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>每次更新都把非线性模型在当前估计点重新线性化，会让协方差估计收缩得比真实不确定度更快，滤波器误以为自己比实际更有把握（过度自信）。当自信程度与实际误差对不上，就是不一致。FEJ 通过固定线性化点，让所有更新基于同一套线性化，避免这种虚增的置信度。</div></details>
+        </li>
+        <li>OpenVINS 的一致性手段是什么？它有没有用 OC-EKF？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>它用 FEJ + 零空间边缘化（引文 [34] Null-space-based marginalization）来保一致。<b>没有</b>用 OC-EKF——OC-EKF 是另一支线（Huang 等），不在本文范围内，不能替它补。</div></details>
+        </li>
+        <li>VIO 有几个不可观方向？其中哪些在非零加速度下会变得可观？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>4 个不可观方向：全局 x / y / z 平移与 yaw（航向）。roll（横滚）与 pitch（俯仰）在存在非零加速度时变得可观，因为重力方向把二者钉住了。这是预积分文献与 Basalt 第 265 行的结论，并非 OpenVINS 正文推导。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0060-Basalt2020-用非线性因子压缩历史.html">← Basalt（2020）：用非线性因子压缩历史</a>
+        <a class="next" href="0062-Kimera2020-度量语义地图.html">Kimera（2020）：度量-语义地图 →</a>
+      </div>
+      <p class="foot-note">把线性化点钉死，滤波器才敢说实话——一致性就是这么来的 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

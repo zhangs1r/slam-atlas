@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BA（上）：现代综述 2000，BA 究竟在解什么 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0018</div>
+      <h1>BA（上）：现代综述 2000，BA 究竟在解什么</h1>
+      <p class="subtitle">这篇 2000 年的综述把 BA 讲透了：它到底在解什么、为什么难、又为什么其实没那么难。读完你就能接住第一季第 0002 课留下的那句「稀疏性决定后端能不能算得动」。🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：BA 的定义、参数化、代价函数、实现策略与历史地位</span>
+        <span>👥 Triggs, McLauchlan, Hartley, Fitzgibbon</span>
+        <span>📅 2000 · <i>Bundle Adjustment — A Modern Synthesis</i></span>
+      </div>
+      <div class="toc">
+        <a href="#def">1. 问题定义</a>
+        <a href="#myth">2. 四个纠偏</a>
+        <a href="#cost">3. 残差与代价</a>
+        <a href="#param">4. 参数化</a>
+        <a href="#err">5. 误差模型</a>
+        <a href="#strategy">6. 三类实现策略</a>
+        <a href="#firstorder">7. 一阶法为何不行</a>
+        <a href="#closing">8. 收尾与钩子</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="def">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清 BA 把「结构」和「相机」一起最优化的含义；② 破除关于 BA 的四个常见误解；③ 把残差/代价函数和第一季第 0002 课的 MAP→最小二乘串起来；④ 知道为什么参数化是个大坑；⑤ 记住三类实现策略和那句「卡尔曼滤波只是半步迭代」的名言。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接 <b>0002</b>：0002 讲了 SLAM 的标准形式化与 MAP→非线性最小二乘，但只甩下一句「稀疏性决定后端能不能算得动」——本节把「BA 究竟在解什么」讲透，下一节（0019）才还这笔债。接 <b>0003</b>：0003 的「滤波→优化」主线，本节会用原文一句话正面回应。</p>
+        </div>
+      </div>
+
+      <h2>1. 问题定义：结构和相机同时最优</h2>
+      <p>原文（§1）对 BA 的定义非常干脆：它是「refining a visual reconstruction to produce <b>jointly optimal</b> 3D structure and viewing parameter estimates」——也就是<b>同时</b>把三维结构和相机观测参数都调到最优。注意这个「同时」是关键词：它不是先估结构、再调相机，也不是反过来，而是把所有变量塞进同一个大优化里一起算。</p>
+      <p>名字的来历也值得记住：每个三维特征会向看见它的各个相机射出一条「光线（bundle of light rays）」，BA 就是把<b>这一束束光线</b>和各个<b>相机中心</b>一起做最优调整，让它们收束得最好。所以它叫「光束法平差」。</p>
+      <div class="callout">
+        <h4>和 independent model methods 的区别</h4>
+        <p>原文特意把它和「独立模型法」对照：独立模型法会分步骤、分块地调整参数，而 BA 的固执之处就在于——它总是在<b>同一个 bundle（光束束）</b>里调整全部参数。正因如此，它才能拿到全局一致的最优解，而不是一堆各自为政的局部最优。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="myth">
+      <h2>2. 四个「纠偏」：关于 BA 的四个想当然</h2>
+      <p>原文（§1）花了很大篇幅纠正零基础读者最容易犯的四种误解。这一节特别适合你——因为它专治「想当然」。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>①「优化太慢」</h4>
+          <p>多半不是 BA 本身的错，而是你用了<b>无视问题结构的通用优化器</b>。一旦把稀疏结构用上，速度可以差好几个数量级。慢，往往是工具的锅，不是问题的锅。</p>
+        </div>
+        <div class="mini-card">
+          <h4>②「需要 eigen / SVD 那些花活」</h4>
+          <p>原文说 BA 本质上「<b>只是线性代数</b>」（just linear algebra），不需要特征值分解、奇异值分解那些听起来很吓人的工具。核心就是解线性方程组加一点点结构利用。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③「任何拍摄顺序都行」</h4>
+          <p>原文<b>反对</b>这种想法，强调<b>网络设计（network design）</b>的重要性。你拍出来的观测网络长什么样，直接决定了 BA 好不好解。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④「点被精确重建了」</h4>
+          <p>这是误解。原文指出：三维点的不确定性<b>没有绝对参照</b>——你只能说「相对某个坐标系」重建得准不准，不存在一个脱离坐标的「绝对精确」。</p>
+        </div>
+      </div>
+
+      <p>把这四点收拢成一句原文的话：BA 的本质只是一个 <b>large sparse geometric parameter estimation problem</b>（大型稀疏几何参数估计问题）。它的难点从来不是「数学有多高深」，而是<b>怎么利用稀疏结构、以及怎么选数值方案</b>。这句话你最好背下来，它是整篇综述的灵魂。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 BA 的本质，下面哪一句话最贴近原文的说法？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文原话：BA 本质只是一个大型稀疏几何参数估计问题，难点在利用稀疏结构与选数值方案，不需要 eigen/SVD 那种花活。" onclick="lessonKit.answer(this,'q0018a')">它是大型稀疏几何参数估计问题，难点在利用结构</button>
+          <button data-correct="no"  data-explanation="不对。原文明确说 BA 本质上只是线性代数，不需要特征分解、奇异值分解这些高深工具。" onclick="lessonKit.answer(this,'q0018a')">它是需要特征分解的稠密非线性问题，很高级</button>
+          <button data-correct="no"  data-explanation="不对。原文恰恰反对「任何拍摄顺序都行」，强调网络设计（拍摄顺序/观测网络）会决定 BA 好不好解。" onclick="lessonKit.answer(this,'q0018a')">任何拍摄顺序都能无脑收敛，顺序不重要</button>
+        </div>
+        <div class="quiz-feedback" id="q0018a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="cost">
+      <h2>3. 残差与代价函数：把 0002 课接上</h2>
+      <p>现在我们把第一季第 0002 课那条线接上。0002 说 SLAM 后端最终变成「非线性最小二乘」；BA 就是这条线在「多视图几何」里最经典的具体形态。</p>
+      <p>先定义<b>残差（residual）</b>。设第 $i$ 张图里第 $p$ 个特征的投影残差为：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Delta x_{ip}(C_c,P_i,X_p)\equiv\bar x_{ip}-x(C_c,P_i,X_p)$$</div>
+      </div>
+      <p>这里面三个自变量都得解释一下（都是术语首现）：</p>
+      <ul>
+        <li><b>$X_p$</b> 是第 $p$ 个三维特征点的位置——就是我们想重建的「世界里的点」。</li>
+        <li><b>$P_i$</b> 是第 $i$ 台相机的位姿（在哪里、朝哪看）加上内参（焦距、主点等）。生活类比：相当于「拍照时相机站在哪儿、镜头是什么规格」。</li>
+        <li><b>$C_c$</b> 是<b>跨图共享的标定（calibration）</b>参数——多张图共用一套镜头畸变等标定。类比：全队共用同一台标定过的相机，这套标定不随单张图变。</li>
+      </ul>
+      <p>而 $\bar x_{ip}$ 是<b>实际观测到的像素位置</b>，$x(\cdot)$ 是「给定上述所有参数，理论上这个点应该投到哪儿」的预测值。残差 = 实测 − 预测，越接近 0 说明当前的 3D 点和相机参数越靠谱。</p>
+      <p>把所有观测的代价汇总成一个总函数：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$f(x)\equiv\frac12\sum_i\Delta z_i(x)^\top W_i\Delta z_i(x)$$</div>
+      </div>
+      <p>其中 $W_i$ 是<b>观测协方差之逆</b>（越准的观测 $W_i$ 越大、权重越高）。到这里你一眼就能认出它：这正是 0002 课里那个「加权最小二乘」！所以 BA 真的就是 0002 课框架的一个特例——只不过变量特别多、结构特别稀疏。</p>
+      <div class="callout">
+        <h4>原文的一个工程提示</h4>
+        <p>原文强调：把 $x(\cdot)$ 当成<b>黑箱</b>处理，不必写出它的解析表达式。为什么？因为写不写解析式，<b>并不影响「怎么调整这个网络」的整体结构</b>。换句话说，求解器的骨架和具体的投影函数解耦，这给了我们换前端、换相机模型的自由。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="param">
+      <h2>4. 参数化：零基础最容易踩的坑</h2>
+      <p>「参数化（parameterization）」说的是：用什么变量去表示一个三维点或一个旋转。这事儿听起来 trivial，却是原文（§2.2）反复警告的雷区。原则一句话：参数化要「<b>as uniform, finite and well-behaved as possible near the current estimate</b>」——在<em>当前估计值附近</em>尽可能均匀、有限、行为良好，让局部接近线性、代价函数局部接近二次。下面三个坑逐一讲。</p>
+
+      <h3>坑①：远处点不能用欧氏坐标 $(X,Y,Z)$</h3>
+      <p>如果用 $\Delta(XYZ)^\top$ 这种增量来更新三维点，原文说这「<b>artificially cuts away half of the natural parameter space</b>」——人为地砍掉了自然参数空间的一半。为什么？因为欧氏坐标在「无穷远」处有边界，而视觉几何本质上是<b>投影（projective）</b>的，远处点会跑到参数空间的边界甚至断裂。正确做法是用<b>齐次坐标 $(XYZW)^\top$</b> 配合<b>球归一化（spherical normalization）</b>，让参数空间绕成一个闭合、无边界的流形。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2000_BundleAdjustment/7a36af3eaf420e65ac247002461d5fd9358301468b8e66b8511faaf3a158bdda.jpg" alt="Fig. 1">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Vision geometry and its error model are essentially projective. Affine parametrization introduces an artificial singularity at projective infinity, which may cause numerical problems for distant features.（视觉几何及其误差模型本质上是投影的；仿射参数化会在投影无穷远处引入一个人为的奇点，可能给远处特征带来数值问题。）<br>
+          <b>怎么看这张图：</b>盯住那条在「无穷远」被拉断的曲线——它直观说明用普通欧氏坐标 $(X,Y,Z)$ 表示很远的点时，坐标会逼近参数空间的边界甚至断裂。BA 里大量的点其实都很远，所以这个看似小的数学细节会演变成真实的数值灾难，Fig. 1 正是在为「远处点必须用齐次坐标」这句话背书。
+        </figcaption>
+      </figure>
+
+      <h3>坑②：旋转别用三参数欧拉角</h3>
+      <p>表示旋转，<b>不要</b>用三个参数的欧拉角——因为它有<b>奇点（singularity）</b>，在某些姿态下会「卡死」算不动。原文推荐两种更安全的方式：用<b>四元数（quaternion）</b>，或者用<b>局部扰动</b>形式 $R\delta R$、其中 $\delta R=(I+[\delta r]_\times)$（$[\cdot]_\times$ 表示把向量变成反对称矩阵）。这种「在当前旋转旁边轻轻扭一下」的写法，在奇点附近也不会崩。</p>
+
+      <h3>坑③：局部参数化可以不同于全局表示</h3>
+      <p>原文还点出一个细腻的道理：<b>更新步长用的局部参数化，可以和存储时用的全局表示不一样</b>。比如全局用四元数存旋转，但每次迭代只在「局部扰动」的小向量上走一步，走完再把四元数<b>重新归一化（renormalize）</b>。这就像你走路用「前后左右」指挥自己，但 GPS 里存的是经纬度——两套语言各司其职。</p>
+    </section>
+
+    <section class="section-card" id="err">
+      <h2>5. 误差模型：为什么不能见到钟形就当高斯</h2>
+      <p>代价函数里每个残差项还可以套一层<b>鲁棒核（robust kernel）</b>。原文（§3）给出的一般形式：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$f_i(x)\equiv\frac12\rho_i(\Delta z_i^\top W_i\Delta z_i)$$</div>
+      </div>
+      <p>$\rho_i(\cdot)$ 就是一个「对平方残差再加工」的函数。这里我要特别提醒你一个<b>诚实的边界</b>：原文在这段<b>并没有点名 Huber 或 Tukey</b>。原文真正列举的「现实误差密度」是：</p>
+      <ul>
+        <li>「窄内点 + 宽外点」的<b>混合密度（mixtures）</b>；</li>
+        <li><b>Cauchy（柯西）分布</b>或 <b>$\alpha$-densities</b>；</li>
+        <li>「中间一个尖峰内点区、外面包一圈常数外点区」的<b>分段定义密度</b>。</li>
+      </ul>
+      <p>所以你写笔记时，请照原文如实写「Cauchy 等」，<b>不要替原文补上 Huber / Tukey</b>——那是别的教材的常客，但不是这篇 2000 综述在此处列出的。下一节（0019）我们会专门回到鲁棒核。</p>
+      <p>原文还顺手泼了一盆冷水：<b>见到钟形（bell-shaped）分布就当高斯，是危险的</b>。下面这张图讲的就是这个——尤其 Cauchy 分布虽然看着也「钟形」，但它的协方差是无穷的。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2000_BundleAdjustment/2848483e497209e8abe669618ef688f4ef68f96287e5b3ff4cfbb89a674a6564.jpg" alt="Fig. 2（三联图中的一张）">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Beware of treating any bell-shaped observation distribution as a Gaussian. … the Cauchy distribution has infinite covariance.（当心把任何钟形观测分布都当成高斯……柯西分布具有无穷协方差。）<br>
+          <b>怎么看这张图：</b>这是 Fig. 2 三联图中的一张，它用对比告诉你「钟形 ≠ 高斯」。重点看 Cauchy 那条尾巴——它比高斯拖得长得多，意味着「极端离群值」出现的概率不可忽略。无限协方差意味着你不能用「方差」来 summarizing 它的散布，所以把外点当成普通高斯噪声会严重低估风险。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="strategy">
+      <h2>6. 三类实现策略对照</h2>
+      <p>原文把 BA 的求解方法分成三大类（§6 / §7 / §8）。下面这张对照表是本节的核心骨架，建议你截图存下来。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>二阶法（§6）</h4>
+          <p><b>做法：</b>牛顿步（Newton step）+ 稀疏分解。<br><b>失效：</b>单次迭代要 $O(n^3)$；需要步长控制（不然容易冲过头）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>一阶法（§7）</h4>
+          <p><b>做法：</b>梯度下降 / <b>Alternation</b>（resection-intersection，线性化版即 block Gauss-Seidel，加速版 BSOR/SOR）/ <b>Krylov 子空间法</b>（共轭梯度、拟牛顿 BFGS、LMQN）。<br><b>失效：</b>线性收敛慢（$\gamma=0.1/0.01$ 需 35 / 3700 次迭代）；Hessian 被低估超过 2 倍就发散；条带（strip）几何下 ≥16 张图时 resection-intersection 不收敛（§7.4）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>递推与更新（§8）</h4>
+          <p><b>做法：</b>Woodbury 协方差更新、Grün reduced camera system、因子分解更新（Givens / rank-1 Cholesky）；递归法（filtering = reduction、smoothing、VSDF）。<br><b>失效：</b>更新不如批处理精确；downdating（反向删数据）可能病态；reduction 只能消掉「dead（已死）」参数。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>一个先记下的结论</h4>
+        <p>三类中，<b>二阶（牛顿类）方法持续占据主导</b>。一阶法胜在简单、省内存，但在坏几何下会跪；递推法适合流式/在线场景，但精度换来了便利。记住这个「主导地位」的论断，下一节我们会从数值上解释为什么。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="firstorder">
+      <h2>7. 一阶法为什么不行：强几何 vs 弱几何</h2>
+      <p>这一节配合 Fig. 5 和 Fig. 6 讲清楚：一阶法不是「永远不行」，而是「在弱几何下特别不行」。先纠正一个直觉：收敛快慢不只看「方法多聪明」，更看<b>问题本身的几何刚度</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2000_BundleAdjustment/976045cf0430aa8981c18a03857ceaf8b9b5bc24893da55edab7b39ac551709a.jpg" alt="Fig. 5">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>An example of the typical behaviour of first and second order convergent methods near the minimum. This is a 2D projection of a small but ill-conditioned bundle problem along the two most variable directions.（一阶与二阶收敛方法在极小点附近典型行为的例子；这是一个小而病态的 BA 问题沿两个最可变方向的二维投影。）<br>
+          <b>怎么看这张图：</b>横竖两个轴是「最让解晃动的两种方向」。二阶法（比如牛顿/LM）的等高线是被「压扁」着快速直冲谷底；一阶法（比如梯度下降）则沿着狭长的山谷慢吞吞地之字形挪。图越小越病态，这个差距越夸张——这就是「条件数差 → 一阶法跪」的几何直觉。
+        </figcaption>
+      </figure>
+
+      <p>Fig. 6 把对比拉到「两种几何」上。原文做了两组实验：</p>
+      <ul>
+        <li><b>强几何（spherical cloud，球形点云）：</b>特征从各个方向被充分看到，网络又短又粗、连得结实，刚度好。</li>
+        <li><b>弱几何（strip，条带）：</b>图像排成长条，每个特征大约只在 3 张重叠图里可见。原文形容这种网络「<b>又长又薄、连得弱（long and thin, weakly connected）</b>」，存在大幅度的低刚度「flexing（弯折）」模态，Hessian 条件数很差。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2000_BundleAdjustment/45e2c12f640d7a798881265218832084c85ba1c42e6a4ed491d6a846ea2626b1.jpg" alt="Fig. 6">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Relative speeds of various bundle optimization methods for strong 'spherical cloud' and weak 'strip' geometries.（各种 BA 优化方法在强『球形点云』与弱『条带』几何下的相对速度。）<br>
+          <b>怎么看这张图：</b>重点看「弱几何 / strip」那一组：近似方法的表现急剧恶化，resection-intersection 甚至比「<b>直接忽略全部稀疏性、用稠密 Cholesky</b>」还慢。原文给的极端数据是：strip 下 <b>16 张图以上跑 3000 次迭代都不收敛</b>。这反过来证明——稀疏结构不是锦上添花，而是 BA 能不能算得动的命门。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么一阶法在 strip（条带）几何下会表现特别差？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文说 strip 网络又长又薄、连得弱，存在大幅度低刚度弯折模态，Hessian 条件数很差，于是线性收敛的一阶法极其缓慢甚至不收敛。" onclick="lessonKit.answer(this,'q0018b')">因为条带几何让 Hessian 条件数变差，有大尺度低刚度模态</button>
+          <button data-correct="no"  data-explanation="不对。strip 实验里每张图只看到约 3 张重叠，问题不是相机太少，而是网络连得弱、刚度差。" onclick="lessonKit.answer(this,'q0018b')">因为条带几何里相机数量太少，观测根本不够</button>
+          <button data-correct="no"  data-explanation="不对。一阶法的短板是收敛慢、对条件数敏感，不是内存瓶颈；原文说的是迭代次数爆炸而非内存不够。" onclick="lessonKit.answer(this,'q0018b')">因为一阶法本身需要海量内存所以直接算不动</button>
+        </div>
+        <div class="quiz-feedback" id="q0018b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="closing">
+      <h2>8. 收尾与下一节的钩子</h2>
+      <p>原文（§12）自己总结了主结论，这三句话请务必记住：① 调整（adjustment）方法具有<b>非凡的通用性</b>；② <b>利用问题结构</b>具有关键重要性；③ <b>二阶（牛顿）算法持续占据主导</b>。三条里两条都在说「结构」和「二阶」——这正好是下一节的主角。</p>
+      <p>还有一句必须引用的原文名言，它直接呼应第一季第 0003 课「滤波→优化」的主线：</p>
+      <div class="callout">
+        <h4>原文名句</h4>
+        <p>「<b>Kalman filtering is only the first half-iteration of a full nonlinear method.</b>」（卡尔曼滤波不过是一个完整非线性方法的「半步迭代」而已。）</p>
+      </div>
+      <p>把这句话翻成白话：你以为滤波和优化是两件事，其实滤波只是「优化只走了半步就停手」。这和第 0003 课讲的一脉相承——优化是更完整的答案。顺着这条线，下一节（0019）我们就要正面回答第 0002 课留下的悬念①：<b>BA 的稀疏性到底怎么被利用</b>。先给你看一眼这条线有多长：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2000_BundleAdjustment/658bfba3c3f529b6c870960dadd13ba64b2ad6e71424eccf4bf3fb35d9f02b8b.jpg" alt="Fig. 9">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>A schematic history of bundle adjustment.（光束法平差的一段示意性历史。）<br>
+          <b>怎么看这张图：</b>它把 BA 的发展画成一条时间线。请把视线停在 <b>Brown 1958</b> 那个节点——原文指出，Brown 早在 1958 年就已经用<b>块矩阵技巧消掉了结构参数</b>。这其实就是下一节要讲的 Schur 消元的雏形。所以「利用稀疏性」不是新发明，而是这篇综述要把它讲明白的老传统。
+        </figcaption>
+      </figure>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>用你自己的话解释「jointly optimal 3D structure and viewing parameter estimates」为什么强调「同时」。</p>
+          <p><b>答：</b>因为 BA 把三维点坐标和相机位姿/内参全部塞进同一个优化里一起调，而不是先估点再调相机（或反过来）。只有「同时」优化，才能拿到全局一致的最优解；分开调容易各自陷入局部最优、彼此不兼容。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>第 0002 课的「加权最小二乘」和本节 BA 的代价函数 $f(x)$ 是什么关系？</p>
+          <p><b>答：</b>是同一个东西的具体化。0002 说 SLAM 后端是「非线性最小二乘」，BA 就是它在多视图几何里最经典的形式：残差 $\Delta x_{ip}=\bar x_{ip}-x(\cdot)$ 对应「预测减实测」，权重 $W_i$ 对应观测协方差之逆。BA 只是变量更多、结构更稀疏。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>为什么原文说远处三维点「不能用欧氏坐标 $(X,Y,Z)$ 的增量」来更新？</p>
+          <p><b>答：</b>因为视觉几何本质是投影的，欧氏坐标在无穷远处有边界，用 $\Delta(XYZ)$ 更新会「人为砍掉自然参数空间的一半」、在远处引入奇点。正确做法是用齐次坐标 $(XYZW)$ 配合球归一化，把参数空间变成无边界、行为良好的流形。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>原文在误差模型这一段有没有点名 Huber 或 Tukey？它真正列举了哪些密度？</p>
+          <p><b>答：</b>没有点名 Huber / Tukey。原文列举的是：窄内点+宽外点的混合密度、Cauchy 或 $\alpha$-densities、以及「中间尖峰内点区+外包常数外点区」的分段密度。写笔记要照原文如实写，不要替它补 Huber/Tukey。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0017-导览-第二季开场-打地基.html">← 导览：第二季开场</a>
+        <a class="next" href="0019-BA下-Schur消元与鲁棒核.html">BA（下）：Schur 消元与鲁棒核 →</a>
+      </div>
+      <p class="foot-note">你刚啃下的是第二季最硬的开篇骨头，下一节我们把「稀疏性怎么用」一次性算给你看。🦴</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

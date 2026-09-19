@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DVO-SLAM（2013）：用现成深度做直接法 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0051</div>
+      <h1>DVO-SLAM（2013）：用现成深度做直接法</h1>
+      <p class="subtitle">RGB-D 相机直接把深度图喂给你，直接法从此不必再「估逆深度」——这一节讲清它长什么样，以及「深度残差」为什么非加不可 📷</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稠密直接法、光度+深度双残差、t 分布鲁棒核、熵比</span>
+        <span>👥 作者：Kerl, Sturm, Cremers（慕尼黑工业大学）</span>
+        <span>📅 2013 · <i>Dense Visual SLAM for RGB-D Cameras</i>（IEEE/RSJ IROS）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">从 DTAM 到 DVO</a>
+        <a href="#b">★ 两个残差加一个先验</a>
+        <a href="#c">★ 鲁棒核是 t 分布</a>
+        <a href="#d">★ 熵比 α 一个指标两用途</a>
+        <a href="#e">三层结构与实验数字</a>
+        <a href="#f">局限与巩固练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 RGB-D 相机让直接法「省掉」了什么；默写光度残差与深度残差两个公式并解释深度残差为何等价于 point-to-plane ICP；明确说出鲁棒核用的是 t 分布而不是 Huber；讲透熵比 α 同时管「选关键帧」和「判回环」两件事；复述三层结构与实验数字。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>上一节 <b>0050 SVO</b> 讲「半直接」：只在运动估计那一步用直接法、特征对应是副产品。<b>0046 DTAM</b> 则是「单目稠密直接法」——它必须同时<b>估计逆深度</b>，因为单目相机本身没有深度。本节 DVO-SLAM 正好接在 DTAM 后面：换上 RGB-D 相机后，深度图是<b>现成给的</b>，于是整个变形函数不用再把深度当未知量去估。这是「悬念④：提取 vs 不提取特征」这条主线里，把直接法推向「有深度就别费劲估深度」的关键一步。</p></div>
+      </div>
+
+      <h2>1. 从 DTAM 到 DVO：相机给你深度，你就别再估了</h2>
+      <p>先复习一句话：<b>直接法</b>（direct method）不靠「先提特征、再匹配特征」，而是直接拿两帧之间的<b>像素灰度差</b>（光度误差）去优化相机运动。我们在 <b>0046 DTAM</b> 里看过单目版本：单目相机不知道每个像素离相机多远，所以 DTAM 必须把「逆深度」也当成要优化的未知量一起估。</p>
+      <p>但 RGB-D 相机（Kinect 一类）不一样：它除了彩色图，还<b>直接输出一张深度图</b> $\mathcal Z(\mathbf x)$，每个像素对应一个真实距离。于是 DVO-SLAM 的变形函数（warping function）可以写成：</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathbf x' = \tau(\mathbf x, \mathbf T) = \pi\!\big(\mathbf T\,\pi^{-1}(\mathbf x,\;\mathcal Z_1(\mathbf x))\big)$$</div></div>
+      <p>请盯住里面那个 $\mathcal Z_1(\mathbf x)$：它直接用了<b>第一帧已有的深度图</b>，把像素 $\mathbf x$ 反投影成 3D 点，再用位姿 $\mathbf T$ 投到第二帧。换句话说——<b>深度是被「读」出来的，不是被「估」出来的</b>。原文从头到尾没有出现「inverse depth（逆深度）」这几个字，只在说深度残差「equivalent to point-to-plane ICP with projective lookup（等价于带投影查询的 point-to-plane ICP）」。</p>
+      <p>这正是 DVO 相对 DTAM 省掉的最大一块：单目要解的逆深度未知数，在这里直接拿传感器的深度图顶替了。代价是你要相信这张深度图的质量——这点我们在第七节会看到它带来的局限。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2013_Dense_visual_SLAM_for_RGB-D_cameras/173db1a39d67a4058b5a5eba4f61fbc2caa457c479bcaf0482d92ae3b6b60501.jpg" alt="DVO general idea of dense RGB-D alignment">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>We propose a dense SLAM method for RGB-D cameras that uses keyframes and an entropy-based loop closure detection to eliminate drift. The figure shows the groundtruth, frame-to-keyframe odometry, and the optimized trajectory for the fr3/office dataset.<br>
+          <b>怎么看这张图：</b>这张总览图把 DVO 的野心画得很清楚——它要同时用<b>稠密</b>（dense，逐像素）的信息、又用<b>关键帧 + 基于熵的回环检测</b>来消漂移。最上面那条绿/灰轨迹是「帧对关键帧」的里程计结果，下面那条是经全局优化、消掉漂移后的轨迹。注意它从一开始就不只是「算两帧相对运动」，而是要拼出一张一致的地图。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>相对 DTAM，DVO-SLAM 在变形函数里用 RGB-D 的深度图顶替了什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="原文明说深度是直接来自深度图、不再作为未知量估计；DTAM 因为单目没有深度，必须额外估计逆深度。DVO 拿到现成深度，省掉了这步。" onclick="lessonKit.answer(this,'q0051a')">单目必须估计的逆深度</button>
+          <button data-correct="no" data-explanation="相机位姿 T 依旧是 DVO 要优化的核心未知量，并没有被深度图顶替。被顶替的是深度，不是位姿。" onclick="lessonKit.answer(this,'q0051a')">相机的六自由度位姿</button>
+        </div>
+        <div class="quiz-feedback" id="q0051a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 两个残差 + 一个先验（先纠正一个常见说法）</h2>
+      <p>很多人把 DVO 说成「有三个误差项」。原文其实不是这么分的。<b>它要最小化的，是两个残差的和</b>，再加<b>一个运动先验</b>。我们一本正经地把这个说法纠正过来：</p>
+
+      <h3>2.1 光度残差（灰度差）</h3>
+      <p>把第一帧的灰度记作 $\mathcal I_1(\mathbf x)$，第二帧在 warp 后的位置灰度记作 $\mathcal I_2(\tau(\mathbf x,\mathbf T))$，光度残差就是两者之差：</p>
+      <div class="formula-box"><div class="flow-formula">$$r_{\mathcal I} = \mathcal I_2\!\big(\tau(\mathbf x,\mathbf T)\big) \;-\; \mathcal I_1(\mathbf x)$$</div></div>
+      <p>它的物理含义是「<b>同一个 3D 点的亮度，在两帧里应该一样</b>」（photo-consistency）。只要场景静止、光照不变、传感器干净，这条假设就成立。这个词我们在 SVO、DSO 里反复见过——它是所有直接法的根。</p>
+
+      <h3>2.2 深度残差（预测深度 vs 观测深度）</h3>
+      <p>同样的思想套到深度上：用位姿把第一帧的 3D 点投到第二帧后，它在第二帧深度图里的<b>预测深度</b>，应该和<b>第二帧实际观测到的深度</b>一致：</p>
+      <div class="formula-box"><div class="flow-formula">$$r_{\mathcal Z} = \mathcal Z_2\!\big(\tau(\mathbf x,\mathbf T)\big) \;-\; \big[\mathbf T\,\pi^{-1}(\mathbf x,\mathcal Z_1(\mathbf x))\big]_Z$$</div></div>
+      <p>方括号里的下标 $[\cdot]_Z$ 表示「取这个 3D 点的 Z 分量（深度）」。</p>
+      <p><b>为什么非要它不可？</b> 因为深度图和灰度图一样有噪声、有外点（比如结构光打到反光面会失效）。更关键的是：当场景<b>纹理很弱</b>（一面白墙、一块纯色桌面）时，光度残差几乎给不出约束——灰度到处差不多，你把图往哪边挪，灰度差都变化不大，所以「拉不动位姿」。而深度残差不依赖纹理：它比的是空间里<b>表面有没有被摆对位置</b>。原文甚至点明，它<b>等价于带投影查询（projective lookup）的 point-to-plane ICP</b>——也就是把观测深度和预测深度拉到「同一个像素」上比较，再求点到面的距离。</p>
+
+      <h3>2.3 运动先验（匀速模型）</h3>
+      <p>最后还有一项：$-\log p(\xi)$，即把相机运动约束在一个<b>匀速运动模型</b>（constant velocity）附近。它像一个「上一帧的运动最可能在下一帧继续」的软约束，给优化一个合理的初值、抑制单帧的离谱跳变。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 两个残差各自把位姿往哪拉（本章最重要的一张）</text>
+          <!-- camera -->
+          <rect x="40" y="250" width="86" height="52" fill="#eceff1" stroke="#37474f" stroke-width="2" rx="6"/>
+          <text x="83" y="281" fill="#37474f" font-size="13" text-anchor="middle">RGB-D 相机</text>
+          <rect x="126" y="266" width="14" height="20" fill="#263238"/>
+          <!-- floor -->
+          <line x1="150" y1="360" x2="860" y2="360" stroke="#90a4ae" stroke-width="2"/>
+          <text x="845" y="380" fill="#607d8b" font-size="12" text-anchor="end">地面</text>
+          <!-- tilted table (parallelogram) -->
+          <polygon points="300,300 600,250 640,290 340,340" fill="#ffe0b2" stroke="#ef6c00" stroke-width="2.5"/>
+          <text x="470" y="320" fill="#bf4e00" font-size="13" text-anchor="middle">倾斜的桌面</text>
+          <!-- cup on table -->
+          <rect x="430" y="222" width="26" height="40" rx="4" fill="#cfd8dc" stroke="#546e7a" stroke-width="2"/>
+          <text x="443" y="212" fill="#37474f" font-size="12" text-anchor="middle">杯子</text>
+          <!-- green arrow: photometric, along image plane (horizontal) -->
+          <line x1="500" y1="180" x2="640" y2="180" stroke="#2e7d32" stroke-width="4"/>
+          <polygon points="640,180 626,173 626,187" fill="#2e7d32"/>
+          <text x="570" y="166" fill="#1b5e20" font-size="13" text-anchor="middle">光度残差</text>
+          <text x="570" y="200" fill="#1b5e20" font-size="12" text-anchor="middle">沿图像平面：把「图案/纹理」对齐</text>
+          <!-- blue arrow: depth, perpendicular to table surface (normal) -->
+          <line x1="470" y1="345" x2="430" y2="405" stroke="#1565c0" stroke-width="4"/>
+          <polygon points="430,405 437,392 423,393" fill="#1565c0"/>
+          <text x="360" y="402" fill="#0d3c75" font-size="13" text-anchor="middle">深度残差</text>
+          <text x="360" y="420" fill="#0d3c75" font-size="12" text-anchor="middle">沿空间：把「表面位置」对齐</text>
+          <!-- balance metaphor -->
+          <rect x="690" y="180" width="150" height="150" fill="#f1f8e9" stroke="#7cb342" stroke-width="2" rx="8"/>
+          <text x="765" y="205" fill="#33691e" font-size="13" text-anchor="middle" font-weight="700">天平比喻</text>
+          <text x="765" y="232" fill="#37474f" font-size="12" text-anchor="middle">只有光度残差</text>
+          <text x="765" y="252" fill="#37474f" font-size="12" text-anchor="middle">→ 白墙拉不动</text>
+          <text x="765" y="284" fill="#37474f" font-size="12" text-anchor="middle">加上深度残差</text>
+          <text x="765" y="304" fill="#37474f" font-size="12" text-anchor="middle">→ 仍给约束</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左侧一台 RGB-D 相机在观察一张倾斜的桌子和上面的杯子。绿色箭头代表<b>光度残差</b>，它沿着「图像平面」方向工作，目标是把两帧之间的<b>纹理/图案</b>对齐；蓝色箭头代表<b>深度残差</b>，它沿着桌面的<b>法线方向（空间里）</b>工作，目标是把<b>表面位置</b>摆对。右上角的「天平」说明两者是互补的两股拉力。<br>
+          <b>怎么看这张图：</b>① 光度残差只关心「看起来像不像」，所以遇到一面<b>白墙</b>（纹理弱）时几乎使不上劲；② 深度残差关心「位置对不对」，<b>哪怕白墙也能给出约束</b>；③ 两者合在一起，就是 DVO 比纯光度直接法更稳的原因。<br>
+          <b>要记住的一句话：</b>深度残差不靠纹理，它把「表面有没有摆对」当成额外约束——这是 RGB-D 直接法能打的关键。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 B · 为什么深度残差等价于 point-to-plane ICP</text>
+          <!-- slanted surface (desk) as a line -->
+          <line x1="120" y1="250" x2="780" y2="150" stroke="#ef6c00" stroke-width="4"/>
+          <text x="700" y="135" fill="#bf4e00" font-size="13" text-anchor="middle">斜放的桌面（真实表面）</text>
+          <!-- predicted point on surface -->
+          <circle cx="360" cy="219" r="7" fill="#1565c0"/>
+          <text x="360" y="230" fill="#0d3c75" font-size="12" text-anchor="middle">预测点</text>
+          <!-- observed point -->
+          <circle cx="470" cy="201" r="7" fill="#c62828"/>
+          <text x="470" y="190" fill="#7a1f00" font-size="12" text-anchor="middle">观测点</text>
+          <!-- perpendicular distance -->
+          <line x1="470" y1="201" x2="455" y2="218" stroke="#00897b" stroke-width="3" stroke-dasharray="5,4"/>
+          <text x="505" y="216" fill="#00695c" font-size="12" text-anchor="start">点到面的距离</text>
+          <!-- arrow from observed to predicted along normal -->
+          <line x1="470" y1="201" x2="362" y2="217" stroke="#00897b" stroke-width="2.5"/>
+          <polygon points="362,217 374,212 372,224" fill="#00897b"/>
+          <text x="430" y="255" fill="#00695c" font-size="12" text-anchor="middle">把观测点拉向预测点</text>
+          <!-- projection query note -->
+          <rect x="120" y="275" width="660" height="40" fill="#e0f2f1" stroke="#00897b" stroke-width="1.5" rx="6"/>
+          <text x="450" y="300" fill="#004d40" font-size="13" text-anchor="middle">投影查询：把观测深度与预测深度「拉到同一个像素」上比较，再求垂直距离</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条斜放的桌面就是「真实表面」。蓝色点是根据位姿从第一帧<b>预测</b>到第二帧表面上的点，红色点是第二帧深度图里<b>实际观测</b>到的点。绿色虚线是红色点到桌面的垂直距离——这就是深度残差想压小的量。<br>
+          <b>怎么看这张图：</b>① 注意两个点是落在「同一个像素位置」被比较的（projective lookup），不是任意两点求距离；② 它比较的是「沿法线方向」的偏差，这正是 <b>point-to-plane ICP</b> 的核心，所以原文说深度残差等价于它。<br>
+          <b>要记住的一句话：</b>深度残差 = 把预测深度与观测深度投影到同一像素后，求点到面的垂直偏差。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在纹理很弱的一面白墙上，下面哪句话对？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="白墙灰度处处相近，光度残差几乎给不出约束，单靠它确实拉不动位姿。这也是原文要额外加深度残差的原因。" onclick="lessonKit.answer(this,'q0051b')">只用光度残差也能很好约束位姿</button>
+          <button data-correct="yes" data-explanation="深度残差比的是空间里表面有没有摆对，不依赖纹理，所以即使白墙也能提供约束。这正是 DVO 加深度残差的动机。" onclick="lessonKit.answer(this,'q0051b')">深度残差不靠纹理，白墙也能给约束</button>
+        </div>
+        <div class="quiz-feedback" id="q0051b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 鲁棒核是 t 分布，不是 Huber！</h2>
+      <p>这里要纠正一个二手资料常犯的错误：<b>很多人讲到 DVO 的鲁棒性时顺手写成「用 Huber 核」——原文根本不是。</b> 我们课上已经纠过好几次这类「替论文补一个听起来合理的东西」的坑。</p>
+      <p>原文把光度误差和深度误差合起来，看成一个<b>二元随机变量</b> $\mathbf r=(r_{\mathcal I}, r_{\mathcal Z})^\top$，并用一个<b>二元 t 分布</b>（bivariate t-distribution）$\mathrm p_t(\mathbf 0,\boldsymbol\Sigma,\nu)$ 来建模。优化目标变成加权最小二乘：</p>
+      <div class="formula-box"><div class="flow-formula">$$\boldsymbol\xi^* = \arg\min_{\boldsymbol\xi} \sum_i^n w_i\,\mathbf r_i^\top \boldsymbol\Sigma^{-1} \mathbf r_i$$</div></div>
+      <p>其中权重来自 t 分布，是一个<b>自适应权重</b>：</p>
+      <div class="formula-box"><div class="flow-formula">$$w_i = \frac{\nu + 1}{\nu + \mathbf r_i^\top \boldsymbol\Sigma^{-1} \mathbf r_i}$$</div></div>
+      <p>为什么用 t 分布而不是高斯？原文的解释很漂亮：t 分布可以看作「无穷多个不同方差的高斯的混合」。于是误差大的点（很可能是外点）落在「大方差分量」里，被自动给<b>低权重</b>；误差小的点落在「小方差分量」里，被给<b>高权重</b>。而且这个加权是随数据自适应更新的（用 EM 算法迭代估计 $\boldsymbol\Sigma$ 和 $w_i$）。</p>
+      <p>请把它和 <b>0018/0019 BA</b> 里讲的鲁棒核区分开：Huber、Cauchy 那一套是「手工设计的递减权重函数」，而 DVO 这里是<b>从概率模型里自然导出</b>的自适应权重。一句话——<b>原文用的是 t 分布，不是 Huber</b>。下次看到有人写 DVO 用 Huber，你可以拍着他肩膀说：回去重读第 129 页。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DVO-SLAM 抑制粗差（外点）的鲁棒核用的是哪种？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="Huber 是二阶段 BA（0018/0019）里常见的手工鲁棒核。DVO 原文明确用的是二元 t 分布，不是 Huber——这是二手资料常写错的地方。" onclick="lessonKit.answer(this,'q0051c')">Huber 核</button>
+          <button data-correct="yes" data-explanation="原文用二变量 t 分布建模残差，并据此导出自适应权重 w_i = (ν+1)/(ν + rᵀΣ⁻¹r)，误差越大权重越小。原文从头到尾没用 Huber。" onclick="lessonKit.answer(this,'q0051c')">二变量 t 分布导出的自适应权重</button>
+        </div>
+        <div class="quiz-feedback" id="q0051c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 熵比 α：一个指标，两个用途</h2>
+      <p>DVO 里我最喜欢的一个设计，是<b>同一个量同时管两件事</b>：选关键帧、判回环。这个量叫<b>熵比（entropy ratio）</b> $\alpha$。</p>
+      <p>先说背景：估计出来的位姿 $\xi$ 被当成高斯分布，它的不确定度由协方差 $\Sigma_\xi$ 描述。一个高斯分布的（微分）熵正比于协方差行列式的对数，$H(\xi)\propto \ln|\Sigma_\xi|$——熵越大，说明这次估计越不确定。DVO 把「当前帧相对关键帧的位姿不确定度」，跟「最可信的那一帧（关键帧到紧邻下一帧）的不确定度」做比值：</p>
+      <div class="formula-box"><div class="flow-formula">$$\alpha = \frac{H(\xi_{k:k+j})}{H(\xi_{k:k+1})}$$</div></div>
+      <p>这个 $\alpha$ 同时干两件大事：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>用途一 · 选关键帧</h4><p>当 $\alpha$ 落到预设阈值<b>以下</b>时，就把上一帧选为新的关键帧插进地图。换言之：当前帧相对关键帧的估计已经「太容易/太确定」（或漂移模式变了），该换关键帧了。</p></div>
+        <div class="mini-card"><h4>用途二 · 判回环</h4><p>同一套熵比检验也用于回环：当相机<b>回到曾经到过的地方</b>，$\alpha$ 会出现明显的<b>峰值</b>，且高熵比正好对应「低误差」——这个峰值就是回环候选信号。</p></div>
+      </div>
+      <p>一个指标、两处复用，既减少了需要手调的参数，又让「关键帧选择」和「回环检测」用的是同一把尺子。这是很聪明的工程省心设计。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="24" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">图 C · 熵比 α 一个指标两个用途（示意趋势，非精确数值）</text>
+          <!-- axes -->
+          <line x1="70" y1="300" x2="850" y2="300" stroke="#37474f" stroke-width="2"/>
+          <line x1="70" y1="40" x2="70" y2="300" stroke="#37474f" stroke-width="2"/>
+          <text x="60" y="60" fill="#37474f" font-size="12" text-anchor="end">α</text>
+          <text x="850" y="322" fill="#37474f" font-size="12" text-anchor="end">帧序号（时间）</text>
+          <!-- threshold line -->
+          <line x1="70" y1="250" x2="850" y2="250" stroke="#c62828" stroke-width="1.5" stroke-dasharray="6,4"/>
+          <text x="845" y="244" fill="#7a1f00" font-size="12" text-anchor="end">阈值</text>
+          <!-- curve: first high peak then valley then second peak -->
+          <polyline points="70,90 120,250 200,260 300,255 420,100 520,200 640,210 760,150 840,150" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <!-- first peak marker -->
+          <circle cx="70" cy="90" r="5" fill="#1565c0"/>
+          <text x="110" y="80" fill="#0d3c75" font-size="12" text-anchor="middle">起始高值</text>
+          <!-- valley below threshold -->
+          <text x="250" y="285" fill="#7a1f00" font-size="12" text-anchor="middle">α 低于阈值 → 选上一帧为新关键帧</text>
+          <!-- second peak = loop -->
+          <circle cx="420" cy="100" r="6" fill="#2e7d32"/>
+          <text x="430" y="92" fill="#1b5e20" font-size="12" text-anchor="start">第二峰值 = 回到旧地点 → 回环候选</text>
+          <text x="640" y="200" fill="#bf4e00" font-size="12" text-anchor="middle">漂移中</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>横轴是帧序号（时间），纵轴是熵比 α。曲线左端起始有个高值（相对参考帧），随后掉到阈值线以下（这一段意味着应该换关键帧），中间在漂移中保持中等，最后在「回到曾经到过的地方」时又冲出一个明显的第二峰值。<br>
+          <b>怎么看这张图：</b>① 红色虚线是阈值，曲线<b>掉到线下</b>的时刻触发「选新关键帧」；② 绿色圆点标记的<b>第二峰值</b>是回环信号；③ 同一根曲线，两端各管一件事——这就是「一个指标两个用途」。<br>
+          <b>要记住的一句话：</b>α 既是关键帧的开关，也是回环的警报；高熵比 = 低误差 = 可能回环。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2013_Dense_visual_SLAM_for_RGB-D_cameras/5f25b476991981eca7e56ae9ca987b558adc1ce4ca6f80f118f94957394556e4.jpg" alt="Entropy ratio alpha over frames for fr1 desk">
+        <figcaption>
+          <b>原图注（Fig. 3(b)）：</b>Frame 50 of the freiburg1/desk dataset matched against all frames of the dataset. Plot (b) displays the entropy ratio α. Note how high entropy ratio values coincide with low error in the estimate. The second peak in the entropy ratio indicates a loop closure detection.<br>
+          <b>怎么看这张图：</b>这是论文里真实的 α 曲线：把第 50 帧和整段序列逐帧比较。可以看到 (b) 里最右那一段（回到第 50 帧附近，约 420–450 帧）出现<b>第二峰值</b>，原文明确说那就是一次回环检测。对照 (a) 还能看到：<b>高 α 的地方恰好误差低</b>，印证了 α 作为「置信度标尺」的可靠性。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 三层结构 + 实验数字</h2>
+      <p>DVO-SLAM 不是只算两帧相对运动，它有三层，层层递进：</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{帧—关键帧对齐（视觉里程计）}\;\to\;\text{关键帧间位姿图优化（回环）}\;\to\;\text{地图融合}$$</div></div>
+      <ul>
+        <li><b>第一层：视觉里程计。</b>用上面两个残差，做「当前帧 ↔ 最近关键帧」的直接对齐。只要相机离关键帧够近，就几乎不漂移。</li>
+        <li><b>第二层：位姿图优化（回环）。</b>每个关键帧是一个图节点，边是相对位姿约束；当检测到回环，就加一条新边，用 <b>g2o</b>（见 <b>0021 g2o</b>）做全局非线性最小二乘，把累积误差分摊掉。</li>
+        <li><b>第三层：地图融合。</b>用优化后的位姿把所有深度图投回同一坐标系，拼出一致的点云地图。</li>
+      </ul>
+
+      <h3>5.1 实验数字（请记下来）</h3>
+      <p>论文在 <b>TUM RGB-D</b> 基准上测试，而且特别强调：<b>纯 CPU</b>（Intel Core i7-2600 / 16 GB，<b>不用 GPU</b>）。几个关键数字：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>跟踪耗时</h4><p>帧对关键帧对齐约 <b>32 ms</b>（≈ 31 Hz）</p></div>
+        <div class="mini-card"><h4>地图更新耗时</h4><p>回环检测 + 图优化平均约 <b>135 ms</b></p></div>
+        <div class="mini-card"><h4>平均 ATE</h4><p><b>0.034 m</b>，对比 KinectFusion 的 <b>0.297 m</b></p></div>
+      </div>
+      <p>注意那个对比数字：KinectFusion（<b>0033</b>）是没有回环、纯帧对模型的稠密方法，在长轨迹上漂得很厉害，ATE 高达 0.297 m；而 DVO 靠关键帧 + 回环把它压到 0.034 m，差了将近一个数量级。论文还报告：加关键帧平均减少 16% 漂移，再加位姿图优化累计减少约 20%，全局轨迹误差相比纯帧对帧降低约 170%。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2013_Dense_visual_SLAM_for_RGB-D_cameras/84ec8fdc858397385661fed5c170252b7532ee8dbd6479043e6dfc6cde10fe20.jpg" alt="Optimized trajectory fr3 office DVO">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We propose a dense SLAM method for RGB-D cameras that uses keyframes and an entropy-based loop closure detection to eliminate drift. The figure shows the groundtruth, frame-to-keyframe odometry, and the optimized trajectory for the fr3/office dataset.<br>
+          <b>怎么看这张图：</b>这是 fr3/office 序列的结果。黑色是真实轨迹，红色是「帧对关键帧里程计」（已经有漂移但被关键帧压住），青色（cyan）连线是<b>回环</b>，蓝色相机锥是关键帧位姿，绿色线是被全局优化后、消掉漂移的轨迹。它直观展示了三层结构最后那一步「地图融合」的威力——一条干净贴合地面的轨迹。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 局限 + 巩固练习</h2>
+      <p>DVO 很强，但它对传感器和场景有明确要求，原文和后续实践都点出了这些硬伤：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>依赖深度质量</h4><p>结构光在<b>阳光下会失效</b>，深度有系统性偏差；深度本身就是噪声 + 外点的来源（所以才需要深度残差去「拉住」光度残差）。</p></div>
+        <div class="mini-card"><h4>对光照敏感</h4><p>光度残差建立在「亮度恒定」假设上，自动曝光突变、强反光都会破坏它。</p></div>
+        <div class="mini-card"><h4>时间同步要求</h4><p>RGB 与深度必须严格对齐到同一时刻，否则 warp 时像素对不上。</p></div>
+        <div class="mini-card"><h4>静态场景假设</h4><p>和所有直接法一样，默认场景不动；动态物体会污染残差。</p></div>
+      </div>
+      <p>这些局限也解释了为什么下一节 <b>0052 RGBD-SLAM-v2</b> 会走一条完全不同的路：<b>稀疏特征 + 八叉树占据地图</b>，而不是像素级直接法。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>写出 DVO 的变形函数 $\tau(\mathbf x,\mathbf T)$，并说明其中哪一部分让 DVO 不必像 DTAM 那样估计逆深度。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>$\mathbf x'=\tau(\mathbf x,\mathbf T)=\pi(\mathbf T\,\pi^{-1}(\mathbf x,\mathcal Z_1(\mathbf x)))$。关键在 $\mathcal Z_1(\mathbf x)$——它直接读第一帧已有的深度图，把像素反投影成 3D 点，深度是「已知量」而不是「待估未知量」，所以省掉了 DTAM 必须估的逆深度。</div></details>
+          </li>
+          <li>光度残差和深度残差分别靠什么提供约束？为什么白墙场景特别需要深度残差？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>光度残差靠「灰度一致」约束位姿（沿图像平面对齐纹理）；深度残差靠「预测深度与观测深度一致」约束位姿（沿空间摆正表面）。白墙纹理极弱，灰度处处相近，光度残差几乎给不出梯度，位姿拉不动；深度残差不依赖纹理，所以仍能约束。</div></details>
+          </li>
+          <li>原文抑制外点用的是 Huber 吗？它的鲁棒权重公式是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>不是 Huber，是二变量 t 分布导出的自适应权重：$w_i=(\nu+1)/(\nu+\mathbf r_i^\top\boldsymbol\Sigma^{-1}\mathbf r_i)$。误差越大权重越小，且权重随数据自适应更新。</div></details>
+          </li>
+          <li>熵比 α 同时服务哪两个目的？分别看 α 的什么特征？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① 选关键帧：当 α 低于阈值，把上一帧选为新关键帧；② 判回环：当 α 出现明显峰值（高熵比对应低误差），判定可能是回环。一个指标两处复用。</div></details>
+          </li>
+          <li>DVO 三层结构分别是什么？为什么它能把 ATE 从 KinectFusion 的 0.297 m 压到 0.034 m？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>三层：帧—关键帧直接对齐（里程计）→ 关键帧间位姿图优化（回环，用 g2o）→ 地图融合。KinectFusion 没有回环、纯帧对模型，长轨迹漂移到 0.297 m；DVO 靠关键帧抑制局部漂移 + 回环消全局漂移，把 ATE 压到 0.034 m。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0050-SVO2014-半直接与概率深度滤波.html">← 上一课：SVO（2014）：半直接与概率深度滤波</a>
+        <a class="next" href="0052-RGBD-SLAM-v2-2014-稀疏特征加EMM回环.html">下一课：RGBD-SLAM-v2（2014）：稀疏特征 + EMM 回环 →</a>
+      </div>
+      <p class="foot-note">拿到现成深度还懂得「再补一个深度残差」来兜底，这种对传感器特性的斤斤计较，正是工程直觉的开始 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kimera（2020）：度量-语义地图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0062</div>
+      <h1>Kimera（2020）：度量-语义地图</h1>
+      <p class="subtitle">🏷️ 不止画出几何，还给每个面片贴一个「这是什么」的标签——首个实时 CPU 度量-语义库</p>
+      <div class="hero-meta">
+        <span>🎯 主题：实时 CPU 度量-语义 VIO SLAM 库（四模块）</span>
+        <span>👥 作者：Antoni Rosinol, Marcus Abate, Yun Chang, Luca Carlone 等（MIT SPARK）</span>
+        <span>📅 2020 · <i>Kimera: an Open-Source Library for Real-Time Metric-Semantic Localization and Mapping</i>（ICRA 2020）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">它是库论文</a>
+        <a href="#b">四模块总览</a>
+        <a href="#c">RPGO 与 PCM</a>
+        <a href="#d">Mesher 方法</a>
+        <a href="#e">语义怎么做</a>
+        <a href="#f">实验与局限</a>
+        <a href="#g">本课要点</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能说清：Kimera 为什么是「库论文」；四个模块各干什么；尤其是 RPGO 如何用 <b>PCM 最大一致集</b> 剔除假阳性回环（并接上第一季 0014 课的「假阳性铁律」）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0014 回环检测综述</b>（假阳性铁律=PCM 的系统实现）、<b>0033–0035 TSDF/Voxblox</b>（Semantics 全局网格同源）、<b>0043–0045 ORB-SLAM</b> 与 <b>0057/0058 VINS-Mono</b>（对标 VIO）。</p></div>
+      </div>
+
+      <h2>1. 它是一篇「库论文」（判定依据）</h2>
+      <p>和前两节一样，先定性。Kimera 不是提出某个单一新算法的论文，而是交付了一个<b>模块化 C++ 开源库</b>。依据：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>① 摘要自陈</b><br>「We provide an open-source C++ library」（第 14 行）。</p></div>
+        <div class="mini-card"><p><b>② 贡献列四模块</b><br>Contribution 一口气列出四个模块（第 34–42 行）。</p></div>
+        <div class="mini-card"><p><b>③ 强调可替换</b><br>「It is modular and allows replacing each module」（第 44 行）。</p></div>
+        <div class="mini-card"><p><b>④ 一句话定位</b><br>首个实时、纯 CPU 的「度量-语义」VIO SLAM 库。</p></div>
+      </div>
+      <p>它想解决的是：几何重建与语义分割长期各自为战；而现有度量-语义工作多依赖 RGB-D + GPU。Kimera 用 <b>RGB + IMU、纯 CPU</b>，把 VIO + 鲁棒位姿图 + 网格重建 + 语义标注四件套拼成一条可拆解的流水线。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 四模块总览：一条可拆解的流水线</h2>
+      <p>Kimera 把系统拆成四个线程/模块（第 48–50 行），数据从图像 + IMU 流进去，多份重建流出来：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>Kimera-VIO</b><br>视觉-惯性前端 + 后端。后端是 fixed-lag smoother（因子图），用 iSAM2/GTSAM，structureless 视觉 + 预积分（第 57、61 行）。</p></div>
+        <div class="mini-card"><p><b>Kimera-RPGO</b><br>鲁棒位姿图优化（Robust Pose Graph Optimization），负责回环与全局一致性。</p></div>
+        <div class="mini-card"><p><b>Kimera-Mesher</b><br>网格重建：把图像/深度变成 3D 面片网格。</p></div>
+        <div class="mini-card"><p><b>Kimera-Semantics</b><br>语义标注：给网格的每个体素/面片贴类别标签。</p></div>
+      </div>
+      <p>下面三节我们逐个拆开讲，重点放在 RPGO（鲁棒性）和 Mesher/Semantics（怎么造出「度量-语义」地图）。先看一张总览架构图：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Kimera__an_Open-Source_Library_for_Real-Time_Metric-Sema/e9fe36e10eeab63463d4249914c060f3580ff027fcc14212e0940bd71f1c87d6.jpg" alt="Kimera architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b> Kimera’s architecture. Kimera uses images and IMU data as input (shown on the left) and outputs (a) pose estimates and (b-e) multiple metric-semantic reconstructions. Kimera has 4 key modules: Kimera-VIO, Kimera-RPGO, Kimera-Mesher, Kimera-Semantics.<br>
+          <b>怎么看这张图：</b>左边是图像 + IMU 输入，右边是四类输出（位姿、局部网格、全局语义网格等）。中间四个模块一字排开，就是本课要逐个讲的 VIO / RPGO / Mesher / Semantics。看数据流怎么从输入穿过四个模块流到输出即可。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ Kimera-RPGO 的鲁棒性：PCM 最大一致集</h2>
+      <p>先回到第一季 <b>0014 回环检测综述</b> 里我们立下的「<b>假阳性铁律</b>」：<b>一个错的回环（假阳性）一旦被信任，整张地图就会瞬间崩坏</b>。Kimera 的 RPGO 模块，就是这条铁律的<b>系统级实现</b>——它专门设计了一套机制来剔除错误的回环。</p>
+      <p>它用的不是 GNC（ graduated non-convexity，别的方法用），而是 <b>PCM（Incremental Consistent Measurement Set Maximization，增量一致测量集最大化）</b>。原文（第 69–71 行）写得很明确：</p>
+      <div class="callout"><h4>原文机制（照抄）</h4><p>把多机 PCM 改造成单机在线版——额外加一个「<b>里程计一致性检查</b>」：沿一个回环闭合，理论上应复合为单位阵，用卡方检验判断是否自洽；再用<b>最大团（max clique）</b>从所有回环候选里选出<b>最大的彼此一致的回环集合</b>（引文 [61] 快速最大团算法）。</p></div>
+      <p>用矩阵语言：构造一个成对一致邻接矩阵 $A\in\mathbb{R}^{L\times L}$（$L$ 是回环候选数），两个回环「一致」就在矩阵里连 1，否则 0；然后找这个图里的<b>最大团</b>，就是被保留的最大一致回环集。简单阈值法会无脑保留所有「看起来像」的回环，于是把假阳性也收进来；PCM 只保留能彼此自洽的那一团。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="34" font-size="18" font-weight="700" fill="#1a3a6b" text-anchor="middle">PCM 最大一致集怎么工作</text>
+
+          <!-- 最大一致团 高亮椭圆 -->
+          <ellipse cx="320" cy="180" rx="170" ry="95" fill="none" stroke="#2f9e44" stroke-width="3" stroke-dasharray="8 6"/>
+
+          <!-- 一致团 4 个节点 -->
+          <circle cx="220" cy="130" r="22" fill="#2f9e44"/>
+          <circle cx="360" cy="120" r="22" fill="#2f9e44"/>
+          <circle cx="300" cy="240" r="22" fill="#2f9e44"/>
+          <circle cx="440" cy="210" r="22" fill="#2f9e44"/>
+          <!-- 绿边（两两一致，共 6 条） -->
+          <line x1="220" y1="130" x2="360" y2="120" stroke="#2f9e44" stroke-width="3"/>
+          <line x1="220" y1="130" x2="300" y2="240" stroke="#2f9e44" stroke-width="3"/>
+          <line x1="220" y1="130" x2="440" y2="210" stroke="#2f9e44" stroke-width="3"/>
+          <line x1="360" y1="120" x2="300" y2="240" stroke="#2f9e44" stroke-width="3"/>
+          <line x1="360" y1="120" x2="440" y2="210" stroke="#2f9e44" stroke-width="3"/>
+          <line x1="300" y1="240" x2="440" y2="210" stroke="#2f9e44" stroke-width="3"/>
+
+          <!-- 冲突节点 -->
+          <circle cx="620" cy="130" r="22" fill="#c92a2a"/>
+          <circle cx="720" cy="230" r="22" fill="#c92a2a"/>
+          <circle cx="580" cy="300" r="22" fill="#c92a2a"/>
+          <!-- 红虚边（与团冲突） -->
+          <line x1="440" y1="210" x2="620" y2="130" stroke="#c92a2a" stroke-width="3" stroke-dasharray="7 6"/>
+          <line x1="300" y1="240" x2="580" y2="300" stroke="#c92a2a" stroke-width="3" stroke-dasharray="7 6"/>
+          <line x1="720" y1="230" x2="620" y2="130" stroke="#c92a2a" stroke-width="3" stroke-dasharray="7 6"/>
+          <!-- 红叉：假阳性回环被剔 -->
+          <line x1="606" y1="116" x2="634" y2="144" stroke="#c92a2a" stroke-width="4"/>
+          <line x1="634" y1="116" x2="606" y2="144" stroke="#c92a2a" stroke-width="4"/>
+
+          <text x="320" y="320" font-size="16" fill="#2f9e44" text-anchor="middle">最大一致集 = 最大的彼此一致的团</text>
+          <text x="620" y="92" font-size="15" fill="#c92a2a" text-anchor="middle">假阳性回环被剔</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>PCM 如何从一堆回环候选里挑出「能彼此自洽」的那一团。<br>
+          <b>怎么看这张图：</b>① 绿色四个节点之间两两都用实线相连，表示它们互相一致，外面绿色虚线圈出「最大一致集」（最大团）；② 红色节点与红虚线表示和这团冲突的回环候选；③ 红叉明确标出一个被剔除的假阳性回环。<br>
+          <b>要记住的一句话：</b>简单阈值法会把红叉那个假阳性也收进来；PCM 只保留绿色那团——这正是 0014 课「假阳性铁律」的工程落地。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Kimera-RPGO 剔除假阳性回环，用的是哪种方法？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：原文第 69–71 行明确用 PCM（最大一致集 / 最大团），不是 GNC。" onclick="lessonKit.answer(this,'q0062a')">PCM 最大一致集</button>
+          <button data-correct="no" data-explanation="错：GNC 是别的方法用的；Kimera 用的是 PCM（Incremental Consistent Measurement Set Maximization）。" onclick="lessonKit.answer(this,'q0062a')">用的是 GNC</button>
+        </div>
+        <div class="quiz-feedback" id="q0062a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. Mesher 方法：Delaunay 反投影 + 体素哈希</h2>
+      <p>这里要小心别和 Basalt 混淆（Basalt 没有 Delaunay）。Kimera 的 Mesher <b>两种方法都用</b>（第 77、85 行）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>逐帧网格：2D Delaunay 反投影</b><br>对每帧图像先做 2D Delaunay 三角化，再把三角网反投影到 3D，得到小片局部网格（第 77 行）。</p></div>
+        <div class="mini-card"><p><b>全局网格：Voxblox 体素哈希</b><br>用 TSDF + bundled raycasting + marching cubes 做全局网格（第 85 行），和我们 <b>0034 Voxel Hashing</b>、<b>0035 Voxblox</b> 同源。</p></div>
+      </div>
+      <p>换句话说：<b>局部、低延迟</b>的网格靠 Delaunay 快速反投影（给避障用）；<b>全局、精确</b>的网格靠体素哈希 + TSDF（给语义标注和建图用）。两者分工明确。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="34" font-size="18" font-weight="700" fill="#1a3a6b" text-anchor="middle">度量-语义地图长什么样</text>
+
+          <!-- 墙 -->
+          <rect x="120" y="70" width="560" height="190" fill="#cfe3ff"/>
+          <line x1="260" y1="70" x2="260" y2="260" stroke="#9bbce0" stroke-width="1"/>
+          <line x1="520" y1="70" x2="520" y2="260" stroke="#9bbce0" stroke-width="1"/>
+          <line x1="120" y1="160" x2="680" y2="160" stroke="#9bbce0" stroke-width="1"/>
+          <text x="400" y="150" font-size="18" font-weight="700" fill="#1a3a6b" text-anchor="middle">墙</text>
+
+          <!-- 地板（梯形） -->
+          <polygon points="120,260 680,260 790,400 10,400" fill="#e6d3b3"/>
+          <line x1="120" y1="330" x2="680" y2="330" stroke="#cbb487" stroke-width="1"/>
+          <text x="250" y="370" font-size="18" font-weight="700" fill="#8a6d3b" text-anchor="middle">地板</text>
+
+          <!-- 沙发 -->
+          <rect x="150" y="185" width="200" height="80" rx="14" fill="#ff922b"/>
+          <line x1="250" y1="185" x2="250" y2="265" stroke="#e8590c" stroke-width="1"/>
+          <text x="250" y="232" font-size="18" font-weight="700" fill="#fff" text-anchor="middle">沙发</text>
+
+          <!-- 桌子 -->
+          <rect x="430" y="205" width="150" height="70" rx="6" fill="#8b5e34"/>
+          <text x="505" y="246" font-size="18" font-weight="700" fill="#fff" text-anchor="middle">桌子</text>
+
+          <!-- 椅子 -->
+          <rect x="610" y="200" width="55" height="75" rx="6" fill="#2f9e44"/>
+          <text x="637" y="244" font-size="15" font-weight="700" fill="#fff" text-anchor="middle">椅子</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个真实的室内场景，表面被切成面片并各自涂上颜色、标上类别。<br>
+          <b>怎么看这张图：</b>① 蓝色的「墙」、米色的「地板」、橙色的「沙发」、棕色的「桌子」、绿色的「椅子」——每个色块就是一个被重建出来的面片；② 墙和地板上淡淡的网格线，表示表面被三角化成了许多小面片；③ 重点不是几何形状本身，而是<b>每个面片还带一个语义标签</b>。<br>
+          <b>要记住的一句话：</b>度量-语义地图 = 几何（坐标）+ 语义（标签），二者同时拥有。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Kimera 的 Mesher 做全局网格时，用的是哪套方法？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：全局网格用 Voxblox 体素哈希 + TSDF + bundled raycasting + marching cubes（第 85 行），与 0034/0035 同源。" onclick="lessonKit.answer(this,'q0062b')">体素哈希 TSDF</button>
+          <button data-correct="no" data-explanation="错：Delaunay 反投影只用于逐帧局部网格；全局网格用的是体素哈希 + TSDF。" onclick="lessonKit.answer(this,'q0062b')">Delaunay 全局</button>
+        </div>
+        <div class="quiz-feedback" id="q0062b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 语义怎么做：沿射线做贝叶斯标签</h2>
+      <p>Kimera-Semantics 把 2D 语义分割「升」到 3D。做法是（第 85–87 行，注意原文 OCR 把 <b>TSDF</b> 误识别成「TSFD」，我们已修正）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>① 体素场</b><br>维护一个 TSDF（截断符号距离场）体素网格，记录每个体素到表面的距离。</p></div>
+        <div class="mini-card"><p><b>② Bundled Raycasting</b><br>从相机发出一束射线穿过体素，整合深度与几何。</p></div>
+        <div class="mini-card"><p><b>③ Marching Cubes</b><br>在 TSDF 的零等值面提取出 3D 网格（表面）。</p></div>
+        <div class="mini-card"><p><b>④ 贝叶斯标签</b><br>沿射线在截断距离内做贝叶斯标签更新，每个体素累积「墙面/地面/架子」等概率。</p></div>
+      </div>
+      <p>简单说：相机发出一束射线，打穿一串体素；每个体素会根据射线上看到的 2D 语义，逐步更新自己「属于哪一类」的概率。表面附近的体素更新最活跃，于是最终提取出的网格表面，每一个面片都带上了语义标签——这正是第 4 节那张「度量-语义地图」的来源。<b>但要注意：语义质量高度依赖 2D 分割器</b>（第 125 行），分割器翻车，3D 标签也跟着翻车。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Kimera__an_Open-Source_Library_for_Real-Time_Metric-Sema/234db56f5a17f2535dd2539ecd8f8850594d8b93077f2871a79e35a2dd63ea69.jpg" alt="3D mesh colored by distance to ground truth">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b> (a) Kimera’s 3D mesh color-coded by the distance to the ground-truth point cloud. (b) Ground-truth point cloud color-coded by the distance to the estimated cloud. EuRoC V1 01 dataset.<br>
+          <b>怎么看这张图：</b>这是 Mesher 几何精度的证明——网格按「到真值点云的距离」着色，颜色越冷说明离真值越近。它告诉我们全局网格确实贴合真实场景几何，是度量准确性的直接证据。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Kimera__an_Open-Source_Library_for_Real-Time_Metric-Sema/d9fd69bd9ba36513a7703bef1e693347b31df96d99f461d6cd6a4a05ca800c70.jpg" alt="Confusion matrices for Kimera-Semantics">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b> Confusion matrices for Kimera-Semantics using bundled raycasting and (a) ground truth stereo depth or (b) dense stereo [62]. Both experiments use ground-truth 2D semantics. Values are saturated to $10^{4}$ for visualization purposes.<br>
+          <b>怎么看这张图：</b>这是语义分割的混淆矩阵（行是真值、列是预测）。对角线越亮说明分类越准。注意原文点出：<b>纹理少的墙面</b>在语义/几何上误差都偏大（无纹理墙面是稠密立体的弱点）。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字与原文承认的局限</h2>
+      <p>Kimera 在 EuRoC 上做了系统评测，几个关键数字（均来自原文）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>VIO 精度</b><br>Kimera-VIO mono 的 RMSE ATE 多在 0.08–0.30；加上 RPGO 后更优（如 MH_05 0.24、V1_01 0.05）（Table II）。</p></div>
+        <div class="mini-card"><p><b>PCM 抗阈值</b><br>RPGO 对回环阈值 α 不敏感：α=10→0.05，α=0.001→0.049；无 PCM 时 α=0.1 退化到 1.74（Table III，第 111 行）。</p></div>
+        <div class="mini-card"><p><b>全局网格误差</b><br>0.35–0.48 m，比多帧网格优 12–24%（Table IV，第 121 行）。</p></div>
+        <div class="mini-card"><p><b>语义 mIoU</b><br>80.1%（GT 深度）/ 57.23%（稠密立体）（Table V，第 135 行）。</p></div>
+      </div>
+      <p>实时性分解（第 142 行）：IMU 前端 40µs、视觉前端 4.5 / 45 ms、Mesher &lt;5 / 15 ms、后端 &lt;40 ms、RPGO 55 ms、Semantics 0.1 s——纯 CPU 实时。</p>
+      <p>原文承认的局限，我们如实逐条抄：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>局限一：无纹理墙面</b><br>稠密立体对无纹理墙面失效，导致语义/几何误差大（第 129 行）。</p></div>
+        <div class="mini-card"><p><b>局限二：多帧网格更噪</b><br>多帧网格比全局网格噪（第 118 行）。</p></div>
+        <div class="mini-card"><p><b>局限三：依赖 2D 分割器</b><br>语义质量取决于前端 2D 分割器（第 125 行）。</p></div>
+        <div class="mini-card"><p><b> OCR 修正</b><br>原文 Table I 把后端名 g2o 误识别成「g20」；TSDF 误识别成「TSFD」——均已修正。</p></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Kimera__an_Open-Source_Library_for_Real-Time_Metric-Sema/baa79955aa1bdb933c142b503c1a6d6108215c5d5f0784599aac77b976f45251.jpg" alt="Runtime breakdown">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b> Runtime breakdown for Kimera-VIO, RPGO, and Mesher.<br>
+          <b>怎么看这张图：</b>这是各模块的耗时分解，证明整套流水线能在 CPU 上实时跑。重点看 RPGO（55 ms）与 Semantics（0.1 s）各自占了多少——它们是相对吃时间的模块，但仍在实时预算内。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 本课要点（小结）</h2>
+      <ul>
+        <li><b>性质：</b>库论文（模块化 C++ 开源库，可替换各模块），不是单一算法论文。</li>
+        <li><b>四模块：</b>VIO（fixed-lag smoother + iSAM2）/ RPGO（鲁棒位姿图）/ Mesher（网格）/ Semantics（语义）。</li>
+        <li><b>RPGO 鲁棒性：</b>用 <b>PCM 最大一致集（最大团）</b> 剔除假阳性回环——就是第一季 0014「假阳性铁律」的系统实现；不是 GNC。</li>
+        <li><b>Mesher：</b>逐帧用 2D Delaunay 反投影，全局用 Voxblox 体素哈希 + TSDF + marching cubes（与 0034/0035 同源）。</li>
+        <li><b>语义：</b>TSDF + bundled raycasting + marching cubes + 沿射线贝叶斯标签；质量依赖 2D 分割器。</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么说 Kimera 是「库论文」而不是「方法论文」？列出依据。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>摘要写「We provide an open-source C++ library」（第 14 行）；Contribution 列了四个模块（第 34–42 行）；并明确「It is modular and allows replacing each module」（第 44 行）。它交付的是可拆解、可替换的开源库，而非单一新算法。</div></details>
+        </li>
+        <li>Kimera-RPGO 用什么方法剔除假阳性回环？它和第一季 0014 课讲的「假阳性铁律」是什么关系？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>用的是 PCM（Incremental Consistent Measurement Set Maximization）：加里程计一致性检查（卡方检验回环是否复合到单位阵），再用最大团选出最大一致回环集（第 69–71 行）。这正是对 0014 课「假阳性回环会瞬间毁掉地图」铁律的<b>系统级实现</b>——把不可信的回环挡在门外。</div></details>
+        </li>
+        <li>Kimera 的 Mesher 做局部网格和全局网格，分别用什么方法？别和 Basalt 搞混。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>逐帧局部网格用 <b>2D Delaunay 三角化反投影</b>（第 77 行）；全局网格用 <b>Voxblox 体素哈希 + TSDF + bundled raycasting + marching cubes</b>（第 85 行）。注意：Delaunay 属于 Kimera 的 Mesher，<b>不属于 Basalt</b>（Basalt 的 NFR 与 Delaunay 无关）。</div></details>
+        </li>
+        <li>Kimera-Semantics 是怎么把 2D 语义「升」到 3D 的？它最大的依赖风险是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>维护 TSDF 体素场，用 bundled raycasting 发射线穿过体素，marching cubes 提取表面，并沿射线在截断距离内做贝叶斯标签更新，让每个体素累积类别概率（第 85–87 行）。最大风险：<b>语义质量依赖前端 2D 分割器</b>（第 125 行），分割器出错，3D 标签跟着错。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0061-OpenVINS2020-一致性与FEJ.html">← OpenVINS（2020）：一致性与 FEJ</a>
+        <a class="next" href="0063-DM-VIO2022-延迟边缘化.html">DM-VIO（2022）：延迟边缘化 →</a>
+      </div>
+      <p class="foot-note">几何与语义同时拥有，地图才真正「懂」世界——你已读完 Kimera 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

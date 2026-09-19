@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>连续时间 vs 离散时间（2022）：什么时候必须换建模 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0031</div>
+      <h1>连续时间 vs 离散时间（2022）：什么时候必须换建模</h1>
+      <p class="subtitle">上一节预积分是「离散世界里的补丁」；这一节问一个更根本的问题——如果轨迹本来就不是离散的，为什么要把它当成一串位姿？🔭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：CT vs DT 的受控对比 / 何时必须换范式</span>
+        <span>👥 作者：Rosinol, Von Stumberg, Demmel, Cremers 等</span>
+        <span>📅 2022 · IEEE RA-L · <i>Continuous-Time Vs. Discrete-Time Vision-Based SLAM: A Comparative Study</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 先判断：这是一篇「对比研究」</a>
+        <a href="#b">2. 两种轨迹表示的定义（§III）</a>
+        <a href="#c">3. 连续时间的三层好处（Fig.1）</a>
+        <a href="#d">4. 关键公式：B 样条与两种代价</a>
+        <a href="#e">5. 实验设计：把时间不同步变成可控变量</a>
+        <a href="#f">6. 结论、局限与 OCR 修正</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清这篇论文「不是提方法而是做对比」；讲出离散时间三大失效点；对着 Fig.1 的三个子图讲出连续时间的三层好处；复述 B 样条与预积分两条代价函数的差别；并指出本文「同步场景下 CT 不划算」的反直觉结论。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0030</b>：离散那一支用的正是上一节学的预积分，本节问的是「为什么要把轨迹离散化」。接 <b>0027</b>：本文用 COLMAP 做初始化，所以上一课学的 SfM 是本节前提。接 <b>0016</b>：第一季事件相机课提到「连续时间插值去畸变」是方法之一，本节给出它的定量边界。</p></div>
+      </div>
+
+      <h2>1. 先判断：这是一篇「对比研究」</h2>
+      <p>读论文第一步，永远是先判断<b>它是什么类型的论文</b>——因为「对比研究」和「方法论文」的读法完全不同。本文标题就写着 <i>A Comparative Study</i>（一项对比研究）；摘要里说 <i>we aim at systematically comparing the advantages and limitations of the two formulations</i>（我们想系统地比较两种表述的优缺点）；贡献 1 是 <i>An in-depth study on the comparison of discrete- and continuous-time trajectory representations</i>（对离散时间与连续时间轨迹表示做深入对比研究）；作者还自认 <i>To the best of our knowledge, there is no systematic comparison</i>（据我们所知，此前没有系统的对比）。</p>
+      <div class="callout">
+        <h4>★ 对比研究怎么读</h4>
+        <p>它把<b>两套 batch（批量）SLAM</b> 放在<b>同一个开源框架</b> <code>rpg_vision-based_slam</code> 里、跑在<b>同一批数据</b>上做受控对比。所以你读的时候要盯的是「<b>变量控制得好不好、结论有没有意思</b>」，而不是「它提了个多牛的新算法」。本文一句话价值：把「离散 vs 连续」这个老问题第一次做了<b>同框架、同数据</b>的定量对比。</p>
+      </div>
+      <p>那它对比的「两种表述」到底是什么？下面进 §III。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 两种轨迹表示的定义（§III）</h2>
+      <p>先解释一个词：<b>轨迹表示（trajectory representation）</b>。你可以把机器人走过的整条路径想象成一条「时间 → 位姿」的曲线；「表示」就是用数学把它存进计算机的方式。本文对比两种存法。</p>
+
+      <h3>离散时间（DT，§III-B）</h3>
+      <p>原文定义：轨迹用<b>相机帧率下的机体位姿</b>表示，即 $^d\mathcal T=\{p_{b_k},R_{b_k}\}$。大白话：相机每拍一帧，就存一个位姿（位置 $p$ + 旋转 $R$）；整条轨迹就是一串这样的「快照」。两个工程处理：相机-IMU 的<b>时偏（time offset，两个传感器 clock 没对齐的差值）</b>用 VINS-Mono 里的方法（把 2-D 特征按运动做补偿）；<b>惯性残差用预积分</b>——正是上一节 0030 学的东西。</p>
+
+      <h3>连续时间（CT，§III-A）</h3>
+      <p>原文用<b>累计 B 样条（cumulative B-spline）</b>，而且用<b>两条样条</b>分别描述<b>位置 $p(u)$</b> 与<b>姿态 $R(u)$</b>（旋转单独用 SO(3) 样条）。为什么拆两条？原文说这样比「一条 SE(3) 样条（把位姿当整体一次拟合）」<b>省算力</b>。</p>
+      <div class="callout">
+        <h4>★ B 样条是什么（生活类比）</h4>
+        <p>把轨迹想成一条用「控制点」拉出来的橡皮筋。<b>控制点（control points）</b>是决定曲线形状的「图钉」，扎在时间表上；<b>阶数（order $k$）</b>决定每个局部曲线段用几个控制点、多「圆滑」；<b>局部支撑（local support）</b>指「动一个控制点，只影响附近一小段曲线，不会牵动整条」——这点对实时和鲁棒都很关键。累计形式（cumulative）是 B 样条的一种写法，让采样更省算力。</p>
+      </div>
+      <p>这一节的记忆点：<b>DT 存「一串位姿快照」，CT 存「一条可被任意时刻采样的连续曲线」</b>。下一节看这条曲线到底好在哪。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 连续时间的三层好处（Fig.1 三个子图）</h2>
+      <p>原文 Fig.1 是本节骨架：Fig.1(a) 画离散时间怎么「别扭」，Fig.1(b) 和 Fig.1(c) 画连续时间怎么救。下面逐个讲。</p>
+
+      <h3>① 测量时刻不对齐 → CT 可任意采样</h3>
+      <p>离散时间的痛点（Fig.1(a)）：传感器测量发生在两个相机帧<i>之间</i>，但状态只存在帧上，于是「误差项没法直接挂在测量时刻」，只能靠插值之类技术把误差「搬到」最近的节点上（原文：<i>techniques such as interpolation need to be employed to express error terms</i>）。连续时间则反过来——</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_Continuous-Time_Vs__Discrete-Time_Vision-Based_SLAM__A_C/0364fe47ad54b335189147dac1e475512b6b1831fb99f8ce3d0c1c18aabe1bbe.jpg" alt="Fig. 1(b)">
+        <figcaption>
+          <b>原图注（Fig. 1(b)）：</b>In continuous-time SLAM, the estimated state is instead expressed using a continuous function, e.g., a spline $s(t)$. Now, for any measurement at a time $t_i$, a meaningful error term can be expressed by comparing the measurement to the spline sample $s(t_i)$, or any of its derivatives $s'(t_i),s''(t_i),\dots$ e.g., <i>no integration needed for IMU measurements</i>.（连续时间 SLAM 中状态用连续函数（如样条 $s(t)$）表示；对任意时刻 $t_i$ 的测量，都能用样条采样或其导数构造有意义的误差项——<i>IMU 测量不必积分</i>。）<br>
+          <b>怎么看这张图：</b>左边是连续曲线 $s(t)$ 和它上面的控制点；右边把 IMU 测量（绿点）、相机测量（红点）直接「插」到它们真实发生的时刻 $t_i$ 上，误差项就挂在 $s(t_i)$ 或其导数上。对比 Fig.1(a) 必须把误差搬到帧节点，这张图说明 CT 的第一个好处：<b>任意时刻都能采样，不用插值搬点</b>。更妙的是下面那行——因为 IMU 的角速度/加速度本来就是轨迹的导数，直接取 $s'(t_i),s''(t_i)$ 就能用，<b>根本不用积分</b>。</p>
+        </figcaption>
+      </figure>
+
+      <h3>② 状态数爆炸 → CT 免积分省状态</h3>
+      <p>离散时间每来一个新测量，要么加一个新状态、要么用「ad-hoc（临时拼凑）方案」避免加状态（原文：<i>ad-hoc solutions are needed to avoid adding a new state to the estimation problem every time a new measurement is available</i>）。连续时间因为轨迹是连续函数、采样免费，IMU 不必积分成预积分因子，天然躲开这个麻烦。</p>
+
+      <h3>③ 时偏估计 → CT 可联合优化</h3>
+      <p>离散时间估相机-IMU 时偏，靠的是<b>「帧间匀速」</b>假设（在相邻两帧之间把运动当匀速来反推时偏），原文直言 <i>For agile motion, this assumption is no longer accurate</i>（剧烈运动时这个假设就不准了）。连续时间则把时偏当成曲线上的一个平移，直接一起优化：</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_Continuous-Time_Vs__Discrete-Time_Vision-Based_SLAM__A_C/dee494bd219e5f940f06a748e4b0531181dbfa997396ad84549599fcf228a5b2.jpg" alt="Fig. 1(c)">
+        <figcaption>
+          <b>原图注（Fig. 1(c)）：</b>Furthermore, a continuous-time representation allows the simultaneous estimation of time offset or even drift between sensors... the error terms of one of the sensors is simply expressed with the spline sampled at its measurement times plus a constant time offset... $s(t_i+\Delta t)$.（连续时间表示还能同时估计传感器之间的时间偏移甚至漂移……只需把某个传感器的误差项写成「样条在其测量时刻的采样 + 一个常数时偏」，即 $s(t_i+\Delta t)$。）<br>
+          <b>怎么看这张图：</b>这是全文核心好处的图示。注意 $\Delta t$ 就是「时偏」——相机和 IMU 的时钟没对齐，差了一个常数 $\Delta t$。在 CT 里，你不用专门开发时偏估计算法，只要把那个传感器的误差项写成「样条在 $t_i+\Delta t$ 处采样」即可，$\Delta t$ 作为一个普通优化变量和轨迹一起算出来。零基础读者看这张图就能懂：<b>为什么 CT 天然能标时偏，而 DT 要额外假设</b>。</p>
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>★ 三层好处一句话串起来</h4>
+        <p>① 任意时刻可采样（不用插值搬误差）→ ② IMU 直接取导数、免积分、状态不爆炸 → ③ 时偏变成 $s(t_i+\Delta t)$ 里的 $\Delta t$ 一起优化。前两点来自「轨迹是连续函数」，第三点是它的「顺手红利」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 关键公式：B 样条与两种代价</h2>
+      <p>把上面的直觉写成公式。先讲 CT 的样条怎么采样。</p>
+      <div class="callout">
+        <h4>均匀 B 样条（位置）</h4>
+        <p>$x(t)=\sum_{i=0}^{N}B_{i,k}(t)\,x_i$，其中 $k$ 是<b>阶数</b>、$N+1$ 是<b>控制节点个数</b>、相邻节点间距是 $\Delta t$。$B_{i,k}(t)$ 是 B 样条基函数，决定每个控制点 $x_i$ 在时刻 $t$ 的「权重」。</p>
+      </div>
+      <p>但原文主推的是更省算力的<b>累计形式（cumulative）</b>。先把时间参数化到局部区间：令 $u(t)=h(t)-i$（$h(t)$ 是把连续时间映射到「第几段」的整数部分），再写：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$x(u)=x_i+\sum_{j=1}^{k-1}\lambda_j(u)\,d_j^i,\qquad d_j^i=x_{i+j}-x_{i+j-1}$$</div>
+        <div class="flow-formula">$$R(u)=R_i\prod_{j=1}^{k-1}\mathrm{Exp}\!\big(\lambda_j(u)\,d_j^i\big),\qquad d_j^i=\mathrm{Log}\!\big(R_{i+j-1}^{-1}R_{i+j}\big)$$</div>
+      </div>
+      <p>位置部分：从所在段起点 $x_i$ 出发，加上相邻控制点之差 $d_j^i$ 乘上权重 $\lambda_j(u)$（分段混合函数）。旋转部分：在 SO(3) 上用「累乘指数映射」——把相邻旋转差 $R_{i+j-1}^{-1}R_{i+j}$ 取对数 $\mathrm{Log}$ 得到局部增量 $d_j^i$，乘权重后用 $\mathrm{Exp}$ 累乘出来。这就是「位置一条样条、姿态一条样条」在数学上的落地。</p>
+
+      <h3>两种代价函数对照</h3>
+      <p>把两条表示塞进同一个批量优化，代价（要最小化的残差平方和）长这样：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>CT 的代价</h4>
+          <p>视觉重投影残差 + 加速度/角速度残差（直接取样条导数）+ GPS 残差 + 偏置随机游走残差。相机-IMU 时偏 $t_i^c$、GPS-IMU 时偏 $t_i^g$ <b>都作为状态一起优化</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>DT 的代价</h4>
+          <p>视觉重投影残差 + <b>预积分残差</b>（就是 0030 学的 IMU 因子）+ GPS 残差。时偏用 VINS-Mono 式补偿，不单独作为「连续函数上的平移」来优化。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>★ 点题：本节是「在预积分之上再往上问一层」</h4>
+        <p>注意 DT 那一支用的<b>正是上一节 0030 的预积分</b>。所以这一节不是推翻预积分，而是问：「既然预积分是为了在离散框架里省事，那能不能干脆把整个框架换掉？」——这就是从「补丁」到「换范式」的跃迁。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2022_Continuous-Time_Vs__Discrete-Time_Vision-Based_SLAM__A_C/03de8bb80bc02d7e47a1b4066f3d413d43d711ab74837b3ae919b538351bbc41.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>(a) The steps involved in the batch trajectory estimation. Spline generation only applies in continuous-time estimation. (b) The frames and the positions involved in the estimation process...（(a) 批量轨迹估计的步骤；样条生成只用于连续时间估计。(b) 估计过程中涉及的坐标系与位置。）<br>
+          <b>怎么看这张图：</b>(a) 给出工程全貌：COLMAP 初始化 → <b>样条拟合（仅 CT 新增这一步）</b> → 尺度/重力对齐 → 全批量优化。(b) 是涉及的世界系、机体/相机系与位置。这张图正好把上一课 0027 的 COLMAP（做初始化）和本课 CT（样条拟合）串成一条流水线——<b>先有 SfM 点云，再长出让 CT 能用的连续轨迹</b>。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 实验设计：把「时间不同步」变成可控变量</h2>
+      <p>本节最有价值的部分，是一个<b>「受控变量」实验的范例</b>。科研里最难的工程问题之一是「传感器时间不同步」，本文的巧思是：<b>人为注入 0 / 10 / 20 ms 的相机-IMU 时延</b>，做成硬件在环仿真，把这个难题变成「可以调大小的旋钮」。</p>
+      <div class="callout">
+        <h4>★ 最该学的科研技巧</h4>
+        <p>与其抱怨「真实数据时间没对齐、没法公平比」，不如<b>自己造一个能调对齐误差的实验</b>：同步时（0 ms）看两法是否等价，不同步时（20 ms）看谁扛得住。这样结论就变成「分水岭在哪里」而不是「谁更好」。</p>
+      </div>
+
+      <h3>数据集与指标</h3>
+      <p><b>数据集</b>：EuRoC（硬件同步、mocap 真值，只用 <code>v_</code> 序列）+ 室外飞行机器人（GPS 5 Hz，Leica 全站仪真值）+ 室外地面机器人（RTK-GPS 真值）。<b>指标</b>：ATE_P [m]（位置绝对轨迹误差）、ATE_R [deg]（旋转误差）、时偏估计误差、优化耗时。</p>
+
+      <h3>关键数字</h3>
+      <ul>
+        <li>样条配置：<b>B 样条 order 6（6 阶）+ 控制点 10 Hz 最优</b>。原文说：<i>A B-spline of order 6... is needed to correctly estimate the camera-IMU time offset</i>（要估对时偏，就得用 6 阶、10 Hz 的控制点密度）。</li>
+        <li>时偏 0 ms 时：两法<b>相当</b>。</li>
+        <li>注入 <b>20 ms</b> 时：在 V102 上 CT 保持 <b>0.014 m / 2.1°</b>，而 DT 退化到 <b>0.031 m / 2.2°</b>；且 DT 在 V102/V103/V202/V203（中/难、高速序列）上<b>时偏估计严重偏差</b>。</li>
+        <li>消融：<b>视觉最重要</b>；视觉+GPS（V+G）常最优；原文一句反直觉结论——<i>Including inertial measurements does not give any significant advantage</i>（加入惯性测量没有显著好处），因为在他们的 CT 框架里 COLMAP 初始化已很准。</li>
+      </ul>
+      <div class="callout">
+        <h4>★ 必须讲的反例：同步场景下 CT 不划算</h4>
+        <p>在<b>地面机器人</b>上 DT 反而略胜：DT <b>0.87 m</b> vs CT(6 阶/10 Hz) <b>0.92 m</b>。这是「同步场景下 CT 不划算」的直接证据——本文绝不是「CT 全面更好」的宣传稿。另外反例还有：1 Hz 控制点直接崩（V202 上 ATE 0.187 m、时偏 −45.6 ms）；CT(10 Hz) 优化耗时 <b>13–73 min</b>，DT 是 <b>12–28 min</b>（CT 更慢）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 结论、局限与 OCR 修正</h2>
+      <p><b>结论（原文）：</b>同步 → 两法等价；不同步 → CT 胜，并能把 ATE 恢复到同步水平。一句话记忆：<b>胜负的分水岭是「帧间匀速假设能不能成立」</b>。剧烈运动下这个假设破功，DT 的时偏估计就崩；平滑运动下 DT 够用还更快。</p>
+
+      <h3>明确局限（逐条，本节可信度靠这个）</h3>
+      <ul>
+        <li>① <b>只做全局快门相机</b>——原文：<i>In this work, we focus on global shutter cameras</i>。滚动快门（rolling shutter）只在 Intro 被列为 CT 的「受益者」，<b>没有任何 RS 实验数据</b>。所以想讲「卷帘快门」必须明说这是原文<b>未覆盖</b>的，本文不替它背书。</li>
+        <li>② CT 的<b>光滑先验可能恶化估计</b>（摘要原话：连续时间引入的先验在不利情形下「could worsen the trajectory estimates」）。</li>
+        <li>③ 依赖 <b>COLMAP 做初始化</b>（SfM 质量即上限）——顺带接上一课 0027。</li>
+        <li>④ 优化只求解到收敛，<b>不保证全局最优</b>；原文：<i>How far is the local minimum from the global minimum is unknown</i>（局部极小离全局极小有多远，未知）。</li>
+      </ul>
+
+      <div class="callout">
+        <h4>OCR 提醒（如实说明你修正了什么）</h4>
+        <p>md 里 $\mathbf W_{\mathrm w}$ 应为 $W_\omega$（陀螺权重）；<b>「0.9 ms^-1」应为 0.9 m/s</b>、<b>「0.75 rd s^-1」应为 0.75 rad/s</b>；上标 <code>t</code> 在 $R^\top$ 处应为转置 <code>T</code>；Table III 表头 colspan 错乱，<b>引用具体数字前须回原 PDF 核对</b>。本课程一律用正确形式。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>这篇 2022 论文的核心贡献，是提出了一套全新的连续时间 SLAM 算法吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。标题即 A Comparative Study，摘要明说要系统比较两种表述的优缺点，作者自认此前没有系统对比。它的贡献是「同框架、同数据的受控对比」，不是新算法。" onclick="lessonKit.answer(this,'q0031a')">不是，它是一篇对比研究</button>
+          <button data-correct="yes" data-explanation="对。它把离散与连续两套 batch SLAM 放进同一个开源框架、跑同一批数据做定量对比，价值在「对比实验设计」而非新算法。" onclick="lessonKit.answer(this,'q0031a')">是，它首次系统比较 DT 与 CT</button>
+          <button data-correct="no" data-explanation="不对。COLMAP 初始化来自上一课 0027，是它借用的工具，不是本文提出的；本文的前提之一正是 COLMAP 已给出初始化。" onclick="lessonKit.answer(this,'q0031a')">是，它提出了 COLMAP 初始化法</button>
+        </div>
+        <div class="quiz-feedback" id="q0031a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>按本文结论，「连续时间一定全面优于离散时间」这个说法对吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。原文在同步场景、地面机器人上 DT 反而略胜（0.87 m vs 0.92 m），且 CT 优化更慢。结论是「分水岭在帧间匀速假设能否成立」。" onclick="lessonKit.answer(this,'q0031b')">不对，同步场景下 DT 不输甚至更快</button>
+          <button data-correct="yes" data-explanation="对。胜负关键是帧间匀速假设：剧烈运动（DT 时偏崩）时 CT 胜；平滑运动且同步时 DT 够用还更快。" onclick="lessonKit.answer(this,'q0031b')">对，分水岭是帧间匀速假设</button>
+        </div>
+        <div class="quiz-feedback" id="q0031b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>离散时间的三大失效点是什么？连续时间分别怎么救？</p>
+          <p><b>答：</b>① 测量时刻不对齐 → CT 任意时刻采样、不用插值搬误差（Fig.1b）；② 状态数爆炸 → CT 免积分、采样免费（Fig.1a 的 ad-hoc 问题消失）；③ 时偏要专门算法 + 简化假设 → CT 把时偏当 $s(t_i+\Delta t)$ 里的 $\Delta t$ 联合优化（Fig.1c）。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>CT 的代价函数里，相机-IMU 时偏 $t_i^c$ 和 GPS-IMU 时偏 $t_i^g$ 是怎么处理的？这和上一节 0030 的预积分有何关系？</p>
+          <p><b>答：</b>CT 把 $t_i^c, t_i^g$ 当作普通状态变量，在批量优化里和轨迹一起算出来。而 DT 那一支用的正是 0030 的预积分残差 + VINS-Mono 式时偏补偿——所以本节是「在预积分之上再问一层：为什么非要离散」。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>原文说要正确估出相机-IMU 时偏，样条要「order 6 + 10 Hz 控制点」。这暗示了连续时间的什么代价？</p>
+          <p><b>答：</b>暗示<b>参数数量（控制点密度）</b>的代价——要估时偏就得把样条阶数/密度提上来，控制点越多状态越大、越慢。这正是 CT 的代价之一（另两个是计算量与实现复杂度 + 光滑先验风险）。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>为什么本文在地面机器人上 DT 反而略胜？这提醒我们读「对比研究」要注意什么？</p>
+          <p><b>答：</b>因为地面机器人运动平稳、相机-IMU 同步好，DT 的帧间匀速假设成立，且 DT 优化更快（12–28 min vs CT 13–73 min）。提醒：对比研究的结论是有条件的，必须看「实验条件覆盖到哪」，别把「CT 胜」读成「CT 永远胜」。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0030-IMU预积分下-流形上的推导与雅可比.html">← 上一课：IMU 预积分（下）</a>
+        <a class="next" href="0032-连续时间落地-弹性地图与固定延迟平滑.html">下一课：连续时间落地 →</a>
+      </div>
+      <p class="foot-note">你现在已经站在「离散 vs 连续」的岔路口了；下一站看两个真实系统怎么把 CT 用起来 🛰️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

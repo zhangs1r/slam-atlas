@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>两条变体路线：用分布替代特征，用多传感器兜住退化 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0076</div>
+      <h1>两条变体路线：用分布替代特征，用多传感器兜住退化</h1>
+      <p class="subtitle">骨架不动，只换一个零件——这一节能看到改装的两种典型思路 🔧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：加权 NDT · 关键帧 · 自适应协方差 · 退化</span>
+        <span>👥 作者：NDT-LOAM（Chen 等）· EKF-LOAM（Cruz Junior 等）</span>
+        <span>📅 2022 · <i>两篇组课</i></span>
+      </div>
+      <div class="toc">
+        <a href="#frame">先立一个框架</a>
+        <a href="#ndt">路线一：把「提特征」换掉</a>
+        <a href="#wndt">加权 NDT 加了什么</a>
+        <a href="#ekf">路线二：把「位姿来源」换掉</a>
+        <a href="#adaptive">自适应：特征越少越不信激光</a>
+        <a href="#table">横向对比与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="frame">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 NDT 与「提特征」的根本差别；解释「退化」为什么会让激光低估位移；并知道两种补洞思路各自的代价。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节是「组课」——两篇论文都在上一节 <b>0074</b> 的 LOAM 骨架上改零件。其中 NDT 部分直接接第一季 <b>0005</b> 课（那篇讲的就是 SW-NDT）；「退化」概念接第一季 <b>0006</b> 课与 <b>0009</b> 课。</p>
+        </div>
+      </div>
+
+      <h2>1. 先立一个框架：骨架不动，换零件</h2>
+
+      <p>上一节我们看到 LeGO-LOAM 怎么在 LOAM 上做「减法」。这一节要看的是两种<b>更激进</b>的改装——它们不是优化参数，而是<b>把骨架里的某一个零件整个换掉</b>。</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>路线一：换掉「提特征」这个零件</b>
+          <p><b>NDT-LOAM</b> 的做法是：前端<b>不再提取角点与平面点</b>，改用「正态分布变换」（NDT）直接做配准。它的性质很有意思——<b>前端不提特征，后端仍然保留特征</b>。这是激光侧「提特征 vs 不提特征」这场辩论的第二个回合。</p>
+        </div>
+        <div class="mini-card">
+          <b>路线二：换掉「单一的位姿来源」</b>
+          <p><b>EKF-LOAM</b> 面对的是完全不同的问题：在长而均质的隧道里，<b>激光根本看不出自己在前进</b>。它的做法是插入一个扩展卡尔曼滤波，把<b>轮速里程计与 IMU</b> 融合进来当兜底。</p>
+        </div>
+      </div>
+
+      <p>注意这两条路线的方向是相反的：<b>一条是「向内改造传感器数据的用法」，一条是「向外寻找额外的信息源」。</b>把它们放在一起看，正好能看清这一行论文的真实生态——<b>大多数工作并不是提出新范式，而是把某个环节做得更好。</b></p>
+    </main>
+
+    <section class="section-card" id="ndt">
+      <h2>2. 路线一：把「提特征」换掉</h2>
+
+      <p>先建立直觉。回顾一下 LOAM 的做法：<b>先在点云里挑出「角点」和「平面点」，然后让这些点去找线/面。</b></p>
+
+      <p>NDT 走的路完全不一样：<b>它不挑点，而是把空间切成一个个小格子，用「统计分布」来描述每个格子里的点。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一面墙，两种描述方式：用一个一个点，还是用一个一个「分布」</text>
+
+          <!-- ===== 左：LOAM 视角 ===== -->
+          <rect x="18" y="46" width="420" height="320" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="228" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">① 特征法看世界：一个一个独立的点</text>
+
+          <!-- 墙 -->
+          <rect x="70" y="96" width="290" height="12" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <text x="215" y="90" text-anchor="middle" font-size="10.5" fill="#7a8a99">墙面</text>
+          <!-- 墙上的点 -->
+          <g fill="#37474f">
+            <circle cx="96" cy="130" r="3"/><circle cx="124" cy="130" r="3"/><circle cx="152" cy="130" r="3"/>
+            <circle cx="180" cy="130" r="3"/><circle cx="208" cy="130" r="3"/><circle cx="236" cy="130" r="3"/>
+            <circle cx="264" cy="130" r="3"/><circle cx="292" cy="130" r="3"/><circle cx="320" cy="130" r="3"/>
+          </g>
+          <!-- 被框出的平面点 -->
+          <rect x="146" y="120" width="20" height="20" fill="none" stroke="#1e6fa8" stroke-width="2"/>
+          <rect x="230" y="120" width="20" height="20" fill="none" stroke="#1e6fa8" stroke-width="2"/>
+          <!-- 角点 -->
+          <g fill="#c0392b">
+            <circle cx="86" cy="246" r="4"/><circle cx="348" cy="246" r="4"/>
+          </g>
+          <rect x="78" y="236" width="16" height="16" fill="none" stroke="#c0392b" stroke-width="2"/>
+          <rect x="340" y="236" width="16" height="16" fill="none" stroke="#c0392b" stroke-width="2"/>
+          <text x="215" y="272" text-anchor="middle" font-size="11" fill="#3b4a5e">挑出平面点（蓝框）与角点（红框）</text>
+          <text x="215" y="292" text-anchor="middle" font-size="11" fill="#3b4a5e">配准时：点去找「线」或「面」</text>
+          <text x="215" y="316" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e6fa8">问的是「这个点离那条线/那个面多远？」</text>
+          <text x="215" y="340" text-anchor="middle" font-size="11" fill="#7a8a99">其余的点不参与</text>
+
+          <!-- ===== 右：NDT 视角 ===== -->
+          <rect x="462" y="46" width="420" height="320" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="672" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② NDT 看世界：一格一个分布</text>
+
+          <!-- 网格 -->
+          <g stroke="#a8cfb8" stroke-width="1.2" fill="none">
+            <rect x="510" y="96" width="60" height="60"/><rect x="570" y="96" width="60" height="60"/>
+            <rect x="630" y="96" width="60" height="60"/><rect x="690" y="96" width="60" height="60"/>
+            <rect x="750" y="96" width="60" height="60"/>
+            <rect x="510" y="156" width="60" height="60"/><rect x="570" y="156" width="60" height="60"/>
+            <rect x="630" y="156" width="60" height="60"/><rect x="690" y="156" width="60" height="60"/>
+            <rect x="750" y="156" width="60" height="60"/>
+          </g>
+          <!-- 每格里的椭圆（表示分布） -->
+          <g fill="#2e9e6b" opacity="0.34">
+            <ellipse cx="540" cy="112" rx="22" ry="7"/><ellipse cx="600" cy="112" rx="22" ry="7"/>
+            <ellipse cx="660" cy="112" rx="22" ry="7"/><ellipse cx="720" cy="112" rx="22" ry="7"/>
+            <ellipse cx="780" cy="112" rx="22" ry="7"/>
+            <ellipse cx="540" cy="172" rx="22" ry="7"/><ellipse cx="600" cy="172" rx="22" ry="7"/>
+            <ellipse cx="660" cy="172" rx="22" ry="7"/><ellipse cx="720" cy="172" rx="22" ry="7"/>
+            <ellipse cx="780" cy="172" rx="22" ry="7"/>
+          </g>
+          <g stroke="#1e7a52" stroke-width="1.4" fill="none" opacity="0.7">
+            <ellipse cx="540" cy="112" rx="22" ry="7"/><ellipse cx="600" cy="112" rx="22" ry="7"/>
+            <ellipse cx="660" cy="112" rx="22" ry="7"/><ellipse cx="720" cy="112" rx="22" ry="7"/>
+            <ellipse cx="780" cy="112" rx="22" ry="7"/>
+            <ellipse cx="540" cy="172" rx="22" ry="7"/><ellipse cx="600" cy="172" rx="22" ry="7"/>
+            <ellipse cx="660" cy="172" rx="22" ry="7"/><ellipse cx="720" cy="172" rx="22" ry="7"/>
+            <ellipse cx="780" cy="172" rx="22" ry="7"/>
+          </g>
+          <!-- 中心点 -->
+          <g fill="#14532d">
+            <circle cx="540" cy="112" r="2.6"/><circle cx="600" cy="112" r="2.6"/><circle cx="660" cy="112" r="2.6"/>
+            <circle cx="720" cy="112" r="2.6"/><circle cx="780" cy="112" r="2.6"/>
+            <circle cx="540" cy="172" r="2.6"/><circle cx="600" cy="172" r="2.6"/><circle cx="660" cy="172" r="2.6"/>
+            <circle cx="720" cy="172" r="2.6"/><circle cx="780" cy="172" r="2.6"/>
+          </g>
+          <text x="672" y="240" text-anchor="middle" font-size="11" fill="#2f6d51">每个格子里是一个「扁椭圆」：中心是均值，形状是协方差</text>
+          <text x="672" y="262" text-anchor="middle" font-size="11" fill="#2f6d51">（扁＝这里的点铺成一个平面）</text>
+          <text x="672" y="292" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1e7a52">问的是「这个点落在这个分布里有多合理？」</text>
+          <text x="672" y="318" text-anchor="middle" font-size="11" fill="#5f8a72">配准＝调整位姿，让所有点的「似然」最大</text>
+          <text x="672" y="342" text-anchor="middle" font-size="11" fill="#5f8a72">不挑特征，所有点都用</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一面墙，在「特征法」与「NDT」两种视角下被描述成的样子。<br>
+          <b>怎么看这张图：</b>① 左格是 LOAM 的做法——<b>挑出少数几个点</b>（蓝框是平面点、红框是角点），配准问的是「这个点离那条线/那个面多远」；② 右格是 NDT 的做法——空间被切成格子，<b>每个格子里的点被压成一个椭圆</b>（中心是均值、形状是协方差），配准问的是「这个点落在当前这个椭圆里，有多合理」；③ 注意右边那个椭圆为什么是<b>扁的</b>：因为墙上的点只铺在一个平面方向上，所以协方差在一个方向上很大、另两个方向上很小。<br>
+          <b>要记住的一句话：</b>特征法关心「<b>点在几何基元上的距离</b>」，NDT 关心「<b>点在统计分布里的似然</b>」。前者要先做「挑点」这个动作，后者不需要——<b>这正是 NDT 能绕开「提特征」的原因。</b>
+        </figcaption>
+      </figure>
+
+      <p>这个思路其实你在第一季 <b>0005</b> 课已经见过一次（那篇讲的是 SW-NDT）。现在 NDT-LOAM 把它<b>加权</b>之后塞进了 LOAM 的框架里当里程计。</p>
+
+      <p>它的结构可以概括成两个模块：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>DO（直接里程计）</b>
+          <p>用<b>加权 NDT</b> 做配准，并且采用「Scan2Key」策略——<b>当前帧不是去和上一帧配，而是去和最近的关键帧配</b>。这一步就是「不提特征」的那一半。</p>
+        </div>
+        <div class="mini-card">
+          <b>LFA（局部特征调整）</b>
+          <p>这一步<b>就是 LOAM 原来的建图</b>——用点到线/点到面的特征残差做精修。所以它在后端<b>又把特征找回来了</b>。</p>
+        </div>
+      </div>
+
+      <p>所以 NDT-LOAM 的准确描述是：<b>前端不提特征（用 NDT），后端保留特征（用 LOAM 的 LFA）。</b>这是一个很务实的混合方案——它没有彻底站队，而是取两边的好处。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_NDT-LOAM__A_Real-Time_Lidar_Odometry_and_Mapping_With_We/7e593a75326f5496b26f685f5c0e5430367cfe3a657329be4ce16b162f5fea49.jpg" alt="NDT-LOAM Fig.1 system overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>System overview of NDT-LOAM.<br>
+          （中译：NDT-LOAM 的系统总览。）<br>
+          <b>怎么看这张图：</b>① 顺着数据流往下看，注意它是怎么分成两段的——<b>前面一段是 DO（直接里程计，用加权 NDT 配准关键帧），后面一段是 LFA（局部特征调整，用点到线/点到面精修）</b>；② 这个「前段不提特征、后段提特征」的混合结构，就是本课的核心设计；③ 可以对比一下上一节 LeGO-LOAM 的五模块流程图——<b>骨架的形状很相似，被换掉的只是最前面的那一块。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="wndt">
+      <h2>3. 加权 NDT 到底加了什么权</h2>
+
+      <p>经典 NDT 的目标是「让所有点落在各自分布里的似然之和最大」。NDT-LOAM 觉得这样不够——<b>不同格子、不同距离的点，可信度本来就不一样</b>，应该给它们不同的权重。</p>
+
+      <p>它加了两类权重：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>距离权重：远处的点更重要</b>
+          <p>原文用的权重是「点离传感器的距离」$W_{r_k}=|x_k|$。<br>
+          为什么远的反而权重更大？因为<b>同样的角度误差，落得越远、位置偏得越多</b>。想象你拿着一支激光笔，手抖了 1 度：打在 1 米处的墙上只偏了不到 2 厘米，打在 50 米外的大楼上偏了将近 1 米。<b>所以远处的点对「角度是否准」更敏感，约束更强。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>维数权重：像「面」的格子更可信</b>
+          <p>每个格子的协方差算出三个特征值 $\lambda_1\ge\lambda_2\ge\lambda_3>0$，据此判断这个格子里点的形状是「线」「面」还是「体」。<br>
+          然后按形状给权重：<b>像平面给 1.25、像立体给 1.0、像线给 0.75</b>。理由是<b>平面约束最稳定</b>——一条线只能约束两个方向，一个平面能约束一个方向但很明确。</p>
+        </div>
+      </div>
+
+      <p>把两类权重相乘，就得到加权 NDT 的目标函数：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$F(\xi)=\sum_k W_k\, f\!\left(T(\xi,P_k)\right),\qquad W_k=W_{r_k}\cdot W_{D_k}$$</div>
+      </div>
+
+      <p>配准就是调整位姿 $\xi$，让这个目标最大。然后用牛顿法迭代求解。原文实测，<b>加权 NDT 比经典 NDT 的误差低约 12%</b>，而「Scan2Key」（对关键帧配准）比「Scan2Scan」（对上一帧配准）的<b>平均误差几乎减半</b>。</p>
+    </section>
+
+    <section class="section-card" id="ekf">
+      <h2>4. 路线二：把「位姿来源」换掉</h2>
+
+      <p>现在换一个完全不同的场景。</p>
+
+      <p>想象一台机器人开进了一条<b>废弃的隧道</b>：两侧是均质的混凝土墙，地面与天花板也是均质的，一眼望过去，<b>每一段隧道长得都一模一样</b>。挂在车顶的激光雷达不停扫描，每帧都能测到墙、测到地面，数据一点都不缺。</p>
+
+      <p>但这里有一个致命的问题：<b>它测不出自己前进了多少。</b></p>
+
+      <p>为什么？因为隧道是「平移不变」的——你往前开 10 米，激光看到的还是同一面墙、同一个地面。对配准算法来说，<b>「我在起点」和「我往前 10 米」这两种假设，都能解释这帧点云。</b>于是它倾向于相信「我没怎么动」，结果就是<b>位移被系统性低估</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">退化：为什么在均质隧道里，激光会「看不见自己在前进」</text>
+
+          <!-- ===== 左：退化隧道 ===== -->
+          <rect x="18" y="46" width="420" height="330" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="228" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">均质隧道（退化）</text>
+          <text x="228" y="88" text-anchor="middle" font-size="11" fill="#a8846f">每一段都长得一样</text>
+
+          <!-- 隧道（透视：两条平行线 + 拱顶） -->
+          <path d="M60 130 L390 160" stroke="#b0bec5" stroke-width="3"/>
+          <path d="M60 310 L390 280" stroke="#b0bec5" stroke-width="3"/>
+          <path d="M60 130 Q 120 96 180 130" fill="none" stroke="#cfd8dc" stroke-width="2"/>
+          <!-- 均匀的环（重复结构） -->
+          <g stroke="#cfd8dc" stroke-width="1.6" fill="none">
+            <path d="M110 137 L110 303"/><path d="M150 143 L150 297"/><path d="M190 149 L190 291"/>
+            <path d="M230 154 L230 286"/><path d="M270 158 L270 282"/><path d="M310 161 L310 279"/>
+            <path d="M350 164 L350 276"/>
+          </g>
+          <!-- 车 -->
+          <rect x="82" y="206" width="30" height="16" rx="4" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="90" cy="224" r="4" fill="#37474f"/><circle cx="104" cy="224" r="4" fill="#37474f"/>
+          <!-- 前进箭头 + 问号 -->
+          <path d="M120 214 L168 214" stroke="#c0392b" stroke-width="2.4"/>
+          <path d="M168 214 L159 208 L159 220 Z" fill="#c0392b"/>
+          <text x="196" y="200" font-size="20" font-weight="700" fill="#c0392b">?</text>
+          <text x="212" y="214" font-size="11" fill="#c0392b">走了几米？</text>
+
+          <text x="228" y="336" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">「在起点」和「前进了 10 米」</text>
+          <text x="228" y="354" text-anchor="middle" font-size="11.5" fill="#c0392b">都能解释同一帧点云</text>
+
+          <!-- ===== 右：有特征的长廊 ===== -->
+          <rect x="462" y="46" width="420" height="330" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="672" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">有特征的长廊（可定位）</text>
+          <text x="672" y="88" text-anchor="middle" font-size="11" fill="#5f8a72">有柱子、门、管道接口</text>
+
+          <path d="M504 130 L834 160" stroke="#b0bec5" stroke-width="3"/>
+          <path d="M504 310 L834 280" stroke="#b0bec5" stroke-width="3"/>
+          <path d="M504 130 Q 564 96 624 130" fill="none" stroke="#cfd8dc" stroke-width="2"/>
+          <!-- 柱子（不等间距的标志物） -->
+          <g fill="#795548">
+            <rect x="552" y="140" width="12" height="160"/>
+            <rect x="648" y="150" width="12" height="142"/>
+            <rect x="762" y="157" width="12" height="122"/>
+          </g>
+          <g fill="#4a9c76">
+            <rect x="600" y="152" width="26" height="34"/>
+            <rect x="710" y="160" width="26" height="30"/>
+          </g>
+          <rect x="526" y="206" width="30" height="16" rx="4" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <circle cx="534" cy="224" r="4" fill="#37474f"/><circle cx="548" cy="224" r="4" fill="#37474f"/>
+          <path d="M564 214 L612 214" stroke="#2e9e6b" stroke-width="2.4"/>
+          <path d="M612 214 L603 208 L603 220 Z" fill="#2e9e6b"/>
+          <text x="628" y="200" font-size="11" fill="#2f6d51">柱子明显错开了</text>
+
+          <text x="672" y="336" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">柱子、门的位置</text>
+          <text x="672" y="354" text-anchor="middle" font-size="11.5" fill="#2f6d51">随前进在地图里清楚移动</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同样是「一条长长的通道」，为什么左边的会让激光失效、右边的不会。区别只在于<b>通道上有没有能区分位置的东西</b>。<br>
+          <b>怎么看这张图：</b>① 左格里，隧道壁是<b>完全均匀、等距的环</b>——你往前开一段，看到的还是同样的一圈圈，所以「我在起点」与「我前进了 10 米」这两种假设<b>都能解释同一帧数据</b>，优化就倾向于相信「我没动」；② 右格里，长廊上有<b>柱子、门、管道接口</b>这些不等间距的东西，随着前进它们在地图里的位置明显错开，于是「我动了多少」就能被观测到；③ 注意左格那个<b>红色的问号</b>——它不是「没数据」，而是「数据里没有能区分位置的信息」。<br>
+          <b>要记住的一句话：</b>退化<b>不是指数据变少</b>，而是指<b>数据里缺少某些方向上的信息</b>。这就是为什么原文要把轮速与 IMU 拉进来补洞——它们和激光「看到的」是两种完全不同的信息。
+        </figcaption>
+      </figure>
+
+      <p>EKF-LOAM 的实测数字非常震撼。原文做了一条 <b>200 米</b>的真实废弃隧道实验：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>只用 LeGO-LOAM（激光）</b>
+          <p>200 米的隧道，它只估出了 <b>87.37 米</b>——误差 <b>56.32%</b>。也就是说它认为机器人只走了不到一半的路。</p>
+        </div>
+        <div class="mini-card">
+          <b>只用轮速 + IMU</b>
+          <p>估出 207.40 米（略偏大），但轮速在转弯时会发散，单独不能用。</p>
+        </div>
+        <div class="mini-card">
+          <b>EKF-LOAM（融合后）</b>
+          <p>估出 <b>200.35 米，误差 0.18%</b>。相对于纯 LeGO-LOAM，误差降低了 <b>50% 以上</b>。</p>
+        </div>
+      </div>
+
+      <p>另一个更极端的实验是一条 300 米的<b>虚拟圆管</b>：LeGO-LOAM 的误差高达 <b>74.19%</b>（终点偏了 154 米），而 EKF-LOAM 只有 <b>1.55%</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_EKF-LOAM__An_Adaptive_Fusion_of_LiDAR_SLAM_With_Wheel_Od/a703736056ebca6377b4d9ced4cf90cf63fbc90791be7c9506f0347e5713bad6.jpg" alt="EKF-LOAM Fig.4 system overview, EKF between front-end and back-end">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>System overview of the EKF-LOAM. The extended Kalman filter is integrated between front-end and back-end stages.<br>
+          （中译：EKF-LOAM 的系统总览。扩展卡尔曼滤波被集成在前端与后端两个阶段之间。）<br>
+          <b>怎么看这张图：</b>① 请特别看那个 <b>EKF 方框的位置</b>——它不在最前面，也不在最后面，而是<b>夹在「激光里程计」与「建图」中间</b>；② 数一数有几条箭头指进这个方框（轮速、IMU、激光里程计三条）；③ 这个位置很讲究：<b>它在激光已经给出一个初步位姿之后介入</b>，所以它能拿这个位姿去和轮速、IMU 比对，判断「这次激光是不是不可信」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="adaptive">
+      <h2>5. 自适应：特征越少，越不信激光</h2>
+
+      <p>EKF-LOAM 里最漂亮的一个设计是「<b>自适应协方差</b>」。这一节把它讲清楚——它是用一个量同时解决两个问题的经典例子。</p>
+
+      <p>先说明一个前提：在卡尔曼滤波里，每个传感器都带着一个「我有多不确定」的量（协方差）。<b>这个量越大，滤波器就越不听它的。</b>所以「要不要信激光」这件事，本质上就是「怎么设置激光的协方差」。</p>
+
+      <p>EKF-LOAM 的做法是：<b>让激光的协方差随「检测到多少特征」而变。</b></p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$Q_L=\mathrm{diag}(g_x,\dots,g_\psi)\cdot \xi(n_e,n_p)$$</div>
+      </div>
+
+      <p>其中 $n_e$ 与 $n_p$ 分别是当前帧里检测到的<b>边缘特征数与平面特征数</b>，而 $\xi$ 是一个随特征减少而增大的因子（原文给的参数是 $n_e=500$、$n_p=5000$、下限 $\xi_{\min}=0.005$）。</p>
+
+      <p><b>读法：</b>特征多 → $\xi$ 小 → 激光协方差小 → <b>更信激光</b>；特征少 → $\xi$ 大 → 激光协方差大 → <b>更信轮速与 IMU</b>。</p>
+
+      <p>还有一个更细致的处理：<b>它按特征类型分别调整不同方向的协方差。</b>边缘特征主要约束水平方向与航向，平面特征主要约束高度与横滚/俯仰——所以这两类特征的多少，分别影响不同方向的信任度。这其实与上一节 LeGO-LOAM 的「两步优化」是同一个洞察：<b>不同几何量管不同方向。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>EKF-LOAM 在隧道里把「激光的协方差」调大了。这个动作的直接效果是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="调大协方差不是让它更准，而是让滤波器「少听它的」。激光本身的估计质量并没有被改善——在隧道里它该低估还是低估。" onclick="lessonKit.answer(this,'q0076a')">让激光估计变得更准</button>
+          <button data-correct="yes" data-explanation="对。协方差是「我有多不确定」的声明。调大它，就等于告诉滤波器「这次激光的话只能算参考」，于是滤波器的输出会更偏向轮速与 IMU。这就是它能救回那 56% 缺失位移的原因。" onclick="lessonKit.answer(this,'q0076a')">降低激光在融合中话语权</button>
+          <button data-correct="no" data-explanation="调大协方差不会让激光「停止工作」，它照样参与融合，只是权重变小。整个设计的关键正是「不切断任何一个来源」，而是动态地分配信任。" onclick="lessonKit.answer(this,'q0076a')">直接屏蔽掉激光数据</button>
+        </div>
+        <div class="quiz-feedback" id="q0076a"></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_EKF-LOAM__An_Adaptive_Fusion_of_LiDAR_SLAM_With_Wheel_Od/0c80ee41ec29b582c3b2b7afc49cc475058c01e5cc5b34c30e73fbb58bccad29.jpg" alt="EKF-LOAM Fig.15 mapping results comparison LeGO-LOAM vs EKF-LOAM">
+        <figcaption>
+          <b>原图注（Fig. 15）：</b>Mapping results in a multi-floor corridor using (a) LeGO-LOAM and (b) EKF-LOAM. LeGO-LOAM underestimation causes misalignment between lower and upper floors walls of about 9 m.<br>
+          （中译：多层走廊中的建图结果，(a) LeGO-LOAM，(b) EKF-LOAM。LeGO-LOAM 的低估导致上下两层墙面错位约 9 米。）<br>
+          <b>怎么看这张图：</b>① 看 (a)——LeGO-LOAM 建出来的图里，<b>上下两层的墙对不上，错开了大约 9 米</b>，而且同一面墙出现了不止一份；② 这个错误不是「噪声」造成的，而是<b>系统性低估</b>：它每走一段就少算一点，走到头就差了近 10 米；③ 看 (b)——EKF-LOAM 把轮速与 IMU 融进来之后，<b>楼层对齐了</b>。这是一个很典型的例子：<b>退化的后果不是「地图模糊」，而是「结构上歪掉」。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>6. 横向对比与边界</h2>
+
+      <p>把两篇并排摆出来，两条路线的分工就很清楚了：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.93rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">NDT-LOAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">EKF-LOAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>换掉了哪个零件</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">「提特征」——前端改用加权 NDT</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">「单一来源」——加入轮速与 IMU</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>改善什么</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">速度（10 Hz 实时）与精度</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">退化场景下的系统性低估</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>代价</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">高速 + 少特征场景仍差（高速路误差 &gt;1%）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">依赖轮速标定；没有轮子的平台用不了</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>关键数字</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">KITTI 上 0.899%（原 LOAM 约 0.88%，但它快 10 倍）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">200 m 隧道：56.32% → 0.18%</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>原文承认的短板</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">无回环、无图优化</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">EKF 只校正速度态，长时间仍会累积位姿误差</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>一句话总结这两条路线</h4>
+        <p><b>NDT-LOAM 在「传感器内部」找答案</b>——同样是激光数据，换一种使用方式（分布替代特征）就能既快又准；<br>
+        <b>EKF-LOAM 在「传感器外部」找答案</b>——激光自己解决不了的问题，就再拿一个信息来源来补。<br>
+        这两条路都没有动 LOAM 的骨架，但都真实解决了一类具体问题。这也是这一阶段后面大量论文的共同特征。</p>
+      </div>
+
+      <p>最后回到这一模块的主线。我们把三节课连起来看：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        LOAM（提特征，两步优化）<br>
+        ↓ 做减法<br>
+        LeGO-LOAM（分割去噪 ＋ 地面只管三自由度）<br>
+        ↓ 换零件<br>
+        NDT-LOAM（前端不提特征）&nbsp;·&nbsp; EKF-LOAM（多传感器兜底）
+      </div>
+
+      <p>但注意：<b>这三节的系统都还是「纯激光」或「激光 + 一点惯性」</b>，而且都有一个共同短板——<b>没有回环、没有全局一致</b>。下一模块就要解决这件事：把 IMU 正式请进优化，并且把回环也装进同一张图。这就是 LIO-SAM 一系的开始。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请说清 NDT 与「提特征」这两种做法的根本差别。为什么 NDT 不需要「挑点」这个动作？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>根本差别在于「用什么来描述局部几何」。</b></p>
+              <p>特征法的做法是：<b>先把点分成「角点」与「平面点」两类</b>（用曲率等判据），然后让这些点去找对应的几何基元（线或面），残差是「点到线/面的垂直距离」。所以它必须先做一次「挑点」，其余的点不参与。</p>
+              <p>NDT 的做法是：<b>把空间切成格子，每个格子里的点被压成一个高斯分布</b>（均值＋协方差）。配准时直接问「这个点落在当前这个分布里有多合理」，残差是「似然的负对数」。</p>
+              <p><b>为什么它不用挑点？</b>因为「分布」这个描述本身<b>已经把所有点都汇总进去了</b>——它不需要选出「代表点」，而是用统计量（均值与协方差）概括整格的点。协方差的形状还会自动告诉你这里像面还是像线。<b>挑点这个动作被「统计」替代了。</b></p>
+            </div></details>
+          </li>
+          <li>加权 NDT 给了两类权重。请分别说明它们是什么、为什么这样设。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>第一类：距离权重，权重值是「点到传感器的距离」，越远越大。</b></p>
+              <p>理由是几何的：同样的角度误差，投影到越远的地方、位置偏差越大。拿激光笔打比方——手抖 1 度，打在 1 米外的墙上只偏不到 2 厘米，打在 50 米外的大楼上偏了将近 1 米。所以远处的点<b>对「角度准不准」更敏感</b>，给出的约束更强。</p>
+              <p><b>第二类：维数权重，按格子里的点形状来定——像平面给 1.25、像立体给 1.0、像线给 0.75。</b></p>
+              <p>理由同样是几何的：<b>平面约束最稳定明确</b>（它明确约束了一个法向方向）；立体的点散布在三个方向上，约束反而模糊；一条线只能约束两个方向、留一个自由度。所以原文给「像平面」最高的权重。</p>
+              <p>两类权重相乘，就得到每个格子的总权重。原文实测加权比不加权的经典 NDT 误差低约 12%。</p>
+            </div></details>
+          </li>
+          <li>「退化」这个词常常被误解成「数据变少了」。请以均质隧道为例，说明退化的准确含义。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>退化的准确含义是：数据里缺少某些方向上的信息。</b>而不是数据量少。</p>
+              <p>在均质隧道里，激光雷达每帧照样测到成千上万个点——墙面、地面、天花板都有。数据量一点都不少。问题出在<b>隧道的平移不变性</b>：你往前开 10 米，看到的还是同样的一圈圈环。对配准来说，<b>「我在起点」与「我前进了 10 米」这两种假设都能同样好地解释这帧数据</b>。</p>
+              <p>于是在所有解释里，算法倾向于选一个去解释——结果就是「没怎么动」，位移被系统性低估。（原文实测：200 米的隧道，纯激光只估出 87.37 米。）</p>
+              <p><b>为什么叫「退化」？</b>因为在数学上，此时待估参数在某些方向上的 <b>Hessian 特征值趋于零</b>——也就是「沿这个方向改变，代价几乎不变」。所以它不是「没数据」，而是「<b>数据在某些方向上没有区分能力</b>」。这也解释了为什么补洞要靠完全不同类型的传感器：轮速与 IMU 提供的正是激光看不到的那部分信息。</p>
+            </div></details>
+          </li>
+          <li>EKF-LOAM 用「检测到的特征数」来调激光的协方差。为什么这个设计比「检测不到特征就直接不用激光」更好？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为它<b>保留了一个连续的信任度，而不是做一个非黑即白的开关</b>。好处有三层：</p>
+              <p>① <b>避免「误判即失效」</b>：如果做成硬开关，那么当特征数刚好卡在阈值附近时，系统会激烈地来回切换，输出会跳变。而自适应协方差是平滑过渡的——特征少一点就少信一点。</p>
+              <p>② <b>保留部分有用信息</b>：即便在隧道里，激光也不是完全没用——它对<b>横滚、俯仰、离墙距离</b>这些方向仍然是可靠的（隧道的墙面与地面仍然提供这些约束）。硬屏蔽会把这份信息一起丢掉。</p>
+              <p>③ <b>可以按方向分配信任</b>：原文进一步做了「按特征类型调不同方向的协方差」——边缘特征少就调低水平方向与航向的信任，平面特征少就调低高度与横滚/俯仰的信任。<b>这是一把「精调的旋钮」，比开关灵活得多。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0075-LeGO-LOAM2018-为嵌入式瘦身.html">← LeGO-LOAM（2018）：为嵌入式瘦身</a>
+        <a class="next" href="0077-紧耦合3D激光惯性2019-LIO-SAM的前身.html">紧耦合 3D 激光惯性（2019）：把 IMU 请进优化 →</a>
+      </div>
+      <p class="foot-note">这一节的两条路线正好是一个好用的思考框架：向内改造 / 向外找补 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

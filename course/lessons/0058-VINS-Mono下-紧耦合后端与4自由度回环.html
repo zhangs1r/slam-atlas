@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VINS-Mono（下）：紧耦合后端与 4 自由度回环 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0058</div>
+      <h1>VINS-Mono（下）：紧耦合后端与 4 自由度回环</h1>
+      <p class="subtitle">上一节把系统「点着了」，这一节看它怎么持续跑下去——滑动窗怎么裁、先验怎么留，以及一个很漂亮的巧劲：回环为什么只优化 4 个自由度 🎯</p>
+      <div class="hero-meta">
+        <span>🎯 主题：滑动窗紧耦合优化、边缘化、重定位与全局位姿图</span>
+        <span>👥 作者：秦通、李攀硕、沈劭劼（HKUST）</span>
+        <span>📅 2018 · <i>VINS-Mono: A Robust and Versatile Monocular Visual-Inertial State Estimator</i>（IEEE T-RO）</span>
+      </div>
+      <div class="toc">
+        <a href="#backbone">后端：状态向量与目标函数</a>
+        <a href="#sphere">一个特殊设计：残差定义在单位球面上</a>
+        <a href="#marg">边缘化：什么时候留、什么时候扔</a>
+        <a href="#levels">三档输出：低频精确、高频流畅</a>
+        <a href="#loop">回环与重定位</a>
+        <a href="#fourdof">★ 4 自由度位姿图</a>
+        <a href="#exp">实验与诚实的读数</a>
+        <a href="#drill">巩固练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="backbone">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 写出滑动窗的完整状态向量，说清每一项是什么；② 讲明白目标函数里的三项各代表什么、为什么视觉项要加鲁棒核而 IMU 项不用；③ 解释边缘化策略里那个「保留非关键帧的 IMU 测量」的用意；④ 用自己的话讲透<b>为什么回环只优化 4 个自由度</b>；⑤ 读出实验表里哪一行其实输了。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接 <b>0057</b>（上一节刚做完初始化，状态里所有量都有了物理单位）。接第二季 <b>0032 / 0049</b>：边缘化 = Schur 补成先验，你在那两节已经见过两次，这一节是它的第三次出场，但有个新细节（<b>选择性边缘化</b>）。接 <b>0014 回环检测综述</b>：那里的「假阳性铁律」在这里落实成了两级外点剔除 + 只给回环边加鲁棒核。接 <b>0043 ORB-SLAM</b>：同样用 DBoW2 + 位姿图，但自由度选择不同，正好可以对照。</p>
+        </div>
+      </div>
+
+      <h2>1. 后端：状态向量与目标函数</h2>
+      <p>初始化之后，系统进入滑动窗紧耦合优化。先把「要优化的东西」列出来（原文式 13）：</p>
+      <div class="formula-box">
+        $$\mathcal{X} = [\mathbf{x}_0,\mathbf{x}_1,\ldots,\mathbf{x}_n,\ \mathbf{x}_c^b,\ \lambda_0,\lambda_1,\ldots,\lambda_m]$$
+      </div>
+      <p>三部分读法：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>$\mathbf{x}_k$：每帧的 IMU 状态</h4>
+          <p>$\mathbf{x}_k = [\mathbf{p}_{b_k}^w, \mathbf{v}_{b_k}^w, \mathbf{q}_{b_k}^w, \mathbf{b}_a, \mathbf{b}_g]$——位置、速度、姿态，加上<b>两个偏置</b>。注意偏置是<b>持续被优化</b>的，初始化只是给了起点</p>
+        </div>
+        <div class="mini-card">
+          <h4>$\mathbf{x}_c^b$：相机到 IMU 的外参</h4>
+          <p>$\mathbf{x}_c^b = [\mathbf{p}_c^b, \mathbf{q}_c^b]$。<b>外参也是优化变量</b>——这就是原文说的「在线外参标定」</p>
+        </div>
+        <div class="mini-card">
+          <h4>$\lambda_l$：特征的逆深度</h4>
+          <p>原文的定义是「该特征距它<b>第一次观测</b>的逆距离」。用逆深度而不是深度，你在 <b>0046 / 0047</b> 已经见过两次这个选择了</p>
+        </div>
+      </div>
+      <p>目标函数是一个标准的视觉惯性 BA（式 14）：</p>
+      <div class="formula-box">
+        $$\min_{\mathcal{X}}\Big\{\underbrace{\|\mathbf{r}_p-\mathbf{H}_p\mathcal{X}\|^2}_{\text{边缘化先验}}+\sum_{k\in\mathcal{B}}\underbrace{\|\mathbf{r}_{\mathcal{B}}(\hat{\mathbf{z}}, \mathcal{X})\|^2_{\mathbf{P}}}_{\text{IMU 残差}}+\sum_{(l,j)\in\mathcal{C}}\underbrace{\rho\big(\|\mathbf{r}_{\mathcal{C}}(\hat{\mathbf{z}},\mathcal{X})\|^2_{\mathbf{P}}\big)}_{\text{视觉残差（带鲁棒核）}}\Big\}$$
+      </div>
+      <p>三项分别打招呼一下：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① 先验项</h4>
+          <p>来自边缘化的信息，$\{\mathbf{r}_p,\mathbf{H}_p\}$。形式是「线性先验」——这正是第二季 <b>0032 / 0049</b> 讲过的 Schur 补的产物</p>
+        </div>
+        <div class="mini-card">
+          <h4>② IMU 残差</h4>
+          <p>窗口内每对相邻帧的预积分残差，<b>没有加鲁棒核</b>（只有马氏范数）。理由不难想：预积分量是自己积出来的，不存在「匹配错」这种外点</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 视觉残差</h4>
+          <p>被观测到<b>至少两次</b>的特征的观测残差，<b>带 Huber 范数</b> $\rho$。因为特征匹配一定有外点，必须抗</p>
+        </div>
+      </div>
+      <p>Huber 的定义原文也给了（式 15）：$\rho(s)=s$（当 $s\le1$）、$\rho(s)=2\sqrt{s}-1$（当 $s>1$）。意思是：<b>残差小时按平方增长，残差大时改为按平方根增长</b>——对大残差的惩罚被压住了，这就是「鲁棒」的含义。求解用的是 Ceres。</p>
+      <p>原文特别说明 $\mathcal{C}$ 是「在当前滑动窗内<b>至少被观测两次</b>的特征集合」——只有一次观测的特征无法三角化，自然不能产生残差。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/7b8a35ba966c01ca304669145d33c840e37b766281909fbb9f28a53f675f35c9.jpg" alt="sliding window monocular VIO with relocalization">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Illustration of the sliding window monocular VIO with relocalization. Several camera poses, IMU measurements, and visual measurements exist in the sliding window. It is a tightly coupled formulation with IMU, visual, and loop measurements.（带重定位的滑动窗单目 VIO 示意。滑动窗中存在若干相机位姿、IMU 测量与视觉测量。这是一个把 IMU、视觉与回环测量紧耦合起来的公式。）<br>
+          <b>怎么看这张图：</b>请找两类连接：<b>相邻帧之间的 IMU 测量</b>（把时间上挨着的状态连起来）和<b>特征对多帧的观测</b>（把空间上共同看到同一处的状态连起来）。回环测量则是第三种连接——它把「当前」和「很久以前」直接连上。三者放在同一个优化里，这就是「紧耦合」的字面意思。<br>
+          <b>要记住的一句话：</b>紧耦合不是一种算法，而是「把不同来源的测量写进同一个代价函数」这个态度。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="sphere">
+      <h2>2. 一个特殊设计：残差定义在单位球面上</h2>
+      <p>这是一个很多人第一遍读会跳过的细节，但它直接关系到「大 FOV 相机」这个卖点。</p>
+      <p>传统做法是：把像素上的重投影误差定义在<b>图像平面</b>上。VINS-Mono 反过来——它把残差定义在<b>单位球面</b>上。原文给的理由是：几乎所有相机的光学过程（广角、鱼眼、全向）都可以建模为一条连接单位球面的<b>单位射线</b>。</p>
+      <p>具体到残差（式 17）：先由第一次观测到的像素反投影出一个单位向量，再把当前帧的观测也变成单位向量，两者的差再投影到<b>切平面</b>上——原文说明这个投影是必要的，因为视觉残差的自由度只有 <b>2</b>，而球面上的向量差是 3 维的。原文也提到，特征观测的方差同样是<b>从像素坐标传播到单位球面上</b>的。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/0bf85f23ab92081c5cf3a721f45a718278ec843c1cce909d2ae98f5136183cb3.jpg" alt="visual residual on unit sphere">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Illustration of the visual residual on a unit sphere. $\hat{\bar{\mathcal{P}}}_l^{c_j}$ is the unit vector for the observation of the $l$th feature in the $j$th frame. $\mathcal{P}_l^{c_j}$ is predicted feature measurement on the unit sphere by transforming its first observation in the $i$th frame to the $j$th frame. The residual is defined <b>on the tangent plane</b> of $\hat{\mathcal{P}}_l^{c_j}$.（单位球面上的视觉残差示意。$\hat{\bar{\mathcal{P}}}_l^{c_j}$ 是第 $l$ 个特征在第 $j$ 帧的观测单位向量；$\mathcal{P}_l^{c_j}$ 是把它在第 $i$ 帧的首次观测变换到第 $j$ 帧后，在单位球面上的预测观测。残差定义在 $\hat{\mathcal{P}}_l^{c_j}$ 的<b>切平面</b>上。）<br>
+          <b>怎么看这张图：</b>把它想象成「把一个虚拟的小地球套在相机上」，每个特征观测就是地球表面上的一个点（单位向量）。残差就是「预测的方向」和「观测到的方向」这两个点之间的差距；但差距不能直接相减（那会得到 3 个数），所以要把差距投到该点处的<b>切平面</b>上量——切平面上量出来正好是 2 个数，与「像素只有两个坐标」一致。<br>
+          <b>要记住的一句话：</b>把残差搬到单位球面上，就等于一次性地支持了所有镜头模型——这是为什么它能同时处理针孔、鱼眼和全向相机。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>为什么值得专门讲这一点</h4>
+        <p>因为它示范了一个很实用的工程思想：<b>与其为每种镜头写一套残差，不如把残差定义在一个与镜头无关的中间表示上。</b>同一篇论文里还能看到两处同类的「选对表示」——第二季 <b>0028 MSCKF</b> 把残差投到零空间上消掉特征坐标，本节把残差投到切平面上消掉冗余的第三维。它们的手法不同（一个是消元、一个是降维），但动机一致：<b>让「未知数的个数」和「方程的自由度」对齐。</b></p>
+      </div>
+    </section>
+
+    <section class="section-card" id="marg">
+      <h2>3. 边缘化：什么时候留、什么时候扔</h2>
+      <p>滑动窗要一直保持有限大小，就得不断地把旧状态移出去——这个动作就是边缘化。第二季 <b>0032</b> 和 <b>0049</b> 已经讲过它的原理（Schur 补 → 变成一个先验因子挂回来），这一节的新东西是<b>「选择性地边缘化」</b>。</p>
+      <p>原文的策略（Fig. 7 画得很清楚）：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>情形 A：倒数第二帧是关键帧</h4>
+          <p>让它<b>留在窗口里</b>，把最老的那一帧连同它对应的视觉与惯性测量一起边缘化掉，转成一个先验</p>
+        </div>
+        <div class="mini-card">
+          <h4>情形 B：倒数第二帧不是关键帧</h4>
+          <p>那就<b>只丢掉它的视觉测量，保留它的 IMU 测量</b>，并且预积分过程继续往下一帧传</p>
+        </div>
+      </div>
+      <p>情形 B 里那个「保留 IMU 测量」的做法有个明确的理由，原文写得很直白：<b>「我们不会把非关键帧的所有测量都边缘化掉，目的是维持系统的稀疏性。」</b>另外原文还说明了整个策略想要达到的两个效果：让窗口里保留<b>空间上彼此分开的关键帧</b>，从而保证特征三角化有足够的视差；并且尽量保留<b>激励充分</b>（large excitation）的加速度计测量。</p>
+      <p>边缘化用 Schur 补完成，构造出的新先验会<b>叠加到已有的先验上</b>。</p>
+      <div class="callout">
+        <h4>★ 一个必须讲的诚实说明</h4>
+        <p>原文在这一节末尾主动交代了一个理论上的缺陷，措辞非常坦白：</p>
+        <p>「我们注意到<b>边缘化会导致线性化点被提前固定</b>，这可能带来次优的估计结果。不过，<b>由于 VIO 允许小幅度漂移</b>，我们认为边缘化带来的负面影响并不关键。」</p>
+        <p>这句话值得停下来想一下。你在第二季 <b>0049 VI-DSO</b> 里见过同样的病（那里的解法是「动态边缘化」，通过维护多个先验来绕开），也在 <b>0030 预积分</b>里见过它的另一个名字（first-estimate Jacobian）。VINS-Mono 的处理方式是：<b>承认它、然后论证后果可接受。</b>这是一个很成熟的态度——不是所有理论缺陷都需要被消灭，有些只需要被量化到「在目标场景下不致命」的程度。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/a2ea0ef19ea092ada8633cf7294c764ff6352f1cc1e4029062fa746b23ef7a20.jpg" alt="marginalization strategy">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Illustration of our marginalization strategy. If the second latest frame is a keyframe, we will keep it in the window, and marginalize the oldest frame and its corresponding visual and inertial measurements. Marginalized measurements are turned into a prior. If the second latest frame is not a keyframe, we will simply remove the frame and all its corresponding visual measurements. However, preintegrated inertial measurements are kept for nonkeyframes, and the preintegration process is continued toward the next frame.（我们的边缘化策略示意。若倒数第二帧是关键帧，则把它留在窗口内，并边缘化最老的帧及其对应的视觉与惯性测量；被边缘化的测量会转成一个先验。若倒数第二帧不是关键帧，就直接移除该帧及其全部视觉测量；但非关键帧的预积分惯性测量会被保留，预积分过程继续向下一帧推进。）<br>
+          <b>怎么看这张图：</b>请左右对照着看两条分支，问一个问题：<b>「被移出去的帧，它的信息还在不在？」</b>在关键帧分支里，信息被压成一个先验留了下来；在非关键帧分支里，视觉信息被丢弃，但 IMU 链被「接续」过去——所以时间上的连续性没有断。这个区别就是「选择性」二字的含义。<br>
+          <b>要记住的一句话：</b>丢掉一帧不等于丢掉那段时间——IMU 的测量可以被接力传递下去。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 选择性边缘化：哪些信息该留、哪些该转成先验</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">滑动窗里最老的一帧要被移出去，但处理方式取决于「它是不是关键帧」</text>
+
+          <!-- 上：关键帧情形 -->
+          <rect x="30" y="72" width="840" height="140" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2" rx="9"/>
+          <text x="450" y="96" fill="#1b5e20" font-size="13.5" text-anchor="middle" font-weight="700">情形 A：它（或它旁边那帧）是关键帧 → 信息转成先验留下来</text>
+          <circle cx="140" cy="150" r="18" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2"/>
+          <text x="140" y="155" fill="#1b5e20" font-size="10" text-anchor="middle">最老</text>
+          <circle cx="260" cy="150" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="260" y="155" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="380" cy="150" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="380" y="155" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="500" cy="150" r="18" fill="#90caf9" stroke="#1565c0" stroke-width="2.6"/>
+          <text x="500" y="155" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="620" cy="150" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="620" y="155" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="740" cy="150" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="740" y="155" fill="#0d3c75" font-size="10" text-anchor="middle">最新</text>
+          <path d="M 260 150 L 380 150" stroke="#90a4ae" stroke-width="1.6"/>
+          <path d="M 380 150 L 500 150" stroke="#90a4ae" stroke-width="1.6"/>
+          <path d="M 500 150 L 620 150" stroke="#90a4ae" stroke-width="1.6"/>
+          <path d="M 620 150 L 740 150" stroke="#90a4ae" stroke-width="1.6"/>
+          <!-- 先验弹簧 -->
+          <path d="M 158 150 C 180 118 200 182 220 118 C 236 100 244 140 258 130" fill="none" stroke="#ef6c00" stroke-width="2.4"/>
+          <text x="205" y="200" fill="#7a1f00" font-size="11" text-anchor="middle">压成一根「先验弹簧」</text>
+          <text x="205" y="216" fill="#7a1f00" font-size="10.5" text-anchor="middle">挂在剩下的状态上</text>
+
+          <!-- 下：非关键帧情形 -->
+          <rect x="30" y="230" width="840" height="150" fill="#e3f2fd" stroke="#1565c0" stroke-width="2" rx="9"/>
+          <text x="450" y="254" fill="#0d3c75" font-size="13.5" text-anchor="middle" font-weight="700">情形 B：它不是关键帧 → 丢掉视觉、把 IMU 链接续下去</text>
+          <circle cx="140" cy="310" r="18" fill="#ffe0b2" stroke="#ef6c00" stroke-width="2"/>
+          <text x="140" y="315" fill="#7a1f00" font-size="10" text-anchor="middle">要被</text>
+          <text x="140" y="327" fill="#7a1f00" font-size="10" text-anchor="middle">丢掉</text>
+          <circle cx="260" cy="310" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="260" y="315" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="380" cy="310" r="18" fill="#90caf9" stroke="#1565c0" stroke-width="2.6"/>
+          <text x="380" y="315" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="500" cy="310" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="500" y="315" fill="#0d3c75" font-size="10" text-anchor="middle">帧</text>
+          <circle cx="620" cy="310" r="18" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+          <text x="620" y="315" fill="#0d3c75" font-size="10" text-anchor="middle">最新</text>
+          <!-- IMU 链跨过被丢的帧 -->
+          <path d="M 158 310 C 200 348 240 272 300 310 C 340 332 360 300 396 310" fill="none" stroke="#c62828" stroke-width="2.6"/>
+          <text x="278" y="360" fill="#8e2020" font-size="11" text-anchor="middle">IMU 测量被接续传递，时间不断</text>
+          <!-- 视觉叉 -->
+          <path d="M 128 296 L 152 322 M 152 296 L 128 322" stroke="#c62828" stroke-width="2.4"/>
+          <text x="140" y="358" fill="#8e2020" font-size="10.5" text-anchor="middle">视觉丢弃</text>
+          <text x="700" y="290" fill="#0d3c75" font-size="11.5" text-anchor="middle">为什么保留 IMU？</text>
+          <text x="700" y="310" fill="#0d3c75" font-size="11.5" text-anchor="middle">「为了维持系统的稀疏性」</text>
+          <text x="700" y="332" fill="#0d3c75" font-size="11" text-anchor="middle">（原文原话）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上下两条分支是同一件事（把最老的状态移出滑动窗），处理方式取决于关键帧的判定。上格（情形 A）：被移出的帧的测量被压成一根「先验弹簧」挂在剩余状态上，信息保留了下来。下格（情形 B）：被移出的不是关键帧，它的视觉测量被直接丢弃（打叉），但<b>红色的 IMU 测量链从它上方跨过去、接续到下一帧</b>——时间上的连续性没有断。<br>
+          <b>怎么看这张图：</b>① 先分清两类边：灰色直线是帧间连接，红色曲线是 IMU 预积分链；② 上格里最重要的动作是「压成弹簧」——这就是 Schur 补（第二季 0032 讲过）；③ 下格的关键是<b>那条红线绕过了被丢掉的帧</b>：预积分可以跨越多个非关键帧继续累积，所以「丢掉一帧」并不等于「丢掉那段时间的信息」。<br>
+          <b>要记住的一句话：</b>选择性边缘化的精髓是「好留的留、能传的传、只有真没用的才丢」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="levels">
+      <h2>4. 三档输出：为什么同一个系统要有两套优化</h2>
+      <p>这一节讲的是一个很实际的工程问题。原文指出：像手机这样算力有限的设备，<b>紧耦合的非线性优化做不到按相机帧率输出</b>。于是除了完整优化之外，系统还有一个轻量的 <b>motion-only</b> 优化，专门用来把输出提到相机帧率（30 Hz）。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>完整优化（滑动窗 BA）</h4>
+          <p>优化状态向量里的所有量。<b>代价：在最先进的嵌入式机器上也可能超过 50 ms</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>motion-only 优化</h4>
+          <p>只优化<b>固定数量的最新 IMU 状态的位姿与速度</b>，把特征的深度、外参、偏置、以及不想动的旧状态全部当常数。<b>但它仍然使用全部的视觉与惯性测量</b>。代价：<b>约 5 ms</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>IMU 前向传播</h4>
+          <p>IMU 比图像快得多。用最新的 VIO 估计加上新来的 IMU 测量做<b>直接传播</b>，就能输出 IMU 帧率的状态。原文说这些高频估计可以用作闭环控制的反馈</p>
+        </div>
+      </div>
+      <p>原文对 motion-only 的说法里有一句很值得引用：这样做得到的状态估计「<b>比单帧 PnP 方法平滑得多</b>」——因为它虽然只优化少数几个状态，但用的是<b>全部</b>测量。也就是说，这里的快不是靠「少用信息」换的，而是靠「少优化未知数」换的。</p>
+      <p>这样就形成了一个很清楚的三档结构：<b>低频（约 10 Hz）的完整优化保证精度 → motion-only（30 Hz）保证相机帧率 → IMU 传播（几百 Hz）保证控制的实时性。</b>这种「按频率分层输出」的设计，你在第二季 <b>0035 Voxblox</b> 的机载约束里也见过类似的思路（把有限的算力分配到最需要的地方）。</p>
+    </section>
+
+    <section class="section-card" id="loop">
+      <h2>5. 回环与重定位：检测、检索、剔外点</h2>
+      <p>滑动窗和边缘化解决了算力问题，但也带来了累积漂移。原文因此做了一个与 VIO 无缝集成的紧耦合重定位模块。流程是三步：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① 检测（Loop Detection）</h4>
+          <p>用 <b>DBoW2</b>（词袋位置识别）。除了 VIO 用的角点之外，<b>额外检测 500 个角点</b>并用 <b>BRIEF</b> 描述子描述——原文说明加这些是为了「获得更好的回环检测召回率」。DBoW2 返回候选后要过<b>时序一致性检查与几何一致性检查</b>。另外原文有个省内存的细节：<b>保留全部 BRIEF 描述子，但把原始图像丢掉</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>② 特征检索（Feature Retrieval）</h4>
+          <p>检测到回环后，用 BRIEF 描述子匹配建立「当前窗口」与「回环候选」之间的特征对应。因为描述子匹配一定会有错配，原文用了<b>两级几何外点剔除</b>（Fig. 10）：先做 <b>2D–2D</b> 剔除，再做 <b>3D–2D</b> 剔除</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 紧耦合重定位</h4>
+          <p>把检索到的特征对应<b>直接送进单目 VIO 模块</b>，而不是单独做一次位姿求解。原文强调这样做的好处：多个特征的多次观测被直接用于重定位，因此精度更高、状态估计更平滑。而且因为用的是特征级对应，系统可以同时利用<b>多个历史关键帧</b>给出的回环约束</p>
+        </div>
+      </div>
+      <p>这个「三级结构」和本季 <b>0014 课</b>讲的回环检测综述高度一致：先靠外观检索提候选（会把假阳性当成本来就要防的事），再用几何验证把它清掉，最后才拿来用。<b>两级外点剔除</b>这个设计尤其值得记——它回应了 0014 里那条铁律「一个假阳性可能导致 SLAM 完全失败」。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/8f3600629b8a437b7141f5f0091ebb56ddea5fd3ed4ed80c1d272949782e6c7c.jpg" alt="relocalization and pose graph procedure">
+        <figcaption>
+          <b>原图注（Fig. 9(a)）：</b>Diagram illustrating the relocalization and pose graph optimization procedure. (a) The relocalization procedure. It starts with VIO-only pose estimates (blue). Past states are recorded (green). If a loop is detected for the newest keyframe (see Section VII-A), as shown by the red line in the second plot, a relocalization occurred. Note that due to the use of feature-level correspondences for relocalization, we are able to incorporate loop-closure constraints from <b>multiple past keyframes</b> (see Section VII-C), as indicated in the last three plots.（重定位与位姿图优化流程示意。(a) 重定位流程：起始于仅有 VIO 的位姿估计（蓝），过去状态被记录（绿）。若最新关键帧检测到回环（见第 VII-A 节），如第二幅图中的红线所示，就发生了一次重定位。注意由于重定位使用特征级对应，我们能够纳入来自<b>多个历史关键帧</b>的回环约束（见第 VII-C 节），如最后三幅图所示。）<br>
+          <b>怎么看这张图：</b>这张 jpg 是原文 Fig. 9 的 (a) 部分（(b) 部分在原文同图中，用于说明全局位姿图）。请顺着四幅小图的时间顺序看：蓝色是纯 VIO 轨迹、绿色是记录下来的历史状态、红线是「这次回环」。最值得看的是<b>最后三幅</b>——它展示了「一次回环可以拉来多条约束」，因为匹配是在特征层面做的，而不是只在位姿层面。<br>
+          <b>要记住的一句话：</b>在特征层面做重定位，换来的是「一次回环、多条约束」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="fourdof">
+      <h2>6. ★ 4 自由度位姿图：一个有依据的「偷懒」</h2>
+      <p>这一节是本课我觉得最漂亮的地方。先讲一个事实：在 VIO 里，<b>roll 和 pitch 是没有漂移的。</b></p>
+      <p>为什么？原文的解释（第 VIII-A 节）值得逐句读：</p>
+      <div class="callout">
+        <p>「得益于对重力的惯性测量，<b>roll 和 pitch 角在 VINS 中是完全可观的</b>。随着物体运动，三维位置与旋转相对于参考系变化；但是<b>我们可以通过重力向量确定水平面</b>，这意味着我们<b>始终在观测绝对的 roll 和 pitch 角</b>。因此，roll 和 pitch 是世界系下的绝对状态，而 x、y、z 和 yaw 则是相对于参考系的估计。<b>累积漂移只发生在 x、y、z 和 yaw 上。</b>为了充分利用有效信息并高效地修正漂移，我们固定无漂移的 roll 和 pitch，只做 4 自由度的位姿图优化。」</p>
+      </div>
+      <p>这段话的逻辑链非常干净：<b>重力给了你一个「绝对的上下方向」→ 于是水平面是已知的 → 于是「相对水平面的两个转角（roll / pitch）」是绝对的、不会漂 → 那它们就不需要被优化 → 剩下的可漂自由度只有 4 个（3 个平移 + 1 个 yaw）。</b></p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/b147aa9763eb56ca9b0efc2b2027064da403b01d595ef981e3330c471083b572.jpg" alt="four drifted direction">
+        <figcaption>
+          <b>原图注（Fig. 11）：</b>Illustration of four drifted direction. With the movement of the object, the x, y, z, and yaw angles change relatively with respect to the reference frame. The absolute roll and pitch angles can be determined by the horizontal plane from the gravity vector.（四个漂移方向示意。随着物体运动，x、y、z 与 yaw 角相对于参考系发生变化。而绝对的 roll 与 pitch 角可以由重力向量确定的水平面来确定。）<br>
+          <b>怎么看这张图：</b>请把它读成一张「六自由度里哪两个被赦免了」的示意图。三个旋转（roll / pitch / yaw）加三个平移（x / y / z）一共六个自由度，图中把 <b>roll 和 pitch 摘出来</b>——它们由重力定义的水平面钉住，是绝对的；剩下 x、y、z、yaw 四个才是「相对于参考系」、会积累漂移的量。<br>
+          <b>要记住的一句话：</b>重力不只提供尺度，它还免费送你两个「绝对姿态」——这笔便宜能被后面的优化直接吃掉。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 B · 六个自由度里，为什么只有四个需要优化</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">重力锁住了「倾斜」，剩下的「位置 + 转头」才会漂</text>
+
+          <!-- 上：几何示意 -->
+          <rect x="30" y="70" width="840" height="180" fill="#faf7f4" stroke="#d7ccc8" stroke-width="1.6" rx="9"/>
+          <!-- 相机 -->
+          <rect x="410" y="146" width="52" height="34" fill="#455a64" rx="5"/>
+          <circle cx="436" cy="163" r="9" fill="#90a4ae" stroke="#546e7a" stroke-width="1.6"/>
+          <text x="436" y="198" fill="#37474f" font-size="11" text-anchor="middle">相机 / IMU</text>
+          <!-- 水平面 -->
+          <line x1="90" y1="230" x2="810" y2="230" stroke="#8d6e63" stroke-width="2.4"/>
+          <text x="820" y="234" fill="#6b5b52" font-size="10.5" text-anchor="end">水平面</text>
+          <!-- 重力 -->
+          <line x1="436" y1="96" x2="436" y2="128" stroke="#c62828" stroke-width="2.6"/>
+          <polygon points="430,128 442,128 436,140" fill="#c62828"/>
+          <text x="452" y="112" fill="#8e2020" font-size="11.5" text-anchor="start">重力 g（绝对值已知）</text>
+          <!-- 三个旋转轴 -->
+          <path d="M 340 120 L 388 120" stroke="#2e7d32" stroke-width="2.2"/>
+          <text x="300" y="116" fill="#1b5e20" font-size="11.5" text-anchor="end">pitch（俯仰）</text>
+          <path d="M 500 120 L 552 132" stroke="#2e7d32" stroke-width="2.2"/>
+          <text x="566" y="136" fill="#1b5e20" font-size="11.5" text-anchor="start">roll（横滚）</text>
+          <path d="M 436 230 L 436 246" stroke="#ef6c00" stroke-width="2.2" stroke-dasharray="4 3"/>
+          <text x="600" y="230" fill="#7a1f00" font-size="11.5" text-anchor="start">yaw（绕竖直轴转头）</text>
+          <text x="230" y="140" fill="#1b5e20" font-size="11" text-anchor="middle">这两个被重力钉住</text>
+          <text x="230" y="158" fill="#1b5e20" font-size="11" text-anchor="middle">→ 绝对、不漂 → 不用优化</text>
+
+          <!-- 下：六格清单 -->
+          <text x="450" y="286" fill="#37474f" font-size="13.5" text-anchor="middle" font-weight="700">六个自由度，逐个体检</text>
+          <rect x="60" y="304" width="126" height="48" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.8" rx="6"/>
+          <text x="123" y="326" fill="#1b5e20" font-size="12" text-anchor="middle" font-weight="600">roll</text>
+          <text x="123" y="344" fill="#1b5e20" font-size="10.5" text-anchor="middle">绝对，不漂</text>
+          <rect x="196" y="304" width="126" height="48" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.8" rx="6"/>
+          <text x="259" y="326" fill="#1b5e20" font-size="12" text-anchor="middle" font-weight="600">pitch</text>
+          <text x="259" y="344" fill="#1b5e20" font-size="10.5" text-anchor="middle">绝对，不漂</text>
+          <rect x="332" y="304" width="126" height="48" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.8" rx="6"/>
+          <text x="395" y="326" fill="#7a1f00" font-size="12" text-anchor="middle" font-weight="600">yaw</text>
+          <text x="395" y="344" fill="#7a1f00" font-size="10.5" text-anchor="middle">相对，会漂</text>
+          <rect x="468" y="304" width="126" height="48" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.8" rx="6"/>
+          <text x="531" y="326" fill="#7a1f00" font-size="12" text-anchor="middle" font-weight="600">x</text>
+          <text x="531" y="344" fill="#7a1f00" font-size="10.5" text-anchor="middle">相对，会漂</text>
+          <rect x="604" y="304" width="126" height="48" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.8" rx="6"/>
+          <text x="667" y="326" fill="#7a1f00" font-size="12" text-anchor="middle" font-weight="600">y</text>
+          <text x="667" y="344" fill="#7a1f00" font-size="10.5" text-anchor="middle">相对，会漂</text>
+          <rect x="740" y="304" width="126" height="48" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.8" rx="6"/>
+          <text x="803" y="326" fill="#7a1f00" font-size="12" text-anchor="middle" font-weight="600">z</text>
+          <text x="803" y="344" fill="#7a1f00" font-size="10.5" text-anchor="middle">相对，会漂</text>
+          <text x="250" y="392" fill="#1b5e20" font-size="12" text-anchor="middle" font-weight="600">固定的：2 个</text>
+          <text x="660" y="392" fill="#7a1f00" font-size="12" text-anchor="middle" font-weight="600">优化的：4 个（这就是「4 自由度」的由来）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上半是几何直觉：一台相机（或 IMU）悬在水平面上方，红色箭头是重力（模长与方向已知）。<b>「相对水平面倾斜多少」这两个角（roll 和 pitch）被重力钉死了</b>，所以它们是绝对的；而「在水平面里往哪走（x、y）」、「抬高还是降低（z）」、「朝哪个方向转头（yaw）」这四件事，重力管不着，只能靠估计——因此会漂。下半是逐个体检的清单：两个绿的（固定）、四个橙的（优化）。<br>
+          <b>怎么看这张图：</b>① 先看那条水平线——它是整张图的支点，因为「水平面由重力唯一确定」，所以「与水平面的夹角」才成了绝对量；② 再看红色虚线的 yaw 轴：它<b>沿着重力方向</b>，重力对它完全无能为力（绕着重力转圈，重力不变）——这就是为什么 yaw 一定会漂；③ 最后看下面那排方块：它把「为什么是 4 而不是 6」变成了可以点数的事实。<br>
+          <b>要记住的一句话：</b>4 自由度不是偷懒，而是「除掉那两个已经被重力确定的自由度」之后剩下的全部。
+        </figcaption>
+      </figure>
+      <p>形式化地，原文把每条边都定义成<b>只含相对位置与相对 yaw</b>（式 19）：</p>
+      <p>残差（式 20）里出现 $\mathbf{R}(\hat{\phi}_i,\hat{\theta}_i,\psi_i)$——注意前两个角带帽子（$\hat{\phi}_i,\hat{\theta}_i$ 是<b>固定的</b> roll 与 pitch 估计，取自 VIO），只有 $\psi_i$ 是待优化的。位姿图里有两类边：<b>顺序边</b>（来自 VIO 的相对变换）与<b>回环边</b>（来自重定位，同样写成 4 自由度相对变换）。</p>
+      <p>代价函数（式 21）里有一个很细的讲究：<b>回环边加 Huber 范数，顺序边不加。</b>原文给的理由是：虽然紧耦合重定位已经帮忙剔除了错误的回环，但还要再加一层鲁棒核以进一步降低任何可能错误回环的影响；而顺序边来自 VIO，<b>本身已经包含足够的外点剔除机制</b>，所以不需要。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>「只在 4 个自由度上做位姿图优化」这件事，最准确的描述是哪个？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文的依据是：重力给出了绝对的「下方」，于是水平面确定，roll 与 pitch 成为世界系下的绝对量、不会累积漂移；剩下的 x、y、z、yaw 才是相对于参考系的估计。所以固定前者、优化后者不是近似，而是「精确地去掉那两个已经被重力确定的自由度」。" onclick="lessonKit.answer(this,'q0058a')">固定的是不漂的 roll/pitch，剩下四个恰好是全部需要修正的量</button>
+          <button data-correct="no" data-explanation="不对。「单目尺度漂移只发生在这四个方向」这个说法把原因搞错了：VINS-Mono 是视觉惯性系统，尺度已经由 IMU 定住了；4 自由度的依据是「重力让 roll/pitch 可观」，而不是单目尺度漂移的模式。" onclick="lessonKit.answer(this,'q0058a')">因为单目的尺度漂移恰好只影响这四个方向</button>
+          <button data-correct="no" data-explanation="不对。虽然它确实更快，但原文的表述是「充分利用有效信息并高效地修正漂移」——固定 roll/pitch 的理由是它们本来就绝对、本来就不该动，而不是「为了省时间而牺牲精度」。把它读成一种速度换精度的近似，会错过这个设计真正的依据。" onclick="lessonKit.answer(this,'q0058a')">为了降低计算量而做的一种精度折中</button>
+        </div>
+        <div class="quiz-feedback" id="q0058a"></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/4057da50fb4e3f0bd1d415532d8e2e9ae34e6a1106de82aba2c4188d79b41ac0.jpg" alt="pose graph illustration">
+        <figcaption>
+          <b>原图注（Fig. 12）：</b>Illustration of the pose graph. The keyframe serves as a vertex in the pose graph and it connects other vertexes by sequential edges and loop edges. <b>Every edge represents relative translation and relative yaw.</b>（位姿图示意。关键帧作为位姿图中的顶点，通过顺序边与回环边连接其他顶点。<b>每条边表示相对平移与相对 yaw。</b>）<br>
+          <b>怎么看这张图：</b>图注最后那句是重点——<b>每条边只含「相对平移 + 相对 yaw」</b>，而不是完整的六自由度相对位姿。这是 4 自由度的直接体现。你可以和第二季 <b>0020 GraphSLAM 教程</b>里那张节点—边图对照着看：骨架完全一样，只是每条边携带的信息少了两维。<br>
+          <b>要记住的一句话：</b>减少边的维度，等于给优化装了一个「先验约束」——它来自重力，不需要靠观测去挣。
+        </figcaption>
+      </figure>
+      <p>原文还补了一个很实用的机制：<b>位姿图可以合并</b>。因为所有边都是相对约束，只要检测到两张地图之间的回环连接，位姿图优化会<b>自动把它们合并</b>——当前地图会被回环边「拉进」旧地图。原文指出：由于每个顶点、每条边都是相对量，<b>只需固定位姿图里的第一个顶点</b>即可。</p>
+      <p>此外系统支持<b>位姿图的保存与加载</b>：保存的内容是帧索引、位置、姿态、（若有）回环帧索引、相对位置与相对 yaw、以及该帧的特征集合（每个特征含 2D 位置与 BRIEF 描述子）。原文特意说明<b>原始图像被丢弃</b>以省内存，而且保存与加载的速度<b>与位姿图规模呈线性关系</b>。</p>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>7. 实验与诚实的读数</h2>
+
+      <h3>7.1 EuRoC 上的对比（Table I）</h3>
+      <p>实验在 EuRoC MAV 数据集上做：相机是 Aptina MT9V034（全局快门、WVGA 单色、<b>20 FPS</b>）、IMU 是 ADIS16448（<b>200 Hz</b>），真值来自 VICON 与 Leica MS50。<b>只用左目图像</b>。对比对象是 OKVIS。表里区分了 <b>VINS</b>（只有单目 VIO）与 <b>VINS_loop</b>（含重定位与位姿图优化的完整版）。单位是米（RMSE）：</p>
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;margin-top:.8rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:left">序列</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">OKVIS</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">VINS</th>
+            <th style="padding:.42rem .6rem;border:1px solid #d7ccc8">VINS_loop</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">MH_01_easy</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.33</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.15</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.12</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">MH_02_easy</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.37</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.15</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.12</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">MH_03_medium</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.25</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.22</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.13</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">MH_04_difficult</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.27</b></td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.32</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.18</td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">MH_05_difficult</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.39</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.30</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.21</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">V1_01_easy</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.094</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.079</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.068</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">V1_02_medium</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.14</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.11</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.084</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">V1_03_difficult</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.21</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.18</b></td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.19</td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">V2_01_easy</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.090</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.080</b></td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.081</td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">V2_02_medium</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.17</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.16</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.16</b></td></tr>
+          <tr><td style="padding:.42rem .6rem;border:1px solid #d7ccc8">V2_03_difficult</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.23</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center">0.27</td><td style="padding:.42rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.22</b></td></tr>
+        </tbody>
+      </table>
+      <p>总体读法：<b>带回路闭合的 VINS-Mono 在大多数情况下胜出。</b>但表里有三行值得特别注意，因为它们体现了原文的诚实：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① MH_04_difficult：纯 VIO 输了</h4>
+          <p>VINS（0.32）明显差于 OKVIS（0.27）。这是唯一一行「纯 VIO 被 OKVIS 打败」的序列，而且是困难序列。加上回环后（0.18）才反超</p>
+        </div>
+        <div class="mini-card">
+          <h4>② V1_03 与 V2_01：回环反而略差</h4>
+          <p>V1_03 上 VINS 0.18 vs VINS_loop 0.19、V2_01 上 0.080 vs 0.081——加了回环反而略差一点点。原文对此的解释是：<b>在旅行距离短、漂移本来就小的序列上，回环模块没有显著效果</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 这是正常现象</h4>
+          <p>回环模块的收益取决于「有没有足够的漂移需要被修正」。在本来就跑得好的序列上，额外的优化与约束可能带来微小扰动。这类现象在很多系统里都能观察到，<b>不必读成「回环有害」，但也不该假装它不存在</b></p>
+        </div>
+      </div>
+
+      <h3>7.2 时间开销（Table II）</h3>
+      <p>原文给的计时统计（三线程）：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>线程 1</h4>
+          <p>特征检测器 <b>15 ms</b>（25 Hz）；KLT 跟踪器 <b>5 ms</b>（25 Hz）</p>
+        </div>
+        <div class="mini-card">
+          <h4>线程 2</h4>
+          <p>窗口优化 <b>50 ms</b>（10 Hz）——这就是第 4 节讲的那个「完整优化」的开销</p>
+        </div>
+        <div class="mini-card">
+          <h4>线程 3</h4>
+          <p>回环检测 <b>100 ms</b>；位姿图优化 <b>130 ms</b>——注意这两个都在<b>独立的线程</b>里跑，所以不会阻塞前端</p>
+        </div>
+      </div>
+      <p>把这张表和上一节的「三模块并发」对上，你就明白那个设计决策的价值了：<b>位姿图优化要 130 ms，比窗口优化的 50 ms 还慢一倍多——但因为它跑在独立线程里，前端完全不受影响。</b></p>
+
+      <h3>7.3 真实环境与两个应用</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>大尺度环境</h4>
+          <p>用一台手持 VI-Sensor 绕了 HKUST 整个校园：覆盖约 <b>710 m 长、240 m 宽、60 m 高差</b>，<b>总路径 5.62 km</b>，数据为 25 Hz 图像 + 200 Hz IMU，持续 <b>1 小时 34 分钟</b>。关键帧数据库设为 2000。运行平台 Intel i7-4790 @ 3.60 GHz。原文把估计轨迹与 Google 地图对齐，结论是「在这个超长时长的测试中几乎无漂移」</p>
+        </div>
+        <div class="mini-card">
+          <h4>地图合并</h4>
+          <p>五个 MH 序列在同一地点的不同起始位置与不同时间采集，被合并成<b>一个全局位姿图</b>。只固定第一个序列的第一帧（位置与 yaw 置零）。合并后的 ATE RMSE 是 <b>0.21 m</b>——原文说这在总计 500 m 左右的行进上是「一个令人印象深刻的结果」，并指出这个实验说明地图会随着时间通过增量合并新数据而「进化」，且整体位姿图的一致性得以保持</p>
+        </div>
+        <div class="mini-card">
+          <h4>无人机闭环控制</h4>
+          <p>用 VINS-Mono 作为位置反馈控制一架无人机跟踪<b>预先设计的轨迹</b>（一个 8 字形）。这次实验<b>关闭了回环</b>。总轨迹长度 <b>61.97 m</b>，最终漂移为 <b>[0.08, 0.09, 0.13] m</b>，即 <b>0.29%</b> 的位置漂移（真值由 OptiTrack 提供）。机载相机是 752×480 的全局快门相机加 190° 鱼眼镜头——正好用上了上一节讲的「单位球面残差」对大 FOV 相机的支持</p>
+        </div>
+        <div class="mini-card">
+          <h4>手机端 VINS-Mobile</h4>
+          <p>移植到 iPhone：用 30 Hz、640×480 的图像与手机内置 IMU（100 Hz）。做了一个简单的 AR 演示，<b>总轨迹长度约 264 m</b>。这一条印证了第 4 节讲的 motion-only 优化——没有它，手机端很难按相机帧率输出</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>本节小结：VINS-Mono 的「稳」来自哪几件事</h4>
+        <p>把上下两节合起来看，这个系统能被广泛采用，靠的不是某一项突破，而是<b>一整套互相配合的工程决策</b>：</p>
+        <p><b>① 起手稳</b>：四步松对齐的初始化，把尺度、重力、速度、偏置一次交代清楚（0057）。<br>
+        <b>② 表示选得对</b>：残差定义在单位球面上（支持所有镜头）、特征用逆深度、重力在切平面上参数化。<br>
+        <b>③ 算力分配得当</b>：三线程并发、按频率分层输出（完整优化 10 Hz / motion-only 30 Hz / IMU 传播更高）、选择性边缘化维持稀疏性。<br>
+        <b>④ 回环「省着做」</b>：两级外点剔除、只给回环边加鲁棒核、只优化 4 个自由度、位姿图独立线程。</p>
+        <p>而它明确承认的边界也同样值得记住：<b>单目 VINS 可能根据运动与环境进入弱可观甚至退化状态</b>——这是作者自己写在结论里的，也是这一整条路线的共同软肋。下一节我们看另一条技术路线（滤波派）怎么处理同一个问题。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="drill">
+      <h2>8. 巩固练习</h2>
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>滑动窗状态向量里有三部分。请分别指出「外参」和「特征」各是怎么表示的，并说明为什么特征用<b>逆深度</b>而不是深度。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>外参 $\mathbf{x}_c^b=[\mathbf{p}_c^b,\mathbf{q}_c^b]$ 是相机到 IMU 的位移与旋转，<b>它也是优化变量</b>（原文称之为在线外参标定）。特征是 $\lambda_l$，原文定义是「该特征距它<b>第一次观测</b>的逆距离」。</p>
+              <p>用逆深度的理由与 <b>0046 DTAM</b> 和 <b>0047 LSD-SLAM</b> 相同：远处深度的不确定性极大，用逆深度表示能让「不确定性」在整个距离范围内更均匀地分布（沿极线的均匀采样对应逆深度均匀）；同时它也避免了「深度趋近无穷」时的数值问题——逆深度趋近 0 比深度趋近 ∞ 好处理得多。</p>
+            </div></details>
+          </li>
+          <li>目标函数有三项，为什么<b>只有视觉项</b>加了 Huber 鲁棒核？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为三个残差的「外点来源」不同：</p>
+              <p>① <b>先验项</b>来自边缘化，是过去测量的压缩结果，本身已经被处理过；② <b>IMU 残差</b>来自自己积分的预积分量，不存在「匹配到错误的对应」这种外点，只有噪声，所以用马氏范数就够；③ <b>视觉残差</b>来自特征匹配与跟踪，一定存在错匹配、遮挡、动态物体等外点，因此需要 Huber 把大残差的惩罚压住（$s>1$ 时改为 $2\sqrt{s}-1$），避免个别坏点把整个优化拉偏。</p>
+              <p>同样的原则在后面的位姿图里也出现了一次：<b>回环边加 Huber、顺序边不加</b>——因为顺序边来自 VIO，本身已有足够的外点剔除机制。</p>
+            </div></details>
+          </li>
+          <li>边缘化策略里，为什么「非关键帧」要保留 IMU 测量而不是全部丢弃？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文给了明确理由：「我们不会把非关键帧的所有测量都边缘化掉，<b>目的是维持系统的稀疏性</b>。」另外整个策略还追求两个效果：让窗口里保留空间上分离的关键帧（保证三角化有足够视差），以及尽量保留<b>激励充分</b>的加速度计测量。</p>
+              <p>直白地说：视觉观测会让状态之间产生大量相互连接（破坏稀疏性，让 H 矩阵变稠密、求解变慢）；而预积分可以<b>跨越多个帧继续累积</b>，所以把 IMU 链接续到下一帧既保留了时间上的连续性，又不引入额外的稠密连接。图中那条「跨过被丢帧的红色曲线」就是这个意思。</p>
+            </div></details>
+          </li>
+          <li>★ 请完整解释：为什么 VINS-Mono 的回环只做 4 自由度优化？请写出「哪两个被固定、为什么它们不会漂」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>被固定的是 <b>roll 和 pitch</b>（横滚与俯仰）。它们之所以不会漂，是因为<b>重力向量提供了绝对的「下方」参考</b>——有了重力就能确定水平面，而「相对水平面的两个倾斜角」因此成为世界系下的<b>绝对量</b>，不再依赖参考系的选取，所以不会随时间累积误差。</p>
+              <p>而 x、y、z 与 yaw 是「相对于参考系」估计出来的——其中 yaw 尤其明显：<b>绕重力方向转圈，重力完全不变</b>，所以重力对这个自由度毫无约束力，它必然漂。原文的结论就是：「累积漂移只发生在 x、y、z 和 yaw 上。为了充分利用有效信息并高效地修正漂移，我们固定无漂移的 roll 和 pitch，只做 4 自由度的位姿图优化。」</p>
+              <p>所以 4 自由度不是近似或者偷懒，而是<b>精确地「除掉那两个已经被重力确定的自由度」之后剩下的全部</b>。</p>
+            </div></details>
+          </li>
+          <li>EuRoC 表里有哪几行「不像宣传语」？请指出来，并说明原文是怎么解释的。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>有三处：</p>
+              <p>① <b>MH_04_difficult</b>：纯 VIO（VINS）0.32 明显差于 OKVIS 0.27——这是唯一一行纯 VIO 被 OKVIS 击败的序列；加上回环后（0.18）才反超。② <b>V1_03_difficult</b>：VINS 0.18 反而略好于带环的 VINS_loop 0.19。③ <b>V2_01_easy</b>：VINS 0.080 略好于 VINS_loop 0.081。</p>
+              <p>原文对后两处的解释是：<b>在旅行距离短、漂移本来就小的序列上，回环模块没有显著效果。</b>这三行都说明同一件事——回环的收益取决于「有多少漂移值得被修正」；在本来就跑得好的序列上加约束，不保证一定更好。读实验表时，值得专门去找这类「不符合叙事」的行。</p>
+            </div></details>
+          </li>
+          <li>为什么系统要做两套优化（完整优化 + motion-only）而不是只做一套？这样得到的状态估计为什么「比单帧 PnP 平滑得多」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为算力与频率的要求是矛盾的：完整滑动窗优化在最先进的嵌入式平台上也可能超过 50 ms，达不到相机帧率（30 Hz）；但只做单帧 PnP 又会把多帧之间的约束全部浪费。所以系统分层：<b>完整优化（约 10 Hz）保精度，motion-only（约 5 ms）保帧率，IMU 前向传播保更高频的控制反馈。</b></p>
+              <p>motion-only 平滑的原因在于：它虽然只优化「固定数量的最新 IMU 状态的位姿与速度」，把特征深度、外参、偏置、旧状态都当常数，<b>但它仍然使用了全部的视觉与惯性测量</b>。也就是说，它的快是靠「少优化未知数」换来的，不是靠「少用信息」换来的——信息用得全，自然比只看单帧的 PnP 更平滑、更稳。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0057-VINS-Mono上-四模块管线与联合初始化.html">← VINS-Mono（上）：四模块管线与联合初始化</a>
+        <a class="next" href="0059-ROVIO2015-滤波派的直接法.html">ROVIO（2015）：滤波派的直接法 →</a>
+      </div>
+      <p class="foot-note">这一篇从头到尾都在做同一件事：把已有的零件按正确的顺序、正确的表示组装起来。下一节换一个阵营——同样用 IMU，但走的是滤波器那条路 🧭</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

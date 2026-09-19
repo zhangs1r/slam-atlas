@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>点云上的高效一致 BA：BALM2.0（2023） — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0022</div>
+      <h1>点云上的高效一致 BA：BALM2.0（2023）</h1>
+      <p class="subtitle">前三节讲的都是「图像 BA 机器」，这一节把它搬到激光点云上，看两个硬障碍怎么被绕过 🔧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：激光点云上的 Bundle Adjustment（BALM2.0）</span>
+        <span>👥 作者：Zheng Liu、Xiyuan Liu、Fu Zhang（香港大学）</span>
+        <span>📅 2023 · IEEE Transactions on Robotics</span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 这一节接在哪里</a>
+        <a href="#b">2. 两道坎：视觉 BA 搬不过来</a>
+        <a href="#c">3. 相关工作两条支线</a>
+        <a href="#d">4. 技术三件套与特征消元</a>
+        <a href="#e">5. 点簇坐标：效率的秘密</a>
+        <a href="#f">6. Hessian 与复杂度</a>
+        <a href="#g">7. 「一致性」是什么意思</a>
+        <a href="#h">8. 体素化、实验与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清激光 BA 比视觉 BA 多出的两道坎；讲清「特征参数闭式消元」「点簇」「二阶求解器」三件套；看懂为什么复杂度能与点数无关；理解论文里「一致性」是拿归一化 NEES 曲线检验出来的。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 0018/0019 的 BA 与 Schur 消元：本文「把不想估的特征参数直接闭式消掉」，是同一思想的另一个版本。接 0020/0021 的因子图：本文 Fig. 1 就是那张「节点—边」语言用到点云上的实例。接 0006/0008：LOAM 的「点到面/点到边」残差，在这里被正式写成 BA。</p></div>
+      </div>
+
+      <h2>1. 这一节接在哪里：把 BA 机器搬到激光上</h2>
+      <p>前面三节（0018 BA 上、0019 BA 下、0020 GraphSLAM、0021 g²o）讲的 BA，残差本质上是「三维点投影到图像上的<b>重投影误差</b>」。图像里有密集的像素，所以同一个角点、同一个路标能跨帧被反复观测到——这就是视觉 BA 赖以生存的「<b>点特征</b>」范式：每个点都被当成独立、可重复追踪的观测。</p>
+      <p>激光雷达（LiDAR）给出的是<b>点云</b>——一堆三维空间里的点。把同一台 BA 机器直接搬过去，会遇到两个视觉世界里没有的硬障碍（下一节）。本文的标题叫 <i>Efficient and Consistent Bundle Adjustment on Lidar Point Clouds</i>，开源实现叫 <b>BALM2.0</b>。它要证明两件事：<b>高效</b>（代价、雅可比、海森、不确定度都不必枚举原始点）、<b>一致</b>（位姿不确定度估计是可信的）。</p>
+      <div class="callout">
+        <h4>一句话定位</h4>
+        <p>这是一个「把视觉 BA 的整套思想，换一套几何残差（点到面/点到边）重新做一遍，并把它做到既快又能在统计意义上可信」的工作。它站在自家前作 BALM（2021）的肩膀上。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 两道坎：为什么视觉 BA 不能直接搬</h2>
+      <p>原文在引言与 §II-B 把障碍讲得很直白（以下是原文原话的转述）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>坎①：点云稀疏、甚至非重复</h4><p>激光测距远，但<b>扫描线之间分辨率低</b>，点云在大空间里分布很稀，有时甚至<b>非重复</b>（不同帧扫不到空间里同一个「点」）。这让「跨帧捕捉同一个点特征」几乎不可能——视觉 BA 的「点特征」范式直接失效。</p></div>
+        <div class="mini-card"><h4>坎②：单帧点太多</h4><p>实用的激光一次扫出<b>几万到上百万个点</b>。逐个处理所有点去做 BA，计算量极其惊人。这正是「高效」要解决的问题。</p></div>
+      </div>
+      <p>作者的态度是：既然「点特征」这条路走不通，那就换一种特征——用<b>几何特征（平面、边）</b>来表示场景，并直接最小化「每个原始点到该几何特征的自然欧氏距离」。这就是全文的主线。</p>
+
+      <p>在动手之前，原文先清点了前人的尝试，借此亮出自己的位置（注意这些数字都是原文给的）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>BALM（2021）</h4><p>能解析消掉平面参数，但<b>二阶导数仍需枚举点</b>，复杂度 $O(N^2)$（$N$ 为点数），大模型扛不住。</p></div>
+        <div class="mini-card"><h4>EF（2021）</h4><p>只有一阶梯度，要几百次迭代才收敛，慢。</p></div>
+        <div class="mini-card"><h4>BAREG（2022）</h4><p>靠<b>启发式惩罚项</b>和「经验固定」的特征参数，代价函数已不是真正的地图一致性。</p></div>
+        <div class="mini-card"><h4>PA（2011）</h4><p>planar adjustment，用 Ceres 的 <code>DENSE_SCHUR</code> 走 Schur 路线消元。</p></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么视觉 BA 的「点特征」范式在点云 BA 里行不通？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。原文明确说激光点云稀疏、有时非重复，跨帧几乎扫不到空间里同一个点，所以视觉 BA 依赖的『可重复追踪的点特征』在点云里不成立。" onclick="lessonKit.answer(this,'q0022a')">因为激光点云太稀、甚至非重复，跨帧抓不到同一个点</button>
+          <button data-correct="no" data-explanation="不对。点云里点很多（几万到百万），问题不是点太少，而是太稀且非重复，无法跨帧重复观测同一特征点。" onclick="lessonKit.answer(this,'q0022a')">因为单帧点太少，没有足够特征可优化</button>
+          <button data-correct="no" data-explanation="不对。本文恰恰改用平面/边这种几何特征，而不是丢掉特征；失效的是视觉式的『点特征』，不是特征本身。" onclick="lessonKit.answer(this,'q0022a')">因为激光点云根本没有特征可用</button>
+        </div>
+        <div class="quiz-feedback" id="q0022a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 相关工作两条支线</h2>
+      <p>原文把相关文献分成两支，理解它们能看清本文站在哪条路的延长线上。</p>
+      <h3>A. 多视图配准（Multiview Registration）</h3>
+      <p>这是一条<b>两层框架</b>：第一层用 ICP 式<b>成对配准</b>估出若干扫描对之间的相对位姿；第二层用<b>位姿图（pose graph）的最大后验（MAP）</b>把相对位姿拼成全局轨迹。优点是快（每次只动局部点、图优化只含少量约束），缺点是精度有天花板——成对配准只看两帧重叠、忽略了多帧共享的重叠，位姿图又完全忽略了原始点云的地图一致性。原文认为这正是它「准度不够」的根源。</p>
+      <h3>B. Bundle / Plane Adjustment</h3>
+      <p>另一条路直接优化「点到面」的原始距离，包括 EF、planar adjustment（PA）、BALM、BAREG。本文属于这一支，但把它的效率与一致性都往前推了一步。注意：PA 用 Ceres 的 <code>DENSE_SCHUR</code> 做 Schur 消元——这与 0019 课讲的 Schur 是同一类思想；而本文走的是「<b>能拿到闭式解</b>」的另一条消元路线。</p>
+      <div class="callout">
+        <h4>接 0021</h4>
+        <p>0021 说「H 的块结构 = 图的邻接矩阵」。本文 Fig. 1 正是那张「节点—边」因子图语言在点云上的实例：节点是位姿和特征参数，边是「点到特征」的残差。同一套图语言，只是从图像换到了点云。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 技术三件套与特征参数闭式消元</h2>
+      <p>§VIII-A 把本文贡献总结成三件套（原文原话概括）：<b>feature elimination</b>（特征参数闭式消元）、<b>second-order solver</b>（二阶求解器 BALM2.0）、<b>point cluster</b>（点簇）。概念层还有 <b>plane feature</b> 与 <b>edge feature</b>、点簇坐标 $\Re(\mathcal C)$、<b>Rigid transform (Def. 1)</b>、<b>Cluster merging (Def. 2)</b>。</p>
+
+      <h3>4.1 点到特征残差（式 3、式 4）</h3>
+      <p>先给特征参数化（见 Fig. 2）：<b>平面</b>用 $\pi_i=(\mathbf n_i,\mathbf q_i)$，$\mathbf n_i$ 是法向、$\mathbf q_i$ 是面上任一点；<b>边</b>同样用 $(\mathbf n_i,\mathbf q_i)$，但 $\mathbf n_i$ 是边方向、$\mathbf q_i$ 是边上任一点。一个在第 $j$ 帧局部系下的点 $\mathbf p_{f_{ijk}}$ 投影到全局系是：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf p_{ijk}=\mathbf R_j\mathbf p_{f_{ijk}}+\mathbf t_j$$
+      </div>
+      <p>点到面的代价（式 3）取「每个点到面的有符号距离平方」的平均：</p>
+      <div class="formula-box flow-formula">
+        $$c(\pi_i,\mathbf T)=\frac{1}{N_i}\sum_{j=1}^{M_p}\sum_{k=1}^{N_{ij}}\bigl\|\mathbf n_i^T(\mathbf p_{ijk}-\mathbf q_i)\bigr\|_2^2$$
+      </div>
+      <p>点到边的代价（式 4）只把「投影算子」换成 $(\mathbf I-\mathbf n_i\mathbf n_i^T)$——也就是把点到边的距离，写成「点到过该点且垂直于边方向的平面的距离」：</p>
+      <div class="formula-box flow-formula">
+        $$c(\pi_i,\mathbf T)=\frac{1}{N_i}\sum_{j=1}^{M_p}\sum_{k=1}^{N_{ij}}\bigl\|(\mathbf I-\mathbf n_i\mathbf n_i^T)(\mathbf p_{ijk}-\mathbf q_i)\bigr\|_2^2$$
+      </div>
+      <div class="callout">
+        <h4>★ 关键提醒：是「点到特征」，不是「特征到特征」</h4>
+        <p>残差度量的是<b>每个原始点到几何特征</b>的距离，而不是直接拿两个特征去比。这样原始点的测量噪声被显式考虑进来，估计更一致。这也是它比「plane-to-plane」更准、更适合稀疏激光的原因。</p>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2023_Efficient_and_Consistent_Bundle_Adjustment_on_Lidar_Poin/b08a46eb31a5133c99b2234151af1aabbdd8ba3fdd2541781e1e9d0e897fbefa.jpg" alt="Fig. 2 Plane and edge features used in the lidar BA">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b><i>Plane and edge features used in the lidar BA.</i>（LiDAR BA 使用的面特征与边特征。）</p>
+          <p><b>怎么看这张图：</b>左 (a) 是平面：一个法向 $\mathbf n_i$ 加上面上任一点 $\mathbf q_i$ 就把平面钉死；右 (b) 是边：一个方向 $\mathbf n_i$ 加上边上任一点 $\mathbf q_i$ 就把边钉死。这是理解式 (3)(4) 的前提——两种特征都用「方向 + 一点」极简参数化。</p>
+        </figcaption>
+      </div>
+
+      <h3>4.2 特征参数闭式消元（式 6、式 8 → 式 9）</h3>
+      <p>妙处来了：因为每个代价项 $c(\pi_i,\mathbf T)$ 只依赖「它自己的那个特征参数 $\pi_i$」，所以优化可以拆成「先对每个特征各自最小化，再对外部位姿最小化」（式 5，这就是典型的 <b>separable least-squares</b> 可分最小二乘结构）：</p>
+      <div class="formula-box flow-formula">
+        $$\min_{\mathbf T,\pi}\sum_{i=1}^{M_f}c(\pi_i,\mathbf T)=\min_{\mathbf T}\sum_{i=1}^{M_f}\Bigl(\min_{\pi_i}c(\pi_i,\mathbf T)\Bigr)$$
+      </div>
+      <p>而「对单个特征最小化」这一步，居然有<b>闭式解</b>，不需要迭代。具体地，把点到所有点的散布矩阵记为 $\mathbf A_i$，它有特征值 $\lambda_1\ge\lambda_2\ge\lambda_3$：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>平面（式 6）</h4><p>$\min c=\lambda_3(\mathbf A_i)$，取 $\mathbf n_i^\star=\mathbf u_3$（最小特征值对应的特征向量，即最「扁」的方向=法向），$\mathbf q_i^\star=\bar{\mathbf p}_i$（所有点的质心）。</p></div>
+        <div class="mini-card"><h4>边（式 8）</h4><p>$\min c=\lambda_2+\lambda_3$，取 $\mathbf n_i^\star=\mathbf u_1$（最大特征值方向=边方向）。</p></div>
+      </div>
+      <p>于是整个 BA 目标化简成只含位姿的形式（式 9）：</p>
+      <div class="formula-box flow-formula">
+        $$\min_{\mathbf T}\ \sum_{i=1}^{M_f}\lambda_l(\mathbf A_i)$$
+      </div>
+      <p><b>未知量只剩位姿</b>。原文把这一招类比为 separable least-squares；并明确指出，这与 PA 所用的 Ceres <code>DENSE_SCHUR</code> 是<b>另一条</b>消元路线。</p>
+      <div class="callout">
+        <h4>★ 接 0019（Schur 消元）</h4>
+        <p>0019 课讲：Schur 消元「把不想估的结构参数（路标/点）消掉」，得到只含相机的小系统。本文是同一个思想的另一版本——区别是这次特征参数有<b>闭式解</b>，直接消掉，连迭代都不用；而 PA 走的是 Ceres 的 <code>DENSE_SCHUR</code>，靠数值 Schur 在每步迭代里消元。两条路目标一致：让优化维度只剩位姿。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 点簇坐标：效率的全部秘密</h2>
+      <p>式 (9) 虽好，但算 $\mathbf A_i$ 和它的导数（雅可比、海森）仍要枚举每个点。BALM（2021）就卡在这里，复杂度 $O(N^2)$。本文的第三个杀手锏是<b>点簇（point cluster）</b>：把「属于同一特征的所有点」压成一小组参数——<b>点簇坐标</b> $\Re(\mathcal C)$。</p>
+      <p>定义（式 10）是：把所有点各自扩成齐次坐标后外积求和，得到一个 $4\times4$ 矩阵：</p>
+      <div class="formula-box flow-formula">
+        $$\Re(\mathcal C)\triangleq\sum_k\begin{bmatrix}\mathbf p_k\\1\end{bmatrix}\begin{bmatrix}\mathbf p_k^T&1\end{bmatrix}=\begin{bmatrix}\mathbf P&\mathbf v\\\mathbf v^T&N\end{bmatrix},\quad \mathbf P=\sum_k\mathbf p_k\mathbf p_k^T,\ \mathbf v=\sum_k\mathbf p_k$$
+      </div>
+      <p>其中 $\mathbf P$ 是二阶矩累积、$\mathbf v$ 是一阶矩累积、$N$ 是点数。它最要紧的是两条代数性质（式 21）：</p>
+      <div class="formula-box flow-formula">
+        $$\Re(\mathbf T\circ\mathcal C)=\mathbf T\,\Re(\mathcal C)\,\mathbf T^T,\qquad \Re(\mathcal C_1\oplus\mathcal C_2)=\Re(\mathcal C_1)+\Re(\mathcal C_2)$$
+      </div>
+      <p>第一式说：<b>刚体变换</b>作用在点簇上，等价于「同个 $4\times4$ 齐次矩阵」夹在左右乘一下；第二式说：<b>两个簇合并</b>，等价于「两个坐标矩阵相加」。于是全局第 $i$ 个特征可写成各帧局部簇拼起来：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf C_i=\sum_{j=1}^{M_p}\mathbf T_j\,\mathbf C_{f_{ij}}\,\mathbf T_j^T$$
+      </div>
+      <div class="callout">
+        <h4>★ 这就是效率的全部秘密</h4>
+        <p>变换退化成矩阵乘法、合并退化成矩阵加法。所以点簇可以<b>先在各个扫描的局部坐标系里建好，再拼到全局</b>——全程不碰任何原始点。代价、雅可比、海森、不确定度四件事，从此都只用这串小矩阵算，与原始点数 $N$ 脱钩。</p>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2023_Efficient_and_Consistent_Bundle_Adjustment_on_Lidar_Poin/68313a3ec3866dc562869b3b9522e6c351246d50d9b0a4521ebcb0c2b562598d.jpg" alt="Fig. 3 Two operations on point cluster">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b><i>Two operations on point cluster. (a) Rigid transform. (b) Cluster merging.</i>（点簇的两种操作——(a) 刚体变换 (b) 簇合并。）</p>
+          <p><b>怎么看这张图：</b>左 (a) 把一个点簇整体旋转平移，右 (b) 把两个相邻点簇并成一个大簇。这就是「效率来源」的视觉证明——所有原始点被这串小矩阵代表后，优化里再也不用逐个遍历它们，复杂度因此与点数无关。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. Hessian 与复杂度：为什么与点数无关</h2>
+      <p>用点簇坐标把导数推到二阶后，第 $l$ 个位姿块对应的海森（式 31）写成：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf H_l=\mathbf W_l+\sum_{k\neq l}\frac{2}{\lambda_l-\lambda_k}\,\mathbf g_{kl}^{T}\mathbf g_{kl}$$
+      </div>
+      <p>LM 的更新步（式 43）就是经典形式：</p>
+      <div class="formula-box flow-formula">
+        $$\Delta\mathbf T^\star=-(\mathbf H+\mu\mathbf I)^{-1}\mathbf J^T$$
+      </div>
+      <p>关键结论在复杂度上（原文给出）：</p>
+      <div class="callout">
+        <h4>★ 复杂度</h4>
+        <p>整体复杂度是 $O(M_fM_p+M_fM_p^2+M_p^3)$，其中 $M_f$ 是特征数、$M_p$ 是位姿数。<b>式子右边完全没有 $N$（点数）</b>。代价、雅可比、海森、协方差（式 53）四步都不枚举原始点——这正是「高效」的硬保证。位姿不确定度则由二阶信息（协方差式 53）一并给出。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 「一致性」是什么意思：归一化 NEES 曲线</h2>
+      <p>标题里的 <b>consistent（一致）</b>不是形容词好听，而是有严格定义的：它和「二阶信息 / 估计量一致性」有关。检验方法是<b>归一化 NEES（Normalized Estimation Error Squared）</b>。</p>
+      <p>做法（§V）：给位姿真值加已知噪声，跑 BA 得到估计值和它的协方差，算估计误差相对协方差的归一化平方和；在 100 次蒙特卡洛里平均。判定准绳是：</p>
+      <div class="callout">
+        <h4>★ 曲线贴近 1 才叫「一致」</h4>
+        <p>横轴是点噪声水平、纵轴是归一化 NEES。<b>如果曲线贴着 1</b>，说明「BA 报出的不确定度」和「真实误差」对得上——估计是统计一致的。论文的 Fig. 7(a) 正是这条曲线。</p>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2023_Efficient_and_Consistent_Bundle_Adjustment_on_Lidar_Poin/89f12fe257dff19e5ab7ac10dd6b55a4f615477dfae7be26ed2f2ee5705b0a72.jpg" alt="Fig. 7(a) Normalized NEES averaged over 100 Monte Carlo runs">
+        <figcaption>
+          <p><b>原图注（Fig. 7(a)）：</b><i>Normalized NEES averaged over 100 Monte Carlo runs at different point noise levels.</i>（不同点噪声水平下 100 次蒙特卡洛的平均归一化 NEES。注意这是 Fig. 7 的 (a) 子图。）</p>
+          <p><b>怎么看这张图：</b>纵轴归一化 NEES 在噪声不太大时几乎压在 1 这条虚线附近——这就是「一致性」的可视化承诺。一旦偏离 1（太高=过度自信、太低=过度保守），说明报出的不确定度不可信。</p>
+        </figcaption>
+      </div>
+
+      <p>但原文也诚实划了边界（§V 原话）：</p>
+      <div class="callout">
+        <h4>★ 一致性是有适用范围的</h4>
+        <p>原文承认：「<i>Beyond this noise level, the first order approximation in (50) no longer holds, which undermines the accuracy of the computed covariance.</i>」即<b>点噪声超过 0.3 m 后</b>，协方差推导里用的一阶近似失效，算出的不确定度不再可信。好消息是：真实激光噪声远低于 0.1 m，所以日常用不到这个边界——但它示范了「一致性是有适用范围的」这一科学态度。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>本文说自己的 BA 是「一致（consistent）」的，这个判断靠什么来检验？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。原文用归一化 NEES（100 次蒙特卡洛平均）检验：曲线贴近 1 才说明「BA 报出的不确定度」和「真实误差」对得上，即一致。" onclick="lessonKit.answer(this,'q0022b')">用归一化 NEES 曲线是否贴近 1 来检验</button>
+          <button data-correct="no" data-explanation="不对。轨迹误差小只说明准，不等于「一致」；一致性特指不确定度估计是否可信，要靠 NEES 这类统计量检验。" onclick="lessonKit.answer(this,'q0022b')">只要最终轨迹误差足够小就算一致</button>
+          <button data-correct="no" data-explanation="不对。原文明确点噪声超过 0.3 m 时一阶近似失效、协方差不可信，所以一致性是有上界的，并非无条件成立。" onclick="lessonKit.answer(this,'q0022b')">只要用了二阶求解器就永远一致</button>
+        </div>
+        <div class="quiz-feedback" id="q0022b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 自适应体素化、实验数字与局限</h2>
+      <p>特征怎么关联？原文用的是 <b>BALM 的自适应体素化（adaptive voxelization）</b>：把所有点按初始轨迹注册到世界系，递归把空间切小，直到一个子体素里只含一个特征（面或边）。参数（§VI-B 原话）：$L=1$ 或 $2$ m（根体素）、最大层数 $l_{\max}=3$、$n_{\min}=20$、阈值 $\gamma=1/25$。</p>
+      <div class="callout">
+        <h4>★ 如实说明：ikd-Tree 悬念本文不还</h4>
+        <p><b>全文未出现 ikd-Tree / octree / hash</b>。第一季第 0006 课埋的「ikd-Tree 悬念」，这一节不能还——本文走的是自适应体素化路线，ikd-Tree 是另一条路线，要等到阶段 D 的 FAST-LIO2（2022）才揭晓。请记住：BALM2.0 的关联靠体素切分，不是动态树。</p>
+      </div>
+
+      <h3>8.1 实验数字（§VI-B，逐字照抄原文结论）</h3>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>19 个真实序列</h4><p>原文：「<i>our method consistently achieves the best results in all 19 sequences even with single-precision</i>」——连单精度都全胜。</p></div>
+        <div class="mini-card"><h4>VIRAL 数据集</h4><p>仅用 LiDAR 达 <b>4.2 cm</b> 平均精度，优于融合相机/IMU/LiDAR/UWB 的 VIRAL-SLAM 的 <b>4.7 cm</b>。</p></div>
+        <div class="mini-card"><h4>耗时对比</h4><p>约为 BAREG 的 <b>1/4</b>、PA 的 <b>1/6</b>、BALM 的 <b>1/8</b>、EF 的 <b>1/20</b>；单精度再降 <b>40%</b>。</p></div>
+        <div class="mini-card"><h4>UzhArea2 侧墙</h4><p>厚度标准差：<b>15.3 cm</b>（真值位姿）→ <b>6.8 cm</b>（真值平移+BA 旋转）→ <b>1.7 cm</b>（完全 BA 优化）。越优化越薄。</p></div>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2023_Efficient_and_Consistent_Bundle_Adjustment_on_Lidar_Poin/3476681fbaf64fcca8766430c701f4a2485f03b9f8a76b2eba08698731f92479.jpg" alt="Fig. 10 Point cloud map of the UzhArea2 sequence in Hilti">
+        <figcaption>
+          <p><b>原图注（Fig. 10）：</b><i>Point cloud map of the UzhArea2 sequence in "Hilti". (a) ground-truth trajectory (b) ground-truth translation + BA rotations (c) fully BA-optimized, (d)(e)(f) points on one side wall.</i>（Hilti 的 UzhArea2 序列点云图与侧墙切片——(a) 真值轨迹 (b) 真值平移+BA 旋转 (c) 完全 BA 优化后 (d)(e)(f) 侧墙上的点。）</p>
+          <p><b>怎么看这张图：</b>看右下 (d)(e)(f) 的侧墙厚度：真值位姿下点云很糊（15.3 cm），BA 优化后薄到 1.7 cm。但原文同时借这组数字<b>指出真值本身可疑</b>（真值轨迹的侧墙反而最糊）——这是个很好的科学态度例子：敢于怀疑基准真值。</p>
+        </figcaption>
+      </div>
+
+      <h3>8.2 明确局限（逐条）</h3>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 一致性有噪声上界</h4><p>点噪声 ≤ 0.3 m 才成立；超过后一阶近似失效、协方差不可信。</p></div>
+        <div class="mini-card"><h4>② 要好初始轨迹</h4><p>特征关联依赖自适应体素化，初始轨迹来自 ICP；初始差则关联差。</p></div>
+        <div class="mini-card"><h4>③ 批处理、要降频</h4><p>批量处理全部扫描，真实数据须从 10 Hz 降到 2 Hz（§VIII-B：「at a higher computation cost」）。</p></div>
+        <div class="mini-card"><h4>④ 单精度掉精度</h4><p>单精度省时但精度低于双精度。</p></div>
+        <div class="mini-card"><h4>⑤ 边缘特征几乎无增益</h4><p>加边特征差异仅 <b>6 mm</b>；原文归因于激光脉冲难正好打中边缘、远处发散产生 bleeding points。</p></div>
+        <div class="mini-card"><h4>⑥ 平面性假设偏差</h4><p>BA 全程只用平面（除 Ours(edge)），弯曲墙/地面的平面性假设带来偏差；平面合并精度随合并度上升而下降。</p></div>
+      </div>
+
+      <h3>8.3 开放问题与钩子</h3>
+      <p>§IX 与 §VIII-C 列出下一步：如何与 <b>IMU 预积分</b>、相机因子、回环更紧地耦合；如何做帧内运动补偿与动态物体剔除。<b>Remark 5</b> 还给了与 IMU 预积分对接时的雅可比变换：</p>
+      <div class="formula-box flow-formula">
+        $$\breve{\mathbf J}=\mathbf J\,\mathbf L,\qquad \breve{\mathbf H}=\mathbf L^T\mathbf H\,\mathbf L$$
+      </div>
+      <p>其中 $\mathbf L$ 是两种扰动参数化之间的雅可比。这条可作为到 0029/0030（IMU 预积分）的钩子。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2023_Efficient_and_Consistent_Bundle_Adjustment_on_Lidar_Poin/bce5f32c5d41bb0c14103745f85a91521fe0bfa6f310baafaf5f1688ca2d0faf.jpg" alt="Fig. 1 Factor graph representation of the bundle adjustment formulation">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b><i>Factor graph representation of the bundle adjustment formulation.</i>（BA 形式的因子图表示。）</p>
+          <p><b>怎么看这张图：</b>节点是一堆位姿 $\mathbf T_j$ 和特征参数 $\pi_i$，边是「点到特征」的残差联系。把它和 0020 的节点—边图、0021 的 g²o 图接口连起来：<b>同一张因子图语言，这次用到点云上</b>。这就是本文与前面课程的几何纽带。</p>
+        </figcaption>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：写出式 (3) 点到面残差，并解释为什么是「点到特征」而非「特征到特征」</summary>
+          <div>
+            <p>$c(\pi_i,\mathbf T)=\frac{1}{N_i}\sum_j\sum_k\bigl\|\mathbf n_i^T(\mathbf p_{ijk}-\mathbf q_i)\bigr\|_2^2$。它是<b>每个原始点到几何特征</b>的距离平方平均，把测量噪声显式纳入；不是直接比较两个特征。这样估计才更一致，也比 plane-to-plane 更适合稀疏激光。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：特征参数闭式消元与 0019 的 Schur 消元，异同在哪</summary>
+          <div>
+            <p>同：都是「把不想估的变量消掉」，让优化维度只剩位姿。异：0019 的 Schur 靠数值 Schur 补在每步迭代里消结构参数（如 PA 的 <code>DENSE_SCHUR</code>）；本文因特征参数有<b>闭式解</b>（式 6/8），一次性直接消掉，连迭代都不用，且消的是几何特征而非路标点。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：点簇坐标的两条性质如何推出「复杂度与点数 N 无关」</summary>
+          <div>
+            <p>$\Re(\mathbf T\circ\mathcal C)=\mathbf T\Re(\mathcal C)\mathbf T^T$ 让变换退化成矩阵乘法；$\Re(\mathcal C_1\oplus\mathcal C_2)=\Re(\mathcal C_1)+\Re(\mathcal C_2)$ 让合并退化成矩阵加法。于是代价/雅可比/海森/协方差都只用这串 $4\times4$ 小矩阵算，全过程不枚举原始点，所以复杂度 $O(M_fM_p+M_fM_p^2+M_p^3)$ 里没有 $N$。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：归一化 NEES 贴近 1 说明什么？0.3 m 边界又说明什么</summary>
+          <div>
+            <p>贴近 1 说明 BA 报出的不确定度与真实误差对得上，估计是统计一致的。0.3 m 边界说明：点噪声超过 0.3 m 后协方差推导的一阶近似失效，不确定度不再可信——<b>一致性是有适用范围的</b>，而非无条件成立。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：为什么本文不能还第一季第 0006 课的 ikd-Tree 悬念</summary>
+          <div>
+            <p>本文特征关联用的是 <b>BALM 自适应体素化</b>（递归切空间），全文无 ikd-Tree / octree / hash。ikd-Tree 是 FAST-LIO2（阶段 D）那条「可动态插入删除的树」路线，与本文无关，所以悬念要留到阶段 D 再揭晓。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0021-g2o优化库2011-因子图求解器的工程实现.html">← 上一课：因子图求解器的工程实现（g²o 2011）</a>
+        <a class="next" href="0023-PCL点云库2011-点云处理的瑞士军刀.html">下一课：点云处理的瑞士军刀（PCL 2011） →</a>
+      </div>
+      <p class="foot-note">把 BA 从图像搬到激光，最难的一步是「重新定义特征」。这一节你已看懂它怎么做到又快又一致，下一节我们补上读激光论文绕不开的工程底座 PCL 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

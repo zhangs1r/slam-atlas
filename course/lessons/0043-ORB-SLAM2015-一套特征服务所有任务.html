@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ORB-SLAM（2015）：一套特征服务所有任务 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0043</div>
+      <h1>ORB-SLAM（2015）：一套特征服务所有任务</h1>
+      <p class="subtitle">前两季所有零件，在这里被装配成一台完整机器 🔧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：三线程 + 四张图的特征法单目 SLAM 系统</span>
+        <span>👥 作者：Mur-Artal, Montiel, Tardós</span>
+        <span>📅 2015 · <i>ORB-SLAM: A Versatile and Accurate Monocular SLAM System</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">三线程架构</a>
+        <a href="#b">一套 ORB 服务所有任务</a>
+        <a href="#c">共视图与本质图</a>
+        <a href="#d">词袋位置识别</a>
+        <a href="#e">初始化与重定位</a>
+        <a href="#f">实验、sim(3) 与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 ORB-SLAM 的三线程各做什么、频率与通信方式；讲清「一套 ORB 特征如何同时服务跟踪、建图、重定位、闭环」；区分共视图与本质图；讲出 BoW 倒排索引为何能把检索做到近似 $O(1)$；并说出 sim(3) 是怎么纠正单目尺度漂移的。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>这是把前两季零件全部装配起来的那一篇。点名：<b>0019 BA 教程</b>（Schur 消元、gauge freedom）→ 落在本篇的 local BA / full BA；<b>0024 VO 教程</b>（对极几何、三条运动估计管线、PnP+RANSAC）→ 落在初始化 H/F 自动选择与重定位；<b>0014 回环检测综述</b>（假阳性铁律）→ 落在 DBoW2 的「三道闸」；<b>0026 SGM / 直接法</b>→ 落在 §IX-B「特征法 vs 直接法」辩论，是下一条线的岔路口。</p></div>
+      </div>
+
+      <h2>1. 三线程架构：跟踪 / 局部建图 / 回环检测</h2>
+      <p>PTAM（上一课 0042）把系统拆成两条线程。ORB-SLAM 觉得还不够：它要再补一条专门管回环的线程，于是变成三条并行线程，外加四张图（共视图、本质图、生成树、回环边）。论文 Fig.1 把整套系统画得清清楚楚。</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{Tracking（30 Hz）}\;\parallel\;\text{Local Mapping（后台）}\;\parallel\;\text{Loop Closing（后台）}$$</div></div>
+      <ul>
+        <li><b>Tracking（跟踪线程）</b>：每帧都跑，频率最高。它抽 ORB 特征、用上一帧位姿初始化当前位姿（或触发重定位）、跟踪局部地图、判断要不要插新关键帧。论文实测整段跟踪中位 30.57 ms，约 25–30 Hz。</li>
+        <li><b>Local Mapping（局部建图线程）</b>：接收新关键帧，做近点剔除、新点三角化、局部 BA、关键帧剔除。它是一道「慢」工序，实测整段中位 383 ms，但只在有新知识时才重活。</li>
+        <li><b>Loop Closing（回环线程）</b>：用位置识别查数据库、计算 Sim(3)、做回环融合与本质图优化。关键帧越多它越贵，但增长是<b>次线性</b>的。</li>
+      </ul>
+      <p>三条线程的通信靠共享的「地图」——由 MapPoints、KeyFrames、共视图、生成树组成，还有独立的「位置识别」模块（视觉词典 + 识别数据库）。这正是把 PTAM 的「双线程」扩成「三线程 + 四张图」的那一步。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System/13a792d121ca48ef92e0e18ab9cbfd52c9366158aa138d6aee35d863a44f5b37.jpg" alt="ORB-SLAM system overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>ORB-SLAM system overview, showing all the steps performed by the tracking, local mapping, and loop closing threads. The main components of the place recognition module and the map are also shown.（系统总览，含三线程全部步骤、位置识别模块与地图主要组件。）<br>
+          <b>怎么看这张图：</b>① TRACKING 框里逐字可读：Extract ORB / Initial Pose Estimation / Track Local Map / New KeyFrame Decision；② LOCAL MAPPING 框里是 KeyFrame Insertion → Recent MapPoints Culling → New Points Creation → Local BA → Local KeyFrames Culling；③ LOOP CLOSING 框里是 Loop Detection（Query Database → Candidates → Compute Sim3）与 Loop Correction（Loop Fusion → Optimize Essential Graph）。这张图就是本课的地图。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 一套 ORB 特征，服务所有任务</h2>
+      <p>ORB-SLAM 的核心卖点之一，是它<b>只用一种特征——ORB</b>，就同时喂饱了跟踪、建图、重定位、闭环四件事。这背后是一套关于「速度 vs 不变性」的精打细算。</p>
+      <p>论文 §III-A 把候选逐一排除，理由很硬：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>SIFT / SURF 太慢</h4><p>约 300 ms / 帧，A-KAZE 约 100 ms，都远超过「每帧必须 33 ms 内完成」的实时红线，被排除。</p></div>
+        <div class="mini-card"><h4>纯 BRIEF 缺旋转不变性</h4><p>BRIEF 描述子没有方向，在宽基线（大视角变化）下无法识别同一地点，被排除。ORB = FAST 角点 + 方向 + 旋转感知 BRIEF，补足了这一环。</p></div>
+        <div class="mini-card"><h4>FAST 提供角点</h4><p>用 FAST 检测关键点，并给每个点算一个方向（质心法），让描述子可旋转。</p></div>
+        <div class="mini-card"><h4>图像金字塔 + 网格均匀化</h4><p>8 层金字塔（尺度因子 1.2）应对尺度；再把图切成网格，每个格子取前 N 个响应最强的点，保证特征在画面里<b>均匀分布</b>。</p></div>
+      </div>
+      <p>★ <b>为什么「网格化均匀分布」这么重要？</b>如果只按「响应强度」贪心地取特征，画面纹理丰富的区域会被刷屏，而纹理稀少的墙角、天空一带一个点都没有。一旦相机转向稀疏区，就「没特征可跟」。网格均匀化让每一块都保留若干特征，整张图在任何朝向都有「抓手」——这是它比 PTAM 更鲁棒的关键细节之一。论文 §V-A 写明：在 512×384–752×480 的分辨率取约 1000 个特征，KITTI（1241×376）取约 2000 个，每层分格、每格至少 5 个、不够就自适应调高检测阈值。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>ORB-SLAM 为什么不用 SIFT/SURF 而用 ORB？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="SIFT/SURF 约 300 ms/帧、A-KAZE 约 100 ms，都超过 33 ms/帧的实时红线；ORB 快得多，且旋转感知 BRIEF 补足了纯 BRIEF 缺方向的问题。" onclick="lessonKit.answer(this,'q0043a')">因为要够快</button>
+          <button data-correct="no" data-explanation="恰恰相反，SIFT/SURF 的旋转不变性比 ORB 更好。被排除的唯一原因是它们太慢，达不到实时每帧 33 ms 的要求。" onclick="lessonKit.answer(this,'q0043a')">因为更准</button>
+        </div>
+        <div class="quiz-feedback" id="q0043a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 共视图与本质图：两个长得像但用处不同的图</h2>
+      <p>ORB-SLAM 用「地图」不只是一个点云，而是两套图结构。理解它们，是理解这套系统为何能「局部化」、为何回环能快的原因。</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>共视图（Covisibility Graph）</h4><p>节点是<b>关键帧</b>。如果两个关键帧「共同看到」了同一批地图点（至少 15 个），它们之间就连一条边，<b>边权 = 共同观察到的地图点个数</b>。所以它非常稠密——看到同一处场景的帧越多，线越密。</p></div>
+        <div class="mini-card"><h4>本质图（Essential Graph）</h4><p>是共视图的「瘦身版」：取<b>生成树</b>（保证连通）+ <b>强共视边</b>（边权 ≥ 100）+ <b>回环边</b>。节点还是关键帧，但边稀疏得多。回环优化只在本质图（而不是整张稠密共视图）上做，所以又快又准。</p></div>
+      </div>
+      <p>一句话区分：<b>共视图负责「平时谁和谁一起优化」</b>（局部 BA 的邻域）；<b>本质图负责「回环时怎么把整张地图拉正」</b>（位姿图优化）。论文 Table VI 直接证明：在 KITTI 09 上，本质图优化 EG(θ_min=100) 只花 0.48 s、误差 8.36 m，而全局 BA 即便迭代 100 次也要 72 s 还难收敛。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 房间俯视 -->
+          <rect x="60" y="70" width="780" height="320" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2.5"/>
+          <text x="450" y="52" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">房间俯视图：共视图（绿，线越粗＝共视越强）＋ 本质图（红虚线）</text>
+          <!-- 家具 -->
+          <rect x="120" y="300" width="150" height="55" fill="#d8c6a0" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="195" y="332" fill="#6b5b3e" font-size="13" text-anchor="middle">桌子</text>
+          <rect x="650" y="95" width="150" height="40" fill="#d8c6a0" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="725" y="120" fill="#6b5b3e" font-size="13" text-anchor="middle">书架</text>
+          <rect x="420" y="70" width="45" height="70" fill="#c9b58a" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="442" y="155" fill="#6b5b3e" font-size="12" text-anchor="middle">门</text>
+          <!-- 相机轨迹点（关键帧） -->
+          <g>
+            <g transform="translate(160,200)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+            <g transform="translate(260,150)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+            <g transform="translate(380,180)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+            <g transform="translate(500,140)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+            <g transform="translate(620,200)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+            <g transform="translate(720,290)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+            <g transform="translate(560,300)"><rect x="-9" y="-7" width="18" height="14" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/><polygon points="9,-4 20,0 9,4" fill="#1565c0"/></g>
+          </g>
+          <text x="160" y="226" fill="#0d3c75" font-size="11" text-anchor="middle">KF1</text>
+          <text x="260" y="176" fill="#0d3c75" font-size="11" text-anchor="middle">KF2</text>
+          <text x="380" y="206" fill="#0d3c75" font-size="11" text-anchor="middle">KF3</text>
+          <text x="500" y="166" fill="#0d3c75" font-size="11" text-anchor="middle">KF4</text>
+          <text x="620" y="226" fill="#0d3c75" font-size="11" text-anchor="middle">KF5</text>
+          <text x="720" y="316" fill="#0d3c75" font-size="11" text-anchor="middle">KF6</text>
+          <text x="560" y="326" fill="#0d3c75" font-size="11" text-anchor="middle">KF7</text>
+          <!-- 共视边（粗细不同）：绿 -->
+          <line x1="160" y1="200" x2="260" y2="150" stroke="#2e7d32" stroke-width="6" opacity="0.7"/>
+          <line x1="260" y1="150" x2="380" y2="180" stroke="#2e7d32" stroke-width="4" opacity="0.6"/>
+          <line x1="380" y1="180" x2="500" y2="140" stroke="#2e7d32" stroke-width="3" opacity="0.55"/>
+          <line x1="500" y1="140" x2="620" y2="200" stroke="#2e7d32" stroke-width="2" opacity="0.5"/>
+          <line x1="620" y1="200" x2="720" y2="290" stroke="#2e7d32" stroke-width="5" opacity="0.65"/>
+          <line x1="720" y1="290" x2="560" y2="300" stroke="#2e7d32" stroke-width="3" opacity="0.55"/>
+          <line x1="560" y1="300" x2="380" y2="180" stroke="#2e7d32" stroke-width="1.5" opacity="0.45"/>
+          <line x1="620" y1="200" x2="560" y2="300" stroke="#2e7d32" stroke-width="2.5" opacity="0.5"/>
+          <!-- 本质图（红虚线）：生成树 + 强边 + 回环 -->
+          <line x1="160" y1="200" x2="260" y2="150" stroke="#c62828" stroke-width="2" stroke-dasharray="7 5"/>
+          <line x1="260" y1="150" x2="380" y2="180" stroke="#c62828" stroke-width="2" stroke-dasharray="7 5"/>
+          <line x1="380" y1="180" x2="500" y2="140" stroke="#c62828" stroke-width="2" stroke-dasharray="7 5"/>
+          <line x1="500" y1="140" x2="620" y2="200" stroke="#c62828" stroke-width="2" stroke-dasharray="7 5"/>
+          <line x1="620" y1="200" x2="720" y2="290" stroke="#c62828" stroke-width="2" stroke-dasharray="7 5"/>
+          <line x1="160" y1="200" x2="560" y2="300" stroke="#7b1fa2" stroke-width="2" stroke-dasharray="3 4"/>
+          <text x="360" y="380" fill="#2e7d32" font-size="13">绿＝共视图（看着同一处的帧越多，线越粗＝约束越强）</text>
+          <text x="360" y="402" fill="#c62828" font-size="13">红虚线＝本质图（生成树＋强边，回环检测优化只用它，所以快）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个房间的俯视图（有桌子、书架、门），相机沿轨迹走过，留下 7 个关键帧（蓝色小相机）。绿色实线的粗细代表两帧「共同看到多少地图点」——线越粗，共视特征越多、约束越强。红色虚线是本质图：只保留生成树主干与少量强边。紫色细虚线是一条回环边。<br>
+          <b>怎么看这张图：</b>① 绿线很密（真实共视图比这还密得多，见原图 Fig.2(b)）；② 红线是绿线的「瘦身版」，回环优化只在这张稀疏图上跑；③ 关键直觉——共视图负责日常局部 BA 的邻域，本质图负责回环时把整张地图拉正。<br>
+          <b>要记住的一句话：</b>同一批节点，两种边——稠密共视图管平时，稀疏本质图管回环。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System/4259090d4cf9b62d0322f25dd2931bd9d84a0e74b233afced186daff48f27243.jpg" alt="Covisibility graph">
+        <figcaption>
+          <b>原图注（Fig. 2(b)）：</b>Covisibility graph.（共视图。）<br>
+          <b>怎么看这张图：</b>① 极密的绿色网状图，节点是相机、边由共视点数决定；② 这张图直观说明「共视图很稠密」，所以它不能被直接拿来做全局优化；③ 它是对照本质图（下一张）的基准。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System/a1f926395bb70b006d30d2ce8e6556beb8166291c020a8778776270c5bc86678.jpg" alt="Essential graph">
+        <figcaption>
+          <b>原图注（Fig. 2(d)）：</b>Essential graph.（本质图。）<br>
+          <b>怎么看这张图：</b>① 与上面的共视图（Fig.2(b)）同一场景，边明显稀疏得多；② 它保留了生成树主干 + 强共视边 + 回环边；③ (b) 与 (d) 并排看，就是「为什么要砍边、砍掉的是什么」的最佳素材。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 词袋（BoW）位置识别与倒排索引</h2>
+      <p>回环检测和重定位都需要一个能力：<b>给一张新图像，快速找出「我以前是不是来过这里」</b>。暴力比对全地图太慢，ORB-SLAM 用 DBoW2 词袋库解决。</p>
+      <p>思路分两步：① 离线用大量图像训练一本「视觉词典」，把图像特征聚类成上百万个<b>视觉单词</b>（visual word）；② 每帧的关键点被量化到某个单词，于是每张图就变成一条「单词袋」。数据库维护一个<b>倒排索引</b>——对每个单词，记下「哪些关键帧里出现过它」。</p>
+      <p>★ <b>为什么检索是近似 $O(1)$ 而不是遍历全部？</b>查询时，新图像抽出自己的单词列表，只去「这些单词对应的关键帧槽位」里找候选，取并集即可。根本不用逐张比对全地图——只用比较「有共同词」的少数图像。这正是 Table II 里「回环检测耗时随关键帧数<b>次线性</b>增长」的数学原因。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="40" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">图书馆索引卡：倒排索引为什么快</text>
+          <!-- 一排视觉单词卡槽 -->
+          <g>
+            <rect x="70" y="70" width="120" height="70" fill="#eef3fb" stroke="#1565c0" stroke-width="2"/>
+            <rect x="210" y="70" width="120" height="70" fill="#eef3fb" stroke="#1565c0" stroke-width="2"/>
+            <rect x="350" y="70" width="120" height="70" fill="#eef3fb" stroke="#1565c0" stroke-width="2"/>
+            <rect x="490" y="70" width="120" height="70" fill="#eef3fb" stroke="#1565c0" stroke-width="2"/>
+            <rect x="630" y="70" width="120" height="70" fill="#eef3fb" stroke="#1565c0" stroke-width="2"/>
+          </g>
+          <!-- 抽象纹理小图（每个槽一个） -->
+          <g>
+            <line x1="92" y1="92" x2="168" y2="92" stroke="#37474f" stroke-width="2"/><line x1="92" y1="104" x2="168" y2="104" stroke="#37474f" stroke-width="2"/><line x1="92" y1="116" x2="168" y2="116" stroke="#37474f" stroke-width="2"/>
+            <circle cx="270" cy="105" r="14" fill="none" stroke="#37474f" stroke-width="2"/><line x1="258" y1="105" x2="282" y2="105" stroke="#37474f" stroke-width="2"/>
+            <rect x="392" y="92" width="36" height="26" fill="none" stroke="#37474f" stroke-width="2"/><line x1="410" y1="92" x2="410" y2="118" stroke="#37474f" stroke-width="2"/>
+            <polyline points="510,120 540,90 570,120" fill="none" stroke="#37474f" stroke-width="2"/>
+            <line x1="662" y1="92" x2="718" y2="118" stroke="#37474f" stroke-width="2"/><line x1="718" y1="92" x2="662" y2="118" stroke="#37474f" stroke-width="2"/>
+          </g>
+          <text x="130" y="158" fill="#0d3c75" font-size="13" text-anchor="middle">单词 w1</text>
+          <text x="270" y="158" fill="#0d3c75" font-size="13" text-anchor="middle">单词 w2</text>
+          <text x="410" y="158" fill="#0d3c75" font-size="13" text-anchor="middle">单词 w3</text>
+          <text x="550" y="158" fill="#0d3c75" font-size="13" text-anchor="middle">单词 w4</text>
+          <text x="690" y="158" fill="#0d3c75" font-size="13" text-anchor="middle">单词 w5</text>
+          <!-- 索引卡：每个槽里插着用到它的关键帧 -->
+          <text x="130" y="200" fill="#37474f" font-size="12" text-anchor="middle">卡片：KF3, KF17, KF88</text>
+          <text x="270" y="200" fill="#37474f" font-size="12" text-anchor="middle">卡片：KF5, KF40</text>
+          <text x="410" y="200" fill="#37474f" font-size="12" text-anchor="middle">卡片：KF2, KF9</text>
+          <text x="550" y="200" fill="#37474f" font-size="12" text-anchor="middle">卡片：KF11, KF30, KF77</text>
+          <text x="690" y="200" fill="#37474f" font-size="12" text-anchor="middle">卡片：KF6</text>
+          <!-- 查询帧 -->
+          <rect x="300" y="240" width="300" height="50" fill="#fff3e0" stroke="#e67e22" stroke-width="2"/>
+          <text x="450" y="262" fill="#b75d00" font-size="13" text-anchor="middle">查询帧抽出的单词：w1, w3, w5</text>
+          <text x="450" y="282" fill="#b75d00" font-size="12" text-anchor="middle">→ 只看这三张卡 → 候选 = {KF3,17,88, 2,9, 6}</text>
+          <line x1="380" y1="290" x2="160" y2="210" stroke="#e67e22" stroke-width="2" marker-end="url(#q1)"/>
+          <line x1="450" y1="290" x2="410" y2="210" stroke="#e67e22" stroke-width="2" marker-end="url(#q1)"/>
+          <line x1="520" y1="290" x2="690" y2="210" stroke="#e67e22" stroke-width="2" marker-end="url(#q1)"/>
+          <defs><marker id="q1" markerWidth="9" markerHeight="9" refX="4" refY="4" orient="auto"><path d="M0,0 L9,4 L0,9 Z" fill="#e67e22"/></marker></defs>
+          <text x="450" y="358" fill="#888" font-size="12" text-anchor="middle">只检索「有共同词」的少数关键帧，所以不是遍历全地图 → 近似 O(1)</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把倒排索引画成图书馆的「视觉单词卡槽」。每个槽上画一个抽象纹理小图代表一个视觉单词（w1…w5），槽里插着「哪些关键帧用过它」的卡片。底部是查询帧：抽出 w1、w3、w5 后，只去这三张卡里取候选并求并集。<br>
+          <b>怎么看这张图：</b>① 卡槽＝倒排索引的一行；② 查询时的箭头只打在「命中的卡槽」上；③ 候选集合是少量关键帧的并集，而非全部。<br>
+          <b>要记住的一句话：</b>倒排索引＝先查卡槽再取交集，这就是检索近似 $O(1)$ 而不是遍历全部的秘密。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 自动初始化、重定位与回环纠正</h2>
+      <h3>初始化：H 与 F 并行打分，自动选模型</h3>
+      <p>单目初始化在平面 / 低视差下有二义性。ORB-SLAM 的漂亮做法是：<b>同时</b>用同一批匹配点算两个模型——单应矩阵 $H$（适合平面）和基础矩阵 $F$（适合非平面），各自打分，再比分数决定用谁。</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathbf x_c=\mathbf H_{cr}\mathbf x_r\quad,\quad \mathbf x_c^{\mathsf T}\mathbf F_{cr}\mathbf x_r=0$$</div></div>
+      <p>打分公式（对称转移误差）：$S_M=\sum_i(\rho_M(d_{cr}^2)+\rho_M(d_{rc}^2))$，阈值 $T_H=5.99,\ T_F=3.84$。关键判据：</p>
+      <div class="formula-box"><div class="flow-formula">$$R_H=\frac{S_H}{S_H+S_F}\;,\qquad R_H>0.45\ \text{选}\ H\;\text{（平面）},\ \text{否则选}\ F\ \text{（非平面）}$$</div></div>
+      <p>如果检测到二义性（twofold ambiguity），系统<b>为安全起见拒绝初始化</b>。下面这张原图把「模型选择」的收益画得很直白：PTAM 与 LSD-SLAM 在低视差下初始化出歪掉的平面解，ORB-SLAM 靠 F 正确初始化。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System/2b7160d0c89cd6f30ad8f5446a4559c68b9847d2ca72701dc45f106353a7bda8.jpg" alt="Initialization comparison PTAM LSD-SLAM ORB-SLAM">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Top: PTAM, middle: LSD-SLAM, bottom: ORB-SLAM, some time after initialization in the NewCollege sequence. PTAM and LSD-SLAM initialize a corrupted planar solution, while our method has automatically initialized from the fundamental matrix when it has detected enough parallax.（上：PTAM，中：LSD-SLAM，下：ORB-SLAM；上中两张初始化出错误的平面解，本文在检测到足够视差后由基础矩阵正确初始化。）<br>
+          <b>怎么看这张图：</b>① 上、中两栏明显歪掉、结构错误；② 下栏规整——这就是「自动选 H/F」的价值；③ 它对应 0024 VO 教程里「对极几何 / 三条管线」在工程系统里第一次被自动选择。
+        </figcaption>
+      </figure>
+
+      <h3>重定位：BoW 找候选 → PnP → RANSAC</h3>
+      <p>跟踪一旦丢失，系统进入全局重定位：先用 BoW 在 Atlas 里找相似关键帧，对每个候选用 PnP（3D-2D）求解位姿，再用 RANSAC 剔除外点。论文 Table IV：重定位召回率 PTAM 34.9% vs ORB-SLAM 78.4%；跨序列（有行人遮挡）PTAM 0.0% vs ORB-SLAM 77.9%。</p>
+
+      <h3>回环纠正：sim(3) 与尺度漂移</h3>
+      <p>单目最头疼的毛病是<b>尺度漂移</b>——地图整体被「拉长 / 压短」却无法被图像证据发现。ORB-SLAM 检测到回环后，用带尺度的相似变换 <b>Sim(3)</b> 把两片地图对齐，而不是普通的刚体变换 SE(3)。单目共有 7 个漂移自由度：3 平移 + 3 旋转 + 1 尺度 $s$；用 $\log_{\mathrm{Sim}(3)}$ 把误差变成 $\mathbb R^7$ 向量，并固定闭环关键帧消去这 7 自由度 gauge。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="230" y="40" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">未闭环：单目估计（尺度被收小，回不到原点）</text>
+          <text x="670" y="40" fill="#37474f" font-size="15" text-anchor="middle" font-weight="700">检测回环后用 sim(3) 拉正（回到原点）</text>
+          <!-- 左：收小的环 -->
+          <ellipse cx="230" cy="190" rx="150" ry="95" fill="none" stroke="#c62828" stroke-width="3"/>
+          <circle cx="380" cy="190" r="7" fill="#1565c0"/>
+          <circle cx="80" cy="190" r="6" fill="#888"/>
+          <line x1="80" y1="190" x2="360" y2="190" stroke="#1565c0" stroke-width="2.5" stroke-dasharray="5 4"/>
+          <text x="230" y="300" fill="#c62828" font-size="13" text-anchor="middle">s &lt; 1：轨迹收小、首尾接不上</text>
+          <text x="80" y="215" fill="#888" font-size="12" text-anchor="middle">起点</text>
+          <text x="380" y="215" fill="#1565c0" font-size="12" text-anchor="middle">终点（偏了）</text>
+          <!-- 右：拉正 -->
+          <ellipse cx="670" cy="190" rx="150" ry="95" fill="none" stroke="#2e7d32" stroke-width="3"/>
+          <circle cx="820" cy="190" r="7" fill="#1565c0"/>
+          <circle cx="520" cy="190" r="6" fill="#888"/>
+          <line x1="520" y1="190" x2="820" y2="190" stroke="#1565c0" stroke-width="2.5"/>
+          <text x="670" y="300" fill="#2e7d32" font-size="13" text-anchor="middle">s 被估出：整条轨迹放大/缩小后首尾重合</text>
+          <text x="520" y="215" fill="#888" font-size="12" text-anchor="middle">起点</text>
+          <text x="820" y="215" fill="#1565c0" font-size="12" text-anchor="middle">终点（重合）</text>
+          <text x="450" y="175" fill="#7b1fa2" font-size="20" text-anchor="middle">→</text>
+          <text x="450" y="200" fill="#7b1fa2" font-size="12" text-anchor="middle">估 s</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一条闭合轨迹画两次。左边是单目估计：尺度被整体收小（红色环），首尾接不上；右边是检测到回环后用 Sim(3) 把轨迹缩放对齐，首尾回到同一点（绿色环）。<br>
+          <b>怎么看这张图：</b>① 红线终点偏离起点，这是「尺度漂移」；② 中间箭头表示 sim(3) 估出一个尺度因子 $s$；③ $s$ 就是「这条轨迹被整体放大 / 缩小的倍数」。<br>
+          <b>要记住的一句话：</b>$s$ 是单目那个多出来的第 7 个自由度，回环检测用 Sim(3) 把它纠回来。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System/1d14a89c6e9de699d21b90156c05526580e560cb545b804f3f5a0b75b3a4a14a.jpg" alt="Map before and after loop closure">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Map before and after a loop closure in the NewCollege sequence. The loop closure match is drawn in blue, the trajectory in green, and the local map for the tracking at that moment in red.（闭环前后地图；闭环匹配蓝色、轨迹绿色、当时跟踪用的局部地图红色。）<br>
+          <b>怎么看这张图：</b>① 看闭环匹配（蓝）如何把错位的轨迹拉回；② 绿色轨迹在被纠正后回到一致；③ 它对应上面自绘图的「拉正」效果。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>单目 ORB-SLAM 做回环纠正时，为什么用 Sim(3) 而不是 SE(3)？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="因为单目存在尺度漂移，地图可能被整体放大缩小。Sim(3) 比 SE(3) 多一个尺度因子 s（共 7 自由度），正好把漂移掉的尺度纠回来。" onclick="lessonKit.answer(this,'q0043b')">要纠尺度漂移</button>
+          <button data-correct="no" data-explanation="不是更省事。SE(3) 没有尺度自由度，无法纠正单目的尺度漂移；用 Sim(3) 是多处理了尺度那一维，不是为了简化。" onclick="lessonKit.answer(this,'q0043b')">因为更省事</button>
+        </div>
+        <div class="quiz-feedback" id="q0043b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字、sim(3) 与局限</h2>
+      <p>论文在 27 条序列上做了穷尽评测（平台：i7-4700MQ 4 核 2.40 GHz + 8 GB）。挑几个硬数字：</p>
+      <ul>
+        <li><b>NewCollege</b>：跟踪中位 30.57 ms（约 30 Hz）；局部 BA 中位 296 ms；回环总耗时 0.51 s → 4.69 s，且随关键帧数次线性增长。</li>
+        <li><b>TUM RGB-D（关键帧轨迹 ATE RMSE 中位，cm）</b>：ORB-SLAM 普遍 1–3 cm 级，明显优于 PTAM / LSD-SLAM。如 fr1_xyz 0.90 cm、fr2_desk 0.88 cm、fr3_long_office 3.45 cm。</li>
+        <li><b>重定位召回</b>：fr2_xyz 上 PTAM 34.9% vs ORB-SLAM 78.4%；跨序列（行人遮挡）PTAM 0.0% vs ORB-SLAM 77.9%。</li>
+        <li><b>KITTI 里程计（关键帧轨迹 RMSE，m）</b>：序列 00 为 6.68 m（20 次全局 BA 后 5.33 m）、序列 03 低至 1.59 m；误差约为地图尺寸的 1%。序列 01（高速路）失败。</li>
+        <li><b>闭环策略对照（KITTI 09）</b>：无闭环 48.77 m；BA(100) 18.82 m / 72 s；<b>EG(θ_min=100) 8.36 m / 0.48 s</b>——本质图优化又快又准。</li>
+      </ul>
+      <p>★ <b>§IX-B 还给出「特征法为何比直接法更准」的完整论证</b>：直接法需假设表面反射模型、光度一致性限制基线宽度（伤深度精度）、对卷帘/自动增益/自动曝光敏感、计算重而往往退化为只做位姿图；特征法可宽基线匹配，且 BA 同时优化位姿与点。这正好埋下了第三季「直接法线（LSD-SLAM / SVO / DSO）」的岔路口。</p>
+      <p>论文<b>没有</b>单列 Limitations 小节，但正文明确承认这些边界：① 平面 + 低视差场景若存在 twofold ambiguity 会为安全拒绝初始化（如 fr3_nostructure_texture_far）；② KITTI 序列 01（高速路、缺近处物体）失败；③ 无回环序列（KITTI 08）的漂移无法纠正；④ 纯旋转初始化会失败（需足够视差）；⑤ 单目存在尺度漂移，需 Sim(3) 处理。最后作者点出两条未来方向：加入无穷远点（利于约束旋转）、以稀疏图为骨架建更稠密模型。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System/0e106dff182dff4614cd2bd757f3b0e43f87f1d67432fa8c6d58e3220593614d.jpg" alt="Lifelong experiment">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Lifelong experiment in a static environment… PTAM is always inserting keyframes, while ORB-SLAM is able to prune redundant keyframes and maintains a bounded-size map.（静态环境终身实验；PTAM 始终插关键帧，ORB-SLAM 能剔除冗余关键帧、地图规模有界。）<br>
+          <b>怎么看这张图：</b>① PTAM 的曲线一直涨（地图无限膨胀）；② ORB-SLAM 的曲线饱和（spawn generous、cull restrictive 策略）——这是它「终身运行」能力的证据。
+        </figcaption>
+      </figure>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>ORB-SLAM 的三条线程各叫什么？各自大致的频率 / 节奏是怎样的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>Tracking（每帧 30 Hz 左右，约 30.57 ms/帧）、Local Mapping（后台，整段中位约 383 ms，只在有新知识时重活）、Loop Closing（后台，随关键帧数增加但次线性增长）。三者通过共享地图（关键点、关键帧、共视图、生成树）通信。</div></details>
+          </li>
+          <li>为什么 ORB-SLAM 既要网格化、又要「每个格子取前 N 个」的均匀化特征提取？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>只按响应强度贪心取点会让纹理丰富区刷屏、稀疏区一个点都没有；一旦相机转向稀疏区就无特征可跟。网格均匀化保证每个区域都保留若干特征，使任何朝向都有可跟踪的抓手，提升鲁棒性。</div></details>
+          </li>
+          <li>共视图与本质图的定义和用途分别是什么？为什么回环优化用本质图而不是共视图？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>共视图：节点是关键帧，共视同一批点（≥15 个）就连边，边权＝共同点数，很稠密，用于日常局部 BA 的邻域选择。本质图：生成树 + 强共视边（≥100）+ 回环边，稀疏。回环优化在本质图上做，又快又准（KITTI 09 上 EG 0.48 s vs BA 72 s）。</div></details>
+          </li>
+          <li>初始化时 $R_H>0.45$ 判据在选什么？它对应 0024 VO 教程里的哪个概念？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>在「单应 H（平面场景）」与「基础矩阵 F（非平面）」之间自动选择：并行算两模型、对称转移误差打分，$R_H=S_H/(S_H+S_F)$，大于 0.45 选 H。这对应 0024 里「2D-2D 运动估计管线」，是工程系统第一次在运行时自动选模型。</div></details>
+          </li>
+          <li>单目 Sim(3) 比 SE(3) 多出来的那个自由度是什么？它怎么被估出来？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>多出来的是尺度因子 $s$（单目共 7 个漂移自由度：3 平移 + 3 旋转 + 1 尺度）。检测到回环后，用 $\log_{\mathrm{Sim}(3)}$ 把对齐误差写成 $\mathbb R^7$ 向量，固定闭环关键帧消去 gauge，优化解出 $s$，把两片地图整体缩放对齐。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0042-PTAM2007-跟踪与建图分家.html">← PTAM（2007）：跟踪与建图分家</a>
+        <a class="next" href="0044-ORB-SLAM2-2017-绝对尺度与工程标杆.html">ORB-SLAM2（2017）：绝对尺度与工程标杆 →</a>
+      </div>
+      <p class="foot-note">ORB-SLAM 把前两季的 BA、对极几何、回环、直接法辩论全部收拢成一台完整机器。但它仍是单目——尺度漂移、纯旋转初始化失败、要等视差，这些病，下一课 ORB-SLAM2 用双目与深度来根治 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态环境视觉 SLAM 综述：从几何到语义 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0012</div>
+      <h1>动态环境视觉 SLAM 综述：从几何到语义</h1>
+      <p class="subtitle">真实世界里到处是走动的人、开的车。传统视觉 SLAM 默认"场景静止"，于是动态物体成了误差源头。这篇综述把大家怎么对付动点的方法，理成一条清晰的主线：<strong>先用几何约束硬剔，再借深度学习做语义理解</strong>。副标题就点明了——The Evolution From Geometric to Semantic Approaches。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态场景视觉 SLAM 的方法谱系与代价</span>
+        <span>👥 作者：动态视觉 SLAM 综述作者组</span>
+        <span>📅 2024 · <i>A Survey of Visual SLAM in Dynamic Environment: The Evolution From Geometric to Semantic Approaches</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">1. 为什么动态环境是死穴</a>
+        <a href="#geometry">2. 几何方法：对极与多视图约束</a>
+        <a href="#semantic">3. 语义方法：检测 / 分割与 TV 之谜</a>
+        <a href="#family">4. 方法谱系：三张表怎么读</a>
+        <a href="#pipeline">5. 典型管线与实例结果</a>
+        <a href="#cost">6. 代价：精度不是唯一的轴</a>
+        <a href="#limit">7. 作者的两条自陈与启示</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>建立"动态SLAM"的问题框架：动点为什么会毁掉定位，以及学界的两大应对思路（几何 / 语义）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>前面的视觉 SLAM、激光 SLAM 都默认静态世界。这一节引入"动点"这一现实扰动，是后续语义 SLAM、目标跟踪的入口。</p></div>
+      </div>
+      <h2>1. 为什么动态环境是死穴</h2>
+      <p>传统视觉 SLAM（以 ORB-SLAM 家族、VINS-Mono 为代表）在<strong>静态</strong>场景里很强，但一到动态、不可预测的环境就吃瘪：走动的人、行驶的车会把"用来算相机运动的特征点"带偏。论文用一张三层同心圆把"动态视觉 SLAM 处在什么位置"画得清清楚楚——</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/f579152f53b21e2bd921594b6e8d79c041eebbbfe5d4af7213419f66123dc9ee.jpg" alt="Fig. 1 动态视觉SLAM三层关系">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b> 最内层展示动态视觉 SLAM 与计算机视觉、深度学习、视觉 SLAM 的关系；中间层是动态视觉 SLAM 的分类；最外层是动态视觉 SLAM 的应用场景。<br>
+          <b>怎么看这张图：</b> 它告诉你动态 SLAM 是个"交叉地带"——内核是视觉 SLAM，外圈借力计算机视觉与深度学习，再往外是应用（AR、自动驾驶、机器人）。中间层那圈"分类"正是本综述的骨架：几何法 → 语义法（剔除 / 跟踪 / 建图）→ 多传感器融合。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/a01423fa22af634ea4f322350fda581dfeaefc4ede493de76609179cbdfd7ca1.jpg" alt="Fig. 3 综述结构思维导图">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b> 本综述结构的思维导图，提供论文组织的可视化概览，展示从动态视觉 SLAM 的基础挑战，经各类方法，到对未来研究方向总结的推进过程。<br>
+          <b>怎么看这张图：</b> 把它当成本节课的地图：II 节讲挑战与几何基础 → III 纯几何法 → IV–VII 语义法（剔除、跟踪、建图）→ VIII 多传感器融合 → IX 实验评测 → X 讨论。跟着这张图读，不会迷路。
+        </figcaption>
+      </figure>
+      <p>动态物体的破坏力体现在三处：<strong>地图一致性</strong>（动点被当成静止结构永久写进地图）、<strong>特征跟踪可靠性</strong>（匹配被动点带偏）、以及由此引发的<strong>系统鲁棒性</strong>下降。所以"如何判断一个点是不是动的"是整篇的核心技术问题。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>动态物体主要威胁 SLAM 的哪一块？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="回环检测关注的是『是否回到了同一个地方』，动态物体对它只是干扰项；真正被动点直接破坏的是『前端靠静态特征估相机运动』这一步。" onclick="lessonKit.answer(this,'q1')">只影响回环检测</button>
+          <button data-correct="yes" data-explanation="动点会出现在『用于估计相机运动的特征』里，把位姿估偏，进而污染地图一致性与跟踪可靠性。所以核心是前端的特征判断。" onclick="lessonKit.answer(this,'q1')">破坏前端的特征匹配与位姿估计</button>
+          <button data-correct="no" data-explanation="传感器本身（相机 / IMU）并不因场景里有动点而失效；失效的是『拿动点当静态特征去解算』的算法假设。" onclick="lessonKit.answer(this,'q1')">直接让相机硬件失效</button>
+        </div>
+        <div class="quiz-feedback" id="q1"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="geometry">
+      <h2>2. 几何方法：用对极与多视图约束揪出动态点</h2>
+      <p>最早、也最"轻量"的思路是<strong>纯几何</strong>：不训练任何模型，只用相机几何本身判断"哪些点不守规矩"。论文给了两条经典约束。</p>
+      <h3>对极几何约束（Epipolar Geometry）</h3>
+      <p>对两帧图像 $I_1, I_2$ 中正确匹配的特征点 $\mathbf{u}_1, \mathbf{u}_2$，若场景静止，它们满足<strong>基础矩阵（fundamental matrix）约束</strong>：</p>
+      <div class="formula-box">
+        $$ \mathbf{u}_2^{\mathrm{T}} \mathbf{F} \mathbf{u}_1 = 0 $$
+      </div>
+      <p>也就是说，$\mathbf{u}_2$ 必须落在由相机运动决定的一条<strong>极线</strong>上。论文用"特征点到极线的距离"来量化违例：</p>
+      <div class="formula-box">
+        $$ d_e = \frac{\left| \mathbf{u}_2^{\mathrm{T}} \mathbf{F} \mathbf{u}_1 \right|}{\sqrt{a^{2}+b^{2}}} $$
+      </div>
+      <p>若 $d_e$ 超过阈值 $d_{\mathrm{th}}$，这个点就是<strong>动态点</strong>——因为它"不守"相机运动规定的极线约束。多视图约束则更进一步：把点反投影到邻近若干关键帧的 3D 空间，再投回去看位置差；若差超过阈值 $d_{m\mathrm{th}}$，判为动态。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/efb8744d3c7348e80f6b847199bc1d73007361628a57de3af4a4e04f4cd6ac6b.jpg" alt="Fig. 4 对极与多视图约束">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b> (a) 对极几何约束 与 (b) 多视图几何约束 的示意图。<br>
+          <b>怎么看这张图：</b> (a) 画的是两帧之间，静态点的匹配必须落在极线上；动点（图中偏离极线的点）会"掉出"这条线，于是被挑出来。(b) 是多帧版本的思路：同一点在多个关键帧里的投影应当一致，不一致即判动。几何法的好处是<strong>不依赖任何训练数据</strong>。
+        </figcaption>
+      </figure>
+      <div class="callout"><h4>助教提醒：OCR 修正（数学符号）</h4><p>原文公式里把相机中心写成了 $\mathbf{0}_1\mathbf{0}_2\mathbf{P}$（数字 0），但相机中心字母是 <strong>O</strong>（如 $\mathbf{O}_1,\mathbf{O}_2$），不是数字零。我已在上面的讲解里改回字母 O。这是 PDF 转 Markdown 时"O/0 不分"的典型坑，看公式时务必警惕。</p></div>
+
+      <p>几何法的优点（论文 III-B 节总结）：<strong>简单、不依赖预训练模型、在结构化环境里效率高</strong>。缺点也致命：高度依赖"特征质量"；当动点太多，静态特征被淹没，定位就崩；而且它<strong>缺乏语义理解</strong>——纯靠几何有时分不清"静止的人"和"静止的柱子"。这就引出了语义方法。</p>
+    </section>
+
+    <section class="section-card" id="semantic">
+      <h2>3. 语义方法：检测 / 分割，以及那个"TV 还是显示器"之谜</h2>
+      <p>语义路线的核心：用深度学习给画面里的东西"贴标签"，知道"这是人 / 车 / 电视"，于是可以直接把<strong>已知会动的那类物体</strong>上的特征剔除或单独跟踪。论文用一张图对比了四种获取语义信息的方式——</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/e1bb337b3c6bb9b2dbf99950a35af428e2b91c70c7703069d86a1faf0028e27d.jpg" alt="Fig. 5(a) 原图">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/6e3d55323c9075682aec5621a831dcc5303edbc8cce00a0474c72dfa0f2c91bb.jpg" alt="Fig. 5(b) 目标检测">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/eac4323ff92f60d8ceb3ac331a71fc708f41f1e48ec575abbe1d51caf1638615.jpg" alt="Fig. 5(c) 语义分割">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/a00be96196fc6a4715cd600bb117403e2b753302a103f3b6e66f00cb1fb4b75b.jpg" alt="Fig. 5(d) 实例分割">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b> TUM RGB-D 数据集上语义信息获取的示意：(a) 原图；(b) 目标检测；(c) 语义分割；(d) 实例分割。原文特别点出：实例分割把它识别成 <strong>TV</strong>，是因为数据集的分类标准，尽管它在视觉上更像我们通常说的<strong>显示器（monitor）</strong>。<br>
+          <b>怎么看这张图：</b> 四张小图是同一场景的四种"理解层级"：(b) 只画框（这是什么类）；(c) 像素级分类（每个像素属于哪类）；(d) 实例级（区分"第几个"同类物体）。真正的教学金矿在 (d) 的标注——模型说它是 TV，可你肉眼觉得是显示器。这暴露一个深刻问题：<strong>标签体系 ≠ 物理真值，数据集的偏见会变成系统的先验</strong>。一个为"排除动态物体"而训练的 SLAM，会因为它"相信"那是 TV（通常放那不动）而可能误判其动态性。
+        </figcaption>
+      </figure>
+      <div class="callout"><h4>助教提醒：OCR 修正</h4><p>原文多处把 "Instance segmentation" 误识别成 "Instace segmentation"（TABLE III、IV），把 "Object detection" 误成 "Object detectation"（TABLE V），又把 "Fig. 4 illustrates thr epipolar" 的 "thr" 写成 "the"；第 III 节标题 "APPROACHESIN DYNAMIC SCENES" 漏了空格。另外第 I 节首句 "ISUAL SLAM" 漏了开头的 V，应为 <strong>VISUAL SLAM</strong>。我已逐一修正。</p></div>
+      <p>论文把语义法进一步拆成三个子方向（对应 IV / VI / VII 节）：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>① 动态物体剔除（V 节）</h4><p>判定为动的点直接不进位姿估计。提升精度，但依赖分割质量，且吃算力。</p></div>
+        <div class="mini-card"><h4>② 动态物体跟踪（VI 节）</h4><p>不只剔除，还跟踪动点、预测其运动，甚至把暂时静止的车当临时路标。适合高动态场景。</p></div>
+        <div class="mini-card"><h4>③ 语义建图（VII 节）</h4><p>在建图时写入物体标签，产出"带语义的八叉树地图"，支撑人机交互、AR。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="family">
+      <h2>4. 方法谱系：三张表怎么读</h2>
+      <p>综述用 TABLE II / III / IV / V 把代表方法按"用什么判动态、什么传感器、适用场景"列成家谱。我按主线给你串一遍。</p>
+      <h3>几何家族（TABLE II：纯几何动态 SLAM）</h3>
+      <p>代表：Kim et al. 2016（RGB-D，背景建模）、StaticFusion 2018（聚类 + 动态概率）、RP-VIO 2021（单目+IMU，用<strong>平面特征</strong>专攻动态）、DynaVINS 2023（单目+IMU，鲁棒集束调整）。共性：靠光流、平面、运动模型等<strong>几何手段</strong>判动态，不碰深度学习。</p>
+      <h3>语义定位家族（TABLE III：用语义信息做定位）</h3>
+      <p>代表：DS-SLAM 2018（语义分割 + 对极几何）、DynaSLAM 2018（关键帧静态加权）、DynaSLAM II 2021（实例分割 + 多视图，且跟踪物体）、DRG-SLAM 2022（点+线+面 + 语义分割 + 对极 + 多视图）。注意一个趋势：<strong>语义 + 几何混用</strong>越来越多。</p>
+      <h3>语义建图家族（TABLE IV：用语义信息建图）</h3>
+      <p>代表：MaskFusion 2018（带语义标签的 surfel）、MID-Fusion 2019（TSDF + 语义标签）、SG-SLAM 2023（Octomap + 3D 语义物体）、Cube-SLAM 2019（用检测结果造立方体）。地图类型从"点 / surfel"走向"<strong>带物体标签的语义地图</strong>"。</p>
+      <h3>多传感器融合家族（TABLE V）</h3>
+      <p>代表：Dynamic-VINS 2022（RGB-D+IMU，目标检测 + 深度）、DGM-VINS 2023（实例分割 + DBSCAN + 对极）、TwistSLAM++ 2023（立体+激光）、DynamSLAM 2023（立体+IMU，场景流）。融合让系统在不同传感器失效时仍能撑住。</p>
+      <div class="callout"><h4>读表的小心机</h4><p>表里 "Dynamic Object Tracking" 列用 √ 标记是否跟踪动点。你会发现：越往后（语义建图、融合），打 √ 的越多——说明"剔除"只是第一步，"理解并跟踪"才是更完整的方案。</p></div>
+    </section>
+
+    <section class="section-card" id="pipeline">
+      <h2>5. 典型管线与实例结果</h2>
+      <p>把上面所有思路收进一条"标准管线"，论文用 Fig. 6 画了出来；再用 Fig. 7、Fig. 8 给出两个真实系统的截图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/0a4da26db18c2e970e5c0568fcb1a335227167d106fb5db2ea0c8d1af8594009.jpg" alt="Fig. 6 动态视觉SLAM典型管线">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b> 动态视觉 SLAM 的典型管线。先输入 RGB 图像、深度图像与 IMU 等传感器数据；再做特征提取、匹配、跟踪；同时用目标检测或语义分割获取语义信息；语义 + 几何约束一起判断动态物体；属于动态物体的特征被剔除或单独跟踪；最后构建静态场景地图，有些方法还构建带物体标签的语义地图。<br>
+          <b>怎么看这张图：</b> 这就是第 4 节家谱的"总装图"：左路是经典 SLAM 前端（特征→跟踪），右路是语义分支（检测/分割），两路在"动态判断"汇合，再决定"剔还是跟"，最后出图。记住这个结构，你读任何一篇动态 SLAM 论文都能对号入座。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/825928dd68b246fd47e580608487d4c06cede7d333af866191174a164441caaf.jpg" alt="Fig. 7 DRG-SLAM Bonn结果">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b> DRG-SLAM 在 Bonn RGB-D 数据集上的截图。如图所示，通过把语义分割与几何约束结合，该方法有效地从人物身上移除了动态特征。<br>
+          <b>怎么看这张图：</b> 注意画面里的人——他们的特征点被"抠掉"了（不再参与建图），背景的静态结构被干净保留。这正是"语义 + 几何"协同的直观效果：语义负责"认出是人"，几何负责"确认他确实在动"。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/a821f0b9926eab7b3a103fe10ad1239c62449e3620e0facaa9a335ca9076438f.jpg" alt="Fig. 8 SG-SLAM 八叉树语义地图">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b> SG-SLAM 在 TUM RGB-D 数据集上构建的带语义标签的八叉树（octo-map）。<br>
+          <b>怎么看这张图：</b> 与 Fig. 7 不同，这里不只是"剔除动点"，而是产出一张<strong>带物体标签的语义八叉树地图</strong>——墙、家具、地面各有语义。这就是 VII 节"语义建图"的落地：地图从"一堆点"升级成"机器能读懂的房间描述"，是 AR、服务机器人的关键资产。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="cost">
+      <h2>6. 代价：精度不是唯一的轴</h2>
+      <p>这是原文最硬的一句批评，也是很多"刷精度"论文不会告诉你的：<strong>语义法虽准，但很多需要桌面级算力与 GPU，限制了在真实机器人平台上的部署</strong>。论文 TABLE VI 在 TUM RGB-D 动态数据集上，把各方法的定位误差（RMSE）和每帧耗时并列给出。挑最刺眼的两组对比：</p>
+      <table>
+        <thead><tr><th>方法</th><th>walking_rpy 精度 (RMSE, m)</th><th>Tracking 耗时</th><th>Semantic 耗时</th><th>部署平台</th></tr></thead>
+        <tbody>
+          <tr><td>DynaSLAM [6]</td><td>0.1360</td><td>237.57 ms / 帧</td><td>195.00 ms / 帧</td><td>桌面级 GPU（原论文用 Tesla M40）</td></tr>
+          <tr><td>Dynamic-VINS [122]</td><td>0.0629</td><td>5.54 ms / 帧</td><td>—（轻量）</td><td>嵌入式 Jetson AGX Xavier</td></tr>
+          <tr><td>SG-SLAM [115]</td><td><strong>0.0324</strong>（全场最佳）</td><td>39.51 ms / 帧</td><td>—</td><td>常规</td></tr>
+          <tr><td>DS-SLAM [5]</td><td>0.4442</td><td>76.45 ms / 帧</td><td>37.57 ms / 帧</td><td>常规</td></tr>
+        </tbody>
+      </table>
+      <p>这张表讲了三件事：</p>
+      <ul>
+        <li><strong>"精度不是唯一的轴"</strong>：DynaSLAM 在 walking_rpy 上 0.1360 看似不差，但它每帧要 237.57 + 195.00 ≈ <strong>432 ms</strong>——也就是大约 2.3 帧/秒，只能在桌面 GPU 上跑；而 Dynamic-VINS 在嵌入式 Jetson 上每帧只要 <strong>5.54 ms</strong>（约 180 帧/秒），walking_rpy 反而更好（0.0629）。能上机器人平台的，往往比"实验室最准的"更有用。</li>
+        <li><strong>最准的不一定是 heaviest 的</strong>：SG-SLAM 以 0.0324 拿下 walking_rpy 最佳，却只需 39.51 ms/帧——说明"轻"和"准"并非零和。</li>
+        <li><strong>序列难度 exposes 短板</strong>：walking_rpy（大幅度旋转平移 + 动点）是最难的序列，DS-SLAM 在这里掉到 0.4442，说明某些方法在剧烈运动时并不鲁棒。</li>
+      </ul>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>依据 TABLE VI，下面哪个结论最站得住？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="DynaSLAM 每帧约 432 ms，只能在桌面 GPU 跑；Dynamic-VINS 在嵌入式 Jetson 上 5.54 ms 且精度更好。『最准』和『能部署』是两件事。" onclick="lessonKit.answer(this,'q2')">DynaSLAM 最准，所以它是最佳方案</button>
+          <button data-correct="yes" data-explanation="TABLE VI 显示精度、每帧耗时、平台三者要一起看：Dynamic-VINS 在嵌入式平台又快又准，SG-SLAM 精度最佳且不算重。选方案必须按『应用约束』权衡，而非单看 RMSE。" onclick="lessonKit.answer(this,'q2')">要同时看精度、算力与平台</button>
+          <button data-correct="no" data-explanation="原文明确说语义法『需要桌面级算力与 GPU，限制了真实部署』，且没有任何单一方法被证明普遍最优。轻量 + 语义结合（如 Dynamic-VINS）正是为了破这个局。" onclick="lessonKit.answer(this,'q2')">语义法太重，应完全弃用</button>
+        </div>
+        <div class="quiz-feedback" id="q2"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>7. 作者的两条自陈与启示</h2>
+      <p>综述结尾，作者诚实地给自己划了两条边界，这对我们读任何 SLAM 综述都该成为"默认怀疑"：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 没有单一方法普遍更优</h4><p>原文（IX-B 节）：<em>"no single method emerges as universally superior"</em>。选哪个，取决于你的环境动态程度、算力、以及是否需要语义理解。所以别迷信"某一篇 SOTA"。</p></div>
+        <div class="mini-card"><h4>② 语义建图质量无法定量评估</h4><p>原文（IX 节）：<em>"the quantitative assessment of semantic mapping quality remains challenging, localization accuracy serves as a proxy"</em>。即：我们<strong>只能用定位精度当代理指标</strong>来间接判断地图好坏——但"地图语义对不对"并没有公认的量化标准。这意味着很多语义 SLAM 的"好"，其实是用定位精度"代考"的。</p></div>
+      </div>
+      <p>最后用一张时间线（Fig. 2）收尾——它把从几何到语义、再到融合的关键方法按年份排开，直观展示"演进"二字：早期（2016–2018）以几何 / 轻量语义为主，2020 后实例分割、多传感器融合密集出现。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DynamicSLAM-Survey/d28911ee427db77bf60fcbb006b0f0de4482a1b91853475abc2fecf92021bc0a.jpg" alt="Fig. 2 动态视觉SLAM方法时间线">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b> 一些值得注意的动态视觉 SLAM 方法的时间线。<br>
+          <b>怎么看这张图：</b> 横轴是年份，点是方法。你会看到节点越往后越密——说明这个方向在 2020 年后爆发；也能看到方法从"纯几何 / 单模态"逐步走向"深度学习语义 + 多传感器融合"。把它和 Fig. 1 的中间层分类对照着看，主线就完整了。
+        </figcaption>
+      </figure>
+
+      <section class="exercise-box">
+        <ol>
+          <li>对极几何约束 $\mathbf{u}_2^{\mathrm{T}} \mathbf{F} \mathbf{u}_1 = 0$ 说的是什么？为什么"距离极线过远"就能判一个点动态？<details class="exercise-answer"><summary>展开查看答案</summary><div>它说：若两点来自同一个静止三维点，则第二帧的匹配点必须落在由相机相对运动决定的极线上。动态点不遵守这个由相机运动决定的约束，所以它会明显偏离极线；用点到极线的距离 $d_e$ 超过阈值即可判为动态。本质是"用几何一致性检验运动一致性"。</div></details></li>
+          <li>Fig. 5(d) 中实例分割把显示器识别成 TV。为什么说"标签体系 ≠ 物理真值"？这对一个"剔除动态物体"的 SLAM 有什么隐患？<details class="exercise-answer"><summary>展开查看答案</summary><div>标签来自训练数据集的分类标准（该数据集把这类屏幕归为 TV），并非物体的物理本质。隐患：SLAM 若"信任"标签来决定是否剔除，可能因错误/僵化的类别先验，把本应保留或本应剔除的特征处理错；数据集偏见会静默地变成系统偏见。</div></details></li>
+          <li>纯几何法和语义法，各自最大的"软肋"是什么？（提示：看 III-B 与 V-B 节的 Advantages/Limitations）<details class="exercise-answer"><summary>展开查看答案</summary><div>几何法：依赖特征质量，动点过多时静态特征被淹没而失效，且缺乏语义理解（分不清"静止的人"和"静止的柱子"）。语义法：依赖分割精度（分错就剔错），且实时分割带来显著算力开销，很多需桌面 GPU。</div></details></li>
+          <li>按 TABLE VI，若你要在一台嵌入式无人机上部署动态 SLAM，为什么 Dynamic-VINS 比 DynaSLAM 更现实？请给出具体数字。<details class="exercise-answer"><summary>展开查看答案</summary><div>DynaSLAM 每帧约 237.57 + 195.00 ≈ 432 ms，只能跑在桌面级 GPU（Tesla M40）上；Dynamic-VINS 在 Jetson AGX Xavier 嵌入式平台每帧仅 5.54 ms（约 180 FPS），且 walking_rpy 精度 0.0629 反而优于 DynaSLAM 的 0.1360。无人机带不动桌面 GPU，所以后者更现实。</div></details></li>
+          <li>论文说"语义建图质量无法定量评估，只能用定位精度作 proxy"。这给我们比较两篇语义 SLAM 论文时提了什么醒？<details class="exercise-answer"><summary>展开查看答案</summary><div>提醒：当两篇论文都用定位 RMSE 证明自己"地图更好"时，这个证据是间接的——RMSE 好只说明定位好，并不直接证明语义标签 / 物体级地图正确。应追问是否有其他语义质量的定性或人工评估，避免把"定位 proxy"当成"建图真值"。</div></details></li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0011-深度学习视觉SLAM2023-模块化与联合学习.html">← 深度学习视觉 SLAM（2023）</a>
+        <a class="next" href="0013-视觉场景识别教程2024-评测协议的坑.html">视觉场景识别教程（2024）→</a>
+      </div>
+      <p class="foot-note">几何给你"快而省"，语义给你"懂而准"——真正落地的系统，往往在两者之间找那个属于你机器人的平衡点 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

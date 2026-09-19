@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeRF（上）：隐式表示与体渲染 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0036</div>
+      <h1>NeRF（上）：隐式表示与体渲染</h1>
+      <p class="subtitle">前三个模块都在解决「位姿怎么算」；从这一节起换问题——地图（场景本身）怎么表示？我们把「隐式表示」这个抽象词，拆成一条光线、一个 MLP、一个可微的合成公式 🔦</p>
+      <div class="hero-meta">
+        <span>🎯 主题：连续 5D 神经辐射场 + 体渲染，稀疏视角新视角合成</span>
+        <span>👥 作者：Mildenhall、Srinivasan、Tancik、Barron、Ramamoorthi、Ng（UC 伯克利 &amp; Google）</span>
+        <span>📅 2020 · ECCV · <i>NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 它想解决什么：稀疏视角新视角合成</a>
+        <a href="#b">2. 相关工作：两条脉络</a>
+        <a href="#c">3. ★ 连续体渲染（式1）</a>
+        <a href="#d">4. 离散化：分层采样与离散求积</a>
+        <a href="#e">5. ★ 两个网络、两条光线</a>
+        <a href="#f">6. 损失与可微性（式6）</a>
+        <a href="#g">7. 实验数字与存储权衡</a>
+        <a href="#h">8. 收尾：这些还不够</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 NeRF 想解决什么、它怎么用「连续 5D 场」绕开离散表示的存储代价；把体渲染式(1)讲给零基础的人听（重点是用生活类比讲透 $\sigma$ 与 $T$）；写出离散求积式(3)与 alpha 合成的关系；明白「两级网络」为什么要两级；并记住「5 MB vs 15 GB」这个冲击性对比。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0035</b>：地图怎么表示——从体素（TSDF/ESDF）到把场景塞进神经网络权重。接 <b>0015</b>：第一季用 3DGS 把「隐式→混合→显式」这条线点到为止，NeRF 当时只是背景；本季四节（0036–0039）把起点真正讲透。也呼应前三个模块（后端 / 几何 / 惯性）只解决「位姿怎么算」，这里换问题「场景怎么表示」。</p></div>
+      </div>
+
+      <h2>1. 它想解决什么：稀疏视角下的新视角合成</h2>
+      <p>先说任务，免得你以为这是个「锦上添花」的玩意儿。任务叫<b>新视角合成（novel view synthesis）</b>：给你一组从若干角度拍的图（视角是<b>稀疏</b>的，不是密密麻麻），要合成出「从没拍过的角度」长什么样。想象你绕着一尊雕塑拍了 100 张照片，然后想看「从雕塑正后方、稍微仰视」的样子——这个角度你根本没拍过，得靠模型「脑补」。</p>
+      <p>在 NeRF 之前，主流有两条路，原文都点名批评了：</p>
+      <ul>
+        <li><b>① 网格 / 体素 / MPI 这类<b>离散表示</b></b>。原文一句很重的话：它们的扩展性「<i>is fundamentally limited by poor time and space complexity due to their discrete sampling</i>」——因为要在 3D 空间里<b>离散地采样</b>，时间和空间的复杂度都很差；而且「<i>rendering higher resolution images requires a finer sampling of 3D space</i>」——想渲染更高分辨率，就得把 3D 空间采样得更密，存储和计算跟着爆。换句话说，<b>分辨率一高，这种表示就被自己的离散采样拖垮</b>。</li>
+        <li><b>② SRN 这类<b>隐式曲面</b>方法</b>。它们把场景建成一个隐式曲面，但原文说它们「<i>limited to simple shapes with low geometric complexity, resulting in oversmoothed renderings</i>」——只能憋出简单形状，几何复杂度一高就「过平滑」，画面糊掉。</li>
+      </ul>
+      <div class="callout">
+        <h4>★ NeRF 的策略：换成连续 5D 辐射场</h4>
+        <p>NeRF 不走离散采样，而是把场景建模成一个<b>连续的 5D 辐射场（radiance field）</b>。输入是位置 $(x,y,z)$ 加上观察方向 $(\theta,\phi)$，输出是颜色 $\mathbf c$ 和<b>体密度</b> $\sigma$。因为「连续」意味着可以任意精度查询，就绕开了离散采样的内存代价——原文说它「<i>requires just a fraction of the storage cost of those sampled volumetric representations</i>」（只需采样式体表示存储代价的一小部分）。<b>代价是优化慢</b>，这正是后面两节（0037–0038）要打的靶子。</p>
+      </div>
+      <p>还有一句很有冲击力的原话（原文第 26 行），建议你记住：</p>
+      <div class="formula-box">「<i>Crucially, our method overcomes the prohibitive storage costs of discretized voxel grids when modeling complex scenes at high-resolutions.</i>」（关键的是，我们的方法在建模高分辨率复杂场景时，克服了离散体素网格那令人咋舌的存储成本。）</div>
+      <p>下面这张图就是整个任务的「一图定义」：左边一圈是稀疏输入视角，右边两个是新合成的视角。</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/4c546d6379a663a3e76b9987582f2ec76a8944b1fa934336d691bb8ac0cddd55.jpg" alt="Fig. 1">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We present a method that optimizes a continuous 5D neural radiance field representation (volume density and view-dependent color at any continuous location) of a scene from a set of input images… Here, we visualize the set of 100 input views of the synthetic Drums scene randomly captured on a surrounding hemisphere, and we show two novel views rendered from our optimized NeRF representation.（我们提出一种方法，从一组输入图像优化出场景的连续 5D 神经辐射场表示（任意连续位置上的体密度与视角相关颜色）……这里可视化合成 Drums 场景在环绕半球上随机采集的 100 个输入视角，以及从优化后的 NeRF 表示渲染出的两个新视角。）<br>
+          <b>怎么看这张图：</b>这是整篇论文的任务定义图。左边（或上方）是环绕半球的 100 个输入相机位姿、全是真实拍到的视角；右边（或下方）两个是模型「脑补」出来的新视角——这些角度根本没拍过。一张图就讲清了「输入是一圈稀疏视角、输出是任意新视角」这回事。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 相关工作：两条脉络</h2>
+      <p>原文把前人的工作分成两条脉络，理解这两条脉络，你才知道 NeRF 站在哪个岔路口上。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>(i) Neural 3D Shape Representations</h4>
+          <p>用神经网络表示 3D 形状，典型是 SDF（符号距离场）或 occupancy（占据场）。这一类要么<b>依赖 3D 真值</b>当监督，要么用<b>可微渲染</b>放松这个要求、只用图像来训练。它们关心的是「表面在哪」，而不是「从某方向看是什么颜色」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>(ii) View Synthesis &amp; Image-Based Rendering</h4>
+          <p>直接从图像做新视角合成，又分两支：<b>基于网格（mesh-based）</b>与<b>基于体（volumetric）</b>。原文对 mesh 一支毫不客气（见下），对 volumetric 一支则要正面比拼（DeepVoxels、NV、LLFF 等）。</p>
+        </div>
+      </div>
+      <p>对 <b>mesh-based</b> 方法的批评，原文有两点：<b>第一</b>，image reprojection（图像重投影）优化「<i>often has local minima and is ill-posed</i>」——容易卡在局部极小、而且本身是病态问题；<b>第二</b>，它需要「<i>a template mesh with fixed topology</i>」——一个固定拓扑的模板网格，换个形状就得换模板，不灵活。</p>
+      <div class="callout">
+        <h4>★ 基线怎么拆</h4>
+        <p>原文的 §6.2 把要比较的基线拆成 <b>NV / SRN / LLFF</b> 三类。记住这三个缩写，它们在第 7 节的实验表里会一一出场：NV（Neural Volumes）是 volumetric 路线、SRN 是隐式曲面路线、LLFF 是真实前向场景的实时视图合成路线。后文 Fig. 5 会把这三家的失效模式摊在图上。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 连续体渲染（式1）：一条光线如何变成颜色</h2>
+      <p>这是本节第一个核心，也是「隐式表示」从抽象变具体的第一步。先给第一个术语：</p>
+      <div class="callout">
+        <h4>术语：辐射场（radiance field）与体密度（volume density）</h4>
+        <p><b>辐射场</b>可以类比成「一团智能雾」：雾里每个点，从每个方向看，都有属于自己的颜色和「厚度」。数学上，它就是一个<b>从 5D 坐标映射到颜色和密度</b>的函数。<b>体密度</b> $\sigma(\mathbf x)$ 就是这团雾在 $\mathbf x$ 处的「不透明程度」——密度越大，光越容易被挡住。以后提到 $\sigma$，你脑子里就放一个「雾的浓淡」的图。</p>
+      </div>
+      <p>现在问一个具体问题：从相机出发射出一条光线 $\mathbf r$，它最后看到的颜色 $C(\mathbf r)$ 该怎么算？原文给出连续形式的体渲染公式（式1）：</p>
+      <div class="formula-box">
+        $$C(\mathbf r)=\int_{t_n}^{t_f}T(t)\,\sigma(\mathbf r(t))\,\mathbf c(\mathbf r(t),\mathbf d)\,dt,\qquad T(t)=\exp\Big(-\int_{t_n}^{t}\sigma(\mathbf r(s))\,ds\Big)$$
+      </div>
+      <p>符号逐个拆开（这是零基础能不能读懂的分水岭，请慢看）：</p>
+      <ul>
+        <li>$C(\mathbf r)$：光线 $\mathbf r$ 的<b>期望颜色</b>，也就是这条光线最终「看到」的 RGB。</li>
+        <li>$t_n,t_f$：这条光线查询范围的<b>近边界 / 远边界</b>（相机前从哪到哪这一段 3D 空间）。</li>
+        <li>$\sigma(\mathbf x)$：<b>体密度</b>。原文给了一个极准的定义——它是「一束光线在位置 $\mathbf x$ 处、被一个无穷小颗粒终止的<b>微分概率</b>」（the differential probability that the ray terminates at an infinitesimal particle at location $\mathbf x$）。注意「微分概率」四个字：它不是「一定会停」，而是「在这一点附近、单位距离里停下来的概率密度」。</li>
+        <li>$\mathbf c$：<b>方向相关的出射辐射</b>，也就是从方向 $\mathbf d$ 看、这个点「发出来」的颜色。</li>
+        <li>$T(t)$：<b>累积透射率（accumulated transmittance）</b>。原文定义它是「光线从 $t_n$ 走到 $t$<b>而没有撞上任何颗粒</b>的概率」（the probability that the ray travels from $t_n$ to $t$ without hitting any other particle）。</li>
+      </ul>
+      <div class="callout">
+        <h4>★ 生活类比：半透明玻璃层层叠加</h4>
+        <p>把 $\sigma\,\delta$（一小段里的密度乘上长度）想成「这薄薄一层有多不透明」；把 $T(t)$ 想成「走到这里时，光还剩下多少没被挡住」。想象你隔着一叠<b>半透明玻璃</b>看远处：第一片玻璃挡掉一点光（贡献一点自己的颜色），剩下的光穿过去找第二片，再挡一点……越往后的玻璃，能收到的光就越少。$T(t)$ 就是「到这一片为止，光还剩几成」；$\sigma$ 就是「这片玻璃本身有多挡光」。<b>整条光线看到的颜色，就是每一片玻璃的颜色，按「它还剩多少光能贡献」加权加起来</b>——这正是式(1)在做的事。</p>
+      </div>
+      <p>接一下上一节（0035）：TSDF 里存的是「到表面的距离」，这里存的则是「光线在这里终止的微分概率」。<b>两者都是「给每个空间位置一个标量」，但一个描述几何、一个描述遮挡。</b>从「到表面的距离」到「终止的微分概率」，是地图表示思路的一次大转弯。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>0035 的 TSDF 存「到表面的距离」、NeRF 的 $\sigma$ 存「光线终止的微分概率」。这两者本质相同吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。两者都是「给每个空间位置一个标量」，但 TSDF 那个标量描述几何（离表面多近），NeRF 的 $\sigma$ 那个标量描述遮挡（光在这停下的概率密度）。一个是几何量，一个是光学量，用途不同。" onclick="lessonKit.answer(this,'q0036a')">都是给每点一个标量，但一个描述几何、一个描述遮挡</button>
+          <button data-correct="no" data-explanation="不对。只是都「存成一个标量」这个外壳像，物理含义完全不同：一个是距离、一个是概率密度，不能混为一谈。" onclick="lessonKit.answer(this,'q0036a')">完全一样，只是名字不同</button>
+        </div>
+        <div class="quiz-feedback" id="q0036a"></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/75b7186333ad0ca8612b0c17e7155a0cf9c88cb6b0c12288531ea064183820f5.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>An overview of our neural radiance field scene representation and differentiable rendering procedure. We synthesize images by sampling 5D coordinates (location and viewing direction) along camera rays (a), feeding those locations into an MLP to produce a color and volume density (b), and using volume rendering techniques to composite these values into an image (c). This rendering function is differentiable, so we can optimize our scene representation by minimizing the residual between synthesized and ground truth observed images (d).（神经辐射场场景表示与可微渲染流程总览——沿相机光线采样 5D 坐标 (a) → 送入 MLP 输出颜色与体密度 (b) → 用体渲染合成图像 (c) → 该渲染函数可微，故可用合成图与真值图的残差反传优化场景表示 (d)。）<br>
+          <b>怎么看这张图：</b>这是本节的头号图，也是整篇论文的「地图」。(a) 沿相机光线采样 5D 坐标、(b) 丢进一个 MLP 吐出颜色和体密度、(c) 用体渲染把这一串值合成成一张图、(d) 因为合成可微，就能用「合成图 − 真值图」的残差反传去优化场景。请记住这四步 (a)(b)(c)(d)，它们正好对应本节的四个小节。
+        </figcaption>
+      </figure>
+      <p>最后补一句：为什么颜色 $\mathbf c$ 要写成 $\mathbf c(\mathbf r(t),\mathbf d)$，即<b>依赖观察方向 $\mathbf d$</b>？因为真实世界里很多东西是「非朗伯」的——金属、玻璃会从特定角度反光（镜面高光）。同一个点，从正面看是暗的、从侧面看可能很亮。下面这张图就把「颜色依赖方向」这件事可视化给你看：</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/a101befb54a24100f2e0a9ea4268f3629081b6709f859923658074bc898ec1b3.jpg" alt="Fig. 3">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>A visualization of view-dependent emitted radiance… we visualize example directional color distributions for two spatial locations in our neural representation of the Ship scene… (c) we show how this behavior generalizes continuously across the whole hemisphere of viewing directions.（视角相关出射辐射的可视化……我们可视化 Ship 场景神经表示中两个空间位置的方向色分布……(c) 展示这种行为如何在整个视角半球上连续泛化。）<br>
+          <b>怎么看这张图：</b>它解释的是 5D 里那 2D 方向分量到底有什么用。图里两个空间点，从不同角度看会呈现不同颜色；(c) 显示这种行为能在整个「视角半球」上连续地泛化。这就是推土机履带上的镜面反光、水面的闪烁这类<b>非朗伯效应</b>——正因为把方向也作为输入，NeRF 才抓得住。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 离散化：分层采样（式2）与离散求积（式3）</h2>
+      <p>式(1)是个连续积分，计算机算不了连续，得离散化。但怎么在 $[t_n,t_f]$ 上选采样点，有讲究。</p>
+      <h3>4.1 分层采样（式2）——先把区间切成桶</h3>
+      <p>第一步是把光线要查的区间分成 $N$ 个等距的「桶」，在每个桶里<b>均匀随机</b>抽一个点：</p>
+      <div class="formula-box">
+        $$t_i\sim\mathcal U\!\left[t_n+\frac{i-1}{N}(t_f-t_n),\ t_n+\frac{i}{N}(t_f-t_n)\right]$$
+      </div>
+      <p>也就是把 $[t_n,t_f]$ 均分成 $N$ 段，第 $i$ 段里抽一点 $t_i$。<b>为什么要随机、而不是固定点？</b>原文说，如果用确定性的求积（固定点），「<i>would effectively limit our representation's resolution because the MLP would only be queried at a fixed discrete set of locations</i>」——MLP 永远只在那几个固定位置被问，表示的分辨率就被这些固定点锁死了，等于自己给自己设了上限。</p>
+      <h3>4.2 离散求积（式3）——把积分变成求和</h3>
+      <p>把式(1)的积分近似成沿光线的求和：</p>
+      <div class="formula-box">
+        $$\hat C(\mathbf r)=\sum_{i=1}^{N}T_i\big(1-\exp(-\sigma_i\delta_i)\big)\mathbf c_i,\qquad T_i=\exp\!\left(-\sum_{j=1}^{i-1}\sigma_j\delta_j\right),\qquad \delta_i=t_{i+1}-t_i$$
+      </div>
+      <p>其中 $\delta_i=t_{i+1}-t_i$ 是第 $i$ 段的长度。这里冒出两个关键量：</p>
+      <ul>
+        <li>$\alpha_i=1-\exp(-\sigma_i\delta_i)$ 就是传统的 <b>alpha 合成（alpha compositing）</b>权重——它代表「这一段对最终颜色的贡献有多大」。</li>
+        <li>$T_i=\exp\!\big(-\sum_{j=1}^{i-1}\sigma_j\delta_j\big)$ 是「前面所有段累积的透射率」，也就是<b>前面的遮挡</b>。</li>
+      </ul>
+      <div class="callout">
+        <h4>★ 一句话记住</h4>
+        <p>$\alpha_i$ 是「<b>这一段自己贡献多少</b>」，$T_i$ 是「<b>前面的东西挡掉了多少、还剩多少光能轮到这一段</b>」。<b>两者相乘再乘颜色、沿光线加起来，就是这条光线最终看到的颜色</b>。这正好是上一节「半透明玻璃层层叠加」的数学版。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 两个网络、两条光线：为什么要两级</h2>
+      <p>式(2)(3) 只讲了「在一组采样点上求积」。但 NeRF 真正让它work的渲染技巧是：<b>不是只采一组点，而是采两组</b>。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>粗网络（coarse）</h4>
+          <p>先<b>均匀</b>抽 $N_c=64$ 个点，跑一个粗 MLP，得到每个点的 $\sigma$ 和颜色。</p>
+        </div>
+        <div class="mini-card">
+          <h4>细网络（fine）</h4>
+          <p>根据粗网络的结果，在「更可能有东西」的地方再抽 $N_f=128$ 个点，跑细 MLP，在 $N_c+N_f$ 个点上算最终颜色。</p>
+        </div>
+      </div>
+      <p>具体怎么用粗网络去决定「往哪多采」？把粗网络算出来的 alpha 合成权重 $w_i=T_i\big(1-\exp(-\sigma_i\delta_i)\big)$ <b>归一化</b>，得到沿光线的一个<b>分段常数概率密度（PDF）</b>；然后对这个 PDF 做<b>逆变换采样</b>，抽出 $N_f=128$ 个更密的点。原文特意划清了它和经典重要性采样的区别：</p>
+      <div class="formula-box">「<i>This addresses a similar goal as importance sampling, but we use the sampled values as a nonuniform discretization of the whole integration domain rather than treating each sample as an independent probabilistic estimate of the entire integral.</i>」（这达成了和重要性采样相似的目标，但我们将采样值用作整个积分域的<b>非均匀离散</b>，而不是把每个样本当成对整个积分的独立概率估计。）</div>
+      <div class="callout">
+        <h4>★ 0036 只讲「为什么要两级」，细节留给 0037</h4>
+        <p>这一节你只需记住「为什么要两级」的动机：原文说，如果只均匀采样，「<i>free space and occluded regions that do not contribute to the rendered image are still sampled repeatedly</i>」——空荡荡的空间、以及已经被挡死的区域，也会被反复浪费采样。<b>两级采样的意义，就是让采样点集中到「真正有内容」的地方</b>。至于那个 PDF 怎么构造、逆变换采样具体怎么做，是下一节（0037）的装置二要展开的。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 损失与可微性（式6）：渲染函数可微</h2>
+      <p>前面所有设计，都为了服务一句话：<b>整个渲染过程是可微的</b>。这是 NeRF 能「从图像反推出场景」的根本。</p>
+      <p>训练时，对一批光线 $\mathcal R$，同时用粗网络和细网络各渲染一张图，和真值比残差。损失函数（式6）是：</p>
+      <div class="formula-box">
+        $$\mathcal L=\sum_{\mathbf r\in\mathcal R}\big\|\hat C_c(\mathbf r)-C(\mathbf r)\big\|_2^2+\big\|\hat C_f(\mathbf r)-C(\mathbf r)\big\|_2^2$$
+      </div>
+      <p>注意下标 $c$（coarse 粗）和 $f$（fine 细）——<b>粗网络也要算损失</b>，不只是细网络。为什么要让粗网络也参与优化？因为粗网络的输出决定了「往哪多采样」，如果它不学好，细网络的采样位置就不对。</p>
+      <div class="callout">
+        <h4>★ 核心逻辑：和前面几节「后端思维」完全一致</h4>
+        <p>整条链路是：<b>渲染函数可微 → 用渲染图与真值图的残差反传 → 直接优化场景表示（MLP 的权重）</b>。请点明：这和前面几节的后端（BA / 图优化）思维<b>同根同源</b>——都是「<b>最小化残差</b>」。区别只在于「要优化的对象」从位姿，变成了<b>场景本身</b>。你之前在 0018–0022、0028 学到的「残差驱动优化」，在这里换了个战场继续用。</p>
+      </div>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>NeRF 的「渲染函数可微」到底意味着什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。可微意味着可以用「合成图 − 真值图」的残差反传，直接优化场景表示（MLP 权重）。这和后端「最小化残差」同根，只是优化对象从位姿变成场景本身。" onclick="lessonKit.answer(this,'q0036b')">可以用合成图与真值图的残差反传，直接优化场景表示</button>
+          <button data-correct="no" data-explanation="不对。可微恰恰意味着网络参数不是固定的——它要被残差反传更新；位姿在这里通常是已知输入，不是被优化的主对象。" onclick="lessonKit.answer(this,'q0036b')">意味着网络参数固定，只优化相机位姿</button>
+        </div>
+        <div class="quiz-feedback" id="q0036b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字与存储权衡</h2>
+      <p>这一节先给你全局印象，<b>细节（位置编码等带来的提升）留给 0037</b>。先说三个数据集：</p>
+      <ul>
+        <li><b>DeepVoxels 合成</b>：4 个朗伯物体，$512\times512$，479 张输入 / 1000 张测试。</li>
+        <li><b>Realistic Synthetic 360°</b>（作者自建）：8 个 path-traced（路径追踪）物体，100 输入 / 200 测试，$800\times800$。</li>
+        <li><b>Real Forward-Facing</b>：8 个手机拍摄的真实场景，其中 5 个取自 LLFF，每个 20–62 张图，$1008\times756$。</li>
+      </ul>
+      <p>关键的 PSNR（峰值信噪比，越高越好）对比，抄自 Table 1：</p>
+      <table>
+        <thead><tr><th>数据集</th><th>SRN</th><th>NV</th><th>LLFF</th><th>Ours（NeRF）</th></tr></thead>
+        <tbody>
+          <tr><td>Diffuse Synthetic 360°</td><td>33.20</td><td>29.62</td><td>34.38</td><td><b>40.15</b></td></tr>
+          <tr><td>Realistic Synthetic 360°</td><td>22.26</td><td>26.05</td><td>24.88</td><td><b>31.01</b></td></tr>
+          <tr><td>Real Forward-Facing</td><td>22.84</td><td>—</td><td>24.13</td><td><b>26.50</b></td></tr>
+        </tbody>
+      </table>
+      <p>说明三点：① NeRF 在三类数据上全盘领先；② Real Forward-Facing 那行 NV 显示「—」是<b>破折号</b>，意思是 NV 没法在这类数据上评估（正文解释 NV 只能重建有界体积内的物体，真实前向场景不满足）；③ 原文也老实承认 LLFF 的 LPIPS（感知相似度）略优，但在视频上新视角一致性更好——别把 NeRF 说成「全方位碾压」。</p>
+      <div class="callout">
+        <h4>★ 最有冲击力的对比：存储</h4>
+        <p>NeRF 的网络权重只有 <b>5 MB</b>，原文说相对 LLFF 是「<i>a relative compression of 3000</i>」（约 3000 倍压缩）；而 LLFF 单个「Realistic Synthetic」场景的体素网格<b>超过 15 GB</b>。5 MB 对 15 GB——这正是「连续隐式表示 vs 离散体素」在存储上的天壤之别，也呼应了开头那句「克服离散体素网格的存储成本」。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_NeRF/150258b525132b809619e8db6ebb607d0963e0b0196126f05e653055129c766f.jpg" alt="Fig. 5">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Comparisons on test-set views for scenes from our new synthetic dataset generated with a physically-based renderer. Our method is able to recover fine details… LLFF exhibits banding artifacts… SRN produces blurry and distorted renderings… Neural Volumes… completely fails to recover the geometry of Ship's rigging.（在新的物理渲染器合成数据集上，各方法在测试视角的对比。本方法能恢复细节……LLFF 出现条带伪影……SRN 渲染模糊失真……Neural Volumes 完全无法恢复 Ship 帆索的几何。）<br>
+          <b>怎么看这张图：</b>这是「为什么选隐式」最有说服力的一张。三家基线的失效模式被摊开：SRN 糊且扭曲、LLFF 有条带伪影、Neural Volumes 连 Ship 的帆索几何都重建不出；而 NeRF 能恢复出细枝末节。一眼看懂「离散 / 隐式曲面」路线的瓶颈在哪。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 收尾：这些还不够</h2>
+      <p>读到这里，你应该已经把「隐式表示」从抽象词，变成了三个能画出来的东西：<b>一条光线、一个 MLP、一个可微的合成公式</b>。式(1)(2)(3)(6) 也都讲透了。</p>
+      <div class="callout">
+        <h4>★ 原文自己泼的冷水（留钩子）</h4>
+        <p>但原文第 99 行明说：这些组件「<i>are not sufficient for achieving state-of-the-art quality</i>」（不足以达到最先进的画质）。这句直接抛给下一节。<b>还缺什么？</b>——位置编码、分层采样的<b>具体细节</b>、以及一堆<b>训练技巧</b>。下一节（0037）专门讲「让它真正 work 的三个装置，以及它们带来的代价」。</p>
+      </div>
+      <div class="paper-divider"></div>
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>用大白话讲清 NeRF 用「连续 5D 场」绕开了离散表示的什么代价，并引一句原文。</p>
+          <p><b>答：</b>离散表示（网格/体素/MPI）要在 3D 空间离散采样，时间和空间复杂度差，且分辨率越高越要吃内存；NeRF 用连续场任意精度查询，只需采样式体表示的「一小部分」存储。原句：「requires just a fraction of the storage cost of those sampled volumetric representations」，以及第 26 行「overcomes the prohibitive storage costs of discretized voxel grids」。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>用「半透明玻璃层层叠加」的生活类比，讲清 $\sigma$ 与 $T(t)$ 分别是什么。</p>
+          <p><b>答：</b>$\sigma\,\delta$ 是「这薄薄一层玻璃有多不透明」，$T(t)$ 是「走到这里时光还剩几成没被挡住」。整条光线看到的颜色 = 每片玻璃的颜色按「它还剩多少光能贡献」加权相加。$\sigma$ 是这点的「雾的浓淡」，$T$ 是「前面累积穿透过来的光」。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>写出连续体渲染式(1)，并说明 $T(t)$ 的原文定义。</p>
+          <p><b>答：</b>$$C(\mathbf r)=\int_{t_n}^{t_f}T(t)\,\sigma(\mathbf r(t))\,\mathbf c(\mathbf r(t),\mathbf d)\,dt,\ T(t)=\exp\!\Big(-\int_{t_n}^{t}\sigma(\mathbf r(s))\,ds\Big)$$ $T(t)$ 是「光线从近边界 $t_n$ 走到 $t$ 而没有撞上任何颗粒的概率」（累积透射率）。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>式(3) 里的 $\alpha_i$ 和 $T_i$ 物理含义各是什么？它们和传统 alpha 合成什么关系？</p>
+          <p><b>答：</b>$\alpha_i=1-\exp(-\sigma_i\delta_i)$ 是「这一段对最终颜色的贡献权重」，即传统的 alpha 合成不透明度；$T_i=\exp(-\sum_{j&lt;i}\sigma_j\delta_j)$ 是「前面的遮挡（前面段累积透射率）」。颜色 = $\sum_i T_i\,\alpha_i\,\mathbf c_i$，正是 front-to-back 的半透明图层叠加。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 5：</b>为什么 NeRF 用两级网络（粗+细）而不是只均匀采样？粗网络是「粗结果」吗？</p>
+          <p><b>答：</b>只均匀采样会把计算浪费在空空间与已被遮挡的区域。两级做法是：先用均匀 $N_c=64$ 点跑粗网络，把 alpha 权重归一化成沿光线的分段常数 PDF，再逆变换采样 $N_f=128$ 个更密的点。<b>粗网络不是「粗结果」，而是「给出该往哪里多采样的概率密度」</b>，让采样集中到真正有内容的地方。具体 PDF 与逆变换采样细节在 0037。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0035-Voxblox2017-从TSDF到ESDF.html">← 上一课：Voxblox（2017）</a>
+        <a class="next" href="0037-NeRF下-位置编码与分层采样.html">下一课：NeRF（下） →</a>
+      </div>
+      <p class="foot-note">把场景塞进 MLP 权重里，是地图表示的又一次大转弯 🧠 下一节我们补上让它真正 work 的三个装置。</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

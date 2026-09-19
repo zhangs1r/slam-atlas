@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VINS-Mono（上）：四模块管线与联合初始化 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0057</div>
+      <h1>VINS-Mono（上）：四模块管线与联合初始化</h1>
+      <p class="subtitle">这是一篇教科书级的系统论文，也是我们等了两季的那个答案——第二季讲预积分时，原文明确说自己<b>没有</b>初始化章节，那是它的空白。这一节就把它补上 📐</p>
+      <div class="hero-meta">
+        <span>🎯 主题：单目视觉惯性系统的完整管线与冷启动初始化</span>
+        <span>👥 作者：秦通、李攀硕、沈劭劼（HKUST）</span>
+        <span>📅 2018 · <i>VINS-Mono: A Robust and Versatile Monocular Visual-Inertial State Estimator</i>（IEEE T-RO）</span>
+      </div>
+      <div class="toc">
+        <a href="#why">这一节要回答什么</a>
+        <a href="#pipeline">全景：四模块与三线程</a>
+        <a href="#pre">预处理：光流、关键帧、预积分</a>
+        <a href="#init">★ 联合初始化：四步把尺度找出来</a>
+        <a href="#gravity">重力细化：为什么只动两个自由度</a>
+        <a href="#limit">诚实的边界</a>
+        <a href="#drill">巩固练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 画出 VINS-Mono 的四模块管线，说清每个模块的输入输出；② 逐步复述初始化四步，并解释每一步在解决什么；③ 讲明白「重力细化为什么要降到 2 自由度、为什么要在切平面上参数化」；④ 用自己的话回答第二季那个悬了两季的问题——<b>单目 VIO 到底怎么把尺度找出来</b>。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这是<b>悬念⑤的正面答案</b>。第二季 <b>0029 / 0030</b> 讲预积分时，原文明确没有初始化章节；<b>0024</b> 里说过单目只有 bearing、尺度不可观；本季 <b>0047</b> 用 sim(3) 把尺度当变量估，<b>0048</b> 直接不管尺度，<b>0049 VI-DSO</b> 用 IMU 补尺度（它给了四步初始化，但很简略）。本节把这个流程完整展开。同时它接 <b>0028 MSCKF</b>——那一篇是滤波派的开端，本节则是优化派的主干。</p>
+        </div>
+      </div>
+
+      <h2>1. 先说说这一篇为什么值得单独拆两节</h2>
+      <p>在视觉惯性导航这个方向里，VINS-Mono 大概是引用最多、传播最广的系统之一。它的价值不在某个特别炫的新算法，而在于<b>它把一整套东西做全了、做通了，并且开源了</b>——从测量预处理、初始化、紧耦合优化、回环检测、全局位姿图，一直到地图保存与复用，全都覆盖。</p>
+      <p>原文在引言里给自己的定位有一句话很关键：相对于当时最先进的 OKVIS（面向双目），<b>他们专门针对单目相机提出了初始化流程、关键帧选择判据，并用大视场角（FOV）相机来提升跟踪表现</b>；而且「我们的算法提出了一个<b>完整</b>的系统，包含回环与位姿图复用模块」。</p>
+      <p>所以这一节（上）讲<b>怎么起手</b>（预处理 + 初始化），下一节（下）讲<b>怎么跑下去并收尾</b>（后端 + 回环 + 4 自由度位姿图）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/3ddab9f11d2f34ebca84da2aad433ff81181a582d228a244913d1942d9ef924c.jpg" alt="VINS-Mono full pipeline block diagram">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Block diagram illustrating the full pipeline of the proposed monocular VINS. The system starts with measurement preprocessing (see Section IV). The initialization procedure (see Section V) provides all necessary values for bootstrapping the subsequent nonlinear optimization-based VIO. The VIO with relocalization modules (see Sections VI and VII) tightly fuses preintegrated IMU measurements...（本单目 VINS 完整管线框图。系统从测量预处理开始（第 IV 节）。初始化流程（第 V 节）为后续基于非线性优化的 VIO 提供全部必要的初始值。带重定位模块的 VIO（第 VI、VII 节）紧耦合融合预积分 IMU 测量……）<br>
+          <b>怎么看这张图：</b>这是本课的目录。请把它<b>上下对折</b>来看：上半是「数据进来之后先做什么」，下半是「估出来的状态怎么用」。重点找三件事——① 图像和 IMU 是<b>两条并行的入口</b>，在预处理阶段就已经各自处理好了；② 中间那个「初始化」是一个<b>特殊的、只发生一次</b>的阶段（它提供 pose、velocity、gravity、bias、3D 特征位置）；③ 右侧有个回到起点的箭头，那是<b>位姿图复用</b>。原文图注也特意强调了最后一块：姿态图优化模块会做全局优化消除漂移，而且「它也能实现位姿图复用」。<br>
+          <b>要记住的一句话：</b>这是一条「两条输入、一次初始化、持续优化、最后收口」的流水线。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="pipeline">
+      <h2>2. 全景：四个模块，三条线程</h2>
+      <p>先把骨架立起来。原文第 III 节把系统拆成四块，并明确说了它们的执行方式：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 测量预处理</h4>
+          <p>特征提取与跟踪；两帧之间的 IMU 测量做预积分</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 初始化</h4>
+          <p>提供「全部必要的值」：位姿、速度、重力向量、陀螺仪偏置、三维特征位置——用于给后续的非线性优化 VIO 起手</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ VIO（含重定位）</h4>
+          <p>紧耦合地融合预积分 IMU 测量与特征观测</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 位姿图优化</h4>
+          <p>接收通过几何验证的重定位结果，做全局优化以消除漂移，并实现位姿图复用</p>
+        </div>
+      </div>
+      <p>原文还写了一句容易被跳过、但在工程上很重要的话：<b>「VIO 与位姿图优化这两个模块在分离的线程中并发运行。」</b>这句话看着平淡，它意味着<b>回环发生时系统不会卡住</b>——前端该出位姿还是照出，后端慢慢把全局位姿图调好。下一节我们会看到这个设计的具体收益。</p>
+      <p>原文还给了一个术语约定，顺便把坐标系说清了：上标 $w$ 是世界系、$b$ 是机体系（<b>与 IMU 系相同</b>）、$c$ 是相机系；重力方向与<b>世界系的 z 轴对齐</b>；$\mathbf{g}^w = [0,0,g]^\top$。这几句话是后面所有公式的底。</p>
+      <p>另外原文解释了为什么用单位球面上的残差（这一点值得单独记，因为它和「大 FOV 相机」这个卖点直接相关）：传统针孔模型在图像平面上定义重投影误差，而 VINS-Mono 把它定义在<b>单位球面</b>上，因为「几乎所有类型的相机，包括广角、鱼眼、全向相机，其光学过程都可以建模为一条连接单位球面的单位射线」。</p>
+    </section>
+
+    <section class="section-card" id="pre">
+      <h2>3. 预处理：光流、关键帧、预积分</h2>
+
+      <h3>3.1 视觉前端：KLT 光流 + 均匀分布</h3>
+      <p>做法和大多数特征法系统相似，但有三个细节值得注意：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>跟踪与检测</h4>
+          <p>已有特征用 <b>KLT 稀疏光流</b>跟踪；同时在最新帧检测新角点，以维持每帧 <b>100–300 个特征</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>均匀分布</h4>
+          <p>检测器<b>强制特征的最小间隔</b>，避免特征全挤在纹理丰富的角落（这一点与 <b>0043 ORB-SLAM</b> 的「网格化每格取前 N 个」是同一种思路）</p>
+        </div>
+        <div class="mini-card">
+          <h4>外点剔除</h4>
+          <p>2D 特征<b>先去畸变</b>，然后投影到单位球面；在此之前用 <b>RANSAC + 基础矩阵模型</b>剔除外点</p>
+        </div>
+      </div>
+
+      <h3>3.2 ★ 关键帧的两条判据（其中一条藏着妙招）</h3>
+      <p>原文给了两条判据：</p>
+      <p><b>判据一：平均视差超过阈值。</b>但这里有个陷阱——原文特意指出：<b>不只是平移会产生视差，旋转也会</b>。而纯旋转产生的「视差」是<b>没法三角化</b>的（因为没有基线，前面 0046 / 0047 讲过的道理）。</p>
+      <p>于是作者用了一招：<b>用陀螺仪的短期积分把旋转补偿掉</b>，再算视差。更妙的是紧跟着的那句说明——这个旋转补偿<b>只用于关键帧选择</b>，不参与 VINS 公式中的旋转计算。原文还顺手说明了这样做的好处：<b>即使陀螺仪噪声很大或有偏，最坏也只是关键帧选得不理想，不会直接影响估计质量。</b></p>
+      <p><b>判据二：跟踪质量。</b>如果被跟踪的特征数掉到某个阈值以下，也判为新关键帧。这一条的目的是「避免特征轨迹完全丢失」。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 为什么关键帧选择要先把「旋转造成的视差」扣掉</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">同一个物体在两帧里都「移动」了，但只有平移造成的移动能用来算深度</text>
+
+          <!-- 左：纯旋转 -->
+          <rect x="30" y="72" width="400" height="300" fill="#fdf6f4" stroke="#c62828" stroke-width="2" rx="10"/>
+          <text x="230" y="98" fill="#8e2020" font-size="14" text-anchor="middle" font-weight="700">相机原地转：视差是「假的」</text>
+          <!-- 物体 -->
+          <rect x="300" y="176" width="46" height="46" fill="#90a4ae" stroke="#546e7a" stroke-width="1.6"/>
+          <text x="323" y="204" fill="#263238" font-size="10.5" text-anchor="middle">物体</text>
+          <!-- 相机两个朝向 -->
+          <circle cx="120" cy="260" r="13" fill="#455a64"/>
+          <path d="M 133 256 L 296 186" stroke="#1565c0" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M 133 264 L 296 216" stroke="#1565c0" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M 140 240 A 46 46 0 0 0 160 246" fill="none" stroke="#c62828" stroke-width="2"/>
+          <text x="120" y="292" fill="#37474f" font-size="11" text-anchor="middle">相机中心不动</text>
+          <text x="230" y="330" fill="#8e2020" font-size="12" text-anchor="middle">物体在图上位置变了，但两条视线</text>
+          <text x="230" y="350" fill="#8e2020" font-size="12" text-anchor="middle">来自<tspan font-weight="700">同一个</tspan>相机中心 → 交不出深度</text>
+
+          <!-- 右：平移 -->
+          <rect x="470" y="72" width="400" height="300" fill="#f4f9f4" stroke="#2e7d32" stroke-width="2" rx="10"/>
+          <text x="670" y="98" fill="#1b5e20" font-size="14" text-anchor="middle" font-weight="700">相机平移：视差是「真的」</text>
+          <rect x="760" y="176" width="46" height="46" fill="#90a4ae" stroke="#546e7a" stroke-width="1.6"/>
+          <text x="783" y="204" fill="#263238" font-size="10.5" text-anchor="middle">物体</text>
+          <circle cx="540" cy="260" r="13" fill="#455a64"/>
+          <circle cx="600" cy="260" r="13" fill="#455a64"/>
+          <path d="M 613 260 L 756 186" stroke="#2e7d32" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M 553 260 L 756 216" stroke="#2e7d32" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="570" y="292" fill="#37474f" font-size="11" text-anchor="middle">中心移动了一小段（基线）</text>
+          <circle cx="756" cy="200" r="4" fill="#c62828"/>
+          <circle cx="756" cy="226" r="4" fill="#c62828"/>
+          <text x="670" y="330" fill="#1b5e20" font-size="12" text-anchor="middle">两条视线来自<tspan font-weight="700">两个不同</tspan>中心</text>
+          <text x="670" y="350" fill="#1b5e20" font-size="12" text-anchor="middle">→ 有基线 → 可以三角化出深度</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两格是同一个物体、同一个「物体在图像上的位置发生了变化」的现象。左格是相机原地转动，两条视线（虚线）从<b>同一个相机中心</b>出发；右格是相机平移了一小段，两条视线来自<b>两个不同的中心</b>，中间那段距离就是基线。<br>
+          <b>怎么看这张图：</b>① 关键差异不是「物体动没动」，而是「<b>射线起点是否重合</b>」——这一点决定了方程有没有解；② 左格是几何上的死结：没有基线就没有深度，前面 <b>0046 到 0048</b> 讲的直接法也同样受制于此；③ 所以 VINS-Mono 才要先用陀螺仪把旋转扣掉，保证入选关键帧的「视差」都是平移贡献的。<br>
+          <b>要记住的一句话：</b>合格的视差必须是平移造出来的；旋转造出的「视差」看着像，其实不含深度信息。
+        </figcaption>
+      </figure>
+
+      <h3>3.3 IMU 预积分：第二季学过的东西，这里怎么用</h3>
+      <p>这一节的内容你在第二季 <b>0029 / 0030</b> 已经完整学过，这里只补三个环节：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>测量模型（式 1）</h4>
+          <p>$\hat{\mathbf{a}}_t = \mathbf{a}_t + \mathbf{b}_{a_t} + \mathbf{R}_w^t\mathbf{g}^w + \mathbf{n}_a$ 与 $\hat{\boldsymbol{\omega}}_t = \boldsymbol{\omega}_t + \mathbf{b}_{w_t} + \mathbf{n}_w$。请注意加速度计里<b>含着重力项</b>——这就是为什么 VIO 能通过静止时测到的「表观加速度」反推重力方向（初始化要用到）</p>
+        </div>
+        <div class="mini-card">
+          <h4>偏置建模（式 2）</h4>
+          <p>两个偏置都建模为<b>随机游走</b>（导数就是白噪声），与第二季 0030 的写法一致</p>
+        </div>
+        <div class="mini-card">
+          <h4>预积分量（式 3）</h4>
+          <p>$\boldsymbol{\alpha}$（位置增量）、$\boldsymbol{\beta}$（速度增量）、$\boldsymbol{\gamma}$（旋转增量），都以 $b_k$ 为参考系积分。<b>原文特意说：给定偏置后，这三个量可以只用 IMU 测量算出来</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>偏置更新（式 5）</h4>
+          <p>偏置小变化时用一阶近似修正（$\mathbf{J}_{b_a}^\alpha$ 等雅可比）；<b>变化显著时才重新传播</b>。原文说明了这么做的动机：省下大量重复传播的计算</p>
+        </div>
+      </div>
+      <p>之所以这一篇在预积分上只用四小节带过，是因为作者说「我们当前的 IMU 预积分流程与 [19] 和 [24] 有几乎相同的数值结果，只是推导不同」，详细推导放在附录 A（四元数版本）。<b>这也说明到 2018 年，预积分已经从"新理论"变成了"标准零件"</b>——这本身就是一件值得记住的事。</p>
+    </section>
+
+    <section class="section-card" id="init">
+      <h2>4. ★ 联合初始化：四步把尺度找出来</h2>
+      <p>来了。这是本节的核心，也是<b>第二季悬念⑤的正面回答</b>。</p>
+      <p>先把问题摆清楚。原文第 V 节开头的一句话就是全部动机：<b>「单目紧耦合 VIO 是一个高度非线性的系统，在开始阶段需要一个准确的初始猜测。」</b>而他们的做法是——<b>用一个「松对齐」（loosely align）的方式，把 IMU 预积分与纯视觉结构对起来。</b></p>
+      <p>换句话说：视觉给了你一段<b>形状正确但大小任意</b>的轨迹；IMU 给了你<b>带物理单位的运动信息和一个重力方向</b>；初始化就是想办法把这两者「焊」在一起，把尺度、重力方向、速度、偏置一次性解出来。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/9bb9a5977138d3fabfba018988e482583bdeb9116abaa18d0dba6b8bc363454c.jpg" alt="visual-inertial alignment illustration">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Illustration of the visual-inertial alignment process for estimator initialization. The basic idea is to <b>match the up-to-scale visual structure with IMU preintegration</b>.（估计器初始化的视觉惯性对齐过程示意。基本想法是<b>把只有尺度未知的视觉结构与 IMU 预积分匹配起来</b>。）<br>
+          <b>怎么看这张图：</b>原图注一句话就把整件事说完了，重点就是 <b>match</b> 这个词。请带着这个视角看图：左边是视觉那条线（结构对、尺度未知），右边是 IMU 那条线（有物理单位），中间的对齐就是在求那个「未知的比例」。<br>
+          <b>要记住的一句话：</b>初始化不是「估计位置」，而是「把两套各自自洽、但单位不同的描述对齐」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 B · 尺度到底从哪来：视觉给形状，IMU 给「米」</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">同一个房间、同一条手持轨迹——左边是纯视觉看到的，右边是加上惯性之后确定的</text>
+
+          <!-- ===== 左：纯视觉 ===== -->
+          <rect x="30" y="72" width="400" height="300" fill="#fdf6f4" stroke="#c62828" stroke-width="2" rx="10"/>
+          <text x="230" y="98" fill="#8e2020" font-size="13.5" text-anchor="middle" font-weight="700">纯视觉 SfM：形状对，大小任意</text>
+          <!-- 房间侧视 -->
+          <line x1="60" y1="288" x2="415" y2="288" stroke="#a1887f" stroke-width="2.4"/>
+          <line x1="66" y1="130" x2="66" y2="288" stroke="#a1887f" stroke-width="2.4"/>
+          <rect x="96" y="160" width="46" height="34" fill="#bbdefb" stroke="#64b5f6" stroke-width="1.5"/>
+          <text x="119" y="182" fill="#0d3c75" font-size="9.5" text-anchor="middle">画框</text>
+          <rect x="150" y="238" width="74" height="50" fill="#b0bec5" stroke="#78909c" stroke-width="1.5" rx="4"/>
+          <text x="187" y="268" fill="#37474f" font-size="10" text-anchor="middle">桌子</text>
+          <!-- 手持相机轨迹 -->
+          <path d="M 110 216 C 170 182 250 190 320 214 C 360 226 380 232 396 236" fill="none" stroke="#1565c0" stroke-width="2.2" stroke-dasharray="7 5"/>
+          <circle cx="110" cy="216" r="6" fill="#1565c0"/>
+          <circle cx="252" cy="188" r="6" fill="#455a64"/>
+          <circle cx="396" cy="236" r="6" fill="#1565c0"/>
+          <text x="252" y="176" fill="#0d3c75" font-size="10.5" text-anchor="middle">手持相机</text>
+          <!-- 问号标注 -->
+          <text x="230" y="318" fill="#8e2020" font-size="12" text-anchor="middle">这段路是 3 米？还是 30 米？</text>
+          <text x="230" y="340" fill="#8e2020" font-size="12" text-anchor="middle">把整段放大两倍，图像上没有任何区别</text>
+          <text x="230" y="362" fill="#a8563a" font-size="11.5" text-anchor="middle">→ 只能得到 up-to-scale 的结果</text>
+
+          <!-- 中间对齐箭头 -->
+          <path d="M 436 226 L 458 226" stroke="#8d6e63" stroke-width="2.4"/>
+          <path d="M 462 226 L 458 226 M 462 226 L 458 222 M 462 226 L 458 230" stroke="#8d6e63" stroke-width="1.2"/>
+          <text x="449" y="212" fill="#6b5b52" font-size="10.5" text-anchor="middle">对齐</text>
+
+          <!-- ===== 右：视觉 + IMU ===== -->
+          <rect x="470" y="72" width="400" height="300" fill="#f4f9f4" stroke="#2e7d32" stroke-width="2" rx="10"/>
+          <text x="670" y="98" fill="#1b5e20" font-size="13.5" text-anchor="middle" font-weight="700">加上 IMU：尺度与「哪边是下」都确定了</text>
+          <line x1="500" y1="288" x2="855" y2="288" stroke="#a1887f" stroke-width="2.4"/>
+          <line x1="506" y1="130" x2="506" y2="288" stroke="#a1887f" stroke-width="2.4"/>
+          <rect x="536" y="160" width="46" height="34" fill="#bbdefb" stroke="#64b5f6" stroke-width="1.5"/>
+          <text x="559" y="182" fill="#0d3c75" font-size="9.5" text-anchor="middle">画框</text>
+          <rect x="590" y="238" width="74" height="50" fill="#b0bec5" stroke="#78909c" stroke-width="1.5" rx="4"/>
+          <text x="627" y="268" fill="#37474f" font-size="10" text-anchor="middle">桌子</text>
+          <path d="M 550 216 C 610 182 690 190 760 214 C 800 226 820 232 836 236" fill="none" stroke="#2e7d32" stroke-width="2.6"/>
+          <circle cx="550" cy="216" r="6" fill="#2e7d32"/>
+          <circle cx="692" cy="188" r="6" fill="#455a64"/>
+          <circle cx="836" cy="236" r="6" fill="#2e7d32"/>
+          <!-- 尺度尺子 -->
+          <line x1="550" y1="252" x2="836" y2="252" stroke="#ef6c00" stroke-width="2"/>
+          <line x1="550" y1="246" x2="550" y2="258" stroke="#ef6c00" stroke-width="1.6"/>
+          <line x1="836" y1="246" x2="836" y2="258" stroke="#ef6c00" stroke-width="1.6"/>
+          <text x="693" y="272" fill="#7a1f00" font-size="11.5" text-anchor="middle" font-weight="700">实测 3.2 m</text>
+          <!-- 重力箭头 -->
+          <line x1="693" y1="130" x2="693" y2="172" stroke="#c62828" stroke-width="2.6"/>
+          <polygon points="687,172 699,172 693,184" fill="#c62828"/>
+          <text x="710" y="140" fill="#8e2020" font-size="11.5" text-anchor="start">重力 g（方向可定）</text>
+          <text x="670" y="318" fill="#1b5e20" font-size="12" text-anchor="middle">加速度计测的是含重力的合力</text>
+          <text x="670" y="340" fill="#1b5e20" font-size="12" text-anchor="middle">→ 带着物理单位与方向信息</text>
+          <text x="670" y="362" fill="#a8563a" font-size="11.5" text-anchor="middle">→ 解出尺度 s 与重力向量 g</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两格是同一个房间（侧视：地板、墙、画框、桌子）。左格只画了视觉能看到的东西：一条手持相机走过的轨迹。这条轨迹的<b>形状是完全正确的</b>，但它的「大小」无从确定——因为把整段轨迹连同场景一起放大两倍，投到图像上是一模一样的。右格在同样的轨迹上加了两个东西：一个向下的<b>重力箭头</b>，和一把量出「3.2 m」的<b>尺子</b>——这两样都是从 IMU 来的。<br>
+          <b>怎么看这张图：</b>① 先看左格底部那两行字，它们是这一节的动机：为什么纯单目永远差一个倍数；② 再看右格的重力箭头——它之所以能被确定，是因为加速度计测的是「含重力的合力」（式 1），静止或运动时的表观加速度里就藏着重力方向；③ 最后看那把橙色的尺子：$s$ 不是被观测出来的，而是靠「视觉的运动形状」与「IMU 的物理运动量」摆在一起<b>解方程</b>解出来的（式 9–12）。<br>
+          <b>要记住的一句话：</b>单目给形状、惯性给单位；初始化做的事就是把这两套描述焊在一起。
+        </figcaption>
+      </figure>
+
+      <h3>4.1 第一步：滑动窗内的纯视觉 SfM（拿到形状）</h3>
+      <p>滑动窗里维护若干帧（窗大小有界，为了控制算力）。具体流程：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 挑一对好帧</h4>
+          <p>检查最新帧与窗内其他帧的特征对应。要求两个条件同时满足：<b>稳定跟踪（超过 30 个跟踪特征）</b>、<b>足够视差（超过 20 像素）</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>② 五点法求相对运动</h4>
+          <p>用<b>五点法</b>恢复这两帧之间的相对旋转与 <b>up-to-scale（尺度未知）</b>的平移</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 随意定尺度 + 三角化</h4>
+          <p>原文原话是「arbitrarily set the scale」——<b>随便定一个尺度</b>，然后把这两帧看到的特征全部三角化。这一步清楚体现了单目的本质：尺度是人为规定的，不是观测出来的</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ PnP 补齐其余帧 + 全局 BA</h4>
+          <p>基于三角化出的特征，用 <b>PnP</b> 估计窗内其他帧的位姿；最后做一次<b>全局 full bundle adjustment</b> 最小化所有特征观测的重投影误差</p>
+        </div>
+      </div>
+      <p>因为此时还不知道世界系在哪，原文把<b>第一个相机帧 $c_0$ 作为参考系</b>，所有位姿与特征都相对它表示。然后借助相机与 IMU 之间的外参 $(\mathbf{p}_c^b, \mathbf{q}_c^b)$，把位姿从相机系转到机体系（式 6）：</p>
+      <div class="formula-box">
+        $$\mathbf{q}_{b_k}^{c_0} = \mathbf{q}_{c_k}^{c_0}\otimes(\mathbf{q}_c^b)^{-1},\qquad s\bar{\mathbf{p}}_{b_k}^{c_0} = s\bar{\mathbf{p}}_{c_k}^{c_0} - \mathbf{R}_{b_k}^{c_0}\mathbf{p}_c^b$$
+      </div>
+      <p>注意那个 $s$——<b>它就是那个「未知的尺度」，接下来四步里要被解出来</b>。</p>
+
+      <h3>4.2 第二步：陀螺仪偏置标定（顺手把陀螺修好）</h3>
+      <p>思路非常漂亮，值得单独讲。我们手上有两套「同一段时间内的旋转量」：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>视觉说的旋转</h4>
+          <p>从 SfM 得到的 $\mathbf{q}_{b_k}^{c_0}$ 与 $\mathbf{q}_{b_{k+1}}^{c_0}$，两者相减（相除）就是这段的旋转变化。<b>视觉的旋转估计很准</b>（旋转不受尺度影响）</p>
+        </div>
+        <div class="mini-card">
+          <h4>IMU 说的旋转</h4>
+          <p>预积分量 $\hat{\boldsymbol{\gamma}}_{b_{k+1}}^{b_k}$。它<b>会受陀螺仪偏置的污染</b>——偏置会让旋转随时间线性偏差</p>
+        </div>
+      </div>
+      <p>既然视觉的旋转可信，那就<b>让预积分旋转去迁就视觉旋转</b>，从而反解出偏置。原文对预积分项做关于 $\delta\mathbf{b}_w$ 的线性化（式 7），然后最小化两者之差（对窗内所有相邻帧求和）。解出来的 $\mathbf{b}_w$ 就是陀螺仪的初始标定值。</p>
+      <p>拿到偏置之后还有一步关键动作：<b>用新的陀螺偏置重新传播（repropagate）所有的预积分量</b> $\hat{\boldsymbol{\alpha}},\hat{\boldsymbol{\beta}},\hat{\boldsymbol{\gamma}}$。这件事只在初始化时做一次，之后偏置小变化就走一阶修正（3.3 节讲过的式 5）。</p>
+
+      <h3>4.3 第三步：速度、重力、尺度一起解（一个线性问题）</h3>
+      <p>这是初始化里最漂亮的一步：<b>它把本来非线性的问题变成了一个线性最小二乘。</b></p>
+      <p>待解的向量是（式 8）：</p>
+      <div class="formula-box">
+        $$\mathcal{X}_I = \big[\mathbf{v}_{b_0}^{b_0},\ \mathbf{v}_{b_1}^{b_1},\ \ldots,\ \mathbf{v}_{b_n}^{b_n},\ \mathbf{g}^{c_0},\ s\big]$$
+      </div>
+      <p>逐项读：窗内每一帧的<b>机体系速度</b>、$c_0$ 系下的<b>重力向量</b>、以及那个<b>尺度</b>。原文写出相邻两帧的约束（式 9），然后把它们整理成一个标准的线性测量模型（式 10）：</p>
+      <div class="formula-box">
+        $$\hat{\mathbf{z}}_{b_{k+1}}^{b_k} = \mathbf{H}_{b_{k+1}}^{b_k}\,\mathcal{X}_I + \mathbf{n}_{b_{k+1}}^{b_k}$$
+      </div>
+      <p>其中 $\mathbf{H}$ 里的所有量都<b>来自已经算好的视觉 SfM</b>——原文特意说明：$\mathbf{R}_{b_k}^{c_0}, \mathbf{R}_{b_{k+1}}^{c_0}, \bar{\mathbf{p}}_{c_k}^{c_0}, \bar{\mathbf{p}}_{c_{k+1}}^{c_0}$ 都取自 up-to-scale 的单目视觉 SfM，$\Delta t_k$ 是两帧的时间间隔。因此解这个线性最小二乘（式 12）就能一次性得到：<b>每帧的机体系速度、$c_0$ 系下的重力向量、以及尺度参数</b>。</p>
+      <div class="callout">
+        <h4>这一步为什么重要？</h4>
+        <p>因为它一次回答了两个「单目天生不知道」的问题：<b>尺度是多少</b>（$s$）、<b>哪边是下</b>（$\mathbf{g}^{c_0}$）。而这两个量是靠 IMU 的消息换来的——IMU 的加速度计测的是「包含重力的合力」，所以它天然携带了重力方向与物理单位。<b>这就是「单目 + IMU」比「纯单目」多出来的东西。</b></p>
+      </div>
+
+      <h3>4.4 第四步：重力细化（只在切平面上动两个自由度）</h3>
+      <p>上一步线性解出的重力向量是「粗略的」。原文说明：<b>由于重力向量的模长已知，它实际上只剩 2 个自由度</b>——所以可以把它约束到球面上重新优化。具体做法是在<b>切空间</b>上用两个变量扰动它：</p>
+      <div class="formula-box">
+        $$\mathbf{g} = g\,(\hat{\bar{\mathbf{g}}} + \delta\mathbf{g}),\qquad \delta\mathbf{g} = w_1\mathbf{b}_1 + w_2\mathbf{b}_2$$
+      </div>
+      <p>其中 $g$ 是已知的重力模长，$\hat{\bar{\mathbf{g}}}$ 是当前的重力方向单位向量，$\mathbf{b}_1,\mathbf{b}_2$ 是张成切平面的两个正交基，$w_1,w_2$ 是两个扰动系数。把这个形式代回式 9，与其他状态变量一起解这两个系数，然后<b>迭代若干次直到收敛</b>。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert/d963921e1be1925956c27ce259d7e12a873001524455b125eaace30bb99b6f35.jpg" alt="2-DOF gravity perturbation on tangent plane">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Illustration of 2-DOF perturbation of gravity. Since the magnitude of gravity is known, $g$ lies on a sphere with radius $g \approx 9.81\ \mathrm{m/s^2}$. The gravity is perturbed around current estimate as $g(\hat{\bar{\mathbf{g}}}+\delta\mathbf{g})$, $\delta\mathbf{g} = w_1\mathbf{b}_1+w_2\mathbf{b}_2$, where $\mathbf{b}_1$ and $\mathbf{b}_2$ are two orthogonal basis spanning the tangent space.（重力 2 自由度扰动示意。由于重力模长已知，$g$ 位于半径为 $g\approx9.81\ \mathrm{m/s^2}$ 的球面上。重力在当前估计附近被扰…
+
+（原图注在 md 中于此截断，后续为公式说明）<br>
+          <b>怎么看这张图：</b>请把这张图看成「一颗球 + 一张贴在球面上的坐标纸」。球心到球面的距离固定是 9.81，所以重力的<b>箭头尖端只能在这颗球面上滑动</b>——它不能飞离球面、也不能伸进球里。于是「调整重力」这件事只需要两个数：在这张坐标纸（切平面）上往横（$w_1$）挪多少、往纵（$w_2$）挪多少。$\mathbf{b}_1$ 和 $\mathbf{b}_2$ 就是这张坐标纸的两个轴。<br>
+          <b>要记住的一句话：</b>已知模长，就砍掉一个自由度——这和第二季 <b>0030</b> 讲的「姿态用 3 维最小表示而不是 4 元四元数」是同一类手法：<b>参数化的自由度必须与真实的自由度一致，否则系统会欠定</b>。
+        </figcaption>
+      </figure>
+
+      <h3>4.5 收尾：转到世界系，初始化完成</h3>
+      <p>重力细化之后，把重力旋转到 z 轴即可得到世界系与相机系之间的旋转 $\mathbf{q}_{c_0}^w$，然后把所有变量从参考系 $c_0$ 转到世界系 $w$；机体系速度也一并旋转；视觉 SfM 的平移部分则按解出的尺度$s$缩放到<b>米制单位</b>。至此初始化完成，所有量都是「带物理单位」的，可以直接喂给紧耦合 VIO。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在初始化的四步里，「尺度 $s$」这个量是在哪一步第一次被真正解出来的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。第一步是纯视觉 SfM，原文明确说这一步只是「arbitrarily set the scale」——随便定一个尺度，得到的是 up-to-scale 的结果。它给的是形状，不是大小。" onclick="lessonKit.answer(this,'q0057a')">第一步：纯视觉 SfM 三角化时</button>
+          <button data-correct="yes" data-explanation="对。第三步把每帧速度、重力向量和尺度一起放进一个线性最小二乘里（式 8 的待解向量最后一项就是 s），一次解出来。这也是整个初始化里最关键的一步——它同时回答「尺度多大」和「哪边是下」。" onclick="lessonKit.answer(this,'q0057a')">第三步：解速度／重力／尺度的线性问题</button>
+          <button data-correct="no" data-explanation="不对。第二步只标定陀螺仪偏置 b_w，尺度完全没参与。它的做法是让预积分的旋转去迁就视觉旋转来反解偏置，跟尺度无关。" onclick="lessonKit.answer(this,'q0057a')">第二步：陀螺仪偏置标定</button>
+        </div>
+        <div class="quiz-feedback" id="q0057a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="gravity">
+      <h2>5. 一个值得记住的用词：为什么要「松对齐」</h2>
+      <p>原文在初始化开篇用了一个很准确的词：<b>loosely align</b>（松对齐）。这个「松」字很关键，它说明初始化的定位——<b>它不是一次精确的联合优化，而是一次快速但粗糙的对齐</b>，目的是给后面的紧耦合优化一个够好的起点。</p>
+      <p>这也解释了为什么整个初始化可以被拆成四个能<b>依次单独求解</b>的小步骤（先视觉、再陀螺、再线性解、最后细化重力），而不是一开始就把所有变量塞进一个大优化里。做工程的读者应该能体会这个取舍的价值：<b>分步求解每一步都更简单、更可控、更容易调试，代价是结果不是全局最优。</b></p>
+      <p>另外还有一个细节值得点出：这一步解出来的「陀螺偏置」其实也只是初始值——在后端的紧耦合优化里，两个偏置（$\mathbf{b}_a,\mathbf{b}_g$）是作为状态变量<b>持续被优化的</b>（见式 13 的状态向量）。初始化给的只是「让优化不至于跑飞」的起点。</p>
+      <div class="callout">
+        <h4>把这条线和前面接起来</h4>
+        <p>回想本季 <b>0049 VI-DSO</b> 的视觉惯性初始化，它也是四步：① 复用 DSO 的视觉初始化（归一化使平均深度为 1）② 用最多 40 个加速度计测量估重力方向 ③ 速度与 IMU bias 置 0、尺度置 1.0 ④ 全部参数在类 BA 优化里联合优化。</p>
+        <p>可以看到两篇的思路一致（<b>视觉给形状 → IMU 给重力与尺度 → 交给优化</b>），差别在细节：VI-DSO 因为深度已经归一化，尺度是「隐式定在 1」；而 VINS-Mono 把尺度 $s$ 显式作为待解量，用线性最小二乘求出来。这两种做法你可以对照着记。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>6. 诚实的边界（这一篇自己承认的）</h2>
+      <p>VINS-Mono 是一篇相当扎实的系统论文，但它也在结论里明确交代了自己还做不到的事。原文的原话是：</p>
+      <div class="callout">
+        <p>「尽管基于特征的 VINS 估计器已经达到了真实世界部署的成熟度，我们仍然看到许多未来研究方向。<b>单目 VINS 可能根据运动与环境进入弱可观甚至退化的状态。</b>我们感兴趣的是<b>在线评估单目 VINS 可观性</b>的方法，以及<b>在线生成运动规划</b>……」</p>
+      </div>
+      <p>这段话值得逐字读——它指出了一个根本性的脆弱点：<b>它是靠视觉和惯性互补来获得可观性的，而这套互补关系在某些运动和环境下会失效</b>（比如静止不动、纯旋转、或者在完全无纹理又无运动的场景）。作者承认这不是能靠调参解决的，可能需要「在线判断现在可观不可观」甚至「主动规划运动」。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>需要足够的运动激励</h4>
+          <p>初始化依赖足够的视差与 IMU 激励；高速无人机启动时初始化仍会困难（这一条与 0049 VI-DSO 的观察一致）</p>
+        </div>
+        <div class="mini-card">
+          <h4>论尺度问题的最终归属</h4>
+          <p>注意：这里的「尺度」是靠 <b>IMU 的物理单位</b>换来的，而不是从图像本身观测出来的。也就是说，<b>单目的尺度问题并没有在「单目」这个框架内被解决，而是被「多一种传感器」绕过去/补上</b>。这条暗线走到这里，你应该能看清它的全貌了</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>本节小结：这一节把第二季的空白补上了</h4>
+        <p>第二季 <b>0029 / 0030</b> 讲预积分时，原文明确说自己没有初始化章节。这一节完整给出了那套流程：</p>
+        <p><b>视觉 SfM 给形状 → 陀螺与视觉的旋转差解出陀螺偏置 → 线性最小二乘一次解出速度／重力／尺度 → 在切平面上迭代细化重力 → 转到世界系、缩放到米制。</b></p>
+        <p>而且这套流程体现了单目 VIO 的核心思想：<b>视觉负责「几何形状」，惯性负责「尺度与重力方向」，两者各出一半，焊起来才是一个有物理意义的系统。</b>下一节我们看这套系统跑起来之后是怎么维持精度的——注意力会转向滑窗、边缘化、单位球面残差，以及那个很有意思的「4 自由度回环」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="drill">
+      <h2>7. 巩固练习</h2>
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请按顺序写出初始化四步，并说明每一步的<b>输入</b>和<b>产出</b>。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>① 纯视觉 SfM</b>：输入是滑动窗内的图像与特征对应；判据是「超过 30 个跟踪特征 + 超过 20 像素视差」；用五点法求相对旋转与 up-to-scale 平移，任意设定尺度、三角化特征，再用 PnP 补全窗内其他帧并做全局 BA。<b>产出</b>：up-to-scale 的相机位姿与特征位置。</p>
+              <p><b>② 陀螺仪偏置标定</b>：输入是视觉 SfM 的旋转与 IMU 预积分的旋转；做法是对预积分项关于 δb_w 线性化、最小化两者之差。<b>产出</b>：陀螺仪偏置初值 $\mathbf{b}_w$，并用它重新传播所有预积分量。</p>
+              <p><b>③ 速度／重力／尺度初始化</b>：输入是上一步重新传播后的预积分量 $\boldsymbol{\alpha},\boldsymbol{\beta}$ 与视觉 SfM 的位姿；做法是把约束整理成线性模型 $\hat{\mathbf{z}}=\mathbf{H}\mathcal{X}_I+\mathbf{n}$ 并解最小二乘。<b>产出</b>：每帧机体系速度、$c_0$ 系下的重力向量、尺度 $s$。</p>
+              <p><b>④ 重力细化</b>：输入是上一步的重力估计；做法是利用重力的<b>模长已知</b>这一事实，在切平面上用两个参数扰动它，与其他状态一起迭代求解。<b>产出</b>：更准的重力方向 → 进而得到世界系与相机系的旋转 $\mathbf{q}_{c_0}^w$，把一切转换到世界系并缩放到米制。</p>
+            </div></details>
+          </li>
+          <li>为什么重力细化只需要优化<b>两个</b>自由度，而不是三个？这个做法让你想起第二季学过的哪个技巧？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为重力向量的<b>模长是已知的</b>（约 9.81 m/s²），所以它只能在「半径为 g 的球面」上移动，剩下两个自由度。做法是在当前估计的<b>切空间</b>上取两个正交基 $\mathbf{b}_1,\mathbf{b}_2$，用两个系数 $w_1,w_2$ 表示扰动：$\delta\mathbf{g}=w_1\mathbf{b}_1+w_2\mathbf{b}_2$。</p>
+              <p>它让人想起第二季 <b>0030</b> 讲预积分时的一个关键手法：<b>姿态用 3 维最小表示（而不是把四元数的 4 个分量直接当未知数）</b>。两者是同一类思想——<b>参数化的自由度必须和真实的自由度一致</b>。多给一个自由度就会让协方差矩阵奇异、让方程欠定；这与第二季 0019 讲的「参数化要尽量均匀、有限、行为良好」也是同一条原则。</p>
+            </div></details>
+          </li>
+          <li>为什么关键帧选择时要用陀螺仪补偿旋转？如果不补偿会有什么问题？原文强调这个补偿「不参与 VINS 公式中的旋转计算」，这句话的意义是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为视差有两个来源：平移和旋转。但只有平移产生的视差含有深度信息（能三角化），旋转产生的「视差」在几何上无法给出深度。如果不补偿，系统可能会把「相机原地转过一个大角度」误判为「视差很大、该建新关键帧」，而实际上这一帧对深度估计毫无贡献。</p>
+              <p>原文强调补偿只用于关键帧选择，是因为这样一个设计让<b>陀螺仪的噪声或有偏不会污染估计主流程</b>——原文原话是：即使陀螺有大的噪声或偏置，也只会导致「次优的关键帧选择结果」，而不会直接影响估计质量。这是一个很讲究的<b>故障隔离</b>设计：把一个可能不准的量用在一个「错了也不致命」的地方。</p>
+            </div></details>
+          </li>
+          <li>用一句话回答第二季留下的悬念：单目 VIO 到底靠什么把绝对尺度找出来？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>靠 <b>IMU 的加速度计</b>。加速度计测量的是「包含重力在内的合力」，因此它天然带着物理单位（m/s²）与方向信息。把 IMU 预积分出的运动量与视觉 SfM 出的 up-to-scale 运动摆在一起做成线性约束（VINS-Mono 式 9–12），就能同时解出尺度 $s$ 与重力向量 $\mathbf{g}^{c_0}$。</p>
+              <p>换句话说：<b>单目本身永远不知道尺度，是惯性测量把「米」这个单位带进来的。</b>这也解释了为什么第 0040 课那条「尺度暗线」最终会落到 VIO 上——它是这条线上唯一从根上解决（或者说补上）尺度的办法。</p>
+            </div></details>
+          </li>
+          <li>为什么原文把初始化称为「松对齐」（loosely align），而不是「紧耦合初始化」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为初始化的目标是<b>快速得到一个够好的起点</b>，而不是求得精确的最优解。它把问题拆成四个可以依次单独求解的步骤（视觉 SfM → 陀螺标定 → 线性解速度/重力/尺度 → 重力细化），每一步都是相对简单、可控、易调试的子问题。</p>
+              <p>这样做的代价是结果不是全局最优（比如线性解出的重力还需要再细化），收益是稳健与低复杂度。真正的紧耦合联合优化发生在后面第 VI 节的滑动窗 VIO 里——那里才把 IMU 残差与视觉残差放在同一个代价函数中一起最小化（式 14）。<b>「初始化松、后端紧」是一个很典型也很实用的分工。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0056-DeepFactors2020-学习先验进因子图.html">← DeepFactors（2020）：学习先验进因子图</a>
+        <a class="next" href="0058-VINS-Mono下-紧耦合后端与4自由度回环.html">VINS-Mono（下）：紧耦合后端与 4 自由度回环 →</a>
+      </div>
+      <p class="foot-note">起手是难的——尺度从哪来、重力朝哪、初速度多少，本节把这三件事一次解完。下一节看它跑起来之后怎么维持精度、又怎么用「少两个自由度」的巧劲闭合回环 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

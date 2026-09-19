@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视觉 SLAM 早期综述（2012）· 特征、匹配与数据关联 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0004</div>
+      <h1>视觉 SLAM 早期综述（2012）：硬功夫在看不见的地方</h1>
+      <p class="subtitle">前面两课都在讲"框架"——滤波还是优化、前端还是后端。这一课换个角度，钻进视觉 SLAM 最底层的那条链子：<b>怎么挑特征、怎么描述、怎么匹配、怎么判断匹配对不对</b>。这条链子上任何一个环节出错，上面再漂亮的框架都救不回来。🔍</p>
+      <div class="hero-meta">
+        <span>🎯 主题：特征 / 描述子 / 匹配 / 数据关联 / 回环铁律</span>
+        <span>👥 Fuentes-Pacheco, Ruiz-Ascencio, Rendón-Mancha</span>
+        <span>📅 2012 · <i>Visual simultaneous localization and mapping: a survey</i></span>
+      </div>
+      <div class="toc">
+        <a href="#fail">视觉 SLAM 失败的三大主因</a>
+        <a href="#feat">特征：检测器与描述子全谱</a>
+        <a href="#match">匹配：短基线与长基线</a>
+        <a href="#assoc">数据关联与鲁棒估计</a>
+        <a href="#loop">回环检测的三分类</a>
+        <a href="#iron">precision = 100% 这条铁律</a>
+        <a href="#families">三大解法家族与地图类型</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="fail">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出视觉 SLAM 失败的三大主因；② 讲清"全局特征 vs 局部特征"以及描述子的不变性为什么决定匹配成败；③ 解释"一个假阳性就能毁掉整张地图"的机制；④ 说清度量地图与拓扑地图各自的取舍。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>第 0003 课把"图优化三步"的前端一句带过（"提取特征点与描述子，常用 SIFT / ORB / SURF"）。本节就是把这句被带过的话<b>摊开讲一整课</b>。而且它会给出一个关键前提：为什么"特征法"这条路天生有软肋——这正是后面直接法（第 0003 课提到的 Dryanovski "不提描述子"）与学习式特征的动机。🔗</p>
+        </div>
+      </div>
+
+      <h2>1. 先说结论：视觉 SLAM 会怎么失败</h2>
+      <p>这篇 2012 年的综述把视觉 SLAM 的失败原因归成三条主因。请注意，<b>这三条在十几年后仍然是真实系统的头号杀手</b>——第 0009 课（DARPA 地下挑战赛）会用实测数据把这件事再讲一遍。</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① 运动模糊 / 低纹理</h4>
+          <p>相机移动太快导致图像糊掉，或者面前是白墙、地面、天空这类没有可区分结构的地方——两者都会让"提取出足够多、足够稳定的特征"这件事直接失败。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 动态环境</h4>
+          <p>场景里有行人、车辆在动。经典视觉 SLAM 默认"大多数特征是静止世界的"，一旦这个假设被打破，就会把运动物体上的点当成静态约束用，定位与地图一起被带偏。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 视觉重复</h4>
+          <p>环境里存在大量长得一样的东西（长走廊、瓷砖、重复的窗子）。这会导致<b>感知混叠（perceptual aliasing）</b>——两个不同地点看起来一模一样，匹配就错了。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>把这三大主因记成一张"检查表"</h4>
+        <p>以后你评估任何一篇视觉 SLAM 论文，都可以拿这三条去问：<b>它解决的是哪一条？在哪一条上它反而变差了？</b>比如"点线融合"方法主要针对①（线特征在弱纹理处仍在），"动态 SLAM"针对②，"位置识别/描述子不变性"针对③。而它们几乎都<b>不会</b>同时解决三条——这就是选题空间。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="feat">
+      <h2>2. 特征：先检测，再描述</h2>
+      <p>原文把特征相关的内容拆成两块：<b>检测器（detector）</b>负责"在哪里"，<b>描述子（descriptor）</b>负责"长什么样"。这条分工是理解后面所有匹配方法的前提。</p>
+
+      <h3>检测器全谱，以及一个很实用的实验结论</h3>
+      <p>原文列了当时可用的检测器，包括 Harris 角点、Harris-Laplace / Hessian-Laplace 及其仿射不变版本（Harris-Affine、Hessian-Affine）、DoG（用于 SIFT）、MSER、FAST、Fast-Hessian（用于 SURF）等。</p>
+      <p>然后它引用了 Mikolajczyk 等 2005 年的评测结论，这条结论很值得记住：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>综合表现最好</h4>
+          <p><b>Hessian-Affine 与 MSER</b> 表现最好。</p>
+        </div>
+        <div class="mini-card">
+          <h4>MSER 的长处</h4>
+          <p>对<b>视角变化与光照变化</b>最鲁棒。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Hessian-Affine 的长处</h4>
+          <p>在<b>失焦（defocus）与 JPEG 压缩</b>条件下最好。</p>
+        </div>
+      </div>
+      <p>原文也解释了为什么当时多数系统仍然选角点：<b>角点的不变性好，而且被研究得最充分。</b></p>
+
+      <h3>描述子：SIFT 的故事最有教学价值</h3>
+      <p>原文对描述子的介绍里，最值得讲的是这一条对比结论（引自 Gil 等 2009）：</p>
+      <div class="callout">
+        <h4>在视觉 SLAM 语境下，SURF 描述子在鲁棒性与计算时间上优于 SIFT</h4>
+        <p>更刺眼的是对 SIFT 的批评：<b>SIFT 稳定性不佳</b>——原文的原话大意是：<i>"很多从某个相机位置检测到的路标，把相机稍微移动一点就消失了。"</i></p>
+        <p>这句话为什么重要？因为它把"描述子选择"从"精度高低"变成了"<b>能不能稳定地再次看到</b>"。SLAM 需要的不是"一次匹配得很准"，而是"同一块地方反复路过时都能认出来"。稳定性比单次精度更关键。</p>
+      </div>
+      <p>原文还列了描述子的变体谱系：PCA-SIFT（用 PCA 降维）、GLOH、ASIFT（仿射不变）、<b>BRIEF（二进制）</b>、<b>ORB</b>（基于 BRIEF，但做到旋转不变且抗噪）、PIRF、GPU-SIFT（并行实时）。</p>
+      <div class="callout">
+        <h4>注意 ORB 在这条谱系里的位置</h4>
+        <p>ORB = <b>二进制描述子 + 旋转不变 + 抗噪</b>。二进制意味着比对只需做异或运算，速度极快；旋转不变意味着相机转个角度还能匹配上。这两点加起来，就是为什么 ORB 会成为 ORB-SLAM 的名字来源、以及后面第 0014 课里 <b>DBoW2 词袋</b>的技术基础。</p>
+      </div>
+      <p>原文还提到一条边缘路线：Eade 与 Drummond（2006）在实时 MonoSLAM 中用 <b>edgelets（边缘段）</b>，证明边缘对光照、朝向、尺度不变、受模糊影响小，适合跟踪与 SLAM——<b>缺点是不易提取与匹配</b>。这条"边缘/线特征"的线索会在后面的点线融合 VIO、事件相机线 SLAM 里不断出现。</p>
+    </section>
+
+    <section class="section-card" id="match">
+      <h2>3. 匹配：基线长短决定用什么武器</h2>
+      <p>原文引入了一个很清晰的分界线——<b>基线（baseline）</b>，也就是两个相机光心之间的连线长度。基线短意味着视角差异小，基线长意味着视角差异大。这个简单的物理量决定了你该用什么匹配方法。</p>
+
+      <h3>短基线匹配：用 patch + 相关性</h3>
+      <p>基线短的时候，对应点的位置与外观几乎相同，所以可以用最简单的办法：以显著特征为中心取一个矩形窗口（<b>patch</b>），在窗口内采样像素强度，用相关性度量来比较。</p>
+      <p>原文给出的度量有互相关（cross correlation）、SSD、SAD，并且明确结论：<b>归一化互相关（NCC）效果最好，而且对均匀的亮度变化不变。</b>如果用 homography 对 patch 做变形，NCC 还能对视角变化保持不变。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>缺陷一：假阳/假阴</h4>
+          <p>NCC 容易产生假阳性与假阴性——在重复纹理区域里，搜索范围内<b>可能有两个点都强烈响应</b>，你无法靠相关值区分它们。</p>
+        </div>
+        <div class="mini-card">
+          <h4>缺陷二：深度对噪声极敏感</h4>
+          <p>短基线虽然好匹配，但<b>算出的深度对噪声极敏感</b>（因为视差很小，视差的一点误差会被放大成很大的深度误差）。这是"短基线好匹配、长基线好三角化"这一对矛盾的另一面。</p>
+        </div>
+        <div class="mini-card">
+          <h4>工程建议</h4>
+          <p>原文给出具体数字：patch 取 <b>约 9×9 或 11×11 像素</b>，并且要<b>放在角点上</b>——因为角点处梯度有两个以上主方向，利于匹配。</p>
+        </div>
+      </div>
+
+      <h3>长基线匹配：必须上描述子 + 加速结构</h3>
+      <p>基线一长，尺度与透视变化就大了，点可能移到图中任意位置，基于窗口的相关度量直接失效。最朴素的办法是<b>暴力匹配</b>，但代价随特征数<b>按平方增长</b>，不实用。</p>
+      <p>于是主流做法变成：<b>描述子 + 不相似度度量（欧氏 / 曼哈顿 / 卡方距离）+ 数据结构加速（k-d 树、哈希表）</b>。</p>
+
+      <h3>怎么判断"这两个点到底是不是同一个"——三种判据</h3>
+      <table>
+        <thead><tr><th>判据</th><th>做法</th><th>问题</th></tr></thead>
+        <tbody>
+          <tr><td>(a) 距离阈值</td><td>距离小于阈值就算匹配</td><td>会出现一对多、多对一，需要额外手段消歧</td></tr>
+          <tr><td>(b) 最近邻</td><td>取距离最小的那个</td><td>同样可能多对一（多个查询都指向同一个目标）</td></tr>
+          <tr><td>(c) <b>最近邻距离比（NNR）</b></td><td>把阈值加在"最近邻距离 ÷ 次近邻距离"这个比值上</td><td>这一招最有效：如果最近邻没有明显比次近邻更近，说明这次匹配不可靠，直接拒绝</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>为什么 NNR 这么重要</h4>
+        <p>因为它引入了一个<b>"自我怀疑"机制</b>。单纯的"最近邻"永远会返回一个答案，哪怕这个答案毫无意义（在重复纹理里，最近邻可能只是随机撞上的）。而 NNR 会问："你确定吗？你只比第二名好一点点，那我就不信你。"——<b>这个比值判据至今仍是 ORB-SLAM 等系统的标配。</b></p>
+      </div>
+
+      <h3>几何约束：极线约束</h3>
+      <p>原文介绍了<b>极线约束（epipolar constraint）</b>：$x$ 与 $x'$ 成为对应点的一个<b>必要条件</b>是 $x'$ 落在 $x$ 的极线上。这一个约束就把搜索范围从"整幅图像"压缩到"一条线"。这是对极几何（第 0003 课提到的"帧间匹配"背后真正的几何基础）最直接的用途。</p>
+
+      <h3>学习式匹配在当时是什么状态</h3>
+      <p>原文提到有工作把"对应问题"重构成<b>分类问题</b>，并且认为"很有前景"；但它同时指出一个关键限制：<b>实时 SLAM 需要持续的在线训练，所以当时还不完全适配。</b>后面虽然也有更快的在线学习方法被提出，但整体仍不成熟。</p>
+      <div class="callout">
+        <h4>把这句话和后面接上</h4>
+        <p>2012 年："学习式匹配很有前景，但需要在线训练，还不适配实时 SLAM。"<br>
+        2016 年（第 0002 课）：学习式方法成为鲁棒感知时代的重要新前沿。<br>
+        2020 年（SuperGlue）、2021 年（LoFTR）、2023 年（LightGlue）：学习式匹配全面成为主流。<br>
+        <b>这就是一条完整的"技术从不可行到主流"的时间线。</b>读综述时留意这类"当时的限制"，它们往往就是未来的突破点。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="assoc">
+      <h2>4. 数据关联与鲁棒估计：为什么必须要 RANSAC</h2>
+      <p>原文对<b>数据关联（data association）</b>给了一个精确的定义：把传感器测量与地图中已有元素关联起来，<b>并且判断这个测量是不是外点、或者是不是属于地图之外的元素</b>。</p>
+      <p>然后它给出一个非常关键的判断：<b>再高质量的描述子也不能保证没有错误对应，因此必须使用鲁棒估计器</b>，例如 RANSAC、PROSAC。RANSAC 的做法是估计全局关系，同时把数据分成内点（inliers）与外点（outliers）。</p>
+
+      <div class="callout">
+        <h4>请记住这个"三段式"</h4>
+        <p>完整的匹配链条是：<b>① 描述子给出候选匹配 → ② 用几何约束（极线/单应）做初筛 → ③ 用 RANSAC 类鲁棒估计器把外点剔掉。</b>缺了第③步，前面做得再好也白搭。这也解释了为什么现代 SLAM 前端里 RANSAC 几乎是"标配中的标配"。</p>
+      </div>
+
+      <p>原文还介绍了另外两类思路，作为对照：</p>
+      <ul>
+        <li><b>图匹配（graph matching）</b>：用图来表示点的邻域关系。原文明确点出它的局限——<b>不实时，而且无法处理临时遮挡</b>。</li>
+        <li><b>主动匹配（active matching，Chli &amp; Davison）</b>：一种贝叶斯式的帧间对应方法，只在"最可能找到真阳性"的局部区域搜索，搜索策略由<b>香农信息论</b>引导。它对快速相机运动效果好，但<b>面对特征数增多时扩展性差</b>。后来有工作把它扩展到可实时处理数百个特征且不损失精度。</li>
+      </ul>
+
+      <h3>怎么评价检测器/匹配器的好坏</h3>
+      <p>原文列了两套评价工具，都值得知道：<b>ROC 曲线</b>（统计真阳 TP、假阳 FP、假阴 FN、真阴 TN，外加阳性预测值与准确率），以及信息检索界的 <b>precision（正确匹配数 ÷ 找到的对应总数）</b>与 <b>recall（正确匹配数 ÷ 期望对应总数）</b>。</p>
+      <div class="callout">
+        <h4>注意：这两个指标会在第 0013、0014 课变成主角</h4>
+        <p>把 precision / recall 记住，因为它会出现在回环检测与视觉场景识别的全部评测里，而且那里的"坑"更深（比如真阴几乎不评、$R_{P100}$ 会失效、还有软真值）。本节只是第一次打招呼。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="loop">
+      <h2>5. 回环检测：三种特例，三种做法</h2>
+      <p>原文把数据关联的三个"特例"单独拿出来讲：<b>回环检测（loop closure detection）、被绑架机器人（kidnapped robot）、多会话与协同建图（multi-session and cooperative mapping）</b>。</p>
+
+      <h3>回环检测为什么难</h3>
+      <p>原文的判断是：回环检测"<b>一直是大尺度 SLAM 的最大障碍之一</b>"，同时也是从严重错误中恢复的关键。它衍生出一个专门问题——<b>感知混叠（perceptual aliasing）</b>：两个不同地点被认成同一个。即使有相机也会出现，因为环境里存在大量重复特征（走廊、相似的建筑构件、大片灌木）。</p>
+
+      <h3>方法三分类（引自 Williams 等 2009）</h3>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>(1) map-to-map</h4>
+          <p>关联的数据取自<b>度量地图空间</b>：把当前建出的子图与历史子图做配准/比对。</p>
+        </div>
+        <div class="mini-card">
+          <h4>(2) image-to-image</h4>
+          <p>关联的数据取自<b>图像空间</b>：直接比较两帧图像的外观。</p>
+        </div>
+        <div class="mini-card">
+          <h4>(3) image-to-map</h4>
+          <p>一端是图像、一端是地图。原文指出理想系统应<b>融合三者的优点</b>。</p>
+        </div>
+      </div>
+      <p>原文还列了五种代表方法，各自的思路差异很值得体会：</p>
+      <table>
+        <thead><tr><th>工作</th><th>核心思路</th></tr></thead>
+        <tbody>
+          <tr><td>Ho &amp; Newman (2007)</td><td>相似度矩阵 + 奇异值分解（SVD），可抗重复与视觉歧义的图像</td></tr>
+          <tr><td>Eade &amp; Drummond (2008)</td><td>统一方法同时做"跟踪失败恢复"与"回环检测"；每个节点存地标并维护节点间变换估计；用 <b>BoVW</b> 建外观模型找相似节点</td></tr>
+          <tr><td>Angeli 等 (2008)</td><td>贝叶斯滤波 + <b>增量式 BoVW</b>，对每帧计算"属于已访问场景"的概率</td></tr>
+          <tr><td>Cummins &amp; Newman (2008)</td><td>纯外观的<b>生成式模型 FAB-MAP</b>：不仅算相似度，还计算"属于同一地点"的概率，从而给出观测位置的 pdf</td></tr>
+          <tr><td>Mei 等 (2010)</td><td>基于<b>共视关系（co-visibility）</b>的 <b>topometric</b> 表示，简化数据关联并提升外观识别性能</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>FAB-MAP 那一行值得多想一秒</h4>
+        <p>"不只知道像不像，还知道是不是同一个地方"——这是从<b>相似度</b>到<b>概率</b>的一跃。相似度是一个无标量的分数（0.8 是高还是低？取决于场景），而概率是一个有明确解释的量。第 0014 课会看到，这个"从相似度走向概率"的思路延续到了今天的贝叶斯滤波式回环检测与二项分布投票模型。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="iron">
+      <h2>6. 一条工程铁律：假阳性的代价是"不可挽回"</h2>
+      <p>这是本节最该被记住的一段。原文在讨论回环检测时给出了一条非常硬的要求，以及它背后的理由：</p>
+
+      <div class="callout">
+        <h4>原来的意思（建议记住这个对比）</h4>
+        <p>上面这些工作都在追求 <b>precision = 100%</b>，因为——<b>一个假阳性就足以在建图过程中造成不可挽回的失败。</b></p>
+        <p>而在 SLAM 语境下，<b>假阳性（false positive）远比假阴性（false negative）严重</b>：假阴性只是降低了 recall，并不影响 precision；但假阳性会把一条错误的约束写进图里，把整张地图拉歪，而且这个错误往往无法被自动识别和撤销。</p>
+        <p>因此理想的回环检测器应该做到：<b>recall 尽可能高，而 precision 必须为 100%。</b></p>
+      </div>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$
+        \text{precision} = \frac{\#TP}{\#TP + \#FP}
+        \qquad\qquad
+        \text{recall} = \frac{\#TP}{\#TP + \#FN}
+        $$</div>
+      </div>
+
+      <p>把这条要求翻译成直观感受：<b>宁可漏掉十次真回环，也不能错认一次。</b>因为漏掉的那十次，你还有机会在后面的帧里再次遇到同一个地方（时间连续性给了你很多次机会）；但错认的那一次，会被当作真约束送进后端，把整条轨迹拽变形。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>假设一个回环检测器 A：precision = 99%（recall = 90%）；另一个 B：precision = 100%（recall = 40%）。按本节 2012 年的立场，应该选哪个？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。按 2012 年这篇的立场，precision 必须为 100%——99% 意味着平均每 100 次回环就有 1 次是错的，而一次错就足以毁掉整张地图。所以宁可 recall 只有 40%。" onclick="lessonKit.answer(this,'q0004a')">选 B：precision 必须拉满，漏检可以接受</button>
+          <button data-correct="no" data-explanation="不对。按 2012 年这篇的立场，precision 不到 100% 就意味着存在"必然会发生"的灾难性错误，综合分再高也不能接受。" onclick="lessonKit.answer(this,'q0004a')">选 A：综合分更高</button>
+          <button data-correct="no" data-explanation="不对。这不是当年的主流立场——当年的立场是 precision 必须为 100%，因为后端还没有鲁棒到能处理错误约束。" onclick="lessonKit.answer(this,'q0004a')">两个都能用，看具体场景</button>
+        </div>
+        <div class="quiz-feedback" id="q0004a"></div>
+      </div>
+
+      <div class="callout">
+        <h4>⚠️ 提前埋一个伏笔：这个立场后来被推翻了</h4>
+        <p>记住你现在选的是 B。等你在第 0013 课（2024 视觉场景识别教程）看到下面这段话时，请回想今天的选择：</p>
+        <p><i>"过去，这个指标（$R_{P100}$）对 SLAM 回环检测很重要，把 precision 保持在 1 可以避免错误回环、进而避免建图错误。<b>然而，随着 SLAM 鲁棒图优化技术的出现，避免错误回环已经变得不那么重要了。有了鲁棒图优化，找到足够多的正确回环（TP）比避免错误回环（FP）更重要。</b>"</i></p>
+        <p>同一个技术问题，十二年后的答案完全不同——但变化的原因不是"大家变大胆了"，而是<b>后端有了新的能力（鲁棒核 + 外点剔除）</b>。这是本课程最重要的一类知识：<b>同一个指标该定多严，取决于下游有多鲁棒。</b></p>
+      </div>
+    </section>
+
+    <section class="section-card" id="families">
+      <h2>7. 三大解法家族与地图类型</h2>
+      <p>原文对"怎么解视觉 SLAM"做了一次三分。这个分法比第 0003 课的三代划分更"横向"，可以当作另一把尺子：</p>
+
+      <table>
+        <thead><tr><th>家族</th><th>代表方法</th><th>核心特征与已知失效</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>(a) 概率滤波</b></td>
+            <td>EKF-SLAM（Smith 等 1990 的 stochastic map）、FastSLAM、ML、EM</td>
+            <td>对<b>坏关联极其敏感——一个错误测量就能让整个滤波器发散</b>；复杂度对地标数是<b>二次的</b>，难以维护大地图。降复杂度方案包括 Atlas Framework、压缩 EKF（CEKF）、稀疏扩展信息滤波（SEIF）、分治 O(n)、条件独立子图（CI-Submaps）。</td>
+          </tr>
+          <tr>
+            <td><b>(b) 增量式 SfM</b></td>
+            <td>Visual Odometry（Nistér）、PTAM、FrameSLAM / View-Based Maps</td>
+            <td>标准 SfM 流程本是离线的（提特征 → 匹配 → BA 最小化重投影误差）。它的关键性质是：<b>SfM 定位精度高，但并不以保证一致地图为目标。</b>VO 可每帧处理数千特征，而概率方法只处理少量特征。</td>
+          </tr>
+          <tr>
+            <td><b>(c) 仿生模型</b></td>
+            <td>RatSLAM（用啮齿类海马体空间记忆模型）</td>
+            <td>单相机即可产生复杂环境的<b>一致且稳定</b>表示。实验显示能完成 <b>51 条以上、单条最长 5 km</b> 的回路闭合。这是三篇综述里唯一提到仿生路线的。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>滤波家族的两个关键数字</h3>
+      <ul>
+        <li><b>FastSLAM 的计算代价是 $O(p\log n)$</b>（$p$ 为粒子数，$n$ 为地标数）。它的核心难点原文说得很清楚：<b>无法确定需要多少粒子</b>——粒子多则内存与时间昂贵，粒子少则结果不准。（这和上一节粒子滤波的两难是同一件事。）</li>
+        <li><b>MonoSLAM（Davison 2003）</b>是第一个实时单目概率系统，同时做三维度量点建图与定位，<b>30 fps</b>，只用一台数字相机，考虑完整六自由度相机运动。<b>局限是只能用于受限室内空间</b>（因为它用 EKF）：运动模型假设恒定线速度与角速度，<b>因此无法应对突然的运动</b>；而且为保证跟踪，特征在帧间位移必须很小。</li>
+      </ul>
+
+      <h3>一条被原文明确点出的"路线之争"</h3>
+      <div class="callout">
+        <h4>Strasdat 等（2010）的结论</h4>
+        <p>单目 SLAM 要提高精度，应当<b>增加特征数（这是 SfM 的本质属性），而不是增加帧数</b>；并且<b>BA 优化优于滤波</b>。但——<b>在高不确定性情形下，滤波可能反而有利。</b>所以理想系统应同时利用 SfM 与概率滤波之长。</p>
+        <p>这一段把前两课的"滤波 vs 优化"之争给出了一个更细的答案：<b>不是"优化全面碾压滤波"，而是"在什么不确定性水平下用哪个"。</b>请留意这个句式——本课程后面会反复出现"取决于条件"式的结论，因为真实工程的答案往往就是这样。</p>
+      </div>
+
+      <h3>地图表示：度量 vs 拓扑</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>度量地图（metric）</h4>
+          <p>刻画几何属性，又分两类：<b>占据栅格地图</b>（把环境离散成单元格，可含 2D / 2.5D / 3D 信息）与<b>路标地图</b>（保存若干显著特征的三维位置）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>拓扑地图（topological）</h4>
+          <p>描述地点间的连通性：环境表示为"有意义地点的列表 + 连接它们的弧"，是类图结构，可简化大范围建图。但<b>必须做全局优化以降低局部误差</b>。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>两条必须记住的取舍（原文明确写出）</h4>
+        <p><b>关于路标地图：</b>它只捕获孤立路标，节省内存与计算；<b>因此不适合避障与路径规划</b>——因为"某处没有地标"并不意味着"该处是自由空间"。但在"位姿确定比地图更重要"时，这类表示最合适。（这就是第 0002 课 Fig. 4 那张"稀疏点图 vs 稠密桌面"的结论版。）</p>
+        <p><b>关于拓扑地图：</b>它的根本局限是<b>缺少度量信息 → 无法用来导引机器人移动</b>。因此出现了"度量 + 拓扑混合"的方案。</p>
+        <p>原文对未来的判断是：<b>当前最有前景的环境表示是基于图的</b>；仍需克服的挑战包括——<b>检测到错误位姿后编辑图的能力</b>，以及<b>生成超大规模全局地图（lifelong mapping）</b>。</p>
+      </div>
+
+      <h3>原文的 Table 1：18 个系统的横向对比</h3>
+      <p>这篇综述最有价值的可复用素材是它的 Table 1——把 18 个系统按 8 个维度做了横评：作者与引用、传感设备类型、解法核心、地图类型、检测器、描述子、<b>应对能力</b>（运动物体？回环？被绑架机器人？大尺度建图？）、测试环境类型。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_Visual_simultaneous_localization_and_mapping__a_survey/d6e7f4547bacee3636e800608ab957595c0c64c8a55b3160a1bcbbc83fd30c5b.jpg" alt="Table 1 (first half scan)">
+        <figcaption>
+          <b>诚实说明：</b>这张图<b>不是插图，而是原文 Table 1 的扫描裁剪件</b>（该论文正文没有插图，只有这张大表）。这一张覆盖 Table 1 的前半：Author、Type of sensing device、Core of the solution、Type of map、Feature extraction（Detector / Descriptor）诸列，从 Davison 2003 到 Paz 等 2008。
+          <br><b>怎么看这张图：</b>建议你把注意力放在 <b>"Core of the solution"</b> 与 <b>"Descriptor"</b> 两列——前者让你看到"同一个问题被多少种不同思路解过"，后者让你看到描述子的实际使用史（128 维 SIFT、Shi-Tomasi + patch、FAST-10 + patch……）。请一并注意：<b>这张表里"是否处理 moving objects / kidnapped robot"多数为 No</b>，说明即使到 2012 年，这些能力仍然是少数系统的特权。
+          <br><b>OCR 提醒：</b>扫描件里混有西班牙文残留（"Odometría visual + Bag of words" 应为 "Visual odometry + Bag of words"），引用时请按英文修正。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_Visual_simultaneous_localization_and_mapping__a_survey/8eee87837c57c13732ec70547a6bdc6663e2134822681561a853b77238c0f2e1.jpg" alt="Table 1 (Cope with columns)">
+        <figcaption>
+          <b>这是 Table 1 的另一半扫描件</b>，覆盖 <b>Cope with</b> 四列（Moving objects / Loop closure / Kidnapped robot / Large-scale mapping）与 Type of environment，从 Davison 2003 到 Eade &amp; Drummond 2008。
+          <br><b>怎么看这张图：</b>这是全表最"扎心"的部分。<b>"被绑架机器人"这一列几乎全是 No</b>，只有少数后来者（Konolige 2009、Williams 2009、Botterill 2010）是 Yes。这张表直观地告诉你：到 2012 年为止，视觉 SLAM 在"跟踪不会丢"这件事上有了长足进步，但在"丢了之后能不能自己找回来"上几乎还是空白——而这正是今天重定位与位置识别研究的分量所在。
+          <br><b>备注：</b>同目录下另有 2 张同类扫描件（<code>5b994b08…</code>、<code>11277dc6…</code>），内容为同表的后半，本课不再重复贴出以免占版面。
+        </figcaption>
+      </figure>
+
+      <h3>结尾：原文承认的三件事</h3>
+      <ul>
+        <li><b>图像匹配与数据关联仍是开放研究领域。</b>检测器与描述子的选择直接影响系统"跟踪显著特征、识别已见区域、构建一致地图、以及实时工作"的表现。</li>
+        <li><b>长期导航中的数据关联尤其困难：</b>数据库持续增长、环境在变化、而且环境"极度回环（extremely loopy）"。<b>接受一次坏关联就会在整个 SLAM 系统中造成严重错误</b>，使定位计算与地图构建都不一致——因此必须提出新策略降低假阳性率。</li>
+        <li><b>至今没有任何评估与比较完整视觉 SLAM 系统整体效率与效果的标准。</b>作者建议的替代指标是：人工干预程度、定位精度、地图一致性、实时运行能力、以及随地图增长而来的计算成本控制。</li>
+      </ul>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文说"基于外观的方法（以 BoVW 最常用）在数据关联上很受欢迎"，但同时列出它三条局限。下面哪一条<b>不是</b>原文提到的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="这一条是真的——原文指出 BoVW 受 perceptual aliasing 影响。" onclick="lessonKit.answer(this,'q0004b')">受感知混叠（perceptual aliasing）影响</button>
+          <button data-correct="no" data-explanation="这一条也是真的——原文指出它在视角或尺度大变化下尚未被充分测试。" onclick="lessonKit.answer(this,'q0004b')">在视角或尺度大变化下尚未被充分测试</button>
+          <button data-correct="yes" data-explanation="对，这条不是原文提到的局限。原文提到的第三条是：它不考虑已检测特征之间的空间分布与 3D 几何信息，而这些信息在建立关联时可能有用。（"无法用于实时系统"这句原文并未如此表述。）" onclick="lessonKit.answer(this,'q0004b')">它无法用于任何实时系统</button>
+        </div>
+        <div class="quiz-feedback" id="q0004b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>
+            请解释短基线与长基线这一对矛盾：为什么"好匹配"和"好三角化"难以同时满足？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>因为两者对"视差"的偏好正好相反。短基线时，同一个三维点在两帧中的位置变化很小，所以外观几乎相同、容易匹配（NCC 就够用）；但正因为视差小，视差的微小误差会带来巨大的深度误差——深度大致与视差成反比，视差趋近于零时深度趋于无穷、误差趋于无穷。反之，长基线带来的视差大、深度精度高，但外观差异大、必须靠描述子匹配，而且匹配更难、外点更多。所以工程上常见的做法是"短基线负责跟踪、长基线（或关键帧）负责三角化与约束"。</div>
+            </details>
+          </li>
+          <li>
+            为什么说"最近邻距离比（NNR）"比"最近邻（NN）"和"距离阈值"更好？请从"这个判据在什么情况下会拒绝匹配"这个角度回答。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>NN 和距离阈值都不会因为"缺乏区分度"而拒绝匹配：NN 永远返回一个最近邻（哪怕它只是勉强最近）；阈值只关心绝对距离，不看排名分布。而 NNR 把阈值加在"最近邻距离 ÷ 次近邻距离"这个比值上，因此当最近邻没有明显领先次近邻时（也就是这次匹配可能只是碰巧最像），比值会接近 1，从而被拒绝。也就是说，NNR 是唯一一个"因为自己不够确信而主动放弃"的判据——这正是它在重复纹理环境中格外重要的原因。</div>
+            </details>
+          </li>
+          <li>
+            本节提到"路标地图不适合避障"。请用一句话说清这个论断的逻辑，并指出它后来被什么表示方式解决了。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>逻辑是：路标地图只记录"哪里有可区分的特征"，而"没有特征"既不等于"没有障碍"，也不等于"可以通行"——很光滑的墙面可能一个路标都没有，但它显然是障碍物。所以路标地图的空白区不携带自由空间信息。后来解决的表示是占据栅格地图（把空间显式标注为占据/空闲）与稠密几何表示（点云、TSDF、ESDF），其中 TSDF 系（KinectFusion → Voxblox → ESDF）在后来的课程里会专门讲。</div>
+            </details>
+          </li>
+          <li>
+            请复述"一次假阳性就能造成不可挽回的失败"的机制。它和"一次假阴性"的差别到底在哪？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>差别在于"错误能否被后续信息纠正"。假阴性（漏掉一个真回环）没有引入任何错误信息，只是错过一次机会；而围绕轨迹的时间连续性意味着机器人后面很可能再次经过同一地点，机会不止一次，所以漏检的代价是"降低 recall"。假阳性（把两个不同地点认成同一处）则会把一条错误的相对位姿约束写进因子图，后端优化会"忠实"地按这条错约束重新排布整条轨迹与地图——错误被放大并扩散到全局。更麻烦的是它很难被自动发现，因为系统内部没有"真值"来判断这条约束是错的。因此当年的立场是：precision 必须为 100%，recall 尽量高即可。</div>
+            </details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0003-SLAM综述2021-从滤波到优化的演进主线.html">← SLAM 综述（2021）</a>
+        <a class="next" href="0005-动态环境下的激光SLAM-2022.html">动态环境下的激光 SLAM（2022）→</a>
+      </div>
+      <p class="foot-note">这一节把"看不见的功夫"补齐了。下一节开始换传感器——我们进入激光的世界 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KinectFusion（2011）：稠密建图的开端 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0033</div>
+      <h1>KinectFusion（2011）：稠密建图的开端</h1>
+      <p class="subtitle">第一季 0010 课提过「建图三分类」里的 TSDF 只说了一句；这一节把 TSDF 真正讲透——它怎么把几个旧零件拼成第一个实时可跑的稠密建图系统 🧊</p>
+      <div class="hero-meta">
+        <span>🎯 主题：实时稠密表面重建 + TSDF</span>
+        <span>👥 作者：Newcombe, Izadi, Hilliges, Molyneaux, Davison, Kohli（微软研究院）</span>
+        <span>📅 2011 · <i>KinectFusion: Real-Time Dense Surface Mapping and Tracking</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 它是什么论文：把零件拼成系统</a>
+        <a href="#b">2. 它要解决什么：三个缺口</a>
+        <a href="#c">3. 地图表示的三类：TSDF 凭什么赢</a>
+        <a href="#d">4. ★ TSDF 到底是什么</a>
+        <a href="#e">5. ★ 增量更新的秘密</a>
+        <a href="#f">6. ★ raycasting：闭合的回路</a>
+        <a href="#g">7. ICP 点-面：和 0022 同族</a>
+        <a href="#h">8. 实验数字与结论</a>
+        <a href="#i">9. ★ 局限：内存墙</a>
+        <a href="#j">10. ★ 收尾金句：显式几何的隐式表示</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 KinectFusion 是系统论文而非纯方法论文；用一句话解释 TSDF；讲清加权滑动平均为什么能增量；复述 raycasting 如何把 tracking 和 mapping 闭合成回路；并指出它的内存墙正是下一节的引子。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0010</b>：第一季讲的建图三分类（Geometric/Semantic/Implicit）里，Geometric 下的 TSDF 只提了一句，这一节把它讲透。接 <b>0004</b>：landmark 地图 vs 占据栅格地图，本节用「TSDF 取零交叉 vs 占据栅格取 mode」直接对照。接 <b>0022</b>：ICP 的点-面残差和那节的点云 BA 点到面残差是同一族。接 <b>0015</b>：显式 vs 隐式，本节收尾做三方对照。</p></div>
+      </div>
+
+      <h2>1. 它是什么论文：把零件拼成系统</h2>
+      <p>先给一个定位，免得你读偏：KinectFusion 是一篇<b>系统论文</b>，不是纯方法论文。判断依据在摘要和 §3——它明确用「四个组件」来组织全篇：Surface measurement（表面测量）、Surface reconstruction update（重建更新）、Surface prediction（表面预测）、Sensor pose estimation（传感器位姿估计）。换句话说，它没有发明全新的数学，而是把别人已经做过的几个零件<b>第一次组装成一个实时可跑的完整系统</b>。</p>
+      <p>这四个零件分别是：Curless–Levoy 的<b>体融合（volume fusion）</b>思路、ICP 的<b>点-面（point-to-plane）</b>配准、以及<b>投影数据关联（projective data association）</b>。在它之前，这些零件各自存在，但没人用一块廉价深度相机加一块商品 GPU 把它们实时拼起来。本节的贡献，恰恰是这个「拼法」和让它实时跑起来的工程闭环。</p>
+      <figure class="figure">
+        <img src="../../md/images/2011_KinectFusion/9c68f9ae19784cbf667667c5df199ab8cd76b52fceeeff5930cf6fcae4ac0f6c.jpg" alt="Fig. 1">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Example output from our system, generated in real-time with a handheld Kinect depth camera and no other sensing infrastructure. Normal maps (colour) and Phong shading are shown.（本系统的实时输出示例，仅用手持 Kinect 深度相机、无其他传感设施。图中含法向贴图（彩色）与 Phong 着色。）<br>
+          <b>怎么看这张图：</b>这是整篇最直观的「战果」图。注意它强调「手持 + 无其他传感」——也就是说，只靠一台几十美元的深度相机就能实时重建出带法向着色的细腻表面。它能做到这点，靠的正是后面要讲的四个组件与闭环；先看成果，再回头看机制会更有劲。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它要解决什么：三个缺口</h2>
+      <p>论文在引言里点名了当时三条走不通的路，理解这三条，才知道它到底补了什么：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① SFM / MVS</h4>
+          <p>运动恢复结构、多视图立体，精度高但<b>不实时</b>。离线能重建得很漂亮，却没法边走边建。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② MonoSLAM / PTAM</h4>
+          <p>能实时，但只产出<b>稀疏点云</b>。点太稀，没法给 AR 做遮挡判断，也没法做物理交互。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 已有 RGB-D 方法</h4>
+          <p>只有 <b>1–2 Hz</b>，而且用面片（surfel/面元）表示，质量不够，跟不上手持相机的节奏。</p>
+        </div>
+      </div>
+      <p>它要达成的目标是：用一块廉价深度相机 + 一块商品 GPU，在<b>变光照甚至全黑</b>条件下，重建「room-sized」（房间尺度）的复杂室内场景，而且实时。这里有个关键设定值得记住：深度相机自己会发光（结构光或类似机制），所以不需要环境光——这正是它敢说「全黑也能建图」的底气。</p>
+      <div class="callout">
+        <h4>★ 核心论点</h4>
+        <p>原文最关键的一句话是：<b>不要只对上一帧配准，要对「至今融合出的完整模型」配准</b>。这就是后面 raycasting 闭环的灵魂——tracking 比对的是「已经建出来的整张模型」，而不是「上一帧那点可怜的信息」。模型越建越完整，配准就越稳，这和只对齐相邻帧的方法有本质区别。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 地图表示的三类：TSDF 凭什么赢</h2>
+      <p>§2 先盘点了当时主流的三类地图表示，这是理解 TSDF 地位的前提：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>占据栅格（occupancy grid）</h4>
+          <p>每个格子存「被占据的概率」，用<b>贝叶斯更新</b>。这是第一季 0004 课讲过的老朋友。</p>
+        </div>
+        <div class="mini-card">
+          <h4>SDF / TSDF</h4>
+          <p>每个格子存到最近表面的<b>带符号距离</b>，<b>零交叉（zero crossing）</b>即表面。</p>
+        </div>
+        <div class="mini-card">
+          <h4>mesh 类重建</h4>
+          <p>直接存顶点和三角形面片，是显式的几何。</p>
+        </div>
+      </div>
+      <p>这里要直接接第一季 0004 课的「landmark 地图 vs 占据栅格地图」。论文在 §2.4 明确讲清了 TSDF 相对占据栅格的优势：<b>表面可以直接取零交叉</b>，而占据栅格要去找概率分布的 <b>mode（众数/峰值）</b>。打个比方——占据栅格像一张「每个格子有多可能被墙挡住」的概率表，要找墙在哪，得在一堆概率里找最高的那块；TSDF 则像一张等高线图，墙就画在「高度恰好为零」的那条线上，一眼就能描出来。所以从「取表面」这件事上，TSDF 比占据栅格更干净、更直接。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>从 TSDF 取表面，和从占据栅格取表面，哪个更直接？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。TSDF 表面就是零交叉，直接定位即可；占据栅格要去找概率分布的 mode（峰值），多了一步搜索。原文 §2.4 正是这么对比的。" onclick="lessonKit.answer(this,'q0033a')">TSDF 更直接，取零交叉即可</button>
+          <button data-correct="no" data-explanation="不对。占据栅格需要去找概率分布的 mode，比 TSDF 取零交叉更麻烦。原文 §2.4 说 TSDF 的优势正在于此。" onclick="lessonKit.answer(this,'q0033a')">占据栅格更直接，取 mode 即可</button>
+        </div>
+        <div class="quiz-feedback" id="q0033a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ TSDF 到底是什么：定义、截断与一句话直觉</h2>
+      <p>先解释两个词。<b>体素（voxel）</b>就是三维里的「像素」——把一个空间切成密密麻麻的小立方体，每个小立方体记一个数，整片空间就成了「数字化的豆腐块」。<b>符号距离（signed distance）</b>是指：从某个体素中心到最近表面的距离，并带上符号——<b>正数代表在自由空间（表面外面）、负数代表在表面背后（被墙挡住的那一侧）、零代表正好在表面上</b>。于是整张场景被表示成一个「距离场」，表面就是场里值为零的那条「等高线」。</p>
+      <p>再看原文的投影 TSDF 测量（式 6–9）。它把每个体素 $\mathbf p$ 到当前这一帧深度的距离算出来，投影回体素网格：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm F_{\mathrm R_k}(\mathbf p)=\Psi\!\left(\lambda^{-1}\|\mathbf t_{g,k}-\mathbf p\|_2-\mathrm R_k(\mathbf x)\right),\qquad \mathbf x=\big\lfloor\pi(\mathbf K\mathbf T_{g,k}^{-1}\mathbf p)\big\rfloor,\qquad \lambda=\|\mathbf K^{-1}\dot{\mathbf x}\|_2$$</div>
+      </div>
+      <p>其中 $\mathbf t_{g,k}$ 是相机中心，$\mathrm R_k(\mathbf x)$ 是深度图上该像素测到的距离，$\mathbf x$ 是体素投影回图像后的整数像素坐标，$\lambda$ 是把图像距离换算成世界尺度的系数。别被符号吓到——它干的事就是「对每个体素，问一句：沿相机这条射线看过去，你离测到的表面有多远」。</p>
+      <p>关键在<b>截断（truncation）</b>。截断函数长这样：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Psi(\eta)=\min(1,\eta/\mu)\,\mathrm{sgn}(\eta)\quad(\eta\ge-\mu),\qquad \text{否则为 null}$$</div>
+      </div>
+      <p>$\mu$ 是<b>截断距离</b>。意思是：只有离表面 $\mu$ 范围内的距离才被认真记录，超出就被「压」到 +1 或干脆标成 null（未观测）。<b>为什么必须截断？</b>因为多视角下，截断范围之外的 SDF 是不可信的——一个体素在某一帧的「射线远处」很可能是另一帧的墙背后，不同视角会互相打架、彼此干扰。截断相当于给每个体素圈一块「我只敢相信自己附近」的信任区，远处的噪声就别来捣乱。<b>一句话直觉</b>：TSDF 不存「整个房间到每面墙的距离」，只存「表面附近薄薄一层」的距离，这样既省内存又干净。</p>
+      <figure class="figure">
+        <img src="../../md/images/2011_KinectFusion/28bb10bd73e024be7dd45556b4363e5f190826f755f315c6db35bc1e387f5019.jpg" alt="Fig. 4">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>A slice through the truncated signed distance volume showing the truncated function $\operatorname{F}&gt;\mu$ (white), the smooth distance field around the surface (grey), and the unobserved region (black).（截断符号距离体的一层切片——白色是截断区，灰色是表面附近的平滑距离场，黑色是未观测区域。）<br>
+          <b>怎么看这张图：</b>这是「TSDF 长什么样」的最佳图。灰色的平滑斜坡就是表面附近的符号距离场，白边是 $\mathrm F&gt;\mu$ 的截断区，黑块是还没看到的地方（null）。注意真正有用的信息只在那一条薄薄的灰带上——这直观证明了「有用数据只有薄薄一层」。这条灰带也正是下一节换容器时要「只给这层分配内存」的逻辑起点。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 增量更新的秘密：加权滑动平均与凸去噪</h2>
+      <p>TSDF 是逐帧累积的：每来一帧新深度，就把它的测量结果和「之前融合好的模型」合在一起。合并方式是一个<b>加权滑动平均（weighted running average）</b>：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm F_k(\mathbf p)=\frac{\mathrm W_{k-1}(\mathbf p)\,\mathrm F_{k-1}(\mathbf p)+\mathrm W_{\mathrm R_k}(\mathbf p)\,\mathrm F_{\mathrm R_k}(\mathbf p)}{\mathrm W_{k-1}(\mathbf p)+\mathrm W_{\mathrm R_k}(\mathbf p)}$$</div>
+        <div class="flow-formula">$$\mathrm W_k(\mathbf p)=\min\!\big(\mathrm W_{k-1}(\mathbf p)+\mathrm W_{\mathrm R_k}(\mathbf p),\ \mathrm W_\eta\big)$$</div>
+      </div>
+      <p>分子是「旧值×旧权重 + 新测量×新权重」，分母是权重之和；权重 $\mathrm W$ 越大，说明这个体素被越多帧看到、越可信。下式里的上界 $\mathrm W_\eta$ 很关键——它把「累计平均」变成了<b>滑动平均</b>：当累计权重触顶后，新帧的权重不再无限加，旧信息会逐渐被稀释。这样一旦场景里<b>有物体移动</b>，旧位置的 TSDF 能被新观察慢慢「洗掉」、重新长出来，而不是被旧平均值永远钉死。</p>
+      <div class="callout">
+        <h4>★ 为什么能增量（这一节最值得讲的一步）</h4>
+        <p>原文把融合写成一个 $\mathcal L_2$ 凸去噪目标的逐点最小化：$$\min_{\mathrm F}\sum_k\big\|\mathrm W_{\mathrm R_k}\big(\mathrm F_{\mathrm R_k}-\mathrm F\big)\big\|_2$$ 而这个目标的解<b>可以随数据项增加而增量获得</b>——正是上面的加权平均。原文原话是：exploited … the solution can be obtained <b>incrementally</b> as more data terms are added using a simple <b>weighted running average</b>。换句话说，「每来一帧就更新一次」不是凑合，而是这个凸优化问题的天然解法。这是 TSDF 能实时跑的数学根基。</p>
+      </div>
+      <p>还有一条简单但有用的性质：<b>TSDF 的梯度就是表面法向</b>（式 14）。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\hat{\mathbf N}_k^g(\mathbf u)=\nu[\nabla\mathrm F(\mathbf p)],\qquad \nabla\mathrm F=[\partial_x\mathrm F,\ \partial_y\mathrm F,\ \partial_z\mathrm F]^\top$$</div>
+      </div>
+      <p>要点是：法向、预测深度都是<b>从 TSDF 当场算出来</b>的，不需要额外另存一份法向图。这也呼应了「显式几何的隐式表示」——几何没有显式存成面片，而是要用的时候从距离场里「现算」。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ raycasting：闭合的回路</h2>
+      <p>现在讲本节的核心机制。§3.4 的 <b>raycasting（射线投射）</b>做一件事：从相机出发，对每个像素沿视线方向「打一条射线」穿过 TSDF 体，一步一步往前走，直到符号从正变负（自由空间 → 表面背后），那个<b>正→负的交界就是表面</b>。</p>
+      <figure class="figure">
+        <img src="../../md/images/2011_KinectFusion/9387905b9df1f0f1a8405eecb4bae7de48b404e8d4b975fb3717baa295929773.jpg" alt="Fig. 3">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Overall system workflow.（系统总体工作流。）<br>
+          <b>怎么看这张图：</b>这是本节头号图，四个组件和 tracking–mapping 闭环都在里面。从左上「测量」下来，经「重建更新」把新深度融进 TSDF 体；右侧「预测」用 raycasting 从模型生成深度/法向图；最下「传感器位姿估计」拿预测图和真测量做 ICP。注意那条从预测绕回配准的箭头——它把 mapping 的输出喂回 tracking，闭合了回路。
+        </figcaption>
+      </figure>
+      <p>加速靠两招：第一，用「远小于 $\mu$ 的步长」<b>跳过已经截断的自由空间</b>（simple ray skipping），不用一格一格慢慢走；第二，在交界附近用线性插值精化出精确的表面位置：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$t^*=\mathbf t-\Delta t\,\frac{\mathrm F^+_{\mathbf t}}{\mathrm F^+_{\mathbf t+\Delta t}-\mathrm F^+_{\mathbf t}}$$</div>
+      </div>
+      <p>这个 raycasting 有<b>两个用途</b>，少一个都不行：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>(a) 给 ICP 提供预测</h4>
+          <p>它从「至今融合出的完整模型」生成预测深度图与法向图，供下一帧做 ICP 配准——这就<b>闭合了 tracking–mapping 回路</b>：tracking 比对的是模型，mapping 又由 tracking 驱动。</p>
+        </div>
+        <div class="mini-card">
+          <h4>(b) 渲染显示</h4>
+          <p>同一套 raycasting 直接出图给用户看，于是能实时做 AR 遮挡——虚拟物体能正确地被真实墙面挡住。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2011_KinectFusion/c41049ecbdb6f6b601911fe16706edbb35468dbb68c6f6742259b1028b237d95.jpg" alt="Fig. 5">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Reconstructed of a scene showing raycasting of the TSDF (left) without and (middle and right) with interpolation of the TSDF at the surface interface using …（场景重建，展示 TSDF 的 raycasting：左为不做插值，中/右为在表面界面处对 TSDF 插值。）<br>
+          <b>怎么看这张图：</b>左图不做插值，表面是「台阶状」的格子；中、右图在表面交界处对 TSDF 做了线性插值，台阶被抹平，表面光滑得多。它证明式 15 那个插值精化不是花架子，而是画质的关键一步。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2011_KinectFusion/c7f8bc3d3fec065c7d36801bb1bcc10fa69ee6741babb1896ecb899654a55b8a.jpg" alt="Fig. 6">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Demonstration of the space skipping ray casting. (Left) pixel iteration count are shown where for each pixel the ray is traversed in steps of at most one voxel …（空间跳跃式 raycasting 演示；左为每个像素的迭代次数（每步至多一个体素）……）<br>
+          <b>怎么看这张图：</b>它回答「为什么要加速、怎么加速」。左图颜色越亮代表该像素的射线要迭代越多步；用了 space skipping 后，远处自由空间被大步跳过，迭代次数大幅下降。这正对应正文「远小于 $\mu$ 的步长跳过已截断自由空间」的技巧——没有它，逐体素走完整张体积会慢到不可实时。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. ICP 点-面：和 0022 同族</h2>
+      <p>拿到预测图后，§3.5 用 ICP 求这一帧相机的位姿。流程是：先 raycast 得到上一帧模型的预测 $(\hat{\mathbf V}_{k-1},\hat{\mathbf N}_{k-1})$，用<b>投影数据关联</b>把当前帧点对应上去，并用法向夹角 + 距离<b>双阈值</b>剔除离群点；再最小化一个全局的<b>点-面（point-to-plane）</b>能量：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$E(\mathbb T_{g,k})=\sum_{\mathbf u}\big\|(\mathbb T_{g,k}\dot{\mathbf V}_k-\hat{\mathbf V}^g_{k-1})^\top\hat{\mathbf N}^g_{k-1}\big\|_2^2$$</div>
+      </div>
+      <p>这条残差的意思是：把当前点用位姿 $\mathbb T_{g,k}$ 变换后，它到模型预测表面（法向 $\hat{\mathbf N}^g_{k-1}$）的垂直距离要尽量小。<b>请接 0022</b>：第一季 0022 讲点云 BA 时用的「点到面残差」就是这一族——KinectFusion 把它搬到实时 GPU 上做逐帧跟踪。线性化时假设小角度增量，参数 $\mathbf x=(\beta,\gamma,\alpha,t_x,t_y,t_z)^\top$，每对对应点贡献一个 6×6 对称块：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf G=[\,[\widetilde{\mathbf V}^g_k]_\times\mid\mathbf I_{3\times3}\,]$$</div>
+      </div>
+      <p>GPU 上并行求和这些 6×6 块，再用树形归约（tree reduction）汇总，最后 CPU 端用 Cholesky 解那个正规方程。它还在图像金字塔第 3/2/1 层（由粗到细）分别迭代 4/5/10 次；另外有零空间约束检查，失败时会触发重定位。</p>
+      <div class="callout">
+        <h4>OCR 提醒</h4>
+        <p>你若看到式(18) 的小角度矩阵被打乱，按式(19) 的参数顺序（$(\beta,\gamma,\alpha,\dots)$）与式(21) 的 $\mathbf G=[[\mathbf V]_\times\mid\mathbf I]$ 反推，真值应为：$$\widetilde{\mathbf R}^z=\begin{bmatrix}1&-\gamma&\beta\\[2pt]\gamma&1&-\alpha\\[2pt]-\beta&\alpha&1\end{bmatrix}$$ 另外原文多处 `\Upsilon` 实为 <b>T</b>，`n u l l` 应为 <b>null</b>。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 实验数字与结论</h2>
+      <p>§4 的实验数字要抄准，它们是这门系统「能打」的证据：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>体量</h4>
+          <p>转到台（turntable）<b>19 秒、560 帧</b>；默认体分辨率 <b>256³</b>；RGB-D 流 <b>640×480 @ 30 Hz</b>（约 9M 点/秒）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>速度</h4>
+          <p>tracking <b>30 Hz</b>；TSDF 更新 <b>&gt;65 gigavoxels/s</b>（512³ 整卷更新约 2 ms）。</p>
+        </div>
+      </div>
+      <p>四组对比很说明问题：帧-帧 ICP / 不闭合回路 / 完整闭环 / 同一数据重复 4 遍。结论是<b>帧-模型（frame-to-model）无漂移</b>，而且比「每 8 帧取一个关键帧」的做法更好——因为模型越完整，配准越稳，重复 4 遍数据也不会累计偏掉。这正是 §2 那句「对完整模型配准」的工程兑现。</p>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. ★ 局限：内存墙（下一节的引子）</h2>
+      <p>必须讲清局限，因为它直接引出 0034。原文明确：当前方法只适合 <b>medium sized rooms with volumes of ≤ 7 m³</b>（中型房间，体积不超过 7 立方米）。它撞了两道墙：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>内存墙</h4>
+          <p>规则网格把空空间和表面<b>一样密地</b>存，要重建整栋楼就会<b>内存爆炸</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>长序列漂移</h4>
+          <p>长序列里漂移会在闭环处表现为<b>错位</b>；大平面场景下 6DOF 有 3 个自由度不可约束，会漂或失败（§4.3），需要一个人参与的<b>交互式重定位</b>。</p>
+        </div>
+      </div>
+      <p>原文的开放方向也很诚实：子图（sub-mapping）、自适应网格/八叉树利用 TSDF 的稀疏性、高效自动重定位、在体积上做语义分割。<b>记住这条线</b>——下一节 0034 要做的，正是其中「利用 TSDF 稀疏性」这一条：数学不变，只换一个装它的容器。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>KinectFusion 的「内存墙」主要源于它用规则体素网格把空空间和表面都密密地存了，对吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。§2 原话说 regular voxel grid 把 empty space 和 surfaces 都 densely 表示，所以重建大场景会内存爆炸。这正引出 0034 用哈希表只存表面附近。" onclick="lessonKit.answer(this,'q0033b')">对，规则网格存了太多空空间</button>
+          <button data-correct="no" data-explanation="错。内存爆炸不是因为算法慢，而是因为规则网格对空空间和表面一视同仁地密存。这是存储结构的锅，不是算力的锅。" onclick="lessonKit.answer(this,'q0033b')">不对，是 GPU 算力不够</button>
+        </div>
+        <div class="quiz-feedback" id="q0033b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="j">
+      <h2>10. ★ 收尾金句：显式几何的隐式表示</h2>
+      <p>最后做一个收尾性的辨析，它会贯穿第二季。结论是：<b>TSDF 是「显式几何的隐式表示」</b>——它存的不是顶点和面片，而是每个体素里的<b>距离标量场</b>；表面是这张场的<b>零水平集（zero level set）</b>，要看几何得靠「提取等值面」才能显形。</p>
+      <p>接第一季 0015 课的「显式 vs 隐式」对照，三方关系是：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>3D 高斯（显式）</h4>
+          <p>直接存高斯椭球的几何参数，看得见、点得着。</p>
+        </div>
+        <div class="mini-card">
+          <h4>NeRF（隐式）</h4>
+          <p>把场景塞进神经网络权重，几何藏在权重里。</p>
+        </div>
+        <div class="mini-card">
+          <h4>TSDF（中间态）</h4>
+          <p>离散存储（像显式），但要靠等值面才能「看见」几何（像隐式）。</p>
+        </div>
+      </div>
+      <p>所以 TSDF 站在中间：它比 NeRF 好定位（数据是离散体素，不是黑箱权重），又比 3D 高斯「藏得深」（表面不是直接存的，要算）。<b>这一辨析会在 0036–0039 再被检验一次</b>——到那时你会看到隐式表示怎么把场景彻底塞进网络。现在先记住这个「中间态」的位置。</p>
+      <div class="paper-divider"></div>
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>为什么说 KinectFusion 是「系统论文」而不是「方法论文」？它组装了哪几个已有零件？</p>
+          <p><b>答：</b>因为它没有提出全新数学，而是把 Curless–Levoy 的体融合、ICP 点-面配准、投影数据关联这几个已有零件，用四个组件（测量/更新/预测/位姿估计）第一次组装成实时可跑的完整系统。判断依据是摘要与 §3 用 four components 组织全篇。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>TSDF 相对占据栅格，在「取表面」这件事上为什么更直接？用 §2.4 的话说。</p>
+          <p><b>答：</b>TSDF 表面是零交叉，直接定位即可；占据栅格要去找概率分布的 mode（峰值）。所以 TSDF 取表面更干净直接。这直接接 0004 的「landmark 地图 vs 占据栅格地图」。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>加权滑动平均里，上界 $\mathrm W_\eta$ 起什么作用？为什么需要它？</p>
+          <p><b>答：</b>$\mathrm W_\eta$ 把「累计平均」变成「滑动平均」：累计权重触顶后新帧权重不再无限叠加，旧信息被稀释。这样场景里有物体移动时，旧位置的 TSDF 能被新观察慢慢洗掉、重新长出来，而不是被旧平均永远钉死。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>raycasting 在本系统里有哪两个用途？它如何「闭合」tracking–mapping 回路？</p>
+          <p><b>答：</b>① 从完整模型生成预测深度/法向图供 ICP（闭合回路）；② 渲染显示（AR 遮挡）。闭环在于：mapping 产出 TSDF 模型 → raycasting 从模型出预测图 → ICP 拿预测图和真测量求位姿 → 位姿又驱动下一帧 mapping。tracking 比对的始终是「完整模型」而非上一帧。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 5：</b>为什么说 TSDF 是「显式几何的隐式表示」？把它和 0015 的 3D 高斯、NeRF 摆在一起说。</p>
+          <p><b>答：</b>TSDF 存的是体素里的距离标量场，表面是零水平集，没有顶点/面片（隐式的一面）；但数据又是离散体素、定位明确（显式的一面），所以是中间态。3D 高斯直接存几何参数（显式），NeRF 把场景塞进权重（隐式），TSDF 介于两者之间。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0032-连续时间落地-弹性地图与固定延迟平滑.html">← 上一课：连续时间落地</a>
+        <a class="next" href="0034-VoxelHashing2013-体素地图的内存解法.html">下一课：Voxel Hashing（2013） →</a>
+      </div>
+      <p class="foot-note">TSDF 这层薄薄的距离场，是后面三节课的地基；下一节我们不动数学，只换一个能装下大世界的容器 🧱</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

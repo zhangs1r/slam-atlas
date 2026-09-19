@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>导览：第二季开场——从建立坐标系到打地基 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0017</div>
+      <h1>导览：第二季开场——从「建立坐标系」到「打地基」</h1>
+      <p class="subtitle">第一季我们把 255 篇论文挂到了四根纵轴上，认识了各种方法家族的名字。<b>但从头到尾，我们都在"用"数学，没有"推"数学</b>。第二季换个姿态：把那些被反复引用的地基公式，一篇一篇亲手推一遍。这一节先告诉你这季要去哪、为什么这么走、读完能带走什么。🏗️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：阶段 B 路线图 + 第一季悬念清单</span>
+        <span>👥 覆盖 19 篇论文 · 23 节课</span>
+        <span>📅 2000 – 2023 · 跨 24 年</span>
+      </div>
+      <div class="toc">
+        <a href="#why">为什么要先打地基</a>
+        <a href="#debt">第一季欠的债，这季还哪些</a>
+        <a href="#map">这季的地形图：5 个模块</a>
+        <a href="#spine">一条主线串起 23 节</a>
+        <a href="#howto">三种读法与勘误</a>
+        <a href="#selfcheck">学完这季你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清"阶段 A 和阶段 B 的分工差别"；② 说出这季的五个模块以及各自要解决的核心疑问；③ 知道自己欠下的那几条悬念分别在哪一节课还清、哪几条要等到后面几季。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一节是<a href="0001-导览-255篇论文的阅读地图.html">第 0001 课</a>的姊妹篇。0001 讲的是"255 篇的整体地形"；本节讲的是"我们脚下这一块地形"。建议先回看 <a href="0001-导览-255篇论文的阅读地图.html">0001</a> 的第 2 节（11 个阶段）与 <a href="0003-SLAM综述2021-从滤波到优化的演进主线.html">0003</a> 的四条演进轴，再来读这一节。</p>
+        </div>
+      </div>
+
+      <h2>1. 先说清楚：第一季和第二季，到底在干什么不一样的事</h2>
+
+      <p>用一个比喻。第一季我们做的是<b>认地图</b>：站在高处看这座城，知道哪儿是商业区、哪儿是住宅区、哪条路通往哪儿。我们知道有"光学法""直接法""紧耦合"这些街区名字，也知道它们大致在城的哪个方位。</p>
+
+      <p>但认地图有个天花板：<b>你能指出路，却不会修路。</b></p>
+
+      <p>第二季做的是<b>打地基</b>。我们不在高处看了，而是蹲下来挖开地面，看那些支撑整座城的东西到底是什么材料、怎么浇筑的。具体说，是三类东西：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>① 解方程的地基</h4>
+          <p>SLAM 最后总是落到"解一个巨大的非线性最小二乘"。这个方程凭什么能解？靠的是它的<b>稀疏结构</b>。第一季说了一句"稀疏性决定后端能不能算得动"就走了——这季我们把它推完。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 算一条边的地基</h4>
+          <p>把问题画成图之后，图上每条边都得有个具体的数学形式。IMU 那条边怎么算才不用每次优化都重积分一遍？相机位姿和速度怎么进同一个方程？这是<b>预积分</b>要回答的。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 把场景存下来的地基</h4>
+          <p>算完位姿，地图长什么样？体素里存什么数？为什么一个小小的房间就能吃掉几个 GB 显存？从 TSDF 到神经辐射场，我们看"空间表示"这四十年怎么变的。</p>
+        </div>
+      </div>
+
+      <p>所以一句话总结两个阶段的分工：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\underbrace{\text{阶段 A}}_{\text{怎么把问题写成图}} \;\longrightarrow\; \underbrace{\text{阶段 B}}_{\text{图上的边怎么算得又快又准}}$$</div>
+      </div>
+
+      <p>这不是我编的概括——第一季讲过的那些综述自己就是这么分层的。比如 <a href="0007-固态激光雷达与纳米光子学2022-硬件演进.html">0007</a> 那种硬件课讲的是"信息从哪来"，<a href="0006-LiDAR里程计综述2024-算法分类与九大挑战.html">0006</a> 那种综述课讲的是"方法家族怎么分"，而这一季要讲的 BA、g2o、预积分、TSDF，是这些东西<b>共用的底层零件</b>。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断：先想一个问题</h3>
+        <p>假如你只有一台相机和一个 IMU，相机 20 Hz、IMU 200 Hz。跑 10 分钟，你会得到多少条 IMU 测量？如果"每条测量都在优化里加一个未知量"，这个方程还能解吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="12 万条测量听起来很多，但如果每条都进优化只是慢一点，那就没有预积分什么事了——问题是它会让方程规模失控。" onclick="lessonKit.answer(this,'q0017a')">大约 12 万条，慢但能解</button>
+          <button data-correct="yes" data-explanation="正确。每秒 200 条 × 600 秒 = 12 万条，而相机只有 1.2 万个关键帧级时刻。真正的难点不是数量，而是：每次优化迭代改变状态后，这些测量必须重新积分——这才是预积分要解决的事。" onclick="lessonKit.answer(this,'q0017a')">12 万条，但难点不只在数量</button>
+          <button data-correct="no" data-explanation="IMU 测量的数量本身是可以统计出来的，真正需要思考的是它对优化问题结构的影响。" onclick="lessonKit.answer(this,'q0017a')">这个问题无法估算</button>
+        </div>
+        <div class="quiz-feedback" id="q0017a"></div>
+        <p style="font-size:.9rem;color:#8b786f;margin-top:.6rem;">先别急着看答案。这个问题的完整解答在<a href="0029-IMU预积分上-为什么需要预积分.html">第 0029 课</a>——到时候你会看到，单是"为什么要预积分"这一问，原作者就写了一整节。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="debt">
+      <h2>2. 第一季欠的债，这季还哪些</h2>
+
+      <p>第一季 <a href="0001-导览-255篇论文的阅读地图.html">0001</a> 课末和每节课的"留下什么疑问"里，我们记了五条悬念。<b>这季不是全部都能还</b>——诚实地把账摊开：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>✅ 悬念①：BA 的稀疏性怎么利用？</h4>
+          <p><b>这季还清。</b><a href="0019-BA下-Schur消元与鲁棒核.html">第 0019 课</a>会把 Schur 消元从分块矩阵一路推到底，再讲变量排序为什么能决定快慢。<a href="0020-GraphSLAM教程2010-把SLAM变成一张图.html">第 0020 课</a>从机器人视角把同一套公式再推一遍，<a href="0021-g2o优化库2011-因子图求解器的工程实现.html">第 0021 课</a>讲它怎么被写成一个库。</p>
+        </div>
+        <div class="mini-card">
+          <h4>✅ 悬念②：预积分到底在解决什么？</h4>
+          <p><b>这季还清。</b><a href="0029-IMU预积分上-为什么需要预积分.html">第 0029</a> 与 <a href="0030-IMU预积分下-流形上的推导与雅可比.html">0030 课</a>两节连讲。核心答案就一句话：把几百条 IMU 测量压成一个<b>与状态无关</b>的量，让优化迭代时不必重新积分。第 0002 课提过的"IMU 因子"、第 0008 课提过的"IMU 200 Hz"，到这里才算真正闭环。</p>
+        </div>
+        <div class="mini-card">
+          <h4>🕓 悬念③：ikd-Tree 与 k-d 树差在哪？</h4>
+          <p><b>这季只还一半。</b><a href="0023-PCL点云库2011-点云处理的瑞士军刀.html">第 0023 课</a>会讲到点云处理的标准库 PCL，它的最近邻搜索用的是<b>近似</b>算法（FLANN）。"为什么近似不够用、为什么激光 SLAM 需要能动态插入删除的树"——这个正式的答案要等到<b>阶段 D</b>（激光主干）讲 FAST-LIO2 时才展开。</p>
+        </div>
+        <div class="mini-card">
+          <h4>🕓 悬念④：提取 vs 不提取特征，为什么来回摆动？</h4>
+          <p><b>这季给一半的坐标轴。</b><a href="0022-点云BA2023-高效与一致.html">第 0022 课</a>会展示一个矛盾的中间态：它<b>提取</b>面/边特征用于数据关联，但残差用的是<b>全部原始点</b>；<a href="0026-SGM半全局匹配2008-双目深度怎么算.html">第 0026 课</a>的 SGM 则是彻底的稠密、不提取路线。完整的"为什么来回摆动"要等阶段 D 与阶段 G。</p>
+        </div>
+        <div class="mini-card">
+          <h4>🕓 悬念⑤：3DGS 的"自适应密度控制"怎么做？</h4>
+          <p><b>这季不还。</b>它属于<b>阶段 F</b>（神经隐式与 3D 高斯）。不过这季会打好必要的地基：<a href="0036-NeRF上-隐式表示与体渲染.html">第 0036</a>、<a href="0037-NeRF下-位置编码与分层采样.html">0037 课</a>讲清楚"隐式表示"和体渲染，<a href="0039-Plenoxels2022-连神经网络都不要.html">第 0039 课</a>讲清"显式表示"，到阶段 F 你就能看懂 3DGS 在这条谱系上的位置了。</p>
+        </div>
+        <div class="mini-card">
+          <h4>➕ 这季新增的账</h4>
+          <p>还有几件事第一季根本没提，但属于地基：<b>连续时间轨迹</b>（<a href="0031-连续时间vs离散时间2022-什么时候必须换建模.html">第 0031</a>、<a href="0032-连续时间落地-弹性地图与固定延迟平滑.html">0032 课</a>）、<b>双目深度怎么算</b>（<a href="0026-SGM半全局匹配2008-双目深度怎么算.html">0026</a>）、<b>从 TSDF 到 ESDF</b>（<a href="0035-Voxblox2017-从TSDF到ESDF.html">0035</a>）。</p>
+        </div>
+      </div>
+
+      <p>把这张表看一遍，你应该能感到一件事：<b>第一季那些"听起来很熟但说不清"的词，第二季会变成能写在纸上的公式。</b>这是这季最大的价值。</p>
+    </section>
+
+    <section class="section-card" id="map">
+      <h2>3. 这季的地形图：19 篇论文，5 个模块，23 节课</h2>
+
+      <p>路线图给阶段 B 的定位是"数学、后端、地图表示"。我按<b>认知依赖</b>把它重新排成了五个模块——顺序不是论文年份，而是"你得先懂 A 才能懂 B"。</p>
+
+      <h2>模块一 · 后端与优化（0018 – 0023）</h2>
+      <p>整个 SLAM 社区共用的那台"求解机器"。从 2000 年那篇 BA 圣经开始，到 2023 年它被搬到点云上。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>0018 · BA（上）</h4><p>BA 到底在解什么问题？为什么"远处点不能用欧氏坐标"这种细节能决定成败？（2000 年综述）</p></div>
+        <div class="mini-card"><h4>0019 · BA（下）★</h4><p>稀疏结构 → Schur 消元 → 变量排序。还有两个最反直觉的知识点：<b>gauge freedom</b> 与<b>"先剔除外点再优化"为什么是错的</b>。</p></div>
+        <div class="mini-card"><h4>0020 · GraphSLAM 教程</h4><p>换机器人视角：把 SLAM 画成一张图，从概率一路推到 $\mathbf H\Delta\mathbf x=-\mathbf b$。</p></div>
+        <div class="mini-card"><h4>0021 · g2o</h4><p>上面那套数学怎么变成一个库：顶点、边、求解器、线性求解器四层抽象。</p></div>
+        <div class="mini-card"><h4>0022 · 点云上的 BA</h4><p>把 BA 搬到 LiDAR：点云没有"点特征"怎么办？怎么做到与点数无关？</p></div>
+        <div class="mini-card"><h4>0023 · PCL</h4><p>点云处理的"标准件仓库"。它本身不是算法，但你读激光论文会反复撞见它。</p></div>
+      </div>
+
+      <h2>模块二 · 几何与重建（0024 – 0027）</h2>
+      <p>后端会解方程，前提是<b>有人把方程写出来</b>。这个模块讲"从图像里怎么得到几何约束"。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>0024 · VO 教程（上）</h4><p>相机模型、内参、对极几何——为什么"知道两个相机怎么摆，就能把对应点的搜索降到一条线上"。</p></div>
+        <div class="mini-card"><h4>0025 · VO 教程（下）</h4><p>三条运动估计管线（2D-2D / 3D-3D / 3D-2D）与单目/双目各自的优缺点。</p></div>
+        <div class="mini-card"><h4>0026 · SGM 双目匹配</h4><p>稠密、不提取特征的一条路。以及"两台相机曝光不同，灰度差法就崩了"这个现实问题怎么解。</p></div>
+        <div class="mini-card"><h4>0027 · COLMAP</h4><p>从一堆无序照片到三维模型。也顺便看一个反面：它<b>完全不处理</b>在线、因果、回环这些问题。</p></div>
+      </div>
+
+      <h2>模块三 · 惯性与连续时间（0028 – 0032）</h2>
+      <p>只靠相机不够稳，加上 IMU 又带来一堆麻烦。这个模块讲"怎么把高频惯性测量塞进优化里"。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>0028 · MSCKF</h4><p>滤波派的聪明招：<b>不把路标放进状态向量</b>，也能用上"一个点被多个位姿看到"的约束。</p></div>
+        <div class="mini-card"><h4>0029 · 预积分（上）</h4><p>为什么需要预积分——看"重新积分"这个问题到底有多致命。</p></div>
+        <div class="mini-card"><h4>0030 · 预积分（下）</h4><p>流形上的推导、偏置怎么修正、协方差怎么传播、IMU 因子长什么样。</p></div>
+        <div class="mini-card"><h4>0031 · 连续时间 vs 离散时间</h4><p>什么时候"帧内匀速"这个假设会崩？连续时间表示赢在哪、代价是什么。</p></div>
+        <div class="mini-card"><h4>0032 · 连续时间落地</h4><p>两篇真实系统：地图可以"弹性变形"的 ElasticLiDAR++，和把连续时间跑成实时的固定延迟平滑。</p></div>
+      </div>
+
+      <h2>模块四 · 空间表示：把场景存下来（0033 – 0035）</h2>
+      <p>位姿算完了，地图长什么样？这一模块讲体素式地图的三十年。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>0033 · KinectFusion</h4><p>TSDF 的开山之作。第一次把"手持深度相机实时重建整个房间"变成现实，也第一次撞上<b>内存墙</b>。</p></div>
+        <div class="mini-card"><h4>0034 · Voxel Hashing</h4><p>用哈希表存体素，把重建尺度从"一间房"推到"20–30 米的走廊与庭院"。</p></div>
+        <div class="mini-card"><h4>0035 · Voxblox</h4><p>目标反转：前两篇服务"看"，这篇服务"动"——从 TSDF 增量长出 ESDF，让无人机能规划。</p></div>
+      </div>
+
+      <h2>模块五 · 神经隐式表示（0036 – 0039）</h2>
+      <p>同样是"把场景存下来"，但换了一种彻底不同的思路。这条线直接通向第一季第 <a href="0015-3D高斯泼溅全景2025.html">0015</a> 课讲的 3D 高斯。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>0036 · NeRF（上）</h4><p>把整个场景"压进"一个神经网络的权重里。体渲染公式逐符号讲清。</p></div>
+        <div class="mini-card"><h4>0037 · NeRF（下）</h4><p>位置编码为什么必需（有消融实验数字）、分层采样怎么工作、以及它最要命的两条局限。</p></div>
+        <div class="mini-card"><h4>0038 · Instant NGP</h4><p>哈希编码把训练从"1–2 天"压到"秒级"——同一个体渲染框架，只换了"信息放在哪"。</p></div>
+        <div class="mini-card"><h4>0039 · Plenoxels</h4><p>把这件事推到极端：连神经网络都不要。也留下本季最值得思辨的一句话。</p></div>
+      </div>
+
+      <p>这三个模块——体素（TSDF）、神经隐式（NeRF）、显式网格——其实是回答同一个问题的三种答案。等你在 <a href="0039-Plenoxels2022-连神经网络都不要.html">0039 课</a>把"显式 vs 隐式"这张表填完，再回头看 <a href="0015-3D高斯泼溅全景2025.html">0015 课</a>的 3D 高斯，会有完全不同的感受。</p>
+    </section>
+
+    <section class="section-card" id="spine">
+      <h2>4. 一条主线串起 23 节课</h2>
+
+      <p>23 节课看起来散，其实有一条主线。我先把它写出来，你可以读完全季再回来检验是不是这样：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{把问题写成方程} \;\to\; \text{让方程能算} \;\to\; \text{让方程算得快} \;\to\; \text{把结果存下来}$$</div>
+      </div>
+
+      <p>展开成三个阶段：</p>
+
+      <h2>第一阶段：先把同一件事用三种语言讲一遍</h2>
+      <p><a href="0018-BA上-现代综述2000-BA究竟在解什么.html">0018</a>–<a href="0020-GraphSLAM教程2010-把SLAM变成一张图.html">0020</a> 三节课其实在讲<b>同一个数学对象</b>，只是入口不同：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>摄影测量的入口</h4><p>BA：联合精化相机与三维点。关心的是"参数怎么选才不会数值爆炸"。</p></div>
+        <div class="mini-card"><h4>机器人的入口</h4><p>图优化：节点是位姿，边是约束。关心的是"图长什么样、稀疏性从哪来"。</p></div>
+        <div class="mini-card"><h4>工程师的入口</h4><p>g2o：顶点 + 边 + 求解器。关心的是"怎么让它跑得动、怎么选求解器"。</p></div>
+      </div>
+      <p><b>为什么要同一个东西讲三遍？</b>因为这三遍分别回答"为什么对""长什么样""怎么实现"。缺任何一遍，你读方法论文时都会有空洞感。</p>
+
+      <h2>第二阶段：从"能用"到"好用"</h2>
+      <p><a href="0022-点云BA2023-高效与一致.html">0022</a> 之后，你会看到一批工作都在做同一件事：<b>把公式搬到更难的数据上</b>。点云没有稳定的点特征、IMU 高频到 200–800 Hz、机器人高速运动时帧内匀速假设失效——每一个工程约束都在逼着数学变形。</p>
+
+      <h2>第三阶段：从"存下来"到"用好"</h2>
+      <p>模块四、五是本季的收尾，也是最容易看出"技术演进方向"的一段。<a href="0035-Voxblox2017-从TSDF到ESDF.html">0035 课</a>那张图会告诉你一个残酷的事实：<b>同一个几何场，换一种存储方式，就能决定机器人能不能飞起来。</b></p>
+
+      <div class="figure">
+        <img src="../../md/images/2000_BundleAdjustment/d5cacfcc50e1142791a0f3a05a7365378370e5cc051e5c15a11a3833f6c20eed.jpg" alt="Bundle adjustment sparse structure">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b><i>The network graph, parameter connection graph, Jacobian structure and Hessian structure for a toy bundle problem with five 3D features A–E, four images 1–4 and two camera calibrations $K_1$ (shared by images 1,2) and $K_2$ (shared by images 3,4).</i>（一个玩具级 bundle 问题的网络图、参数连接图、Jacobian 结构与 Hessian 结构——五个三维特征 A–E、四张图像 1–4、两组相机标定 $K_1$、$K_2$。）
+          <br><b>怎么看这张图：</b>这是本季的"预告片"。四联图从左到右是同一个问题的四种画法：最左是<b>谁看见了谁</b>（网络图），第二张是<b>参数之间谁跟谁耦合</b>，第三、四张是<b>这个耦合关系变成矩阵以后的样子</b>。你只要先看出最后一张 Hessian 图里有大量空白——那些空白就是"稀疏"，也是整台后端机器能转起来的原因。这张图在 <a href="0019-BA下-Schur消元与鲁棒核.html">第 0019 课</a>会被拆开学一遍。
+        </figcaption>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2011_KinectFusion/28bb10bd73e024be7dd45556b4363e5f190826f755f315c6db35bc1e387f5019.jpg" alt="KinectFusion TSDF volume slice">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b><i>A slice through the truncated signed distance volume showing the truncated function $\operatorname{F} > \mu$ (white), the smooth distance field around the surface (grey), and the unobserved region (black).</i>（截断符号距离体的一层切片：白色是截断区，灰色是表面附近的平滑距离场，黑色是未观测区域。）
+          <br><b>怎么看这张图：</b>注意那层薄薄的灰色——<b>整张地图里真正有用的只有这一层</b>，其余要么是"空"、要么是"没看过"。这个观察直接引出了后面的两节课：既然有用的数据这么少，为什么要用一个大方块网格把它装起来？（<a href="0034-VoxelHashing2013-体素地图的内存解法.html">第 0034 课</a>）以及，这层灰色到底存的是什么数？（<a href="0033-KinectFusion-稠密建图的开端.html">第 0033 课</a>）
+        </figcaption>
+      </div>
+
+      <div class="figure">
+        <img src="../../md/images/2020_NeRF/75b7186333ad0ca8612b0c17e7155a0cf9c88cb6b0c12288531ea064183820f5.jpg" alt="NeRF overview pipeline">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b><i>An overview of our neural radiance field scene representation and differentiable rendering procedure. We synthesize images by sampling 5D coordinates (location and viewing direction) along camera rays (a), feeding those locations into an MLP to produce a color and volume density (b), and using volume rendering techniques to composite these values into an image (c). This rendering function is differentiable, so we can optimize our scene representation by minimizing the residual between synthesized and ground truth observed images (d).</i>（神经辐射场场景表示与可微渲染流程总览：沿相机光线采样 5D 坐标 (a) → 送入 MLP 输出颜色与体密度 (b) → 用体渲染合成图像 (c) → 该渲染函数可微，故可用合成图与真值图的残差反传优化场景表示 (d)。）
+          <br><b>怎么看这张图：</b>四步 (a)(b)(c)(d) 就是本季最后四节课的目录。但请特别留意 (b) 那个 MLP——<b>一条光线要采上百个点，每个点都要查一次网络</b>。这就是为什么 NeRF 训练一个场景要花一两天。<a href="0038-InstantNGP2022-哈希编码把NeRF压到秒级.html">第 0038 课</a>与<a href="0039-Plenoxels2022-连神经网络都不要.html">第 0039 课</a>会分别给出两种解法，而第一季 <a href="0015-3D高斯泼溅全景2025.html">0015 课</a>的 3D 高斯给出了第三种。
+        </figcaption>
+      </div>
+
+      <p>三张图分别对应"方程""存法""新表示"——正好是本季的三个模块。<b>先看个眼熟，读到时候再回来对照。</b></p>
+    </section>
+
+    <section class="section-card" id="howto">
+      <h2>5. 三种读法，和一处必须告诉你的勘误</h2>
+
+      <h2>读法建议</h2>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>🕐 只有碎片时间（速览）</h4>
+          <p>读 <b>0019 · 0029 · 0036</b> 三节。分别对应"方程怎么算得动""IMU 怎么进方程""新表示是什么"。这三节是全季的骨架，其余都是围绕它们的展开。</p>
+        </div>
+        <div class="mini-card">
+          <h4>📚 系统学一遍（推荐）</h4>
+          <p>按 0017 → 0039 顺序读。模块一是必需的（后面处处要用），模块二可以快读，模块三和模块五值得慢读。</p>
+        </div>
+        <div class="mini-card">
+          <h4>🔧 当工具书查</h4>
+          <p>读到某篇方法论文卡住时，回来查对应模块：看到 Schur 补 → 0019；看到预积分 → 0030；看到 TSDF/ESDF → 0033–0035；看到 NeRF → 0036–0037。每节课末尾都有"返回课程馆"，方便跳走再跳回来。</p>
+        </div>
+      </div>
+
+      <h2>勘误：路线图在这个阶段也有归错类的</h2>
+
+      <p>第一季我们揪出过两处路线图归错类（<a href="0005-动态环境下的激光SLAM-2022.html">第 0005 课</a>那篇其实是方法论文；另有一篇是工业图像异常检测，与 SLAM 无关）。<b>这季又发现一处，同样公开修正：</b></p>
+
+      <div class="mini-card">
+        <h4>⚠️ 「SfM 综述（2016）」其实不是综述</h4>
+        <p>路线图把 <code>2016_StructureFromMotion</code> 标为「SfM 综述」，并注明"SLAM 与 SfM 是一体两面"。但我们打开正文逐字核对后发现，它的真实标题是 <b><i>Structure-from-Motion Revisited</i></b>（Schönberger &amp; Frahm, CVPR 2016）——<b>这是一篇方法论文，而且就是大名鼎鼎的 COLMAP 的原始论文</b>。三条依据：① 摘要开头就是"We propose a new SfM technique…"；② 第 4 节标题直接叫 <i>Contributions</i>，逐条列五个新组件；③ 第 5 节是 Experiments，与 Bundler / VisualSFM / DISCO / Theia 做对比。</p>
+        <p><b>处理方式：</b>照真实内容写成 <a href="0027-COLMAP-从无序图像到三维重建.html">第 0027 课</a>，按"方法论文"来讲它的五条改进，而不是当综述来罗列文献。COLMAP 本身价值极高（它是 SfM 领域的参考实现），只是定位要改。</p>
+        <p>另外顺便说明：我们<b>没有</b>在语料库里找到真正的 SfM 综述，所以这一课就按「通过一个具体系统理解 SfM 流水线」来讲——反而比读综述更实在。</p>
+      </div>
+
+      <h2>还一条元数据不一致</h2>
+      <p>本季有一篇的文件名年份与正文不符：<code>2022_Elasticity_Meets_Continuous-Time...md</code> 的中文资料常被引作 2022，正文本身是 IEEE T-RO 体例。按项目惯例，<b>目录名不改</b>，课程正文里如实标注。</p>
+    </section>
+
+    <section class="section-card" id="selfcheck">
+      <h2>6. 学完这季，你应该能回答</h2>
+
+      <p>这六个问题是本季的验收标准。现在看不懂是正常的——读完再回来。你可以把它们当成一条"债务清单"：</p>
+
+      <ol>
+        <li>为什么 BA 的 Hessian 是稀疏的？稀疏性又是怎么让一个百万参数的问题变得可解的？</li>
+        <li>Schur 消元到底消掉了什么？为什么"相机数量通常少于点的数量"这件事如此重要？</li>
+        <li>gauge freedom 是什么？为什么说"BA 给出的协方差没有绝对含义"？</li>
+        <li>预积分量为什么能"与状态无关"？偏置变了为什么不用重新积分？</li>
+        <li>TSDF 和 ESDF 有什么区别？为什么规划器不能直接用 TSDF？</li>
+        <li>NeRF、Instant NGP、Plenoxels 三者"信息存放的位置"分别在哪？为什么这条线最终会走向 3D 高斯？</li>
+      </ol>
+
+      <div class="interactive-card">
+        <h3>互动判断：检验一下你的直觉</h3>
+        <p>下面哪种说法<b>最接近</b>本季的核心价值？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="本季确实会讲很多公式，但公式本身不是目的。抄下来的公式过两周就忘了。" onclick="lessonKit.answer(this,'q0017b')">学会一堆保证能用的公式</button>
+          <button data-correct="yes" data-explanation="对。真正能带走的是"判断力"：看到一篇方法论文，你知道它在改哪一层、为什么这一层的改动是有意义的、代价落在哪里。这就是为什么每节课都要讲"原文承认的局限"。" onclick="lessonKit.answer(this,'q0017b')">获得判断一篇论文改动了哪一层的能力</button>
+          <button data-correct="no" data-explanation="论文清单第一季已经给过了。本季的价值不在于多认识几个名字。" onclick="lessonKit.answer(this,'q0017b')">记住更多经典论文的名字</button>
+        </div>
+        <div class="quiz-feedback" id="q0017b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用一句话说清"阶段 A"和"阶段 B"的分工差别。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>阶段 A 解决的是<b>"怎么把问题写成图"</b>——认识方法家族、知道每类方法的失效场景；阶段 B 解决的是<b>"图上的边怎么算得又快又准、算完的结果怎么存下来"</b>——把被反复引用的底层公式亲手推一遍。</p>
+              <p>换个说法：第一季让你能<b>读懂</b>综述里的分类图，第二季让你能<b>读懂</b>方法论文里的公式。</p>
+            </div></details>
+          </li>
+          <li>第一季留了五条悬念，哪几条这季能还清？哪几条还不了？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>这季还清：</b></p>
+              <ul>
+                <li>悬念① BA 的稀疏性怎么利用 → 第 0019 课（Schur 消元 + 变量排序）、0020、0021</li>
+                <li>悬念② 预积分在解决什么 → 第 0029、0030 课</li>
+              </ul>
+              <p><b>这季只还一半：</b></p>
+              <ul>
+                <li>悬念③ ikd-Tree：第 0023 课（PCL 用近似最近邻 FLANN）给出问题背景，正式答案在<b>阶段 D</b></li>
+                <li>悬念④ 提取 vs 不提取特征：第 0022 课（提取特征做关联、残差用全部点）与第 0026 课（SGM 的稠密路线）给出坐标轴，完整答案在<b>阶段 D / G</b></li>
+              </ul>
+              <p><b>这季不还：</b>悬念⑤ 3DGS 的自适应密度控制 → <b>阶段 F</b>。但本季第 0036–0039 节会打好"隐式 vs 显式"的地基。</p>
+            </div></details>
+          </li>
+          <li>为什么本季要安排一遍"把同一套数学讲三遍"（0018–0020）？三次的入口分别是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为三次回答的是三个不同的问题，缺一个都会留下空洞：</p>
+              <ul>
+                <li><b>摄影测量的入口（0018、0019，BA 综述）</b>：回答"为什么对"——参数怎么选、误差模型怎么建、稀疏性从哪来、gauge 为什么必须固定。</li>
+                <li><b>机器人的入口（0020，GraphSLAM 教程）</b>：回答"长什么样"——把 SLAM 画成节点与边，从概率一路推到 $\mathbf H\Delta\mathbf x=-\mathbf b$，并讲清稀疏性的来源。</li>
+                <li><b>工程师的入口（0021，g2o）</b>：回答"怎么实现"——顶点/边/求解器/线性求解器四层抽象，以及"直接法 vs 迭代法""Plain vs Schur"两组正交选择。</li>
+              </ul>
+              <p>补充一点：把三者对照着读，你会发现它们其实在说同一件事。<a href="0020-GraphSLAM教程2010-把SLAM变成一张图.html">0020</a> 的原话说 Hessian 的非零块数是"约束数的两倍加节点数"，<a href="0021-g2o优化库2011-因子图求解器的工程实现.html">0021</a> 的原话说"<b>H 的块结构就是图的邻接矩阵</b>"——这两句是同一个洞察的两种表述。</p>
+            </div></details>
+          </li>
+          <li>这季的勘误里，"SfM 综述"那一篇的真实身份是什么？为什么我们据此改了讲法？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它的真实身份是 <b><i>Structure-from-Motion Revisited</i></b>（Schönberger &amp; Frahm, CVPR 2016），也就是 <b>COLMAP</b> 的原始论文——一篇方法论文，不是综述。</p>
+              <p>依据有三条：摘要开头是"We propose a new SfM technique…"；第 4 节标题直接叫 <i>Contributions</i> 并逐条列五个新组件；第 5 节是 Experiments 并与 Bundler / VisualSFM / DISCO / Theia 做对比表。全文没有"本文综述了……"这类语言，第 2 节的 <i>Review of Structure-from-Motion</i> 只是流水线背景铺垫。</p>
+              <p><b>改讲法的理由：</b>按"方法论文"讲它的五条具体改进（场景图增强、下一最佳视角选择、鲁棒三角化、BA/重三角化/滤波的迭代精化、冗余视角挖掘），比按综述罗列文献扎实得多。这也再次印证项目的第一条铁律：<b>绝不凭标题推测论文内容。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+
+      <p class="paper-divider"></p>
+
+      <p>准备好了吗？下一节我们从 2000 年那篇被引了无数次、但很少人真的读完的 BA 综述开始。<b>你会发现它的第一句话就在纠正我们的想当然。</b>👇</p>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0016-事件相机-从原理到SLAM.html">← 事件相机：从原理到 SLAM（第一季收官）</a>
+        <a class="next" href="0018-BA上-现代综述2000-BA究竟在解什么.html">BA（上）：它究竟在解什么问题 →</a>
+      </div>
+      <p class="foot-note">第二季开始，慢一点没关系——地基打得实，后面的楼才盖得高 🌿</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

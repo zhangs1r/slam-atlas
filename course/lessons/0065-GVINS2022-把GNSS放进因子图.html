@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GVINS（2022）：把 GNSS 放进因子图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0065</div>
+      <h1>GVINS（2022）：把 GNSS 放进因子图</h1>
+      <p class="subtitle">🛰️ 室外一跑就漂？把卫星的伪距和多普勒直接塞进同一个因子图，让全局定位「焊死」在 VIO 上</p>
+      <div class="hero-meta">
+        <span>🎯 主题：GNSS–视觉–惯性紧耦合</span>
+        <span>👥 作者：香港大学的 GVINS 团队</span>
+        <span>📅 2022 · <i>GVINS: Tightly Coupled GNSS–Visual–Inertial Fusion for Smooth and Consistent State Estimation</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它要解决什么</a>
+        <a href="#b">GNSS 观测类型</a>
+        <a href="#c">三大模块</a>
+        <a href="#d">外点与多路径</a>
+        <a href="#e">和 VINS-Mono 的关系</a>
+        <a href="#f">实验与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能说清：VIO 为什么在室外必漂、GNSS 的伪距和多普勒是怎么进因子图的、为什么要把伪距和接收机钟差一起估、以及「紧耦合」比「松耦合」强在哪。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 第一季 <b>0006</b> 讲过 LiDAR 里程计的「松耦合 vs 紧耦合」，本课就是<b>紧耦合</b>的范本——原始观测量进图，而非融 GNSS 解。② 第一季 <b>0014</b> 的「回环假阳性铁律」与本文的 NLOS 外点重加权是<b>同一类外点拒绝问题</b>。③ 第二季 <b>0019</b> 的 gauge freedom 与 <b>0022</b> 的 NEES 一致性，正好解释本文标题里的「consistent（一致）」。</p></div>
+      </div>
+
+      <h2>1. 它要解决什么：室外大尺度下 VIO 的漂移病</h2>
+      <p>先把病看清楚。我们在本季 <b>0057</b>（VINS-Mono）学过：单目 VIO 有<b>四个不可观方向</b>——三个平移加一个绕重力轴的偏航（yaw）。短距离还行，可一旦跑进室外大尺度（几公里、几十公里），这四个方向就会慢慢「爬」出来，轨迹整体越走越歪。这就是俗称的<b>尺度漂移 / 平移漂移</b>。</p>
+      <p>那为什么不直接用 GNSS（手机里的卫星定位）？因为 GNSS 单独用有两个毛病：①噪声大，普通单点定位（SPP）只有<b>米级</b>精度，比 VIO 的厘米级糙得多；②在树下、高楼之间、隧道里，信号会被遮挡或被楼房反射，变得又少又脏。所以论文的核心思路是：把 VIO 的<b>局部平滑</b>和 GNSS 的<b>全局无漂</b>互补起来。</p>
+      <p>但互补有三大难处，论文 §I 原话点出：① 局部帧（VIO 的 local world）和全局帧（GNSS 的 ECEF/ENU）之间的<b>四自由度变换</b>没法离线标定，每次开机都变；② 伪距只有米级，融合时容易把 VIO 带偏；③ 卫星数不够或退化（比如进出室内）时必须还能稳健活着。GVINS 的目标就一句话：在线「粗到精」初始化 + 概率因子图紧耦合 + 退化处理，做到「local smoothness + global consistency（局部平滑 + 全局一致）」。</p>
+
+      <h2 id="b">2. GNSS 观测类型：伪距 + 多普勒（注意，不含载波相位）</h2>
+      <p>GVINS 用到的 GNSS 原始观测量只有两类（§IV）：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 伪距 pseudorange</h4>
+          <p>卫星发信号，接收机记下「信号飞了多久 × 光速」当成距离。但它量的是<b>从卫星到接收机的粗略距离</b>，噪声是米级。公式里还叠了钟差、对流层、电离层、多路径和噪声。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 多普勒 Doppler</h4>
+          <p>利用信号频率的微小偏移（多普勒效应）来估<b>接收机相对卫星的速度</b>。噪声比伪距小，主要用来把 yaw 偏置和钟漂估得更准、让结果更平滑。</p>
+        </div>
+      </div>
+      <p>⚠️ <b>关键事实</b>：GVINS <b>没有用载波相位</b>（只有码伪距 + 多普勒）。这正是它相对下一课 P³-VINS 的根本差距——只靠码，精度上限被锁在<b>米级</b>。请记住这条，后面对比两篇时会反复用到。</p>
+
+      <h2>3. 为什么伪距必须和接收机钟差一起估</h2>
+      <p>这里有个反直觉的点。GNSS 接收机自己的时钟又便宜又不准，和卫星的原子钟差着一大截。伪距公式里那一项 $c\cdot\delta t$（光速 × 接收机钟差）如果不单独估出来，会直接混进距离里。</p>
+      <p>论文 §IV-D 给了一个吓人的数字：接收机钟差本身能带来<b>数百公里</b>的误差。所以伪距不能单独当「距离」用，必须把它和三维位置<b>一起</b>放进状态里联合求解。代价是：最少需要 <b>(N+3)</b> 颗星才能唯一解算——其中 3 个用来定三维位置，另 1 个用来定一个钟差（多星座时每个星座还要各自多一个钟偏，$\delta t=[\delta t_G,\delta t_R,\delta t_E,\delta t_C]$ 四个星座钟差分别估）。</p>
+      <div class="formula-box"><div class="flow-formula">$$\text{伪距观测量} = \text{真实几何距} + c\cdot\delta t + \text{大气误差} + \text{多路径} + \text{噪声}$$</div></div>
+      <p>用生活类比：你用手表估算「朋友离你多远」，可你的表慢了 1 毫秒。光 1 毫秒能跑约 300 公里——你若不先把手表误差校正，算出来的距离就差了 300 公里。所以「先估钟差，再谈距离」是 GNSS 的命门。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 天空 -->
+          <rect x="0" y="0" width="900" height="380" fill="#eaf2fb"/>
+          <!-- 街道 -->
+          <rect x="0" y="380" width="900" height="60" fill="#c9cdd4"/>
+          <!-- 左楼 -->
+          <rect x="80" y="70" width="140" height="310" fill="#9aa7b5" stroke="#5b6675" stroke-width="2"/>
+          <text x="150" y="375" fill="#ffffff" font-size="15" text-anchor="middle">高楼</text>
+          <!-- 右楼 -->
+          <rect x="640" y="70" width="140" height="310" fill="#9aa7b5" stroke="#5b6675" stroke-width="2"/>
+          <text x="710" y="375" fill="#ffffff" font-size="15" text-anchor="middle">高楼</text>
+          <!-- 卫星 -->
+          <circle cx="180" cy="80" r="10" fill="#f1c40f" stroke="#b8860b" stroke-width="1.5"/>
+          <text x="180" y="72" fill="#2c3e50" font-size="14" text-anchor="middle">S1</text>
+          <circle cx="350" cy="55" r="10" fill="#f1c40f" stroke="#b8860b" stroke-width="1.5"/>
+          <text x="350" y="47" fill="#2c3e50" font-size="14" text-anchor="middle">S2</text>
+          <circle cx="560" cy="55" r="10" fill="#f1c40f" stroke="#b8860b" stroke-width="1.5"/>
+          <text x="560" y="47" fill="#2c3e50" font-size="14" text-anchor="middle">S3</text>
+          <circle cx="730" cy="80" r="10" fill="#f1c40f" stroke="#b8860b" stroke-width="1.5"/>
+          <text x="730" y="72" fill="#2c3e50" font-size="14" text-anchor="middle">S4</text>
+          <!-- 直达（清晰） -->
+          <line x1="350" y1="55" x2="450" y2="348" stroke="#27ae60" stroke-width="3"/>
+          <line x1="560" y1="55" x2="450" y2="348" stroke="#27ae60" stroke-width="3"/>
+          <text x="400" y="195" fill="#1e8449" font-size="14" text-anchor="middle">直达</text>
+          <text x="505" y="195" fill="#1e8449" font-size="14" text-anchor="middle">直达</text>
+          <!-- 反射（被挡） -->
+          <line x1="180" y1="80" x2="220" y2="200" stroke="#e67e22" stroke-width="3" stroke-dasharray="7,5"/>
+          <line x1="220" y1="200" x2="450" y2="348" stroke="#e67e22" stroke-width="3" stroke-dasharray="7,5"/>
+          <line x1="730" y1="80" x2="640" y2="200" stroke="#e67e22" stroke-width="3" stroke-dasharray="7,5"/>
+          <line x1="640" y1="200" x2="450" y2="348" stroke="#e67e22" stroke-width="3" stroke-dasharray="7,5"/>
+          <circle cx="220" cy="200" r="6" fill="#e67e22"/>
+          <circle cx="640" cy="200" r="6" fill="#e67e22"/>
+          <text x="250" y="232" fill="#ca6510" font-size="14" text-anchor="middle">绕路=反射</text>
+          <text x="615" y="232" fill="#ca6510" font-size="14" text-anchor="middle">绕路=反射</text>
+          <!-- 红色额外距离 -->
+          <line x1="300" y1="165" x2="300" y2="215" stroke="#e74c3c" stroke-width="3"/>
+          <text x="312" y="180" fill="#c0392b" font-size="14" text-anchor="start">多走的距离</text>
+          <!-- 天线 -->
+          <line x1="450" y1="380" x2="450" y2="350" stroke="#2c3e50" stroke-width="3"/>
+          <circle cx="450" cy="348" r="7" fill="#e74c3c"/>
+          <text x="450" y="338" fill="#2c3e50" font-size="14" text-anchor="middle">GNSS 天线</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一栋楼夹着一条街道，一台 GNSS 天线在街上；四颗卫星里 S2、S3 的直达信号畅通（绿线），S1、S4 的直达信号被高楼挡住，改从楼面反射绕过来（橙虚线）。<br>
+          <b>怎么看这张图：</b>① 绿色「直达」是理想情况，信号走直线；② 橙色「绕路=反射」是多路径——信号碰到楼面反弹，实际走的路程比直线长；③ 红色标出的就是「多出来的那段距离」。<br>
+          <b>要记住的一句话：</b>伪距多出来的这一段，会让定位整体偏掉——这就是城市峡谷里 GNSS 不可信的根源。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">4. 三大模块：预处理与同步、初始化、紧耦合优化</h2>
+      <p>GVINS 的整套流程（§V–§VIII）可以拆成三大块。</p>
+      <h3>模块① 测量模型与预处理 + 同步（§V / §VIII-B）</h3>
+      <p>先滤掉低仰角、不健康的卫星；只允许<b>连续锁定若干历元</b>的卫星进系统；星历（卫星轨道参数）经 50 bit/s 的慢链路下发，没收全前测量不可用。</p>
+      <p>⚠️ <b>频率更正（很重要）</b>：论文实测是 <b>GNSS 原始 10 Hz、相机 20 Hz、IMU 200 Hz</b>（Table IV），<b>不是</b>某些资料说的 1 Hz。同步靠：相机+IMU 由 VI-Sensor 自带硬件同步；GNSS 接收机的 <b>PPS 秒脉冲</b>去触发 VI-Sensor，把全局 GNSS 时和本地时对上。因为不同频率天然兼容——在 GNSS 历元处才往因子图里加 GNSS 因子，历元之间靠钟差/钟漂因子传播接收机钟状态，<b>所以不要求三者严格同频</b>。</p>
+      <h3>模块② GNSS-VI 初始化（★ 用 SPP，§VII-A）</h3>
+      <p>粗到精三步：① 用 <b>SPP</b> 取最近历元全部伪距，得到粗锚点；② 用噪声更小的 <b>多普勒</b> 优化 yaw 偏置 $\psi$ 和平均钟漂；③ 以 VIO 轨迹为先验，用<b>伪距 + 钟差约束</b>精修锚点的全局坐标。要求 ≥4 星（多星座则 N+3）、最小位移 4 m；行人场景 2.0–9.0 秒完成。</p>
+      <h3>模块③ 紧耦合优化（§VI）</h3>
+      <p>滑窗 MAP，把伪距残差、多普勒残差、钟差/钟漂全部联合优化；沿用 VINS-Mono 的双向边缘化。下面这张原图（Fig.6）是整个系统最该看透的一张——它把「GNSS 原始观测量怎么进因子图」画得清清楚楚。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_GVINS/e51c4616832b1983aa973048095f53b1761f69a9abadd86bbb4b38e1dd6dc655.jpg" alt="Factor graph of the GVINS system">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Factor graph representation of the optimization problem in our system, where system states are denoted by large colored circles and factors are represented by small black circles. The factors from various measurements consist of inertial factor i, visual factor f, code pseudorange and Doppler factor, and clock factor c. A prior factor p is used to constrain the first pose.<br>
+          <b>怎么看这张图：</b>大彩圆是待估状态（关键帧的位姿、速度、偏置等），小黑圆是因子。注意除了惯性因子 i、视觉因子 f 之外，还有<b>码伪距与多普勒因子 g</b>、<b>钟差因子 c</b>，以及一个先验因子 p——p 专门用来约束 VIO 那四个不可观方向，保证「全局一致」。盯着这条 g 边，它就是 GNSS 进图的入口。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">5. 外点与多路径：robust norm 重加权（接 0014 假阳性铁律）</h2>
+      <p>回到第 3 节的红字——城市峡谷里那些「绕路」的反射信号，进到伪距里就是<b>外点（outlier）</b>。GVINS 怎么处理？原文 §VIII-B5 只说了一句话：对码伪距与多普勒因子施加 <b>a robust norm（鲁棒范数）进行重加权</b>，把 GNSS 外点压下去。</p>
+      <div class="callout"><h4>★ 诚实标注</h4><p>原文<b>没有指明</b>这个鲁棒范数到底是 switchable constraints / DCS / Cauchy / Huber 还是卡方检验，只说了「robust norm 重加权」四个字。所以本课<b>不替它补具体核函数</b>——凡是看到有人说 GVINS 用了 Cauchy 或 DCS，那都是原文没有的发挥。</p></div>
+      <p>这里要显式接第一季 <b>0014</b> 的「假阳性铁律」：回环检测里 occasionally 错配的一对特征（假阳性），和 GNSS 里那颗被楼反射、骗你说「距离更远」的卫星（NLOS），<b>是同一类问题的两个场景</b>——都是在图里混入了一个「看起来像观测、其实是错的」边。处理思路也同源：要么用鲁棒核把它的权重压低，要么用一致性检验把它剔掉。能识别「外点」比「算得准」更救命。</p>
+
+      <h2 id="e">6. 和 VINS-Mono / VINS-Fusion 的关系</h2>
+      <p>GVINS 不是从零造的，它是在 <b>VINS-Mono / VINS-Fusion</b> 的优化框架上长出来的。论文明确说视觉因子、惯性因子、以及初始化流程都直接继承自 VINS 体系（引用的 [6][26][27]）。区别只在：GVINS 额外在因子图里挂上了 GNSS 的码伪距、多普勒、钟差因子，并加了「粗到精 GNSS-VI 初始化」这一步。所以你可以把它理解为——<b>VINS-Mono 怎么一步步长出「自适应 GNSS」的活样本</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 左：松耦合 -->
+          <text x="215" y="30" fill="#2c3e50" font-size="18" text-anchor="middle" font-weight="700">松耦合</text>
+          <text x="125" y="92" fill="#34495e" font-size="13" text-anchor="middle">各自独立先解算</text>
+          <rect x="60" y="110" width="130" height="60" rx="6" fill="#dfe6ee" stroke="#2c3e50" stroke-width="2"/>
+          <text x="125" y="146" fill="#2c3e50" font-size="16" text-anchor="middle">VIO</text>
+          <rect x="60" y="240" width="130" height="60" rx="6" fill="#dfe6ee" stroke="#2c3e50" stroke-width="2"/>
+          <text x="125" y="276" fill="#2c3e50" font-size="16" text-anchor="middle">GNSS</text>
+          <circle cx="320" cy="185" r="40" fill="#f6e58d" stroke="#2c3e50" stroke-width="2"/>
+          <text x="320" y="181" fill="#2c3e50" font-size="16" text-anchor="middle">融合</text>
+          <text x="320" y="200" fill="#2c3e50" font-size="13" text-anchor="middle">末端点平均</text>
+          <line x1="190" y1="140" x2="282" y2="172" stroke="#34495e" stroke-width="2"/>
+          <line x1="190" y1="270" x2="282" y2="198" stroke="#34495e" stroke-width="2"/>
+          <!-- 右：紧耦合 -->
+          <text x="685" y="30" fill="#2c3e50" font-size="18" text-anchor="middle" font-weight="700">紧耦合</text>
+          <text x="700" y="300" fill="#34495e" font-size="13" text-anchor="middle">原始观测量直接进同一张图</text>
+          <circle cx="600" cy="200" r="26" fill="#74b9ff" stroke="#2c3e50" stroke-width="2"/>
+          <text x="600" y="205" fill="#2c3e50" font-size="14" text-anchor="middle">X1</text>
+          <circle cx="700" cy="200" r="26" fill="#74b9ff" stroke="#2c3e50" stroke-width="2"/>
+          <text x="700" y="205" fill="#2c3e50" font-size="14" text-anchor="middle">X2</text>
+          <circle cx="800" cy="200" r="26" fill="#74b9ff" stroke="#2c3e50" stroke-width="2"/>
+          <text x="800" y="205" fill="#2c3e50" font-size="14" text-anchor="middle">X3</text>
+          <line x1="626" y1="200" x2="674" y2="200" stroke="#2c3e50" stroke-width="3"/>
+          <line x1="726" y1="200" x2="774" y2="200" stroke="#2c3e50" stroke-width="3"/>
+          <text x="650" y="185" fill="#2c3e50" font-size="12" text-anchor="middle">IMU 边</text>
+          <circle cx="560" cy="100" r="6" fill="#27ae60"/>
+          <line x1="600" y1="175" x2="562" y2="106" stroke="#27ae60" stroke-width="2"/>
+          <circle cx="840" cy="100" r="6" fill="#27ae60"/>
+          <line x1="800" y1="175" x2="838" y2="106" stroke="#27ae60" stroke-width="2"/>
+          <text x="560" y="88" fill="#1e8449" font-size="12" text-anchor="middle">视觉边</text>
+          <circle cx="850" cy="90" r="12" fill="#f1c40f" stroke="#b8860b" stroke-width="1.5"/>
+          <text x="850" y="94" fill="#2c3e50" font-size="11" text-anchor="middle">卫星</text>
+          <line x1="724" y1="186" x2="840" y2="100" stroke="#2980b9" stroke-width="3"/>
+          <text x="770" y="140" fill="#1f6391" font-size="12" text-anchor="middle">伪距/多普勒因子</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两联对比两种融合方式。<br>
+          <b>怎么看这张图：</b>① 左联「松耦合」：VIO 和 GNSS 各跑各的解算盒子，只在最末端把两个结果加权平均（黄圈）；② 右联「紧耦合」：GNSS 的伪距/多普勒不是「结果」，而是作为<b>因子（蓝边）</b>直接挂进和视觉边、IMU 边同一个因子图里；③ 注意右联里卫星连到状态节点 X2 的那条蓝边，就是 GNSS 观测进图的位置。<br>
+          <b>要记住的一句话：</b>松耦合只在「答案层」合并，紧耦合在「观测层」合并——这正是第一季 <b>0006</b> 说的松/紧之分。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">7. 实验数字与原文承认的局限</h2>
+      <p>论文在仿真、运动场、室内外、城区驾驶四套场景做了实验。最有说服力的是<b>城区驾驶</b>：香港 22.9 公里、40+ 分钟。RMSE（均方根误差）：<b>GVINS 4.508 m</b>，RTKLIB 11.106 m；VINS-Mono 在 54% 里程失败（RMSE 760.22 m），VINS-Fusion 振荡到约 10⁵ m 判失败，<b>GVINS 全程存活</b>。算力上 GVINS 滑窗优化仅 21.91 ms/帧，能跑 20 Hz 实时。</p>
+      <p>下面两张原图分别证明「室内外无缝」和「卫星不足仍比纯 VIO 好」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_GVINS/663121d029af39153e2d5383873f50288837513c00240e0a2a4535c7ea866f3d.jpg" alt="GVINS snapshot in complex indoor-outdoor environment on Google Maps">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Snapshot of our system in a complex indoor–outdoor environment. The global estimation result is plotted on Google Maps directly and aligns well with the ground truth RTK trajectory, as shown in (a). (b) depicts the distribution of satellites, with the tangential direction representing the azimuth and radial direction being the elevation angle. The blue arrow is a compass-like application.<br>
+          <b>怎么看这张图：</b>左边把全局轨迹直接画在谷歌地图上，和 RTK 真值重合；右边是卫星分布（切向=方位角、径向=仰角）。它直观证明「室内外无缝、GNSS 中断时仍保持全局估计」。盯着左图轨迹和道路的贴合程度即可。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_GVINS/1b30f942546cfdcc5ab47c3e1b4f99e421ffeaff689459b4a617661d7f48541b.jpg" alt="Positioning error with insufficient satellites">
+        <figcaption>
+          <b>原图注（Fig. 13）：</b>Positioning error of our proposed system in situations, where the number of locked satellites is insufficient. In the "All" setting, the system utilizes all available (around 20) satellites. The digits "3," "2," and "1" correspond to cases where only that number of satellites are used. When the number becomes "0," our system does not use any satellite.<br>
+          <b>怎么看这张图：</b>横轴是卫星数（All/3/2/1/0），纵轴是误差。关键结论：哪怕只剩 <b>1 颗星</b>，GVINS 仍比纯 VIO 好——这就是「退化机制」的威力。对照 "0"（完全无星）那栏，误差才退化到接近 VIO。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_GVINS/8da00d8e64506318d80683a5defd9c2cd6be438f7b78fe9f53be0a4d99041746.jpg" alt="Trajectories of RTK and GVINS in urban driving">
+        <figcaption>
+          <b>原图注（Fig. 22）：</b>Trajectories of RTK and GVINS in the urban driving experiment. The two paths totally align with each other. The trajectory of RTK is plotted on the top of that of GVINS so that the RTK nonfixed status can be clearly shown by the discontinuities.<br>
+          <b>怎么看这张图：</b>两根轨迹（RTK 真值在上、GVINS 在下）几乎完全重合，只有 RTK 失锁处出现断续。这是 22.9 公里城区最硬场景的说服力证据——看两根线贴得有多紧。
+        </figcaption>
+      </figure>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>原文承认的局限（逐条）</h4><ul>
+          <li>低速（&lt;0.3 m/s）时多普勒噪声大，yaw 偏置被污染；纯旋转时冻结 yaw。</li>
+          <li>卫星 &lt;4 颗：松耦合/SPP 直接失败，GVINS 仍活但精度逐级退化。</li>
+          <li>无 GNSS（室内）：全局量不可观，靠钟漂约束维持，重捕获无需重初始化。</li>
+          <li>垂直方向有偏置（不完美 GNSS 建模所致）。</li>
+          <li>初始化需 ≥4 星且最小位移 4 m。</li>
+          <li><b>本质上限 = 米级</b>：只用了码伪距，没有载波相位（相对 P³-VINS 的根本差距）。</li>
+        </ul></div>
+        <div class="mini-card"><h4>小结：GVINS 做对了什么</h4><ul>
+          <li>紧耦合 + 粗到精初始化，消除漂移又保局部精度。</li>
+          <li>先验因子专门约束 VIO 四不可观方向，保证一致性。</li>
+          <li>退化时仍能靠钟差传播活着，不像松耦合直接崩。</li>
+          <li>下一步瓶颈：想更准，必须上载波相位——这正是 P³-VINS 的切入点。</li>
+        </ul></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 1</h3>
+        <p>下列说法哪句是对的？GVINS 在因子图里用到了哪种 GNSS 观测量？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。GVINS 只用码伪距 + 多普勒，没有用载波相位，所以精度上限被锁在米级。" onclick="lessonKit.answer(this,'q0065a')">只用伪距+多普勒</button>
+          <button data-correct="no" data-explanation="错。载波相位是下一课 P³-VINS 才加的，GVINS 只用码伪距和多普勒。" onclick="lessonKit.answer(this,'q0065a')">用了载波相位</button>
+        </div>
+        <div class="quiz-feedback" id="q0065a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 2</h3>
+        <p>GVINS 用 robust norm 重加权来压 GNSS 的 NLOS/多路径外点，这和第一季 0014 讲的回环假阳性，是同一类问题吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。两者都是在图里混入了『看起来像观测、其实是错的』边，都属于外点拒绝问题，处理思路同源。" onclick="lessonKit.answer(this,'q0065b')">是同一类问题</button>
+          <button data-correct="no" data-explanation="错。它们本质都是『外点边』，GNSS 的反射卫星和回环错配是同一类外点拒绝场景，不是两码事。" onclick="lessonKit.answer(this,'q0065b')">是完全不同的事</button>
+        </div>
+        <div class="quiz-feedback" id="q0065b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么说「伪距必须和接收机钟差一起估」？如果只估三维位置、不估钟差，会发生什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>接收机钟差可带来数百公里误差，若不单独估出就会混进距离里。最少需要 (N+3) 颗星：3 个定位置、1 个定钟差（多星座每星座再各加一个钟偏）。只估位置不估钟差，解算会严重偏掉甚至无解。</div></details>
+          </li>
+          <li>论文实测的 GNSS、相机、IMU 频率各是多少？为什么不需要三者严格同频？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>GNSS 10 Hz、相机 20 Hz、IMU 200 Hz（不是 1 Hz）。不同频率天然兼容：只在 GNSS 历元处往因子图加 GNSS 因子，历元之间靠钟差/钟漂因子传播接收机钟状态，所以不要求严格同频。</div></details>
+          </li>
+          <li>GVINS 的 GNSS-VI 初始化分哪三步？为什么叫「粗到精」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① SPP 取全部伪距得粗锚点；② 用噪声更小的多普勒优化 yaw 偏置和平均钟漂；③ 以 VIO 轨迹为先验，用伪距+钟差精修锚点全局坐标。从粗锚点到精修，逐步提精度，故称粗到精。</div></details>
+          </li>
+          <li>原文对「robust norm 重加权」只说了什么？我们不该替它补什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>原文只说对码伪距与多普勒因子施加 robust norm 重加权来压 GNSS 外点，没有指明具体是 Cauchy / DCS / Huber / 卡方。我们不应替它补具体核函数名，那是原文没有的发挥。</div></details>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0064-纯惯性初始化2020-冷启动怎么解.html">← 纯惯性初始化（2020）：冷启动怎么解</a>
+        <a class="next" href="0066-P3-VINS2022-载波相位与厘米级定位.html">P³-VINS（2022）：载波相位与厘米级定位 →</a>
+      </div>
+      <p class="foot-note">把卫星请进因子图，室外漂移就不再是绝症 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

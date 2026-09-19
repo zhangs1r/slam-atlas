@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Basalt（2020）：用非线性因子压缩历史 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0060</div>
+      <h1>Basalt（2020）：用非线性因子压缩历史</h1>
+      <p class="subtitle">🧩 把滑窗 VIO 累积的历史「压成一个因子」，喂给全局建图，让地图既一致又重力对齐</p>
+      <div class="hero-meta">
+        <span>🎯 主题：两层视觉-惯性建图 + 非线性因子恢复（NFR）</span>
+        <span>👥 作者：Vladyslav Usenko, Nikolaus Demmel, Daniel Cremers 等</span>
+        <span>📅 2020 · <i>Visual-Inertial Mapping With Non-Linear Factor Recovery</i>（IEEE RA-L）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">它叫 Basalt 还是 NFR</a>
+        <a href="#b">为什么需要第二层</a>
+        <a href="#c">三个具体问题</a>
+        <a href="#d">NFR 到底在做什么</a>
+        <a href="#e">NFR 与边缘化</a>
+        <a href="#f">好处与甜头</a>
+        <a href="#g">实验与局限</a>
+        <a href="#h">本课要点</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能说清：Basalt 的两层架构分别干什么；NFR 究竟恢复了什么（以及<b>不是</b>什么）；它为什么比「直接把预积分塞进全局 BA」和「简单边缘化」都更好。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0028 MSCKF</b>（FEJ 一致性）、<b>0029/0030 预积分</b>（ΔR/Δv/Δp 同源）、<b>0032 连续时间落地</b>（边缘化=Schur 补成先验）、<b>0049 VI-DSO</b>（同作者动态边缘化的「兄弟」，Basalt 是其特征式/立体版）；回环留空，接 <b>0014 回环检测</b> 铁律。</p></div>
+      </div>
+
+      <h2>1. 它到底叫 Basalt，还是 NFR？（判定依据）</h2>
+      <p>先说一个容易踩坑的事实：这篇论文的<b>标题里根本没有「Basalt」四个字</b>。标题是 <i>Visual-Inertial Mapping With Non-Linear Factor Recovery</i>。Basalt 是这套系统的<b>名字</b>，NFR（Non-Linear Factor Recovery，非线性因子恢复）是它提出的<b>方法名</b>。我们怎么确定这一点？精读材料给了四条硬依据：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>① 标题没有 Basalt</b><br>正文第 1 行标题用的就是技术名 NFR，通篇没把 Basalt 写进标题。</p></div>
+        <div class="mini-card"><p><b>② 自称「两层方法」</b><br>摘要与 Contributions 写明「we propose a novel two-layered visual-inertial mapping approach」。</p></div>
+        <div class="mini-card"><p><b>③ 开源链接点名</b><br>代码地址是 vision.in.tum.de/research/vslam/basalt，系统名藏在链接里。</p></div>
+        <div class="mini-card"><p><b>④ 同作者脉络</b><br>参考文献 [26] 即同一作者的 VI-DSO（动态边缘化）；Basalt 是其特征式、立体版的后继系统。</p></div>
+      </div>
+      <p>所以记住一句话：<b>方法名 = NFR，系统名 = Basalt</b>。下面讲机制时，我们说的「它」指的是 Basalt 这套系统，它最核心的发明就是 NFR。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 Basalt 与 NFR 的命名，下列哪种说法正确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：标题只写 NFR（方法名），Basalt 是系统名，藏在代码链接与同作者 VI-DSO 脉络里。" onclick="lessonKit.answer(this,'q0060a')">标题无 Basalt</button>
+          <button data-correct="no" data-explanation="错：标题写的是 NFR，Basalt 是系统名而非方法名，不能混为一谈。" onclick="lessonKit.answer(this,'q0060a')">标题就是 Basalt</button>
+        </div>
+        <div class="quiz-feedback" id="q0060a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 为什么需要「第二层」：VIO 自己建不出全局一致地图</h2>
+      <p>要理解 Basalt，先得明白它想补哪块短板。我们前面在 <b>0029/0030 预积分</b>、<b>0049 VI-DSO</b> 里讲过：VIO（视觉-惯性里程计）通常是<b>滑窗优化</b>——只在最近一小段关键帧上算位姿。这就像一个人走路时只盯着脚下几步，不回头看整条路。</p>
+      <p>问题来了：只在小窗里优化，<b>必然漂移</b>。原文说全局一致建图很难，因为 VIO 只在小窗优化（第 9–13 行）。如果你想要一张<b>全局一致、重力对齐</b>的大地图，光靠 VIO 的小窗是不够的，必须有一个<b>上层全局 BA（Bundle Adjustment，光束法平差）</b>把所有关键帧一起拉平。</p>
+      <p>于是 Basalt 设计成<b>两层</b>：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>下层：VIO（实时）</b><br>fixed-lag smoothing（固定滞后平滑），前端用 KLT 光流跟踪，后端做 VI-BA（视觉-惯性 BA）。它在小窗里跑，输出高频位姿。</p></div>
+        <div class="mini-card"><p><b>上层：Mapping（全局）</b><br>ORB 特征做全局 BA，再加上从下层「恢复出来的非线性因子」。它把整段历史拉成一个全局一致的地图。</p></div>
+      </div>
+      <p>关键就在这个「恢复出来的非线性因子」——也就是 NFR。它是衔接上下两层的桥梁。下一节我们专门拆它。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 它要解决的三个具体问题</h2>
+      <p>原文清楚地列出了为什么要搞出 NFR，而不是用更朴素的做法。我们逐条对照（均可在正文找到出处）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>问题一：全局一致建图难</b><br>VIO 只在小窗优化，必然漂移（第 9–13 行）。要全局一致，必须上层 BA。</p></div>
+        <div class="mini-card"><p><b>问题二：预积分不能直接当全局因子</b><br>关键帧间隔一大，IMU 预积分要跨好几秒，积分几秒之后信息所剩无几（第 13 行）。</p></div>
+        <div class="mini-card"><p><b>问题三：于是提出两层 + NFR</b><br>先 VIO（帧率）→ 被边缘化的关键帧抽 NFR 因子 → 全局 BA（第 18–20 行）。</p></div>
+      </div>
+      <p>把问题二讲得更通俗一点：<b>预积分</b>是把两帧之间的 IMU 数据「积」成一个相对运动约束（我们在 0030 讲过 ΔR/Δv/Δp）。它很适合<b>相邻</b>关键帧之间用。可是一旦两个关键帧隔得很远，中间跨了好几秒，这个积分就把一大段千变万化的运动「平均」成一个数——信息被搅成了一锅粥，几乎什么都不剩。所以你不能简单地把预积分当成全局 BA 里连接远距离关键帧的因子。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="40" y="20" width="400" height="40" rx="8" fill="#e8f0fe"/>
+          <text x="240" y="46" font-size="20" font-weight="700" fill="#1a3a6b" text-anchor="middle">关键帧挨得近</text>
+          <rect x="460" y="20" width="400" height="40" rx="8" fill="#fde8e8"/>
+          <text x="660" y="46" font-size="20" font-weight="700" fill="#8a1f1f" text-anchor="middle">关键帧隔得远</text>
+
+          <!-- 左：两台相机 -->
+          <rect x="108" y="170" width="34" height="26" rx="3" fill="#2b6cb0"/>
+          <rect x="120" y="162" width="10" height="8" fill="#2b6cb0"/>
+          <circle cx="125" cy="183" r="5" fill="#cfe3ff"/>
+          <rect x="288" y="170" width="34" height="26" rx="3" fill="#2b6cb0"/>
+          <rect x="300" y="162" width="10" height="8" fill="#2b6cb0"/>
+          <circle cx="305" cy="183" r="5" fill="#cfe3ff"/>
+          <text x="210" y="150" font-size="16" fill="#333" text-anchor="middle">预积分 跨度短</text>
+          <line x1="142" y1="183" x2="288" y2="183" stroke="#2b6cb0" stroke-width="3" marker-end="url(#ab)"/>
+
+          <!-- 左：清晰信息（菱形） -->
+          <polygon points="210,300 232,322 210,344 188,322" fill="#2f9e44"/>
+          <text x="210" y="368" font-size="16" fill="#2f9e44" text-anchor="middle">信息保留好</text>
+
+          <!-- 右：两台相机 -->
+          <rect x="488" y="170" width="34" height="26" rx="3" fill="#2b6cb0"/>
+          <rect x="500" y="162" width="10" height="8" fill="#2b6cb0"/>
+          <circle cx="505" cy="183" r="5" fill="#cfe3ff"/>
+          <rect x="808" y="170" width="34" height="26" rx="3" fill="#2b6cb0"/>
+          <rect x="820" y="162" width="10" height="8" fill="#2b6cb0"/>
+          <circle cx="825" cy="183" r="5" fill="#cfe3ff"/>
+          <text x="660" y="150" font-size="16" fill="#333" text-anchor="middle">预积分 跨几秒</text>
+          <line x1="522" y1="183" x2="808" y2="183" stroke="#c92a2a" stroke-width="3" marker-end="url(#ab)"/>
+
+          <!-- 右：被搅匀（粥） -->
+          <circle cx="640" cy="315" r="9" fill="#b08968"/>
+          <circle cx="662" cy="305" r="8" fill="#a0785a"/>
+          <circle cx="680" cy="322" r="9" fill="#b08968"/>
+          <circle cx="655" cy="335" r="7" fill="#a0785a"/>
+          <circle cx="678" cy="300" r="6" fill="#b08968"/>
+          <circle cx="668" cy="338" r="6" fill="#a0785a"/>
+          <text x="660" y="368" font-size="16" fill="#8a5a2b" text-anchor="middle">信息被搅匀</text>
+
+          <text x="450" y="378" font-size="18" font-weight="700" fill="#1a3a6b" text-anchor="middle">积分越长，信息越糊</text>
+          <defs>
+            <marker id="ab" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#333"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两联对比「预积分当全局因子」的可行度。<br>
+          <b>怎么看这张图：</b>① 左联两个关键帧挨得很近，预积分只跨很短时间，信息保留得清晰（绿色菱形）；② 右联两个关键帧隔得很远，预积分跨了好几秒，中间运动被平均掉，画成一团被搅匀的「粥」；③ 下方一句话点题：积分时间越长，信息越模糊。<br>
+          <b>要记住的一句话：</b>关键帧间隔一大，直接拿预积分当全局 BA 因子就行不通了——这正是 NFR 要解决的痛点。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ NFR 到底在做什么（本课核心，且不是三角化）</h2>
+      <p>这里要特别敲黑板：<b>NFR 不是「用 Delaunay 三角化选关键帧、再从一个子图里抽一个因子」</b>。这是我（和你）最初都很容易误以为的版本，但精读时被原文纠正了——<b>Delaunay 三角化属于 Kimera 的 Mesher，不属于本文</b>。Basalt 里的 NFR 机制，原文（第 199、238–263 行）写得非常具体，我们照着讲：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>第一步：留下线性化</b><br>当一个关键帧要被边缘化时，先保存它 Markov blanket（马尔可夫毯，即它直接相连的所有变量）在当前点的线性化。</p></div>
+        <div class="mini-card"><p><b>第二步：只留位姿</b><br>把除了「关键帧位姿」以外的所有变量都边缘化掉，得到一个<b>稠密</b>连接所有关键帧位姿的因子（见 Fig.6 左）。</p></div>
+        <div class="mini-card"><p><b>第三步：KL 散度恢复稀疏因子</b><br>用最小化 KL 散度（式 18–21）把那个稠密因子，近似成一组<b>稀疏非线性因子</b>。</p></div>
+      </div>
+      <p>恢复出来的是哪些因子？原文式 22–25 列得很清楚：被删关键帧 ↔ 其余各关键帧的<b>成对相对位姿因子</b> $r_{rel}$（SE(3)），再加上该帧的 <b>roll-pitch 因子</b> $r_{rp}$、<b>绝对位置</b> $r_{pos}$、<b>yaw（航向）</b> $r_{yaw}$。</p>
+      <p>但注意：<b>yaw 和绝对位置是 4 个不可观量</b>（全局 x/y/z + yaw），所以地图里实际只保留<b>相对位姿</b>与 <b>roll-pitch</b>（第 265 行）。换句话说，原来那一团把所有关键帧缠在一起的「意大利面」，被换成了「两两相对位姿边 + 一条指向重力的 roll-pitch 锚边」。</p>
+      <div class="formula-box"><div class="flow-formula">$$D_{KL}=\frac12\big(\langle H_a,\Sigma_o\rangle-\log\det(H_a\Sigma_o)+\|H_a^{1/2}(\mu_a-\mu_o)\|^2-d\big)$$</div></div>
+      <p>这是 NFR 用来「把稠密因子近似成稀疏因子」的目标（最小化 KL 散度，式 18–21）。信息阵的闭式解（式 233）是：</p>
+      <div class="formula-box"><div class="flow-formula">$$H_i=(J_r\Sigma_o J_r^T)_i^{-1}$$</div></div>
+      <p>最后上层全局 BA 的目标函数（式 268）把两类因子加在一起：</p>
+      <div class="formula-box"><div class="flow-formula">$$E_{nfr}^G=\sum_{(i,j)\in R} r_{ij}^T H_{ij} r_{ij}+\sum_{i\in P} r_i^T H_i r_i$$</div></div>
+      <p>第一项是相对位姿因子的加权和，第二项是各关键帧信息阵 $H_i$ 对应的残差。可见：<b>同信息量，但边数骤减，而且这些因子可以重新线性化</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 上层全局 BA -->
+          <rect x="330" y="40" width="240" height="46" rx="10" fill="#1a3a6b"/>
+          <text x="450" y="69" font-size="20" font-weight="700" fill="#fff" text-anchor="middle">上层 全局 BA</text>
+
+          <!-- NFR 六边形 -->
+          <polygon points="403,140 497,140 535,175 497,210 403,210 365,175" fill="#2b6cb0"/>
+          <text x="450" y="180" font-size="18" font-weight="700" fill="#fff" text-anchor="middle">NFR 因子</text>
+
+          <!-- 箭头 六边->BA -->
+          <line x1="450" y1="210" x2="450" y2="86" stroke="#1a3a6b" stroke-width="6" marker-end="url(#ar)"/>
+
+          <!-- 时间轴 -->
+          <line x1="80" y1="360" x2="820" y2="360" stroke="#555" stroke-width="2"/>
+          <text x="800" y="382" font-size="15" fill="#555" text-anchor="end">时间 →</text>
+
+          <!-- 被边缘化历史 半透明块 -->
+          <rect x="85" y="318" width="345" height="48" fill="#999" opacity="0.18"/>
+          <text x="255" y="308" font-size="16" fill="#555" text-anchor="middle">被边缘化历史</text>
+
+          <!-- 已边缘化相机（灰+叉） -->
+          <g>
+            <rect x="95" y="332" width="30" height="22" rx="3" fill="#bbb"/>
+            <line x1="98" y1="335" x2="122" y2="351" stroke="#c92a2a" stroke-width="2"/>
+            <line x1="122" y1="335" x2="98" y2="351" stroke="#c92a2a" stroke-width="2"/>
+          </g>
+          <g>
+            <rect x="165" y="332" width="30" height="22" rx="3" fill="#bbb"/>
+            <line x1="168" y1="335" x2="192" y2="351" stroke="#c92a2a" stroke-width="2"/>
+            <line x1="192" y1="335" x2="168" y2="351" stroke="#c92a2a" stroke-width="2"/>
+          </g>
+          <g>
+            <rect x="235" y="332" width="30" height="22" rx="3" fill="#bbb"/>
+            <line x1="238" y1="335" x2="262" y2="351" stroke="#c92a2a" stroke-width="2"/>
+            <line x1="262" y1="335" x2="238" y2="351" stroke="#c92a2a" stroke-width="2"/>
+          </g>
+          <g>
+            <rect x="305" y="332" width="30" height="22" rx="3" fill="#bbb"/>
+            <line x1="308" y1="335" x2="332" y2="351" stroke="#c92a2a" stroke-width="2"/>
+            <line x1="332" y1="335" x2="308" y2="351" stroke="#c92a2a" stroke-width="2"/>
+          </g>
+          <g>
+            <rect x="375" y="332" width="30" height="22" rx="3" fill="#bbb"/>
+            <line x1="378" y1="335" x2="402" y2="351" stroke="#c92a2a" stroke-width="2"/>
+            <line x1="402" y1="335" x2="378" y2="351" stroke="#c92a2a" stroke-width="2"/>
+          </g>
+
+          <!-- 活跃相机（蓝） -->
+          <g>
+            <rect x="475" y="332" width="30" height="22" rx="3" fill="#2b6cb0"/>
+            <rect x="487" y="324" width="9" height="7" fill="#2b6cb0"/>
+            <circle cx="490" cy="343" r="4" fill="#cfe3ff"/>
+          </g>
+          <g>
+            <rect x="555" y="332" width="30" height="22" rx="3" fill="#2b6cb0"/>
+            <rect x="567" y="324" width="9" height="7" fill="#2b6cb0"/>
+            <circle cx="570" cy="343" r="4" fill="#cfe3ff"/>
+          </g>
+          <g>
+            <rect x="635" y="332" width="30" height="22" rx="3" fill="#2b6cb0"/>
+            <rect x="647" y="324" width="9" height="7" fill="#2b6cb0"/>
+            <circle cx="650" cy="343" r="4" fill="#cfe3ff"/>
+          </g>
+          <g>
+            <rect x="715" y="332" width="30" height="22" rx="3" fill="#2b6cb0"/>
+            <rect x="727" y="324" width="9" height="7" fill="#2b6cb0"/>
+            <circle cx="730" cy="343" r="4" fill="#cfe3ff"/>
+          </g>
+          <g>
+            <rect x="785" y="332" width="30" height="22" rx="3" fill="#2b6cb0"/>
+            <rect x="797" y="324" width="9" height="7" fill="#2b6cb0"/>
+            <circle cx="800" cy="343" r="4" fill="#cfe3ff"/>
+          </g>
+          <text x="635" y="308" font-size="16" fill="#2b6cb0" text-anchor="middle">滑窗内活跃关键帧</text>
+
+          <!-- 粗箭头：历史 -> NFR -->
+          <path d="M255,316 C300,270 380,250 440,218" fill="none" stroke="#c92a2a" stroke-width="8" marker-end="url(#ar)"/>
+          <defs>
+            <marker id="ar" markerWidth="12" markerHeight="12" refX="8" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#333"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「把一段历史压成一个因子」这件事的全过程。<br>
+          <b>怎么看这张图：</b>① 时间轴上，左边一排灰相机是被边缘化的关键帧（打红叉），右边蓝相机是滑窗里还活跃的关键帧；② 一根粗红箭头把「被边缘化历史」整段向上压缩，变成中间蓝色六边形，标注 NFR 因子；③ 六边形再向上指向上层全局 BA。<br>
+          <b>要记住的一句话：</b>很多帧的信息 → 一个稀疏因子；这就是 NFR 最直观的画像。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>NFR 用 Delaunay 三角化来选关键帧、从一个子图里抽一个因子——这种说法对吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：Delaunay 三角化属于 Kimera 的 Mesher，不属于 Basalt。NFR 是边缘化后最小化 KL 散度恢复稀疏相对位姿因子。" onclick="lessonKit.answer(this,'q0060b')">是 Delaunay</button>
+          <button data-correct="yes" data-explanation="对：NFR 的机制是保留线性化、边缘化掉非位姿变量、再用 KL 散度恢复稀疏因子，与 Delaunay 无关。" onclick="lessonKit.answer(this,'q0060b')">不是 Delaunay</button>
+        </div>
+        <div class="quiz-feedback" id="q0060b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. NFR 与边缘化的关系：为什么比简单边缘化更好</h2>
+      <p>我们在 <b>0032 连续时间落地</b> 学过：边缘化（marginalize）在数学上等价于用 Schur 补把要删的变量「消」成一个先验。Basalt 的 VIO 后端也用这个（式 168–172）：</p>
+      <div class="formula-box"><div class="flow-formula">$$\hat H_{\alpha\alpha}=H_{\alpha\alpha}-H_{\alpha\beta}H_{\beta\beta}^{-1}H_{\beta\alpha}$$</div></div>
+      <p><b>但简单边缘化有个大问题：</b>它会留下一个<b>稠密</b>的先验因子，把剩下的所有变量全都连在一起（这正是 Fig.6 左画的那团「意大利面」）。这个稠密先验既<b>破坏稀疏性</b>（让后续优化变慢、变重），又因为它是一锤定音的线性化结果，<b>很难再重新线性化</b>。</p>
+      <p>NFR 的巧思就在于：它<b>不把这个稠密先验直接丢给上层</b>，而是先用 KL 散度把它近似成一组<b>稀疏、可重新线性化的非线性因子</b>（相对位姿 + roll-pitch 锚）。这样上层全局 BA 既能享受下层积累的信息，又保持了稀疏结构，还能在新数据到来时重新线性化。</p>
+      <p>这也是本课与 <b>0032</b>（边缘化=Schur 补先验）、<b>0049 VI-DSO</b>（同作者、动态边缘化的兄弟系统）、以及后面的 <b>0063 DM-VIO</b>（延迟边缘化）共同的接口点：<b>怎么处理被边缘化的历史，是 VIO 系统的核心权衡</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Basalt/efead69137f66086d07902426e580f49758803776c7b4bc9f2a134d6b4531b1d.jpg" alt="Visualization of non-linear factor recovery">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b> Visualization of non-linear factor recovery. Left: Densely connected factor from marginalization saved from the VIO before removing a keyframe pose. Right: Extracted non-linear factors that approximate the distribution stored in the original factor.<br>
+          <b>怎么看这张图：</b>左边是边缘化直接留下的<b>稠密因子</b>——一个关键帧位姿用一堆线连到所有其他关键帧，乱成一团；右边是 NFR 抽取出来的<b>稀疏非线性因子</b>，结构清爽得多。这就是「同信息量、边数骤减」的可视化核心图。盯着左图的「意大利面」和右图的整洁边对比看。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Basalt/ae3d4282bbbc6034c1a5dcde131ddaf93ebf547403e2b5ee13068050a2408bec.jpg" alt="Factor graphs of Basalt">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b> Factor graphs. (a) After marginalizing a frame, the system consists of $n$ older keyframes $K_1 \ldots K_n$ and the $m-1$ most recent frames $F_1$ and $F_2$ (which could potentially also host landmarks and hence be keyframes). After a new frame has been added, the oldest velocity $v$ and the oldest bias $b$ are marginalized. If they do not belong to a keyframe (b), the wh…（图注原文较长，此处摘引前部）<br>
+          <b>怎么看这张图：</b>这是 Basalt 的因子图，展示边缘化的两种情形（非关键帧 / 关键帧）。它告诉我们：边缘化的顺序直接决定了后续先验的<b>稀疏性</b>——这正是 NFR 要善加利用、又想绕开其缺点的地方。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. NFR 的两个好处，以及「不估速度/偏置」的甜头</h2>
+      <p>原文（第 20 行）明确点出 NFR 带来的几点优势，我们逐条说：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>好处一：让 roll/pitch 可观</b><br>恢复出的 roll-pitch 因子把重力方向锚进地图，使横滚/俯仰角变得可观（不再漂）。</p></div>
+        <div class="mini-card"><p><b>好处二：桥接「无视觉匹配」区段</b><br>在没有视觉特征可匹配、跟丢的地方，因子仍能提供约束，把地图连起来。</p></div>
+        <div class="mini-card"><p><b>甜头：不估速度/偏置</b><br>全局图里<b>不估速度也不估偏置</b>，只传因子，待优化变量更少，问题更小更快。</p></div>
+        <div class="mini-card"><p><b>代价：信息靠因子传递</b><br>速度/偏置不进全局图，完全靠恢复的因子间接传递（第 20 行）。</p></div>
+      </div>
+      <p>关于「roll/pitch 可观」可以这么直觉理解：重力在世界上是一个固定的向下方向。只要系统能估出重力方向，就等于把横滚和俯仰「钉」住了；剩下只有 yaw（航向）和绝对位置是不可观的——这也呼应我们在 <b>0030 预积分</b> 里说的「4 个不可观方向」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Basalt/fd4a003ca190545385f47a25c411d2038f3fbdcbdcbc3c99cbc85b52eab7fa28.jpg" alt="Orthographic top-down gravity-aligned map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b> Orthographic top-down projection of the map (MH_05 sequence of the EuRoC dataset) rendered using the estimated gravity direction. To obtain a gravity-aligned globally consistent map, non-linear factors are recovered from the marginalization prior of the VIO and combined with keypoint-based bundle adjustment. Green lines visualize keyframe connections resulting from bundle adjustment …（图注原文较长，此处摘引前部）<br>
+          <b>怎么看这张图：</b>这是重力对齐的俯视地图。绿线是 BA 产生的关键帧连接，红线是恢复出的相对位姿因子。它直接证明了 NFR 的效果：地图既<b>全局一致</b>又<b>重力对齐</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Basalt/eb84c7a4dabe0708590adc8cbef8a69aef8dc09f13449c750d0b4ac5867ceb04.jpg" alt="KLT tracks example">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b> Example of KLT tracks estimated by our system. Despite changes in exposure time the proposed method is able to estimate the warp in SE(2) between the patches in the images.<br>
+          <b>怎么看这张图：</b>展示下层 VIO 前端的 KLT 光流跟踪。即便曝光时间变化（亮度突变），系统仍能估出图像块之间的 SE(2) warp（一种平面变换）。这说明了前端在真实光照变化下的鲁棒性——是两层架构能稳定跑起来的地基。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_Basalt/3d00aab73b8d114cf8696e74326b488536c728ab73b58a7cfda92af3b20a7f3c.jpg" alt="Stereographic projection of unit vectors">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b> Geometric interpretation of stereographic projection used to represent unit vectors. The two parameters define a point in the XY-plane … To obtain the corresponding 3D unit vector we cast a ray from (0,0,-1) and find an intersection with the unit sphere shown in black. Three example points are visualized in red, green and y…（图注原文较长，此处摘引前部）<br>
+          <b>怎么看这张图：</b>Basalt 用<b>立体投影</b>把单位方向向量压成 2 个参数，再配合逆距离，对路标做最小参数化。这是它后端能在流形上高效优化的小技巧。看蓝色坐标系与黑色单位球，红/绿点是对应的 3D 方向。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字与原文承认的局限</h2>
+      <p>原文在 EuRoC 上做了评测（注意 V2_03 序列被排除）。几个关键数字：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><p><b>VIO 局部精度</b><br>10 个序列里 8 个达到最优；提出的 stereo 多在 0.04–0.13 m 量级（第 289 行）。</p></div>
+        <div class="mini-card"><p><b>Mapping 全局优势</b><br>在 machine-hall 大间隔关键帧上，明显优于 ORB-SLAM（第 293 行）。</p></div>
+        <div class="mini-card"><p><b>实时性</b><br>VIO 每帧约 7.83 ms（第 303 行）；MH_05 整段 VIO 19.2 s + Mapping 9.7 s，约 4× 实时（第 305 行）。</p></div>
+      </div>
+      <p>但原文的局限/失败边界，我们必须如实逐条抄（不替它美化）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><p><b>局限一：没做回环</b><br>只评了 VIO 局部窗与全局关键帧 BA，未含回环（Table I 下方）。</p></div>
+        <div class="mini-card"><p><b>局限二：大尺度靠 NFR 救</b><br>大尺度环境关键帧间隔大时，纯预积分法很差，只有 NFR 能救回（第 293 行）。</p></div>
+        <div class="mini-card"><p><b>局限三：速度/偏置不进图</b><br>速度/偏置不进全局图，仅靠因子传递（第 20 行）。</p></div>
+        <div class="mini-card"><p><b>结论</b><br>两层框架 + NFR 优于预积分建图（第 313–315 行）；未来可接其他传感器/多相机。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 本课要点（小结）</h2>
+      <ul>
+        <li><b>命名：</b>标题写的是 NFR（方法名），Basalt 是系统名，四条依据可判定。</li>
+        <li><b>动机：</b>VIO 只在小窗优化必然漂移，要全局一致就得上层 BA；但预积分跨大间隔会失效。</li>
+        <li><b>核心：</b>NFR = 保留边缘化线性化 → 只留关键帧位姿 → 用 KL 散度恢复稀疏相对位姿 + roll-pitch 因子。<b>不是 Delaunay。</b></li>
+        <li><b>对比边缘化：</b>简单边缘化留下稠密先验、破坏稀疏性且难重线性化；NFR 把它变成稀疏可重线性化的因子。</li>
+        <li><b>好处：</b>roll/pitch 可观、桥接无视觉区段、不估速度/偏置所以问题更小。</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么 Basalt 的标题里没有「Basalt」？请列出至少两条判定依据。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>标题本身就是 <i>Visual-Inertial Mapping With Non-Linear Factor Recovery</i>，只出现方法名 NFR；系统名 Basalt 出现在开源链接 vision.in.tum.de/research/vslam/basalt，以及同作者的 VI-DSO 脉络里（参考文献 [26]）。所以方法名=NFR、系统名=Basalt。</div></details>
+        </li>
+        <li>为什么不能直接把 IMU 预积分当成全局 BA 里连接远距离关键帧的因子？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>关键帧间隔一大，预积分要跨好几秒，这段时间里运动千变万化，积分把它们平均成一个数，信息所剩无几（原文第 13 行）。所以预积分适合相邻帧，不适合远距离全局连接——这正是 NFR 要解决的痛点。</div></details>
+        </li>
+        <li>NFR 恢复出来的因子包含哪些？为什么地图里最终只保留相对位姿与 roll-pitch？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>恢复出：被删关键帧与其余各关键帧的成对相对位姿因子 $r_{rel}$（SE(3)），加上该帧的 roll-pitch 因子 $r_{rp}$、绝对位置 $r_{pos}$、yaw $r_{yaw}$。但 yaw 和绝对位置是 4 个不可观量（全局 x/y/z + yaw），所以地图只保留相对位姿与 roll-pitch（第 265 行）。</div></details>
+        </li>
+        <li>相比于「简单边缘化」，NFR 好在哪里？它和 0032 课讲的边缘化（Schur 补）是什么关系？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>简单边缘化留下一个稠密先验，破坏稀疏性且难重新线性化；NFR 把它近似成稀疏、可重线性化的非线性因子。关系：NFR 仍建立在边缘化（Schur 补成先验，式 168–172）之上，只是多做了一步「稠密→稀疏」的恢复，是 0032 讲的原理的工程化升级。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0059-ROVIO2015-滤波派的直接法.html">← ROVIO（2015）：滤波派的直接法</a>
+        <a class="next" href="0061-OpenVINS2020-一致性与FEJ.html">OpenVINS（2020）：一致性与 FEJ →</a>
+      </div>
+      <p class="foot-note">把历史压成一个因子，是 VIO 走向全局建图的关键一步，你已经看懂了 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

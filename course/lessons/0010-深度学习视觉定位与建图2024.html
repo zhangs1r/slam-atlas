@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>深度学习视觉定位与建图（2024）— SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">深度学习专题 · Lesson 0010</div>
+      <h1>深度学习视觉定位与建图（2024）：一张全景地图</h1>
+      <p class="subtitle">当 SLAM 遇上神经网络：哪些地方真的有效，哪些地方还在"画大饼"？一篇 TPAMI 体量综述的带读 🧠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：深度学习在视觉定位（重定位 / VO）与建图中的分类法、代表方法与真实边界</span>
+        <span>👥 作者：Changhao Chen, Bing Wang, Chris Xiaoxuan Lu, Niki Trigoni, Andrew Markham</span>
+        <span>📅 2024（IEEE TPAMI 体例） · <i>Deep Learning for Visual Localization and Mapping: A Survey</i></span>
+      </div>
+      <div class="toc">
+        <a href="#intro">定位与建图：一内一外</a>
+        <a href="#vo">VO 的三种学习范式</a>
+        <a href="#reloc">重定位：2-D 还是 3-D 地图？</a>
+        <a href="#map3d">3-D 地图两条路线</a>
+        <a href="#mapping">建图三分类</a>
+        <a href="#backend">回环与后端</a>
+        <a href="#limits">原文承认的"还不能"</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="intro">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完这课，你要能回答综述开篇提出的两个问题：<b>深度学习对视觉定位与建图到底有没有戏？</b>以及<b>应该怎么用？</b>更重要的是，你要记住原文亲口承认的那些"还不能"——这是本节最值钱的部分。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>上一课（DARPA 地下挑战赛）我们看到了经典 SLAM 在极端环境下的挣扎。这一课我们换个视角：如果让神经网络接管 SLAM 的各个模块，能走多远？答案会比营销文案冷静得多。</p></div>
+      </div>
+
+      <h2>1. 先分清两件事：定位管"自己"，建图管"世界"</h2>
+      <p>综述第一节就给了两个非常干净的定义，值得背下来（原文 Sec. I）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>📍 定位 Localization</h4><p>获取<b>自身运动的内部状态</b>——位置（location）、朝向（orientation）、速度（velocity）。通俗说就是"我现在在哪、朝哪、走多快"。</p></div>
+        <div class="mini-card"><h4>🗺️ 建图 Mapping</h4><p>感知<b>外部环境的状态</b>——场景几何（geometry）、外观（appearance）、语义（semantics）。通俗说就是"这个世界长什么样"。</p></div>
+      </div>
+      <p>原文特别强调：这两件事<b>可以单独干，也可以合成 SLAM 一起干</b>（"They can act individually … or can operate jointly as a simultaneous localization and mapping (SLAM) system"）。所以别把"定位"和"SLAM"划等号——SLAM 只是两者联跑的模式。</p>
+      <p>为什么传统方法不够用、要请出深度学习？原文列举的痛点是：传感器测量不完美、动态场景、糟糕光照条件等。深度学习的思路是反过来的——不靠手工设计的物理/几何模型，而是<b>从大量数据里隐式地学出"从图像到位姿 / 从图像到场景"的函数</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/0e3e577c81f4b5345334259df6829157978d54c229ed8fb6e087b7cfb3cb3068.jpg" alt="Fig. 1 深度学习视觉定位与建图分类法">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>基于深度学习的视觉定位与建图分类法。圆角矩形表示功能模块，箭头表示模块间数据输入输出的连接关系。各模块可以组合成完整的深度学习 SLAM 系统，但并不要求包含全部模块才能工作。</p>
+          <p><b>怎么看这张图：</b>这是全篇的"地图上的地图"。传感器数据进来后兵分三路：<b>A</b> 增量运动估计（VO，就是本课第 2 节）、<b>B</b> 全局重定位（第 3-4 节）、<b>C</b> 建图（第 5 节）；最后 <b>D</b> 回环检测与后端（第 6 节）把三路输出拧成一致的结果。注意箭头上标注的"货币"：VO 输出 motion transformation，重定位输出 global pose，建图输出几何/语义/神经表示——后端就是拿这些当原料做全局一致的优化。这张图也解释了本课的章节顺序：它就是原文 Sec. III–VI 的骨架。</p>
+        </figcaption>
+      </figure>
+
+      <div class="callout"><h4>🛠️ OCR 修正播报（本课惯例）</h4><p>这份 md 是 PDF 转的，我们读到的开篇第一句是 "<i>OCALIZATION and mapping serve as essential requiremotivating example…</i>"——这是典型的 OCR 事故：首字母 L 的下沉大写被吞掉（应为 LOCALIZATION），且两句话被粘连（应为 "…serve as essential <b>requirements</b>. … As a motivating example…"）。后面还会遇到 "<i>high-prevision localization</i>"（应为 <b>high-precision</b>）、"<i>stateof-the-art</i>"（断行连字符丢失，应为 state-of-the-art）。本课所有公式我们都逐字核对过并修正了 OCR 错误，遇到时会明确标出。</p></div>
+    </main>
+
+    <section class="section-card" id="vo">
+      <h2>2. 视觉里程计（VO）：三种学习范式</h2>
+      <p>VO（Visual Odometry，视觉里程计）做的事很朴素：看连续的图像帧，估计帧间的运动变换，再把增量位姿积分成全局轨迹。原文按"<b>训练时有没有真值标签</b>"和"<b>是否纯神经网络</b>"把学习式 VO 分成三类，这是全篇最重要的教学图：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/fd1ea361690ba0a7fe7c8521850b1b448c34d668fd51f9f29485a6f8cca7d8a2.jpg" alt="Fig. 2 VO 三种学习范式的典型结构">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b>VO 三种学习范式的典型结构：(a) 监督学习（转载自 DeepVO）、(b) 自监督学习（转载自 SfmLearner）、(c) 混合方式（转载自 D3VO）。</p>
+          <p><b>怎么看这张图：</b>这是本篇最核心的教学图，值得盯两分钟。(a) 里两帧图像堆叠后过一排卷积层（Conv1 到 Conv6），再交给两个 LSTM（一种能记住历史的循环网络）输出 6 维位姿——这是<b>端到端监督</b>：拿真值位姿当标签直接回归。(b) 里没有位姿标签了，取而代之的是 DepthNet（预测深度）+ PoseNet（预测相对运动）双网络，用"合成出来的图和真图像不像"当监督信号——这是<b>自监督</b>。(c) 里神经网络只负责提供深度、位姿和光度不确定性的"预测原料"，真正的跟踪与优化仍由经典直接法 VO 的前端/后端完成——这是<b>混合</b>。三张小图从左到右，恰好是"网络管得越来越多 → 网络和几何各管一摊"的谱系。</p>
+        </figcaption>
+      </figure>
+
+      <h3>2.1 端到端监督：DeepVO 开了 "ConvNet + RNN" 的头</h3>
+      <p>最早的尝试把 VO 当分类问题做（Konda et al.），或者用稠密光流喂卷积网络（Costante et al.），但都不算严格的端到端。真正的里程碑是 <b>DeepVO</b>：用 ConvNet 提取视觉特征（编码器借用了光流网络 FlowNet 的结构），再把特征交给 RNN 建模时序关联——历史信息存在隐状态里，输出同时依赖"过去经验"和"当前观测"。它的训练目标就是最小化平移和欧拉角旋转的均方误差，这也是原文的公式 (1)：</p>
+      <div class="formula-box">
+$$\theta^{*}=\arg\min_{\theta}\frac{1}{N}\sum_{i=1}^{N}\sum_{t=1}^{T}\|\hat{\mathbf p}_t-\mathbf p_t\|_2^2+\|\hat{\boldsymbol\varphi}_t-\boldsymbol\varphi_t\|_2^2\tag{1}$$
+        <p>其中 $(\hat{\mathbf p}_t,\hat{\boldsymbol\varphi}_t)$ 是网络在第 $t$ 步估计的相对位姿（平移 + 旋转），$(\mathbf p_t,\boldsymbol\varphi_t)$ 是对应真值，$\theta$ 是网络参数，$N$ 是样本数。逐项看：两个 $\|\cdot\|_2^2$ 分别是平移误差和旋转误差的平方，网络学的就是"让估计值贴住真值"。</p>
+      </div>
+      <p>有个有趣的观察（原文明确写了）：监督式 VO 从单目相机就能输出<b>带绝对尺度</b>的轨迹，而经典单目 VO 天生有尺度歧义——作者推测是 DNN 从海量图像里隐式学到了全局尺度。但原文同时泼冷水：DeepVO 的评估没经过跨城市级别的大规模数据和真实野外实验验证，泛化和实时性仍是硬挑战。后续改进包括课程学习（先易后难地加训练难度）、知识蒸馏（大模型教小模型，参数砍 92.95%、提速 2.12 倍）、记忆模块、注意力机制（DAVO 用注意力加权语义分割、光流与 RGB 三路输入）等。</p>
+
+      <h3>2.2 端到端自监督：没有标签，就自己造监督信号</h3>
+      <p>标注位姿真值又贵又难，于是 <b>SfmLearner</b> 想出一个妙招：<b>新视角合成</b>当监督信号。框架里有两个网络——DepthNet 预测深度图，PoseNet 预测帧间运动——合起来把源图像"搬运"到目标视角，合成图像和真实图像越像，说明深度和运动估计得越准。原文的公式 (2) 描述了一个像素如何被投影到另一个视角：</p>
+      <div class="formula-box">
+$$p_s\sim \mathbf K\mathbf T_{t\to s}\mathbf D_t(p_t)\mathbf K^{-1}p_t\tag{2}$$
+        <p>$\mathbf K$ 是相机内参矩阵，$\mathbf T_{t\to s}$ 是从目标帧到源帧的相机运动矩阵，$\mathbf D_t(p_t)$ 是目标帧逐像素深度图。从右往左读：像素坐标 $p_t$ 先用 $\mathbf K^{-1}$ 升到 3-D 空间，乘上深度变回真实 3-D 点，经运动矩阵 $\mathbf T_{t\to s}$ 变换到另一帧坐标系，最后用 $\mathbf K$ 投回图像平面。<b>⚠️ OCR 修正</b>：md 里下标是 <code>T_{t s}</code>，箭头丢了；原文正文明确写着 "the camera motion matrix <b>from the target frame to the source frame</b>"，所以必须补回 $t\to s$。</p>
+      </div>
+      <div class="formula-box">
+$$\mathcal L_{\mathrm{photo}}=\sum_{\langle\mathbf I_1,\dots,\mathbf I_N\rangle\in S}\sum_p\big|\mathbf I_t(p)-\hat{\mathbf I}_s(p)\big|\tag{3}$$
+        <p>这是<b>光度重建损失</b>：$p$ 是像素坐标，$\mathbf I_t$ 是真实目标图像，$\hat{\mathbf I}_s$ 是合成图像，逐像素求亮度差的绝对值。内层求和遍历像素，外层求和遍历序列 $S$ 里的图像组。</p>
+      </div>
+      <p>原文毫不客气地指出 SfmLearner 的两个没解决的问题：<b>① 尺度歧义</b>——单目方案给不出物理上有意义的全局尺度；<b>② 光度损失假设场景静态且无遮挡</b>——即使用了 explainability mask 剔除动态区域，问题也没有被彻底解决。后续一堆工作在补锅：<b>UnDeepVO</b> 和 Zhan et al. 用<b>双目立体像对</b>恢复绝对尺度（左右目基线固定已知，训练时加一个左右目光度损失，测试时只用单目）；VRVO 用 GAN 生成虚拟立体数据；GeoNet 把学习拆成"静态结构重建 + 非刚体运动定位"两个子任务，再加几何一致性损失；GANVO 用对抗学习生成深度图 + 循环模块回归位姿；Bian et al. 用几何一致性损失让深度预测跨帧尺度一致（纯单目做到尺度一致）。</p>
+      <p>但结论很清醒（原文原话）：<b>"self-supervised VO still cannot compete with supervised VO in performance"</b>——自监督 VO 的性能至今追不上监督式。</p>
+
+      <h3>2.3 混合式：现阶段真正的赢家</h3>
+      <p>第三条路线不追求"纯神经网络"，而是<b>让网络替代经典几何模型的一部分</b>。两大分支：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>几何先验类</h4><p>把学习到的深度/位姿/不确定性塞进经典 VO。<b>D3VO</b> 是代表：把深度、位姿和<b>光度不确定性</b>（哪些像素可信的图）从自监督网络并入直接法 VO（DVO）——深度和位姿进前端，不确定性进后端。在 KITTI 和 EuroC 上超过了 DSO、ORB-SLAM、VINS-Mono 等一票经典系统。同类的还有：ConvNet 粗深度 + CRF 精修再算尺度因子、预测瞬态掩码（运动物体区域）保护 VO、学习"位姿修正量"而非位姿本身（Wagstaff et al.）、把学习深度与光流并入传统 VO 建立对应（Zhan et al.）。</p></div>
+        <div class="mini-card"><h4>物理运动模型类</h4><p>把<b>可微的滤波器</b>嵌入网络：可微 Kalman filter（端到端训练）、<b>DynaNet</b>（DNN + 状态空间模型，递归 Kalman 滤波在特征状态空间上做最优滤波，还能通过 Kalman 增益等内部参数发现故障）、可微<b>粒子滤波</b>（Jonschkowski et al.，用可学习的运动/观测模型近似复杂非线性函数）。原文评价：相比纯 ConvNet/LSTM，可微滤波器提高了数据效率和泛化能力。</p></div>
+      </div>
+      <p>现在把全篇最重要的"边界结论"郑重抄一遍（原文 Sec. III-B 与 III-C 原话）：</p>
+      <div class="callout"><h4>📌 三句定调的话</h4>
+        <p>① "Currently, end-to-end learning-based VOs have <b>not been proved to surpass the state-of-the-art model-based VOs</b> in performance." —— 端到端学习式 VO 尚未证明能打赢最强的模型驱动 VO。</p>
+        <p>② 自监督 VO "still <b>cannot compete with supervised VO</b> in performance" —— 自监督还打不过监督。</p>
+        <p>③ 混合模型 "generally <b>more accurate than end-to-end VO/SLAM systems</b> and can even <b>outperform conventional monocular VO systems</b> on common benchmarks." —— 混合模型不但稳赢端到端，还能在常见基准上反超经典单目 VO。</p>
+      </div>
+      <p>翻译成大白话：<b>现阶段"几何/物理先验 + 学习"的混合路线才是赢家</b>，纯端到端还在追赶。这不是我们自己的观点，是综述作者自己写下的结论。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>2024 年读到这篇综述时，如果你想搭一个"当下最稳"的单目定位系统，原文的证据更支持哪种选择？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。原文明确说端到端学习式 VO 还没有证明能超过最强的模型驱动 VO。" onclick="lessonKit.answer(this,'q0010a')">纯端到端监督网络，直接从图像回归位姿</button>
+          <button data-correct="yes" data-explanation="正确！D3VO 这类混合模型在 KITTI/EuroC 上超过 DSO、ORB-SLAM、VINS-Mono，原文说混合模型 'generally more accurate than end-to-end VO/SLAM systems'。" onclick="lessonKit.answer(this,'q0010a')">混合式：把学习的深度/位姿/不确定性并入经典几何框架</button>
+          <button data-correct="no" data-explanation="方向有希望（原文说它适应新场景能力更好），但原文同时承认自监督 VO 性能仍追不上监督式，更不是当下最稳的选择。" onclick="lessonKit.answer(this,'q0010a')">纯自监督端到端，完全不用标签</button>
+        </div>
+        <div class="quiz-feedback" id="q0010a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="reloc">
+      <h2>3. 全局重定位：原文的顶层分类是"地图是几维的"</h2>
+      <p>重定位回答的问题是：<b>在一个<b>已建好地图</b>的已知场景里，我这张查询图像对应的绝对位姿是什么？</b>这和 VO 不同——VO 可以在陌生环境里干活，重定位必须有先验地图。</p>
+
+      <div class="callout"><h4>🚨 先纠正一个常见误传</h4><p>很多中文资料把视觉定位概括成"<b>特征匹配 / 位姿回归 / 图像检索</b>三条路线"。这套说法能自圆其说，但它是对本综述的<b>下沉归纳</b>，不是原文的顶层分类。原文 Sec. IV 的顶层切分只有两刀：<b>按所用地图的类型</b>，分成"<b>在 2-D 地图中重定位</b>"与"<b>在 3-D 地图中重定位</b>"两大类，然后再各自细分（2-D 再分 explicit / implicit；3-D 再分 local descriptor / scene coordinate regression）。"检索、回归、匹配"其实散落在这些子类里——把它们抬到顶层，会掩盖"你手里到底有什么样的地图"这个更本质的问题。</p></div>
+
+      <h3>3.1 在 2-D 地图中重定位</h3>
+      <p>2-D 地图又分两种形态（原文 Sec. IV-A）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>显式 2-D 地图（explicit）</h4><p>地图 = 一堆带地理位置标记的参考图像数据库。定位分<b>两阶段：image retrieval（图像检索）→ pose regression（位姿回归）</b>。第一阶段用图像级描述子找出"最像的参考图"——<b>NetVLAD</b> 把检索常用的 VLAD 描述子做成可训练层；<b>CamNet</b> 用"图像粗检索 + 位姿精检索"的两级方案选参考帧。第二阶段相对检索到的参考图估计相对位姿（传统上靠对极几何，学习式做法如 NN-Net 直接回归相对位姿再三角化融合，RelocNet 引入视锥重叠损失）。优点：场景无关、可扩展；缺点：维护地理标记数据库成本高，检索耗时比隐式方案慢。</p></div>
+        <div class="mini-card"><h4>隐式 2-D 地图（implicit）</h4><p>地图被"藏"进网络权重里。<b>PoseNet 是开山之作</b>（原文表格里标注它为 "first neural network in global pose regression"）：输入单张 RGB，输出 7 维全局位姿（3 维位置 + 4 维朝向），骨干借用了 GoogLeNet，去掉最后的 softmax 换成全连接层直接回归。</p></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/f872ba20411a942cb5239b5fb44b145d5a28671914b2cf619d923e7dcbddddf7.jpg" alt="Fig. 3(b) 隐式 2-D 地图重定位（PoseNet）">
+        <figcaption>
+          <p><b>原图注（Fig. 3(b)）：</b>2-D 地图中重定位的典型架构——隐式地图定位，以 PoseNet 为例（Fig. 3(b) of the survey）。</p>
+          <p><b>怎么看这张图：</b>管线简单到令人感动：单张街景图 → Visual Encoder（视觉编码器，几层卷积）→ Feature Map（特征图）→ Pose Regressor（位姿回归器）分出两个头，一个输出 Rotation（朝向）、一个输出 Position（位置）。没有任何显式的地图存储、没有特征匹配——"地图"就是网络参数本身。正是这种极简，让它成为"绝对位姿回归"范式的起点，也带来了下面要说的病根。</p>
+        </figcaption>
+      </figure>
+
+      <p>原文对 PoseNet 的批评很直接，值得原样记住：它 "<b>designed with a naive regression loss function that does not take into account the underlying geometry</b>"——朴素回归损失完全不考虑问题的底层几何，导致超参数要靠昂贵的手工调试，且对新场景泛化差；再加上特征嵌入维度高、训练数据有限，<b>容易过拟合</b>。后续补救五花八门：LSTM 降维、合成数据增广、贝叶斯位姿不确定性、几何感知损失、注意力关联特征、时序约束（VidLoc）、与 VO 联合优化、GNN 做多视角重定位（GR-Net、PoGO-Net）、MS-Transformer 把绝对位姿回归扩展到单模型多场景……但原文的总结论是：隐式方案<b>实现简单、推理高效，可性能有上限，依赖场景相关训练，换个场景就得重训</b>。</p>
+
+      <h3>3.2 在 3-D 地图中重定位</h3>
+      <p>3-D 路线的地图由 SfM（从运动恢复结构）或 TSDF 之类方法建成的 3-D 场景模型。核心是建立<b>2-D 像素 ↔ 3-D 点</b>的对应，然后丢给 PnP 求解器套 RANSAC 算位姿。按"对应怎么建"分两条路（下一节展开讲）：<b>local descriptor-based（局部描述子匹配）</b>与 <b>scene coordinate regression-based（场景坐标回归）</b>。</p>
+    </section>
+
+    <section class="section-card" id="map3d">
+      <h2>4. 3-D 地图重定位的两条路线</h2>
+      <h3>4.1 局部描述子路线：检测器和描述子，谁先谁后？</h3>
+      <p>描述子的学习通常和关键点检测耦合在一起，原文按二者在流程中的<b>角色顺序</b>明确分了三种——这个三分法请原样记住：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>① detect-then-describe<br>先检测后描述</h4><p>最经典的管线：先检测关键点，再在每个关键点周围的图像块上提描述子。可以是手工检测器+手工描述子，也可以只把其中之一换成学习版，或两个都学。检测器负责对尺度/旋转/视角变化的不变性，描述子捕获更大邻域的高级信息。</p></div>
+        <div class="mini-card"><h4>② detect-and-describe<br>检测与描述同步</h4><p>共享一个网络表征同时学检测和描述。<b>SuperPoint、R2D2</b> 用不同解码分支（各自独立训练的损失）；<b>D2-Net、ASLFeat</b> 更彻底——检测和描述<b>共享全部参数</b>、联合优化；<b>P2-Net</b> 学一个 2-D/3-D 通用的描述子，让像素和点云能互相匹配。</p></div>
+        <div class="mini-card"><h4>③ describe-then-detect<br>先描述后检测</h4><p>代表是 <b>D2D</b>：把检测这一步<b>推迟</b>，先学出稠密描述子，再在稠密描述子上跑检测器挑出稀疏关键点。顺序倒过来，思路就完全不同了。</p></div>
+      </div>
+      <p>原文还点了一个实战细节：出于效率，实践中常用稀疏特征；但如果<b>"关掉"关键点检测器、直接做稠密特征提取与匹配</b>，匹配质量反而更好——<b>尤其在强光照变化下</b>（原文引 InLoc 等工作）。</p>
+
+      <h3>4.2 场景坐标回归（SCR）路线：不要地图，直接学"像素 → 三维坐标"</h3>
+      <p>这条路线更激进：干脆<b>不建显式 3-D 地图、不提描述子</b>，网络直接学一个从 2-D 像素坐标到 3-D 场景坐标的隐式映射。查询图上每个像素都被回归出它在世界坐标系里的 3-D 坐标（这就是"场景坐标"），2-D–3-D 对应由此免费获得。</p>
+      <ul>
+        <li><b>DSAC</b>：ConvNet 回归场景坐标 + 新颖的<b>可微 RANSAC</b>，让整条管线能端到端训练——这是开山之作。</li>
+        <li>后续扩展：重投影损失与多视角几何约束（支持无监督学习）、联合学习观测<b>置信度</b>（提升采样效率和精度）、MoE（专家混合）与分层由粗到细消除环境歧义。</li>
+        <li><b>KFNet</b>：把场景坐标回归<b>扩展到时域</b>，缩小了"时序重定位"与"单帧重定位"的性能差距。</li>
+        <li><b>SANet</b>：通过检索相似场景图像的 3-D 点做插值来回归查询图的场景坐标——<b>场景无关</b>，不用针对新场景重训。</li>
+        <li><b>Dense SCR / DSM</b>：稠密地做场景坐标回归，测试阶段计算更高效，并引入全局上下文增强鲁棒性。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/618b37c4802911cf87efbe0ae057533c61cc14a29f3f67a2595f9d64282d9315.jpg" alt="Fig. 4 3-D 地图重定位：描述子匹配与场景坐标回归">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>3-D 地图中重定位的典型架构：(a) 描述子匹配定位（HF-Net）；(b) 场景坐标回归定位（Confidence SCR）。</p>
+          <p><b>怎么看这张图：</b>上半 (a) 是描述子路线的实战流程：查询图先做 ① 全局匹配从检索库找到相似图（Retrieved），再 ② 局部匹配把检索图与稀疏 3-D 模型（右上角的 Sparse 3D model 点云）建立对应，最后 ③ 解出 6-DoF 位姿；右下角红绿连线展示查询图像素与 3-D 点的直接匹配。下半 (b) 是 SCR 路线：输入图像过网络（带 smooth / coords 两个损失）回归出每个像素的场景坐标（中间那张彩色坐标图），再经置信度预测分支给每个估计打分（右侧色条 0→1），最后置信度加权的 2D-3D 对应送去估计位姿。对比着看：一个"先有地图再匹配"，一个"网络就是地图"——两条路线的哲学差异一目了然。</p>
+        </figcaption>
+      </figure>
+
+      <p>SCR 路线的优点：省去描述子提取与匹配，效率高；在小尺度室内环境表现稳健，不输显式 3-D 地图方法。但原文再次划了边界：<b>场景坐标回归这类隐式方法在大尺度户外场景的有效性尚未被证明</b>——因为回归函数依赖场景特定训练，面对户外多变的光照、天气和场景布局泛化能力存疑。这句话请和第 6 节的"还不能"清单放在一起记。</p>
+    </section>
+
+    <section class="section-card" id="mapping">
+      <h2>5. 建图三分类：Geometric / Semantic / Implicit</h2>
+      <p>原文 Sec. V 把学习式建图一分为三：<b>几何建图</b>（学场景的显式几何）、<b>语义建图</b>（学场景的含义）、<b>隐式建图</b>（把整个场景编码进神经表示）。先看一张经典的"同一只兔子，五种表示"：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/2573b4334536d86728b5962d2c2759a3468d0e2e5b4a8a004fcf4d3040966b0e.jpg" alt="Fig. 5 Stanford Bunny 的五种场景表示">
+        <figcaption>
+          <p><b>原图注（Fig. 5）：</b>Stanford Bunny 基准上的场景表示：(a) 原始模型、(b) 深度、(c) 体素、(d) 点云、(e) 网格。</p>
+          <p><b>怎么看这张图：</b>同一只兔子，五种"存法"：(b) 深度图是 2.5-D 的——每个像素存一个距离，从相机视角看信息完整、背后信息为零；(d) 点云只存采样点的 (x,y,z)，省空间但同样的几何可用不同点云表示（歧义）；(e) 网格显式编码表面（边、顶点、面）；(c) 体素把空间切成均匀小方块，表达力强但分辨率一高计算量爆炸。原文的选型建议就藏在这张图里：深度图/点云信息全但内存计算代价高，适合小场景；网格和表面函数类表示省内存，适合大规模户外。</p>
+        </figcaption>
+      </figure>
+
+      <h3>5.1 几何建图</h3>
+      <p>原文（借鉴 Cadena et al. 的分法）把它再分两小类：</p>
+      <ul>
+        <li><b>Raw dense（原始稠密表示）</b>：直接输出 2.5-D 深度图或 3-D 点。深度学习深度估计分三大路线——监督式（早期双网络"粗+精"架构、尺度不变误差）、空间一致性自监督（Garg et al. 用双目光度一致性、Godard et al. 左右视差一致）、时序一致性自监督（就是第 2 节 SfmLearner 那套新视角合成）。3-D 点方向的先驱是 <b>PointNet</b>（直接在点云上算，天然处理点的排列不变性）；Fan et al. 用 earth mover's distance 损失从单图生成点云，但只验证过单物体重建——原文指出<b>场景级的点云生成至今没人做</b>，算力扛不住。另外 CNN-SLAM 把学习到的单目深度并进 LSD-SLAM，缓解了绝对尺度问题，还能在无纹理区域给出稠密预测。</li>
+        <li><b>Boundary &amp; spatial-partitioning（边界与空间划分表示）</b>：① <b>surface mesh</b>（表面网格）：如 Mukasa et al. 把 SLAM 稀疏特征与 CNN 稠密深度融合更新 3-D 网格（平均残差降 38%）；Bloesch et al. 用 2.5-D 网格 + 因子图。② <b>surface function（表面函数）</b>：把表面描述为隐式函数的零等值面，最流行的是 <b>SDF（符号距离函数）</b>——<b>DeepSDF</b> 学连续 SDF 表示一整类形状，能补全带噪输入，模型体积还小一个数量级；<b>occupancy networks</b>（占用网络）输出连续的 3-D 占用函数，以无限分辨率描述 3-D 输出而不爆内存；<b>NeRF</b> 用全连接网络优化辐射场函数表示场景，新视角合成逼真但有三大毛病（原文列了）：只能表示单一场景、渲染要算几十上百次网络极慢、几何模式泛化差。③ <b>voxel（体素）</b>：<b>SurfaceNet</b> 用 3-D 卷积预测体素在表面上的置信度、<b>RayNet</b> 结合视角不变特征与几何约束、八叉树解码器实现高分辨率低内存。体素的死穴：高分辨率时计算量太大。</li>
+      </ul>
+      <p>原文对"选哪种表示"的态度很务实：这是<b>开放问题</b>，取决于传感器、细节需求、算力、场景规模——稠密表示适合小场景，边界表示适合大规模户外。</p>
+
+      <h3>5.2 语义建图</h3>
+      <p>语义地图把"这是什么"贴到几何上。代表工作按演进排：<b>SemanticFusion</b>（先驱：CNN 语义分割 + SLAM 稠密几何，概率化地把逐帧分割结果融进 3-D 地图，顺带发现 SLAM 融合还能提升单帧分割精度，但两模块是松耦合）、Ma et al. 的自监督跨视角语义一致性、<b>DA-RNN</b>（循环模型建模多帧时序，体积地图标注更准更一致）、城市级轻量语义地图（ICP 匹配定位）、实例级升级（Fusion++ 预测物体实例维护语义图；Doherty et al. 把物体检测器作为语义路标放进因子图联合优化）、直到 <b>PanopticFusion</b>——全景分割把世界分成 "stuff"（墙、门、车道等静态背景）和 "things"（车、人、桌子等可数物体）。原文提醒：纯语义分割分不出同类物体的不同实例，所以才有实例级这一步。</p>
+
+      <h3>5.3 隐式建图</h3>
+      <div class="grid-2">
+        <div class="mini-card"><h4>自编码器类</h4><p>代表 <b>CodeSLAM</b>：把图像编码成一个<b>紧凑、可优化</b>的"码"（code），它浓缩了稠密场景的关键信息；在关键帧 SLAM 里用这个码同时推断位姿和深度图。码足够小，所以运动跟踪与场景几何的联合优化变得高效。</p></div>
+        <div class="mini-card"><h4>神经渲染类</h4><p>用<b>新视角合成</b>当自监督信号隐式学 3-D。<b>GQN</b>：表征网络把多个参考视角编码成场景表示，生成网络据此渲染新视角。<b>NeRF</b>：把辐射场编码进 MLP 权重。<b>iMAP</b>：单个 MLP 就是 SLAM 的唯一场景表示，边运行边训练，跟踪 10 Hz、全局地图更新 2 Hz；<b>NICE-SLAM</b> 用分层场景表示 + 预训练几何先验，修掉 iMAP 过度平滑、难扩展到大场景的问题。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="backend">
+      <h2>6. 回环与后端：让系统"自洽"的三件事</h2>
+      <p>VO 会积累漂移误差，SLAM 靠回环检测 + 优化来纠偏。原文 Sec. VI 分三块讲：</p>
+      <h3>6.1 回环检测（Loop-Closure Detection）</h3>
+      <p>判断"这地方我是不是来过"。传统方法靠词袋（BoW），但光照、天气、视角、移动物体都会捣乱。学习式做法：用<b>预训练 ConvNet 特征</b>做地点识别（结合物体提议技术，免训练即超过当时最优）；<b>SDA（堆叠去噪自编码器）</b>无监督学习压缩表征；<b>随机投影 + HOG 的无监督自编码器</b>（用随机投影变换模拟视角变化，用 HOG 描述子获得光照不变性，不需要标注、能实时闭环、还不用降维）；以及基于 <b>super dictionary</b> 的方案（比传统 BoW 词典更省内存，用两个 DNN 加速检测并忽略移动物体）。</p>
+      <h3>6.2 局部优化（Local Optimization）</h3>
+      <p>即经典的束调整（Bundle Adjustment, BA）问题。学习式代表：<b>LS-Net</b>（把解析优化器嵌进学习过程：先学数据驱动先验，再用解析优化器精修以满足光度一致性）；<b>BA-Net</b>——把<b>可微的 Levenberg–Marquardt 二阶优化器直接嵌进 DNN</b> 端到端训练，而且优化不在几何或光度空间、而在<b>特征空间</b>进行（优化多视角图像特征的一致性损失），从而绕开几何优化丢信息、光度优化怕动态和光照变化的老毛病。</p>
+      <h3>6.3 全局优化（Global Optimization）</h3>
+      <p>长航时下 VO 误差必然漂移，需要图优化保全局一致。原文的观察一针见血：<b>"optimizing deep predictions globally is underexplored"</b>——对深度预测做全局优化这件事，研究得远远不够。已有尝试：<b>CNN-SLAM</b> 把学习深度并进 LSD-SLAM 的回环与图优化（尺度一致、还能融合语义）；<b>DeepTAM</b> 把 DNN 的深度/位姿预测并进经典 DTAM（用代价体积更新深度，对含噪位姿鲁棒）；<b>DeepFactors</b> 把 CodeSLAM 式的可优化"码"表示塞进概率因子图后端做全局优化。另外还有无监督 VO + 窗口化位姿图 + 位姿循环一致性损失的工作。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>BA-Net 最"反传统"的一点是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="可微化和端到端确实重要，但原文强调的独特点是优化发生的空间——特征空间，而非几何/光度空间。" onclick="lessonKit.answer(this,'q0010b')">它是第一个用神经网络做束调整的</button>
+          <button data-correct="yes" data-explanation="正确！BA-Net 把可微 LM 优化器嵌入 DNN，并且在特征空间上优化多视角特征一致性损失，绕开了几何优化丢信息、光度优化怕动态/光照变化的固有毛病。" onclick="lessonKit.answer(this,'q0010b')">它把可微 LM 优化器嵌入 DNN，且在特征空间而非几何/光度空间做优化</button>
+          <button data-correct="no" data-explanation="恰恰相反，BA-Net 保留了优化器结构，是'学习+经典优化'结合的典型。" onclick="lessonKit.answer(this,'q0010b')">它彻底抛弃了二阶优化器，全靠反向传播</button>
+        </div>
+        <div class="quiz-feedback" id="q0010b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="limits">
+      <h2>7. 全文最值钱的部分：原文亲口承认的"还不能"</h2>
+      <p>读综述最怕只记住"某某方法 SOTA"。这篇综述的可贵之处在于反复划边界。我们把散落全文的"边界结论"集中成一张表，请重点背前三行：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>端到端 VO vs 经典 VO</h4><p>"Currently, end-to-end learning-based VOs have <b>not been proved to surpass</b> the state-of-the-art model-based VOs in performance." —— 没赢过，这是现状。</p></div>
+        <div class="mini-card"><h4>自监督 vs 监督</h4><p>自监督 VO "still <b>cannot compete with supervised VO</b> in performance"（Table I 的 KITTI 数据也支持这一点）——省标签是有代价的。</p></div>
+        <div class="mini-card"><h4>混合 = 现阶段赢家</h4><p>混合模型 "generally <b>more accurate</b> than end-to-end VO/SLAM systems and can even <b>outperform conventional monocular VO systems</b> on common benchmarks"（D3VO 超 DSO/ORB-SLAM/VINS-Mono 为证）——几何/物理先验 + 学习才是当下正解。</p></div>
+        <div class="mini-card"><h4>全局优化缺口</h4><p>"<b>optimizing deep predictions globally is underexplored</b>" —— 深度预测的全局优化是明显的未开垦地。</p></div>
+        <div class="mini-card"><h4>PoseNet 的病根</h4><p>朴素回归损失"<b>does not take into account the underlying geometry</b>"，超参靠手工调、<b>易过拟合</b>、对新场景<b>泛化差</b>——绝对位姿回归范式的原罪。</p></div>
+        <div class="mini-card"><h4>大尺度户外存疑</h4><p>场景坐标回归与隐式地图方法"在<b>大尺度户外场景的有效性尚未被证明</b>"（the effectiveness … has not been demonstrated）——目前的主场是小尺度室内。</p></div>
+      </div>
+      <p>最后，原文用回答开篇两问收尾。深度学习<b>有戏</b>的三个理由：① 强感知前端（难啃区域的特征提取、稠密深度、语义标注）；② 让机器人获得高层理解（把语义贴进地图，支持"去厨房找苹果"这类任务）；③ 能从经验中自我学习与适应新环境（自监督 / 强化学习）。<b>怎么用</b>有五种姿势：当万能逼近器、解数据关联、自动发现任务相关特征、利用几何先验搭自监督框架、攻克单目尺度歧义等经典顽疾。一句话总结本课：<b>深度学习目前最好的用法不是替代几何，而是给几何打辅助。</b></p>
+
+      <section class="exercise-box"><h3>课后练习</h3><ol>
+        <li>不看上文，默写原文对全局重定位的顶层二分类，以及每一类下的两个子类。<details class="exercise-answer"><summary>展开查看答案</summary><div>顶层按<b>所用地图类型</b>分：(1) 在 2-D 地图中重定位——下分 explicit 2-D map-based（地理标记图像库，检索 → 相对位姿回归两阶段）与 implicit 2-D map-based（地图藏进网络，如 PoseNet 直接回归绝对位姿）；(2) 在 3-D 地图中重定位——下分 local descriptor-based（描述子匹配建立 2-D–3-D 对应）与 scene coordinate regression-based（网络直接回归像素的场景坐标）。注意顶层不是"检索/回归/匹配三条路线"——那是对原文的下沉归纳。</div></details></li>
+        <li>公式 (2) $p_s\sim \mathbf K\mathbf T_{t\to s}\mathbf D_t(p_t)\mathbf K^{-1}p_t$ 中，如果把 $\mathbf D_t(p_t)$ 去掉，投影还成立吗？为什么？<details class="exercise-answer"><summary>展开查看答案</summary><div>不成立。$\mathbf K^{-1}p_t$ 只把像素升成一条视线方向，$\mathbf D_t(p_t)$（该像素在目标帧的深度）负责把它推到真实的 3-D 点上；没有深度，3-D 点在视线上位置不定，乘上运动矩阵后投影到源帧的位置就不唯一。这正是自监督 VO 需要DepthNet 的原因——深度提供"沿视线走多远"的信息。</div></details></li>
+        <li>detect-then-describe、detect-and-describe、describe-then-detect 各举一个代表方法，并说明 detect-and-describe 内部还有什么差别。<details class="exercise-answer"><summary>展开查看答案</summary><div>先检测后描述：传统手工管线及其学习版变体（原文举了大量替换检测器/描述子的工作）；检测与描述同步：<b>SuperPoint、R2D2、D2-Net、ASLFeat、P2-Net</b>；先描述后检测：<b>D2D</b>。detect-and-describe 内部：SuperPoint/R2D2 共享表征但用<b>独立训练的不同解码分支</b>；D2-Net/ASLFeat 则<b>共享全部参数</b>并联合优化两个任务。</div></details></li>
+        <li>为什么原文说稠密匹配"在强光照变化下更好"，但它实践中并不总是首选？<details class="exercise-answer"><summary>展开查看答案</summary><div>原文写道：通过禁用关键点检测器做稠密特征提取与匹配，匹配结果优于稀疏匹配，"particularly under strong variations in illumination"。但实践中描述子通常配合关键点做<b>稀疏</b>提取与匹配，原因是<b>效率</b>——稠密匹配计算量大。所以这是"精度上限 vs 运行效率"的取舍，光照恶劣时更值得付稠密的算力成本。</div></details></li>
+        <li>把第 7 节的六条"边界结论"默写三条以上，并各用一句话说明它否定了哪种流行叙事。<details class="exercise-answer"><summary>展开查看答案</summary><div>参考：① 端到端 VO 尚未证明超过最强模型驱动 VO——否定"深度学习已全面取代几何方法"；② 自监督 VO 性能仍不敌监督——否定"无标签免费的午餐已兑现"；③ 混合模型整体最准、可超经典单目 VO——支持"先验+学习"而非"纯学习"；④ 深度预测的全局优化 underexplored——否定"SLAM 各环节都已被学习覆盖"；⑤ PoseNet 朴素回归损失不考虑几何、易过拟合泛化差——否定"绝对位姿回归已解决重定位"；⑥ SCR/隐式方法在大尺度户外未证明有效——否定"神经隐式表示无处不在"。</div></details></li>
+      </ol></section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0009-DARPA地下挑战赛2024-真实世界的SLAM.html">← DARPA 地下挑战赛（2024）</a>
+        <a class="next" href="0011-深度学习视觉SLAM2023-模块化与联合学习.html">深度学习视觉 SLAM（2023）→</a>
+      </div>
+      <p class="foot-note">记住边界的人，比记住 SOTA 的人走得更远 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

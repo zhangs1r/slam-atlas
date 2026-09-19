@@ -1,0 +1,3023 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLAM 图解入门 · 从零看懂机器人如何认路</title>
+<style>
+  :root{
+    --bg:#0d1117;--bg2:#161b22;--bg3:#1c2129;--line:#30363d;
+    --fg:#e6edf3;--fg2:#a8b3c0;--fg3:#6e7681;
+    --c-vision:#58a6ff;--c-lidar:#3fb950;--c-fusion:#d29922;
+    --c-neural:#bc8cff;--c-gs:#f778ba;--c-learn:#ff7b72;
+    --c-multi:#39c5cf;--c-event:#ffa657;--c-map:#7ee787;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);line-height:1.85;padding:0 0 100px;
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",-apple-system,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 22px}
+
+  header{padding:46px 0 24px;border-bottom:1px solid var(--line)}
+  h1{font-size:29px;font-weight:700;letter-spacing:-.4px;line-height:1.4}
+  h1 em{font-style:normal;color:var(--c-vision)}
+  .sub{color:var(--fg2);margin-top:12px;font-size:14px;max-width:820px}
+  .stats{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}
+  .stat{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:9px 15px}
+  .stat b{display:block;font-size:19px;color:var(--c-vision);font-weight:660}
+  .stat i{font-style:normal;font-size:11.5px;color:var(--fg2)}
+
+  nav.toc{position:sticky;top:0;z-index:60;background:rgba(13,17,23,.95);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);margin:0 -22px 28px;padding:10px 22px;display:flex;gap:5px;flex-wrap:wrap}
+  nav.toc a{font-size:12.5px;color:var(--fg2);text-decoration:none;padding:4px 10px;border-radius:6px;border:1px solid transparent;white-space:nowrap}
+  nav.toc a:hover{color:var(--fg);background:var(--bg3);border-color:var(--line)}
+
+  h2{font-size:21px;margin:58px 0 10px;padding-left:13px;border-left:3px solid var(--c-vision);line-height:1.45}
+  h2 small{display:block;font-weight:400;color:var(--fg3);font-size:13px;margin-top:5px}
+  h3{font-size:16.5px;margin:34px 0 10px}
+  h4{font-size:14.5px;margin:22px 0 8px;color:var(--fg)}
+  p{font-size:14.5px;color:var(--fg2);margin:12px 0}
+  p strong,b{color:var(--fg)}
+  .em{color:var(--c-fusion);font-weight:600}
+
+  .tldr{background:linear-gradient(90deg,#12202e,#161b22);border:1px solid #1f3a54;
+    border-left:3px solid var(--c-vision);border-radius:10px;padding:14px 18px;margin:18px 0}
+  .tldr:before{content:"一句话总结";display:block;font-size:11px;color:var(--c-vision);letter-spacing:1.5px;margin-bottom:5px}
+  .tldr p{font-size:14px;color:var(--fg);margin:0;line-height:1.8}
+
+  .analogy{background:linear-gradient(90deg,#1d1a10,#161b22);border:1px solid #4a3c17;
+    border-left:3px solid var(--c-fusion);border-radius:10px;padding:15px 18px;margin:18px 0}
+  .analogy:before{content:"打个比方";display:block;font-size:11px;color:var(--c-fusion);letter-spacing:1.5px;margin-bottom:6px}
+  .analogy p{font-size:14px;color:var(--fg2);margin:0 0 8px}
+  .analogy p:last-child{margin-bottom:0}
+  .analogy em{font-style:normal;color:var(--c-fusion);font-weight:600}
+
+  /* ── 动画容器 ── */
+  .anim{background:#0b1017;border:1px solid var(--line);border-radius:13px;padding:16px;margin:20px 0}
+  .anim > svg{display:block;width:100%;height:auto;border-radius:8px}
+  .anim .cap{margin-top:13px;padding-top:12px;border-top:1px dashed #232b35;font-size:13.5px;color:var(--fg2);line-height:1.85}
+  .anim .cap .h{display:block;font-size:11.5px;color:var(--c-multi);letter-spacing:1.5px;margin-bottom:6px}
+  .anim .cap b{color:var(--fg)}
+  .anim .cap p{margin:7px 0;font-size:13.5px}
+  .anim svg *{animation-play-state:paused}
+  .anim.play svg *{animation-play-state:running}
+
+  /* ── 分步讲解 ── */
+  .steps{counter-reset:s;margin:18px 0}
+  .steps > div{background:var(--bg2);border:1px solid var(--line);border-radius:10px;
+    padding:13px 18px 13px 54px;position:relative;margin-bottom:9px}
+  .steps > div:before{counter-increment:s;content:counter(s);position:absolute;left:15px;top:14px;
+    width:24px;height:24px;border-radius:50%;background:#1d3a54;color:#cfe6ff;font-size:12.5px;
+    text-align:center;line-height:24px;font-weight:600}
+  .steps > div h5{font-size:14px;margin:0 0 5px;color:var(--fg)}
+  .steps > div p{font-size:13.5px;margin:6px 0 0;color:var(--fg2);line-height:1.8}
+
+  /* ── 常见困惑 ── */
+  .qa{margin:20px 0}
+  .qa > div{border-left:3px solid var(--c-multi);padding:2px 0 2px 15px;margin-bottom:16px}
+  .qa .q{font-size:14px;color:var(--c-multi);font-weight:600;margin-bottom:5px}
+  .qa .a{font-size:13.5px;color:var(--fg2);margin:0;line-height:1.85}
+  .qa .a + .a{margin-top:7px}
+
+  .term{border-bottom:1px dashed var(--c-fusion);cursor:help;position:relative;color:var(--fg);font-weight:600}
+  .term:hover::after{content:attr(data-tip);position:absolute;left:0;bottom:135%;width:min(340px,78vw);
+    background:#1c2430;border:1px solid #3d4753;border-radius:9px;padding:10px 12px;font-size:12.5px;
+    line-height:1.7;color:var(--fg2);box-shadow:0 10px 28px rgba(0,0,0,.6);z-index:200;white-space:normal;font-weight:400}
+  .term:hover::before{content:"";position:absolute;left:14px;bottom:135%;margin-bottom:-5px;
+    border:5px solid transparent;border-top-color:#3d4753;z-index:201}
+  .kbd{display:inline-block;background:#1c2430;border:1px solid #3d4753;border-radius:5px;padding:0 6px;font-size:12px;color:var(--c-multi)}
+
+  .chain{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:16px 19px;margin:16px 0}
+  .chain .row{display:flex;align-items:flex-start;gap:12px;padding:10px 0}
+  .chain .row + .row{border-top:1px dashed #262d36}
+  .chain .yr{flex:0 0 78px;font-size:11.5px;color:var(--fg3);padding-top:3px}
+  .chain .txt{font-size:13.5px;color:var(--fg2);line-height:1.85}
+  .chain .txt b{color:var(--fg)}
+  .chain .tag{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:20px;margin-right:7px;border:1px solid;vertical-align:1.5px}
+
+  .gen{display:flex;gap:0;margin:18px 0;overflow-x:auto;padding-bottom:8px}
+  .gen .step{flex:1 1 0;min-width:210px;position:relative;padding:0 9px}
+  .gen .step:not(:last-child):after{content:"→";position:absolute;right:-7px;top:38px;color:var(--fg3);font-size:15px;z-index:2}
+  .gen .card{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:13px 14px;height:100%}
+  .gen .card.b1{border-top:3px solid var(--fg3)}.gen .card.b2{border-top:3px solid var(--c-lidar)}
+  .gen .card.b3{border-top:3px solid var(--c-vision)}.gen .card.b4{border-top:3px solid var(--c-neural)}
+  .gen .card.b5{border-top:3px solid var(--c-gs)}
+  .gen .nm{font-size:13.5px;font-weight:650;margin-bottom:2px}
+  .gen .yr{font-size:10.5px;color:var(--fg3);margin-bottom:9px}
+  .gen .lim{font-size:12px;color:#ff9e9e;margin-bottom:8px;line-height:1.65}
+  .gen .lim:before{content:"卡在哪 ";color:var(--fg3);font-size:10.5px}
+  .gen .sol{font-size:12px;color:#9fe0a8;line-height:1.7}
+  .gen .sol:before{content:"怎么破 ";color:var(--fg3);font-size:10.5px}
+
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--bg2);color:var(--fg2);font-weight:600;font-size:11.5px}
+  tr:hover td{background:#12171e}
+  td b{color:var(--fg)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--c-map)}
+
+  .concepts{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:16px 0}
+  @media(max-width:820px){.concepts{grid-template-columns:1fr}}
+  .cc{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .cc h4{font-size:13.5px;margin:0 0 8px;color:var(--c-map)}
+  .cc p{font-size:12.5px;color:var(--fg2);line-height:1.78;margin:6px 0}
+  .cc .who{font-size:11px;color:var(--fg3);margin-top:8px}
+  .cc .say{background:#141c26;border-left:2px solid var(--c-fusion);border-radius:0 6px 6px 0;
+    padding:7px 10px;margin:8px 0;font-size:12.5px;color:var(--c-fusion);line-height:1.65}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:15px 19px;margin:16px 0}
+  .box.warn{border-color:#5c2b2b;background:#1a1213}
+  .box.ok{border-color:#24422c;background:#101a13}
+  .box h4{font-size:13.5px;margin:0 0 8px}
+  ul{list-style:none}
+  li{font-size:13.5px;color:var(--fg2);padding:6px 0 6px 19px;position:relative;line-height:1.8}
+  li:before{content:"";position:absolute;left:4px;top:14px;width:5px;height:5px;border-radius:50%;background:var(--fg3)}
+  li b{color:var(--fg)}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:12px;color:var(--c-fusion)}
+
+  .picker{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:18px;margin:18px 0}
+  .picker .opts{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px}
+  .picker button{background:var(--bg3);border:1px solid var(--line);color:var(--fg2);border-radius:8px;
+    padding:9px 15px;font-size:13px;cursor:pointer;font-family:inherit;transition:.16s}
+  .picker button:hover{border-color:var(--c-vision);color:var(--fg)}
+  .picker button.on{background:#16304a;border-color:var(--c-vision);color:#cfe6ff}
+  #pickOut{display:none}
+  #pickOut.on{display:block}
+  .verdict{background:#101a26;border:1px solid #24425c;border-radius:10px;padding:15px 18px}
+  .verdict h4{font-size:15px;margin:0 0 10px;color:var(--c-vision)}
+  .verdict .ladder{margin-top:12px}
+  .verdict .ladder div{display:flex;gap:10px;padding:7px 0;font-size:13px;color:var(--fg2);align-items:flex-start;line-height:1.8}
+  .verdict .ladder span.n{flex:0 0 22px;height:22px;border-radius:50%;background:#1d3a54;color:#cfe6ff;
+    text-align:center;line-height:22px;font-size:11.5px;margin-top:3px}
+
+  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px;line-height:1.9}
+
+  #prog{position:fixed;top:0;left:0;height:3px;width:0;z-index:80;
+    background:linear-gradient(90deg,var(--c-vision),var(--c-lidar),var(--c-gs));transition:width .1s linear}
+  #top{position:fixed;right:26px;bottom:26px;z-index:80;width:42px;height:42px;border-radius:50%;
+    background:#1c2430;border:1px solid var(--line);color:var(--fg2);font-size:17px;cursor:pointer;
+    display:none;font-family:inherit;transition:.18s}
+  #top:hover{border-color:var(--c-vision);color:var(--fg)}
+  #top.on{display:block}
+
+  svg{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .sv-t{fill:#e6edf3;font-size:13px}
+  .sv-s{fill:#a8b3c0;font-size:11.5px}
+  .sv-xs{fill:#6e7681;font-size:10.5px}
+</style>
+</head>
+<body>
+<div id="prog"></div>
+<button id="top" title="回到顶部">↑</button>
+<div class="wrap">
+
+<header>
+  <h1>SLAM 图解入门 <em>从零看懂机器人如何认路</em></h1>
+  <div class="sub">
+    这是一份给<b>完全没接触过 SLAM 的人</b>写的文档。基于本地 255 篇论文的全文语料库，
+    技术细节都来自论文正文，但讲法是从最朴素的问题开始，一步一步来。<br>
+    带虚线下划线的词可以<b>鼠标悬停</b>看解释；每张图下面都写了"怎么看"和"要记住什么"。
+  </div>
+  <div class="stats">
+    <div class="stat"><b>255</b><i>篇论文原文</i></div>
+    <div class="stat"><b>2007–2025</b><i>时间跨度</i></div>
+    <div class="stat"><b>15</b><i>个手绘动画</i></div>
+    <div class="stat"><b>42</b><i>个术语解释</i></div>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#howto">怎么读</a>
+  <a href="#what">① SLAM 是什么</a>
+  <a href="#map">② 地图的五种形态</a>
+  <a href="#lidar">③ 激光雷达</a>
+  <a href="#fusion">④ 多传感器</a>
+  <a href="#visual">⑤ 摄像头</a>
+  <a href="#neural">⑥ 神经隐式</a>
+  <a href="#gs">⑦ 高斯泼溅</a>
+  <a href="#front">⑧ 特征匹配与AI</a>
+  <a href="#multi">⑨ 多机协同</a>
+  <a href="#event">⑩ 事件相机</a>
+  <a href="#terms">⑪ 术语总表</a>
+  <a href="#pick">⑫ 选你的方案</a>
+  <a href="#open">⑬ 没解决的难题</a>
+</nav>
+
+<h2 id="howto">开始之前：这份文档怎么用 <small>三种读法，按你的时间挑</small></h2>
+
+<div class="box ok">
+  <h4>三条阅读路径</h4>
+  <ul>
+    <li><b>20 分钟速览</b> —— 只读每种颜色的方框（蓝色"一句话总结"、黄色"打个比方"），跳过所有动画和表格。读完你会知道这个领域大概在做什么。</li>
+    <li><b>2 小时系统入门（推荐）</b> —— 按章节顺序读。每章先看动画、再看"怎么看这张图"，最后读正文。<b>动画看不懂就停下来多看几遍</b>，不要硬往下走。</li>
+    <li><b>当工具书查</b> —— 直接跳到「选你的方案」或「术语总表」。遇到不认识的词，鼠标停在带虚线的词上；或者按 <span class="kbd">Ctrl+F</span> 搜。</li>
+  </ul>
+</div>
+
+<div class="analogy">
+  <p>把这份文档想象成<b>带你参观一个工厂</b>。</p>
+  <p>我先带你站在门口，看清楚这个厂子到底在造什么东西（第一章）；然后一条生产线一条生产线地走，
+  每到一个工位就停下来，<em>让你亲眼看机器怎么转</em>（动画），再告诉你这个工位为什么这么设计；最后告诉你哪几个工位还没修好（最后一章）。</p>
+  <p>术语不用背。术语只是厂里的人给机器起的外号——<em>你先把机器长什么样看明白了，外号自然就记住了。</em></p>
+</div>
+
+<!-- ═══════════════ 第一章 ═══════════════ -->
+<h2 id="what">一、SLAM 到底在干什么 <small>先讲一个具体的故事，把整个问题说清楚</small></h2>
+
+<div class="tldr">
+  <p>把一个机器人放进一栋它<b>从没见过的楼</b>里。它必须同时搞清楚两件事：
+  <b>① 我在哪</b>（这叫"定位"），<b>② 周围长什么样</b>（这叫"建图"）。
+  难点在于这两件事<b>互相依赖</b>——不知道自己在哪，地图就画不准；地图不准，又定位不了。
+  SLAM 就是一套让两者<b>互相纠正</b>的办法。</p>
+</div>
+
+<h3>1.1 先看一个具体的场景</h3>
+
+<p>下面这张图是一个房间的<b>俯视图</b>（从上往下看）。房间里有沙发、书架、圆桌、长桌和绿植。
+蓝色的小点是机器人，它正沿着墙边慢慢走。</p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 430" role="img" aria-label="机器人在陌生房间里边走边建图，最后通过回环校正">
+  <defs>
+    <path id="r1" d="M 96 356 L 724 356 L 724 116 L 96 116 L 96 356"/>
+    <radialGradient id="scan" cx="0%" cy="50%" r="100%">
+      <stop offset="0%" stop-color="#3fb950" stop-opacity=".5"/>
+      <stop offset="100%" stop-color="#3fb950" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="gl"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+
+  <!-- 图例（独立文字带，不压图形） -->
+  <circle cx="60" cy="36" r="7" fill="#58a6ff"/>
+  <text x="76" y="41" class="sv-s">机器人</text>
+  <circle cx="180" cy="36" r="4" fill="#7ee787"/>
+  <text x="194" y="41" class="sv-s">它记下的地图</text>
+  <circle cx="340" cy="36" r="7" fill="none" stroke="#d29922" stroke-width="2"/>
+  <text x="354" y="41" class="sv-s">"这地方我来过！"</text>
+  <line x1="530" y1="36" x2="566" y2="36" stroke="#ff7b72" stroke-width="1.6" stroke-dasharray="5 5"/>
+  <text x="574" y="41" class="sv-s">它以为自己走的路线</text>
+
+  <!-- 房间：墙 -->
+  <rect x="76" y="96" width="668" height="280" rx="3" fill="#121a24" stroke="#3a4753" stroke-width="4"/>
+  <!-- 门（底边缺口） -->
+  <rect x="360" y="366" width="74" height="12" fill="#121a24"/>
+  <path d="M360 378 a74 74 0 0 0 74 -74" fill="none" stroke="#3a4753" stroke-width="1.2" stroke-dasharray="4 4"/>
+  <text x="397" y="404" class="sv-xs" text-anchor="middle">门</text>
+
+  <!-- 家具（位置都避开机器人路径） -->
+  <g>
+    <rect x="122" y="140" width="150" height="52" rx="9" fill="#2a3a4d" stroke="#456080" stroke-width="1.6"/>
+    <rect x="132" y="150" width="60" height="32" rx="6" fill="#33475e"/>
+    <rect x="200" y="150" width="60" height="32" rx="6" fill="#33475e"/>
+    <text x="197" y="212" class="sv-xs" text-anchor="middle">沙发</text>
+  </g>
+  <g>
+    <rect x="640" y="150" width="70" height="120" rx="4" fill="#3b2f22" stroke="#6b5539" stroke-width="1.6"/>
+    <line x1="645" y1="180" x2="705" y2="180" stroke="#6b5539" stroke-width="1"/>
+    <line x1="645" y1="210" x2="705" y2="210" stroke="#6b5539" stroke-width="1"/>
+    <line x1="645" y1="240" x2="705" y2="240" stroke="#6b5539" stroke-width="1"/>
+    <g fill="#8a6f47">
+      <rect x="650" y="160" width="8" height="18"/><rect x="662" y="162" width="8" height="16"/><rect x="674" y="158" width="8" height="20"/>
+      <rect x="650" y="190" width="8" height="18"/><rect x="664" y="192" width="8" height="16"/><rect x="678" y="190" width="8" height="18"/>
+    </g>
+    <text x="675" y="288" class="sv-xs" text-anchor="middle">书架</text>
+  </g>
+  <g>
+    <circle cx="420" cy="230" r="42" fill="#2f2a3d" stroke="#574a75" stroke-width="1.6"/>
+    <circle cx="420" cy="230" r="6" fill="#574a75"/>
+    <text x="420" y="290" class="sv-xs" text-anchor="middle">圆桌</text>
+  </g>
+  <g>
+    <rect x="200" y="298" width="150" height="42" rx="5" fill="#2c3b33" stroke="#4c6f58" stroke-width="1.6"/>
+    <text x="275" y="358" class="sv-xs" text-anchor="middle">长桌</text>
+  </g>
+  <g>
+    <circle cx="580" cy="316" r="22" fill="#243a28" stroke="#3d6b45" stroke-width="1.4"/>
+    <circle cx="580" cy="316" r="9" fill="#3d6b45"/>
+    <text x="580" y="354" class="sv-xs" text-anchor="middle">绿植</text>
+  </g>
+
+  <!-- 真实路径痕迹 -->
+  <use href="#r1" stroke="#1b2530" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <use href="#r1" stroke="#28394a" stroke-width="1.2" stroke-dasharray="5 6" fill="none"/>
+
+  <!-- 它记下的地图点 -->
+  <g fill="#7ee787">
+    <circle cx="76" cy="150" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" repeatCount="indefinite"/></circle>
+    <circle cx="76" cy="230" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin=".55s" repeatCount="indefinite"/></circle>
+    <circle cx="76" cy="310" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="1.1s" repeatCount="indefinite"/></circle>
+    <circle cx="76" cy="366" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="1.6s" repeatCount="indefinite"/></circle>
+    <circle cx="200" cy="376" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="2.3s" repeatCount="indefinite"/></circle>
+    <circle cx="500" cy="376" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="3.2s" repeatCount="indefinite"/></circle>
+    <circle cx="640" cy="376" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="3.9s" repeatCount="indefinite"/></circle>
+    <circle cx="744" cy="376" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="4.6s" repeatCount="indefinite"/></circle>
+    <circle cx="744" cy="290" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="5.4s" repeatCount="indefinite"/></circle>
+    <circle cx="744" cy="200" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="6.2s" repeatCount="indefinite"/></circle>
+    <circle cx="744" cy="116" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="7.0s" repeatCount="indefinite"/></circle>
+    <circle cx="620" cy="96" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="7.8s" repeatCount="indefinite"/></circle>
+    <circle cx="460" cy="96" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="8.6s" repeatCount="indefinite"/></circle>
+    <circle cx="300" cy="96" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="9.4s" repeatCount="indefinite"/></circle>
+    <circle cx="150" cy="96" r="3.4" opacity="0"><animate attributeName="opacity" values="0;0;.9;.9" dur="14s" begin="10.2s" repeatCount="indefinite"/></circle>
+  </g>
+
+  <!-- 累积漂移示意 -->
+  <path d="M 96 356 L 724 356 L 724 116 L 560 100 L 400 92"
+        fill="none" stroke="#ff7b72" stroke-width="1.6" stroke-dasharray="5 5" opacity="0">
+    <animate attributeName="opacity" values="0;0;.6;.6;0;0;0" dur="14s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- 回环检测 -->
+  <g opacity="0">
+    <animate attributeName="opacity" values="0;0;0;0;0;0;0;0;0;0;0;1;0" dur="14s" repeatCount="indefinite"/>
+    <circle cx="96" cy="356" r="30" fill="none" stroke="#d29922" stroke-width="2.4">
+      <animate attributeName="r" values="16;44;44" dur="14s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;0;0;0;0;0;0;0;0;0;0;1;0" dur="14s" repeatCount="indefinite"/>
+    </circle>
+    <text x="150" y="322" class="sv-s" fill="#d29922">"咦，这地方我来过！"</text>
+  </g>
+
+  <!-- 机器人 + 旋转扫描 -->
+  <g filter="url(#gl)">
+    <g>
+      <animateMotion dur="14s" repeatCount="indefinite" rotate="auto"><mpath href="#r1"/></animateMotion>
+      <g>
+        <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="1.8s" repeatCount="indefinite"/>
+        <path d="M0,0 L-96,-38 L-96,38 Z" fill="url(#scan)"/>
+        <line x1="0" y1="0" x2="-96" y2="0" stroke="#7ee787" stroke-width="1.3" opacity=".75"/>
+      </g>
+      <circle r="11" fill="#58a6ff"/>
+      <circle r="5" fill="#0d1117"/>
+    </g>
+  </g>
+
+  <text x="410" y="422" class="sv-xs" text-anchor="middle">机器人走过的路（灰底）· 它记下的地图（绿点）· 它以为自己走的路（红虚线）</text>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>① 蓝点是机器人</b>，它正沿着墙边慢慢走一圈。绿色扇形是它的"视线"——它不停地在转圈扫描，
+  每转向一个方向就量一次距离，就像蝙蝠发出声波听回声一样。</p>
+  <p><b>② 绿点 = 它记下来的地图。</b>它走到哪儿，就在墙上留下几个点，表示"这里有一堵墙"。
+  注意这些点不是一次记全的，而是走到哪儿记到哪儿——<b>地图是慢慢长出来的</b>。</p>
+  <p><b>③ 红色虚线 = 它以为自己在走的路线。</b>机器人主要靠"轮子转了多少圈"推算走了多远，
+  但轮子会打滑、地面有起伏，所以走着走着，"它以为"就偏离了"实际"。这就是漂移。</p>
+  <p><b>④ 黄色闪光 = 回环检测。</b>绕完一圈回到出发点附近时，它通过扫描发现"这里的墙和我出发时看到的一模一样"，
+  于是知道自己回来了。这一瞬间，它就能算出自己一路上累积了多少误差，然后<b>把整张地图连同轨迹一起校正</b>。</p>
+  <p><b>要记住的一句话：</b>没有回环，机器人只能越走越偏；有了回环，它才能走很久都不迷路。</p>
+</div>
+</div>
+
+<h3>1.2 为什么这两件事必须一起做？</h3>
+
+<p>你可能会想：先定位、再建图，不是更简单吗？答案是<b>做不到</b>——因为这两件事互为前提，形成了一个死循环。</p>
+
+<div class="steps">
+  <div>
+    <h5>要定位，你得先有地图</h5>
+    <p>"我在哪"这个问题，真正的意思其实是"我看到的东西，和地图上的哪一块对得上"。所以没有地图就说不清自己在哪。
+    就像拿着一张没标任何地名的地图，你是无法说出"我在哪个城市"的。</p>
+  </div>
+  <div>
+    <h5>要建图，你得先知道自己在哪</h5>
+    <p>"这里有一堵墙"这个记录，必须配上"我是在哪个位置看到它的"才有意义。
+    不知道自己位置的话，你只能记下"我面前有堵墙"，没法把它拼到地图上的具体位置。</p>
+  </div>
+  <div>
+    <h5>所以只能同时猜、同时改</h5>
+    <p>实际做法是：先随便给个初始位置（比如"我在原点"），用这个假设去建图；建出来的图又反过来告诉你
+    "你的位置好像不太对"，于是修正位置；修正后的位置又让地图更准……<b>反复迭代，两者一起收敛。</b></p>
+    <p>这就是"SLAM"这个名字的字面意思：<span class="term" data-tip="SLAM = Simultaneous Localization And Mapping，中文叫「同时定位与建图」。名字本身就点明了重点：这两件事必须「同时」做，分先后是做不出来的。">Simultaneous Localization And Mapping</span>（同时定位与建图）。</p>
+  </div>
+  <div>
+    <h5>那"回环"为什么特别关键？</h5>
+    <p>因为不断迭代也解决不了"误差累积"这个根本问题——每一步都有小误差，而下一步是在上一步的错误结果上继续算的。</p>
+    <p>只有当你回到一个<b>之前来过的地方</b>时，才能一次性算出"我这一路总共偏了多少"，然后全部修正掉。
+    举个直观的数字：<b>每步只错 0.1%，走 1000 步就偏了整整一米</b>；但只要有一个回环，这一米能被一次性抹掉。</p>
+  </div>
+</div>
+
+<div class="qa">
+  <div>
+    <div class="q">问：为什么不直接用 GPS 定位？</div>
+    <p class="a">室外可以，但 GPS 有三个短板：<b>① 精度不够</b>——民用大概几米，不足以让机器人避开墙角；
+    <b>② 更新太慢</b>——每秒一次左右，机器人走快了根本来不及；<b>③ 室内完全没有信号</b>——卫星信号穿不透楼板。</p>
+    <p class="a">所以 GPS 通常只当"低频的辅助锚点"用，防止长时间漂移，而不是主要定位手段。</p>
+  </div>
+  <div>
+    <div class="q">问：SLAM 就是把场景做成一张漂亮的 3D 模型吗？</div>
+    <p class="a"><b>不是。</b>这是很常见的误解。SLAM 造的是"机器人自己能用的地图"，不是给人看的效果图。
+    激光 SLAM 的地图可能只是一堆没有颜色的点；神经表示 SLAM 的地图甚至是一段能求导的函数。
+    <b>只要够机器人定位和导航就行，好不好看不是重点。</b></p>
+  </div>
+  <div>
+    <div class="q">问：那为什么还要研究"画得好看"的高斯泼溅？</div>
+    <p class="a">因为"能渲染"本身也有用：AR/VR 需要把虚拟物体叠在真实画面上；机器人需要渲染一个"没拍过的角度"来确认自己是否来过这里。
+    而且能渲染就意味着它把外观也记住了，这反过来能帮助定位。<b>这是最近几年最热的方向之一</b>（第七章会讲）。</p>
+  </div>
+</div>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>SLAM 要同时解决哪两件事？</b>定位（我在哪）和建图（周围什么样），两者互相依赖，必须一起解。</li>
+    <li><b>为什么不能先定位再建图？</b>定位需要地图、建图需要位置，互为前提，分先后做不出来。</li>
+    <li><b>什么是漂移？</b>每一步的小误差不断累积，导致越走越偏。像闭眼走直线，你以为走了 100 米直道，其实早偏了 15 度。</li>
+    <li><b>回环检测为什么重要？</b>它是唯一能一次性消除累积误差的手段。没有它，机器人只能走短距离。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第二章 ═══════════════ -->
+<h2 id="map">二、地图的"五种形态" <small>二十年技术演进，本质上是"装地图的容器"换了五次</small></h2>
+
+<div class="tldr">
+  <p>如果把 SLAM 二十年发展压缩成一句话：<b>地图从"一堆稀疏的点"，变成了"一个能算、能求导、能自我修正的三维表示"</b>。
+  每一次大换代，都是因为旧地图在某个场景下撑不住了，于是换了一种"装地图的容器"。</p>
+</div>
+
+<div class="analogy">
+  <p><b>用"记笔记"来理解这五次变化。</b>假设你要把一间会议室的样子记下来，供以后使用。</p>
+  <p><em>① 只记路标</em> —— 你在本子上写"西南角有个饮水机、门边有个白板"。
+  好记，但信息太少：出了这几个点，你什么都不知道。而且每个点你还得标注"我有多确定它在这"。</p>
+  <p><em>② 记关系网</em> —— 你改成写"饮水机在白板东边 3 米""白板正对门"。<b>相对关系比绝对坐标稳定得多</b>，
+  不容易被误差带偏。这就是"图"。</p>
+  <p><em>③ 记格子</em> —— 你拿一张坐标纸，逐格涂色标出哪里是墙、哪里是空的。
+  信息最全，但你必须涂满整个房间才罢休，<b>纸不够用</b>。</p>
+  <p><em>④ 记成一个公式</em> —— 你不画图了，直接写一句话："凡距白板 1.5 米以内都是墙。"
+  极其紧凑，一句话描述整间屋子。但这句话太笼统，<b>桌子腿、墙角这些细节全被抹掉了</b>。</p>
+  <p><em>⑤ 记成一堆橡皮泥</em> —— 你直接捏一堆彩色橡皮泥团摆在桌上，有形状有颜色。
+  想看哪儿就把它们<b>投影到那个方向</b>，几乎瞬间看到结果。但泥团越摆越多，桌子放不下。</p>
+</div>
+
+<h3>2.1 同一面墙，五种记法</h3>
+
+<p>下面这张图里，五个面板描述的是<b>同一个场景</b>：一面墙、墙上挂着一幅画、墙前放着一把椅子。
+区别只在于"用什么方式把它记下来"。</p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 300" role="img" aria-label="同一面墙的五种地图表示方式对比">
+  <!-- 面板1 -->
+  <g transform="translate(14,20)">
+    <rect x="0" y="0" width="152" height="252" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="10" y="20" class="sv-lbl" fill="#7ee787" font-size="12.5" font-weight="600">① 只记路标点</text>
+    <text x="10" y="36" class="sv-xs">1990 — 2005 年</text>
+    <!-- 场景轮廓（淡） -->
+    <line x1="12" y1="120" x2="140" y2="120" stroke="#2b3540" stroke-width="1.4"/>
+    <rect x="86" y="86" width="34" height="26" fill="none" stroke="#2b3540" stroke-width="1.2"/>
+    <text x="103" y="134" class="sv-xs" text-anchor="middle">墙 / 画 / 椅子</text>
+    <!-- 只记三个点 + 不确定圈 -->
+    <g>
+      <circle cx="30" cy="118" r="3.6" fill="#7ee787"/>
+      <ellipse cx="30" cy="118" rx="14" ry="9" fill="none" stroke="#7ee787" stroke-width="1">
+        <animate attributeName="rx" values="10;24;10" dur="4.4s" repeatCount="indefinite"/>
+        <animate attributeName="ry" values="7;16;7" dur="4.4s" repeatCount="indefinite"/>
+      </ellipse>
+      <circle cx="103" cy="86" r="3.6" fill="#7ee787"/>
+      <ellipse cx="103" cy="86" rx="12" ry="8" fill="none" stroke="#7ee787" stroke-width="1">
+        <animate attributeName="rx" values="9;21;9" dur="4.4s" begin=".5s" repeatCount="indefinite"/>
+        <animate attributeName="ry" values="6;14;6" dur="4.4s" begin=".5s" repeatCount="indefinite"/>
+      </ellipse>
+      <circle cx="126" cy="118" r="3.6" fill="#7ee787"/>
+      <ellipse cx="126" cy="118" rx="11" ry="7" fill="none" stroke="#7ee787" stroke-width="1">
+        <animate attributeName="rx" values="8;19;8" dur="4.4s" begin="1s" repeatCount="indefinite"/>
+      </ellipse>
+    </g>
+    <text x="10" y="160" class="sv-xs">圈 = "我有多不确定"</text>
+    <text x="10" y="178" class="sv-xs">点一多圈就互相打架</text>
+    <line x1="10" y1="196" x2="142" y2="196" stroke="#2b3540" stroke-dasharray="3 3"/>
+    <text x="10" y="216" class="sv-xs" fill="#ff9e9e">只能做小房间</text>
+    <text x="10" y="234" class="sv-xs" fill="#6e7681">路标超过几百个就算不动</text>
+  </g>
+
+  <!-- 面板2 -->
+  <g transform="translate(174,20)">
+    <rect x="0" y="0" width="152" height="252" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="10" y="20" class="sv-lbl" fill="#58a6ff" font-size="12.5" font-weight="600">② 记成一张关系网</text>
+    <text x="10" y="36" class="sv-xs">2005 — 2015 年</text>
+    <g stroke="#58a6ff" stroke-width="1" opacity=".55">
+      <line x1="26" y1="76" x2="70" y2="62"/><line x1="70" y1="62" x2="118" y2="76"/>
+      <line x1="26" y1="76" x2="46" y2="122"/><line x1="46" y1="122" x2="96" y2="126"/>
+      <line x1="96" y1="126" x2="118" y2="76"/><line x1="70" y1="62" x2="96" y2="126"/>
+      <line x1="26" y1="76" x2="96" y2="126" stroke="#d29922" stroke-dasharray="3 3"/>
+    </g>
+    <g fill="#58a6ff">
+      <circle cx="26" cy="76" r="6"/><circle cx="70" cy="62" r="6"/><circle cx="118" cy="76" r="6"/>
+      <circle cx="46" cy="122" r="6"/><circle cx="96" cy="126" r="6"/>
+    </g>
+    <circle r="8" fill="#d29922" opacity=".6">
+      <animateMotion dur="5s" repeatCount="indefinite" path="M26,76 L70,62 L118,76 L96,126 L46,122 L26,76"/>
+    </circle>
+    <text x="10" y="160" class="sv-xs">点 = 位置，线 = 约束</text>
+    <text x="10" y="178" class="sv-xs">多数格子是空的 → 算得快</text>
+    <line x1="10" y1="196" x2="142" y2="196" stroke="#2b3540" stroke-dasharray="3 3"/>
+    <text x="10" y="216" class="sv-xs" fill="#7ee787">能撑起整栋楼</text>
+    <text x="10" y="234" class="sv-xs" fill="#6e7681">代价：要反复重算，不是即时的</text>
+  </g>
+
+  <!-- 面板3 -->
+  <g transform="translate(334,20)">
+    <rect x="0" y="0" width="152" height="252" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="10" y="20" class="sv-lbl" fill="#58a6ff" font-size="12.5" font-weight="600">③ 记成一格格方块</text>
+    <text x="10" y="36" class="sv-xs">2011 — 2018 年</text>
+    <g transform="translate(16,54)">
+      <g fill="#1d2733" stroke="#31404f" stroke-width=".6">
+        <rect x="0" y="0" width="20" height="20"/><rect x="21" y="0" width="20" height="20"/><rect x="42" y="0" width="20" height="20"/><rect x="63" y="0" width="20" height="20"/>
+        <rect x="0" y="21" width="20" height="20"/><rect x="21" y="21" width="20" height="20"/><rect x="42" y="21" width="20" height="20"/><rect x="63" y="21" width="20" height="20"/>
+        <rect x="0" y="42" width="20" height="20"/><rect x="21" y="42" width="20" height="20"/><rect x="42" y="42" width="20" height="20"/><rect x="63" y="42" width="20" height="20"/>
+        <rect x="0" y="63" width="20" height="20"/><rect x="21" y="63" width="20" height="20"/><rect x="42" y="63" width="20" height="20"/><rect x="63" y="63" width="20" height="20"/>
+      </g>
+      <g>
+        <rect x="0" y="42" width="20" height="20" fill="#58a6ff" opacity="0"><animate attributeName="opacity" values="0;0;.85;.85;0" dur="5s" begin="1s" repeatCount="indefinite"/></rect>
+        <rect x="21" y="42" width="20" height="20" fill="#58a6ff" opacity="0"><animate attributeName="opacity" values="0;0;.85;.85;0" dur="5s" begin="1.15s" repeatCount="indefinite"/></rect>
+        <rect x="42" y="42" width="20" height="20" fill="#58a6ff" opacity="0"><animate attributeName="opacity" values="0;0;.85;.85;0" dur="5s" begin="1.3s" repeatCount="indefinite"/></rect>
+        <rect x="63" y="42" width="20" height="20" fill="#58a6ff" opacity="0"><animate attributeName="opacity" values="0;0;.85;.85;0" dur="5s" begin="1.45s" repeatCount="indefinite"/></rect>
+        <rect x="42" y="21" width="20" height="20" fill="#3fb950" opacity="0"><animate attributeName="opacity" values="0;0;.4;.4;0" dur="5s" begin="1.2s" repeatCount="indefinite"/></rect>
+        <rect x="63" y="21" width="20" height="20" fill="#3fb950" opacity="0"><animate attributeName="opacity" values="0;0;.4;.4;0" dur="5s" begin="1.5s" repeatCount="indefinite"/></rect>
+      </g>
+      <text x="0" y="102" class="sv-xs" fill="#58a6ff">这排 = 墙的位置</text>
+    </g>
+    <text x="10" y="178" class="sv-xs">每格记：离墙多远</text>
+    <line x1="10" y1="196" x2="142" y2="196" stroke="#2b3540" stroke-dasharray="3 3"/>
+    <text x="10" y="216" class="sv-xs" fill="#ff9e9e">内存随房间变大</text>
+    <text x="10" y="234" class="sv-xs" fill="#6e7681">走到大广场就爆内存</text>
+  </g>
+
+  <!-- 面板4 -->
+  <g transform="translate(494,20)">
+    <rect x="0" y="0" width="152" height="252" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="10" y="20" class="sv-lbl" fill="#bc8cff" font-size="12.5" font-weight="600">④ 记成一段函数</text>
+    <text x="10" y="36" class="sv-xs">2021 — 2023 年</text>
+    <g transform="translate(14,58)">
+      <ellipse cx="56" cy="38" rx="50" ry="34" fill="#bc8cff" opacity=".22">
+        <animate attributeName="rx" values="46;54;46" dur="4s" repeatCount="indefinite"/>
+      </ellipse>
+      <path d="M0,58 Q28,26 56,38 T112,52" fill="none" stroke="#bc8cff" stroke-width="1.4" opacity=".7"/>
+      <path d="M0,44 Q28,14 56,26 T112,40" fill="none" stroke="#bc8cff" stroke-width="1.4" opacity=".5"/>
+      <line x1="0" y1="76" x2="106" y2="10" stroke="#ffa657" stroke-width="1.5" stroke-dasharray="5 4">
+        <animate attributeName="stroke-dashoffset" from="0" to="-36" dur="1.1s" repeatCount="indefinite"/>
+      </line>
+      <circle cx="58" cy="36" r="4.5" fill="#ffa657">
+        <animate attributeName="opacity" values=".4;1;.4" dur="1.6s" repeatCount="indefinite"/>
+      </circle>
+      <text x="0" y="86" class="sv-xs">给一个坐标，它回答</text>
+      <text x="0" y="101" class="sv-xs" fill="#bc8cff">"这里是墙吗？"</text>
+    </g>
+    <text x="10" y="178" class="sv-xs">一整间屋子压成一段公式</text>
+    <line x1="10" y1="196" x2="142" y2="196" stroke="#2b3540" stroke-dasharray="3 3"/>
+    <text x="10" y="216" class="sv-xs" fill="#ff9e9e">公式太笼统</text>
+    <text x="10" y="234" class="sv-xs" fill="#6e7681">墙角和桌腿都会糊成一团</text>
+  </g>
+
+  <!-- 面板5 -->
+  <g transform="translate(654,20)">
+    <rect x="0" y="0" width="152" height="252" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="10" y="20" class="sv-lbl" fill="#f778ba" font-size="12.5" font-weight="600">⑤ 记成一堆彩球</text>
+    <text x="10" y="36" class="sv-xs">2023 — 2025 年</text>
+    <g transform="translate(12,52)">
+      <ellipse cx="34" cy="40" rx="26" ry="16" fill="#f778ba" opacity=".42" transform="rotate(-16 34 40)"/>
+      <ellipse cx="72" cy="30" rx="22" ry="14" fill="#ffa657" opacity=".42" transform="rotate(12 72 30)"/>
+      <ellipse cx="40" cy="68" rx="24" ry="15" fill="#58a6ff" opacity=".42"/>
+      <ellipse cx="82" cy="62" rx="20" ry="13" fill="#3fb950" opacity=".42" transform="rotate(-14 82 62)"/>
+      <ellipse cx="112" cy="42" rx="18" ry="12" fill="#bc8cff" opacity=".42" transform="rotate(18 112 42)"/>
+      <g fill="#e6edf3" opacity=".85">
+        <circle cx="34" cy="40" r="2"/><circle cx="72" cy="30" r="2"/><circle cx="40" cy="68" r="2"/>
+        <circle cx="82" cy="62" r="2"/><circle cx="112" cy="42" r="2"/>
+      </g>
+      <ellipse cx="12" cy="24" rx="12" ry="8" fill="#ffa657" opacity="0">
+        <animate attributeName="opacity" values="0;.42;.42;0" dur="4.4s" repeatCount="indefinite"/>
+      </ellipse>
+      <text x="0" y="88" class="sv-xs">每个球带：位置、形状、</text>
+      <text x="0" y="103" class="sv-xs">颜色、透明度</text>
+    </g>
+    <text x="10" y="178" class="sv-xs">投影到镜头 = 直接出画面</text>
+    <line x1="10" y1="196" x2="142" y2="196" stroke="#2b3540" stroke-dasharray="3 3"/>
+    <text x="10" y="216" class="sv-xs" fill="#ff9e9e">球也会越加越多</text>
+    <text x="10" y="234" class="sv-xs" fill="#6e7681">而且很难整体挪动</text>
+  </g>
+
+  <!-- 时间轴 -->
+  <line x1="14" y1="288" x2="806" y2="288" stroke="#30363d" stroke-width="1.4"/>
+  <circle cx="90" cy="288" r="4" fill="#7ee787"/>
+  <circle cx="250" cy="288" r="4" fill="#58a6ff"/>
+  <circle cx="410" cy="288" r="4" fill="#58a6ff"/>
+  <circle cx="570" cy="288" r="4" fill="#bc8cff"/>
+  <circle cx="730" cy="288" r="4" fill="#f778ba"/>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p>五个面板画的是<b>同一个场景</b>（一面墙 + 墙上挂的画 + 墙前的椅子），区别只在"用什么记下来"。
+  每个面板底部写着这一代的<b>致命弱点</b>——这正是下一代出现的原因。</p>
+  <p><b>① 路标点</b>：只记三个点，每个点还带一个"我有多不确定"的圈。点少时没事，<b>点一多，这些圈就会互相打架</b>，
+  数学上表现为一张巨大的表格算不动了。</p>
+  <p><b>② 关系网</b>：把点连成网，记录"谁在谁的哪边"。关键洞察是：这张网里<b>绝大多数格子是空的</b>，
+  所以可以只算非空的部分，计算量一下降下来。</p>
+  <p><b>③ 方块（体素）</b>：把空间切成小方块逐个填。信息最全，但<b>内存随房间体积线性增长</b>。</p>
+  <p><b>④ 函数</b>：整间屋子压成一段可训练的函数。极小，但<b>太笼统，细节都被平均掉了</b>。</p>
+  <p><b>⑤ 彩球（高斯）</b>：一堆彩色椭球，投影到镜头就出画面。<b>渲染快、能画没拍过的角度</b>，但球会越加越多。</p>
+  <p><b>要记住的一句话：</b>每次换代都是"换容器"，而<b>每个新容器都会带来新的麻烦</b>——这就是下一代的起点。</p>
+</div>
+</div>
+
+<h3>2.2 每一次换代的来龙去脉</h3>
+
+<p>把上面那条时间轴拉成因果链。每一条都写清了"谁失效了、为什么、谁解决了"：</p>
+
+<div class="chain">
+  <div class="row"><div class="yr">1970s<br>— 2000s</div><div class="txt">
+    <b>第一代：滤波时代 —— 把所有东西塞进一个状态向量</b><br>
+    做法是把机器人位置、朝向和所有路标的地标坐标全部拼成一个大向量，每来一次观测就整体更新一遍。
+    这个方法叫 <span class="term" data-tip="EKF-SLAM：Extended Kalman Filter SLAM，扩展卡尔曼滤波 SLAM。它的思路是把机器人位姿和所有路标坐标放进同一个大向量，用一套递推公式同时估计它们以及它们的不确定性。">EKF-SLAM</span>。
+    <span class="tag" style="color:var(--c-survey);border-color:#3d444d">卡在哪</span>
+    它必须维护一张"谁和谁相关、各自多不确定"的大表格，<b>表格大小是路标数量的平方</b>。
+    1000 个路标就是 100 万格——算不动了，所以只能做小房间。
+  </div></div>
+
+  <div class="row"><div class="yr">2000s<br>— 2010s</div><div class="txt">
+    <b>第二代：因子图时代 —— 把大表格换成稀疏的关系网</b><br>
+    一个关键事实被发现了：机器人在某一秒的位置，其实只跟它前后几秒有关，
+    跟一千秒之前那会儿<b>没什么关系</b>。所以那张大表格里绝大多数格子本来是 0，白算了。
+    于是 <span class="term" data-tip="因子图（Factor Graph）：一种把估计问题画成图的表示法。圆形节点是待求的量（机器人位姿、路标位置），方形因子是已知的约束（一次观测、一段惯性积分）。求解就是调整节点，让所有约束尽量同时被满足。">因子图</span>
+    和 <span class="mono">g2o</span>（2011）这类工具把问题改写成稀疏图优化，计算量从平方级压到接近线性级。
+    <span class="tag" style="color:var(--c-vision);border-color:#26406b">代价</span>
+    失去了滤波那种"来一个数据就顺手更新一下"的即时性，需要反复重算。
+  </div></div>
+
+  <div class="row"><div class="yr">2011<br>— 2017</div><div class="txt">
+    <b>第三代：稠密表示登场 —— 干脆不用特征点，逐像素来</b><br>
+    DTAM 和 KinectFusion 证明了一件反直觉的事：<b>不提取任何特征点、直接逐像素处理，效果反而更好</b>。
+    KinectFusion 把所有深度图融合成一张单一的全局隐式表面（用
+    <span class="term" data-tip="TSDF（截断符号距离场）：把空间切成一格格小立方体（叫体素），每格存一个数字，表示「这一点离最近的真实表面有多远」——正数表示在表面外侧，负数在内侧。只看表面附近一定范围内的值，太远的直接忽略，省内存。">TSDF</span> 表示），一边融合一边实时跟踪当前的深度帧。
+    <span class="tag" style="color:var(--c-survey);border-color:#3d444d">卡在哪</span>
+    逐像素计算量极大；而且体素内存<b>随场景体积线性增长</b>，走到一个大广场内存就爆了。
+  </div></div>
+
+  <div class="row"><div class="yr">2015<br>— 2020</div><div class="txt">
+    <b>第四代：多传感器紧耦合 —— 一个不够就一起上</b><br>
+    用单个摄像头有个死穴：<b>纯单目看不出真实尺度</b>（第五章会用动画演示这一点），
+    而且在白墙、黑夜这类场景里直接失效。
+    于是 VINS-Mono 用"视觉结构恢复 + 视觉惯性对齐"来恢复尺度；LIO-SAM 干脆把惯性预积分、激光里程计、GPS、回环检测
+    全部放上同一张因子图。
+    <span class="tag" style="color:var(--c-lidar);border-color:#24422c">关键</span>
+    精度不再是靠单一传感器硬堆出来的，而是靠<b>传感器之间互相约束</b>。
+  </div></div>
+
+  <div class="row"><div class="yr">2021<br>— 2023</div><div class="txt">
+    <b>第五代：神经隐式表示 —— 地图像一段可训练的函数</b><br>
+    <span class="term" data-tip="iMAP：2021 年首次把「一个小神经网络就是整张地图」这件事在实时 SLAM 上跑通。它不像传统方法那样存点云或体素，而是训练一个小网络：输入一个坐标，输出「这里是什么颜色、是不是表面」。">iMAP</span>
+    第一次证明：<b>单独一个小神经网络就能当作实时 SLAM 的完整场景表示</b>，边跑边训练，不需要预先在别的数据集上训练。
+    <span class="tag" style="color:var(--c-survey);border-color:#3d444d">卡在哪</span>
+    这种网络是"全局"的——改动一个地方会牵动全身，导致重建结果总是糊糊的（叫
+    <span class="term" data-tip="过度平滑（oversmoothing）：神经网络倾向于给出「平均答案」。当它没有局部细节信息可用时，就会把尖锐的墙角和模糊的墙角都渲染成中间状态的糊糊。">过度平滑</span>），也没法扩展到整栋楼。
+  </div></div>
+
+  <div class="row"><div class="yr">2023<br>— 2025</div><div class="txt">
+    <b>第六代：显式可微原语 —— 用一盒橡皮泥替代一个函数</b><br>
+    <span class="term" data-tip="3D Gaussian Splatting（三维高斯泼溅）：用一大批显式的三维高斯椭球来表示场景，每个椭球带位置、形状、颜色（用球谐系数存，能表达反光）、透明度。渲染时把它们「泼」到图像平面上混合，速度比神经网络的逐点查询快得多。">3D 高斯泼溅</span>
+    用一堆显式的高斯椭球表示场景，渲染速度比"逐点问神经网络"快了几个量级。
+    <span class="term" data-tip="MonoGS：2024 年首个以 3D 高斯作为唯一场景表示的近实时 SLAM 系统，而且能在单目（只用一个摄像头）条件下工作。">MonoGS</span>
+    第一次做到以高斯为唯一表示做近实时 SLAM。
+    <span class="tag" style="color:var(--c-gs);border-color:#5c2b48">新麻烦</span>
+    内存仍然随场景线性增长；而且和"能形变的神经点"不同，这一大堆椭球在修正回环误差时不好整体挪动。
+  </div></div>
+</div>
+
+<div class="qa">
+  <div>
+    <div class="q">问：这五代是"一个淘汰一个"吗？</div>
+    <p class="a"><b>不是。</b>它们更像不同工具，各自还都在用：小场景用滤波反而更简单可靠；
+    大场景用因子图；要渲染就上高斯。<b>新技术不是替代旧技术，而是多了一种选择。</b></p>
+  </div>
+  <div>
+    <div class="q">问：为什么"地图表示"这么重要？感觉只是存数据的方式变了而已。</div>
+    <p class="a">因为<b>地图表示决定了你能做什么运算</b>。稀疏点云能算"最近邻居"，但没法渲染画面；
+    体素能渲染但改起来贵；神经网络能渲染又能求导，但会糊；
+    高斯能高速渲染又容易优化，但内存吃紧。
+    <b>不是你有了算法再选表示，而是表示本身划定了算法的边界。</b>这就是为什么每次换表示都会带来一波新方法。</p>
+  </div>
+  <div>
+    <div class="q">问：那现在应该学哪一代？</div>
+    <p class="a">建议<b>按顺序理解，但重点学第二代和第三代</b>——因子图是今天几乎所有系统的骨架，
+    体素/TSDF 是理解主流的必经之路。第四代之后都是在这两者之上的改进。第六代（高斯）是当前的研究热点。</p>
+  </div>
+</div>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>为什么后来不用 EKF 了？</b>它维护的"关系表格"大小是路标数量的平方，几百个路标就把算力吃光了。</li>
+    <li><b>因子图的关键洞察是什么？</b>那张大表格里绝大多数格子本来是 0，只算非空的就能把计算量降下来。</li>
+    <li><b>为什么高斯的出现是个大事件？</b>它第一次让"渲染出的画面"和"用于导航的几何"同时存在于一个可优化的表示里，而且足够快。</li>
+    <li><b>五种表示各自的死穴是什么？</b>点（算不动）、图（要重算）、体素（内存涨）、函数（会糊）、高斯（也涨内存、还不好挪）。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第三章 ═══════════════ -->
+<h2 id="lidar">三、激光雷达这条线 <small>一场关于"怎么存点"和"要不要挑点"的竞赛</small></h2>
+
+<div class="tldr">
+  <p>激光 SLAM 二十年的故事可以概括成一句话：<b>它一直在想办法"少算一点"</b>。
+  先是想少看几个点（只挑重要的），后来发现挑点这件事本身太累，干脆全看（不挑点），
+  于是压力全压到了"怎么快速找到最近的那个点"上——结果这条线后半程的突破，<b>几乎全是数据结构的突破，而不是算法的突破</b>。</p>
+</div>
+
+<h3>3.1 先搞懂激光雷达是怎么"看"世界的</h3>
+
+<div class="analogy">
+  <p>想象你站在一个漆黑的房间里，手里只有一支会旋转的激光笔和一块秒表。</p>
+  <p>你朝正前方按下激光笔，它打到墙上反弹回来，你掐表——用了 0.00000002 秒。
+  因为光速是已知的（约每秒 30 万公里），时间就能换算成距离：<em>这面墙离我 3 米</em>。</p>
+  <p>然后你把激光笔转一个很小的角度，再量一次；再转，再量……<em>转完一圈，你就把整个房间的轮廓量了一遍。</em></p>
+  <p>激光雷达就是把这件事全自动化的机器：它每秒转 10–20 圈，每圈在不同高度上同时发出几十束激光（叫"几十线"），
+  每秒钟产生几十万到上百万个测距结果。</p>
+</div>
+
+<p>下面这三个面板，展示的是<b>点云是怎么一个点一个点攒出来的</b>。</p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 310" role="img" aria-label="激光雷达逐束扫描形成点云的过程">
+  <!-- 面板1 -->
+  <g transform="translate(20,16)">
+    <rect x="0" y="0" width="250" height="278" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="26" class="sv-lbl" fill="#3fb950" font-size="13" font-weight="600">① 发出一束激光</text>
+    <text x="14" y="44" class="sv-xs">量出这一个方向的距离</text>
+    <!-- 房间 -->
+    <rect x="26" y="62" width="198" height="150" fill="#121a24" stroke="#3a4753" stroke-width="3"/>
+    <rect x="130" y="150" width="52" height="42" fill="none" stroke="#3a4753" stroke-width="1.6"/>
+    <text x="156" y="222" class="sv-xs" text-anchor="middle">家具</text>
+    <!-- 雷达 -->
+    <circle cx="125" cy="137" r="9" fill="#3fb950"/>
+    <circle cx="125" cy="137" r="18" fill="none" stroke="#3fb950" opacity=".3">
+      <animate attributeName="r" values="13;23;13" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values=".4;.05;.4" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <!-- 一束 -->
+    <g>
+      <line x1="125" y1="137" x2="26" y2="137" stroke="#7ee787" stroke-width="1.5"/>
+      <circle cx="26" cy="137" r="4" fill="#7ee787"/>
+    </g>
+    <text x="125" y="256" class="sv-xs" text-anchor="middle" fill="#7ee787">1 束光 → 1 个点</text>
+  </g>
+
+  <!-- 面板2 -->
+  <g transform="translate(285,16)">
+    <rect x="0" y="0" width="250" height="278" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="26" class="sv-lbl" fill="#3fb950" font-size="13" font-weight="600">② 转个角度，再量</text>
+    <text x="14" y="44" class="sv-xs">每转一点，就多一个点</text>
+    <rect x="26" y="62" width="198" height="150" fill="#121a24" stroke="#3a4753" stroke-width="3"/>
+    <rect x="130" y="150" width="52" height="42" fill="none" stroke="#3a4753" stroke-width="1.6"/>
+    <text x="156" y="222" class="sv-xs" text-anchor="middle">家具</text>
+    <circle cx="125" cy="137" r="9" fill="#3fb950"/>
+    <!-- 多束 -->
+    <g>
+      <line x1="125" y1="137" x2="26" y2="137" stroke="#7ee787" stroke-width="1.2" opacity=".85"/>
+      <line x1="125" y1="137" x2="26" y2="110" stroke="#7ee787" stroke-width="1.2" opacity=".85"/>
+      <line x1="125" y1="137" x2="34" y2="86" stroke="#7ee787" stroke-width="1.2" opacity=".85"/>
+      <line x1="125" y1="137" x2="60" y2="66" stroke="#7ee787" stroke-width="1.2" opacity=".85"/>
+      <line x1="125" y1="137" x2="130" y2="150" stroke="#7ee787" stroke-width="1.2" opacity=".85"/>
+      <circle cx="26" cy="137" r="3.4" fill="#7ee787"/>
+      <circle cx="26" cy="110" r="3.4" fill="#7ee787"/>
+      <circle cx="34" cy="86" r="3.4" fill="#7ee787"/>
+      <circle cx="60" cy="66" r="3.4" fill="#7ee787"/>
+      <circle cx="130" cy="150" r="3.4" fill="#7ee787"/>
+    </g>
+    <text x="125" y="256" class="sv-xs" text-anchor="middle" fill="#7ee787">已扫过一小段 → 5 个点</text>
+  </g>
+
+  <!-- 面板3 -->
+  <g transform="translate(550,16)">
+    <rect x="0" y="0" width="250" height="278" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="26" class="sv-lbl" fill="#3fb950" font-size="13" font-weight="600">③ 转完一圈 = 一圈轮廓</text>
+    <text x="14" y="44" class="sv-xs">这一圈的几百个点，就叫"一帧"</text>
+    <rect x="26" y="62" width="198" height="150" fill="#121a24" stroke="#3a4753" stroke-width="3"/>
+    <rect x="130" y="150" width="52" height="42" fill="none" stroke="#3a4753" stroke-width="1.6"/>
+    <text x="156" y="222" class="sv-xs" text-anchor="middle">家具</text>
+    <g fill="#7ee787">
+      <circle cx="26" cy="76" r="2.6"/><circle cx="26" cy="92" r="2.6"/><circle cx="26" cy="108" r="2.6"/>
+      <circle cx="26" cy="124" r="2.6"/><circle cx="26" cy="140" r="2.6"/><circle cx="26" cy="156" r="2.6"/>
+      <circle cx="26" cy="172" r="2.6"/><circle cx="26" cy="188" r="2.6"/><circle cx="26" cy="204" r="2.6"/>
+      <circle cx="42" cy="62" r="2.6"/><circle cx="62" cy="62" r="2.6"/><circle cx="82" cy="62" r="2.6"/>
+      <circle cx="102" cy="62" r="2.6"/><circle cx="122" cy="62" r="2.6"/><circle cx="142" cy="62" r="2.6"/>
+      <circle cx="162" cy="62" r="2.6"/><circle cx="182" cy="62" r="2.6"/><circle cx="202" cy="62" r="2.6"/>
+      <circle cx="224" cy="80" r="2.6"/><circle cx="224" cy="100" r="2.6"/><circle cx="224" cy="120" r="2.6"/>
+      <circle cx="224" cy="140" r="2.6"/><circle cx="224" cy="160" r="2.6"/><circle cx="224" cy="180" r="2.6"/>
+      <circle cx="224" cy="200" r="2.6"/>
+      <circle cx="130" cy="150" r="2.6"/><circle cx="132" cy="160" r="2.6"/><circle cx="130" cy="172" r="2.6"/>
+      <circle cx="148" cy="192" r="2.6"/><circle cx="168" cy="192" r="2.6"/><circle cx="182" cy="188" r="2.6"/>
+    </g>
+    <circle cx="125" cy="137" r="9" fill="#3fb950" opacity=".35"/>
+    <text x="125" y="256" class="sv-xs" text-anchor="middle" fill="#7ee787">整圈轮廓，连家具也描出来了</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>① 一束激光 = 一个点。</b>雷达转到一个方向，发一次脉冲，量出到障碍物的距离，得到<b>唯一一个</b>坐标点。
+  就这么简单——它不"拍照"，它只是不停地在量距离。</p>
+  <p><b>② 转一点，就多一个点。</b>角度每变一点，就多一个点。点越攒越多，轮廓就慢慢浮现出来。</p>
+  <p><b>③ 转完一圈，得到这一圈的完整轮廓。</b>这一圈的几百到几千个点打包在一起，就叫<b>一帧</b>
+  （<span class="term" data-tip="帧（frame）：一次完整的传感数据采集。对相机是一张照片，对激光雷达是转一圈得到的一批点。SLAM 系统通常按「帧」来处理数据。">这里"帧"的含义</span>）。
+  第二圈再扫一遍，就得到第二帧。一直扫下去，点云就越来越密。</p>
+  <p><b>要记住的关键点：</b>点云里的点<b>没有编号、没有行列、没有顺序</b>。
+  你没法说"第 3 行第 5 列那个点"，只能说"离这个坐标最近的点是哪个"。
+  <b>后面所有的技术难点，都源于这一点。</b></p>
+</div>
+</div>
+
+<h3>3.2 第一个分歧：要不要先"挑出重要的点"？</h3>
+
+<p>假设雷达一秒给你 100 万个点。你打算怎么用？</p>
+
+<p>早期方法（LOAM 那一代）的想法很自然：<b>这么多点太浪费了，先挑出有信息量的用</b>。
+哪些点有信息量？<b>墙角</b>（能确定两条墙的交线）和<b>墙面</b>（能确定一个平面）。其余的点丢掉。
+这个动作叫 <span class="term" data-tip="特征提取（feature extraction）：从一大堆原始数据里挑出「有代表性」的少数几个。在激光点云里通常挑两类——落在棱角上的「边缘点」，和落在平面上的「平面点」。这个思路是从图像处理借来的。">特征提取</span>。</p>
+
+<p>但十几年后，FAST-LIO2 反过来说：<b>挑点这个动作本身才是最大的麻烦，不如不挑。</b>
+这不是偷懒，论文给出的理由有三条：</p>
+
+<div class="steps">
+  <div>
+    <h5>理由一：挑点的规则要人手写，而且换个雷达就得重写</h5>
+    <p>判定"哪些点算墙角"，需要人工设计一套规则。问题是：机械旋转式雷达和固态雷达的扫描图案完全不同，
+    上一套规则在新型号上就不管用了。<b>每换一种设备，就要重新调一遍。</b></p>
+  </div>
+  <div>
+    <h5>理由二：挑的时候会丢掉细节</h5>
+    <p>真实环境里有很多"不太像墙角也不太像平面"的结构——桌腿、门槛、栏杆、电线。
+    严格的特征规则会把它们当噪声丢掉，而这些细节恰恰在某些场景里是唯一能用来定位的东西。</p>
+  </div>
+  <div>
+    <h5>理由三：不挑之后，代码反而更简单</h5>
+    <p>全部点直接参与计算，就没有"特征提取模块"。代码量大幅下降，出错的地方也少了。
+    <b>代价只是计算量变大——而计算量可以用更好的数据结构解决。</b></p>
+  </div>
+</div>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 400" role="img" aria-label="提取特征与直接配准两种做法的对比">
+  <!-- 左 -->
+  <g transform="translate(14,16)">
+    <rect x="0" y="0" width="388" height="368" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#d29922" font-size="13.5" font-weight="600">老办法：先挑出重要的点</text>
+    <text x="16" y="48" class="sv-xs">LOAM / LeGO-LOAM · 2014 / 2018 年</text>
+
+    <!-- 场景：走廊 + 墙角 + 家具 -->
+    <g transform="translate(30,72)">
+      <rect x="0" y="0" width="328" height="200" fill="#121a24" stroke="#3a4753" stroke-width="2.4"/>
+      <line x1="182" y1="0" x2="182" y2="130" stroke="#3a4753" stroke-width="2.4"/>
+      <rect x="232" y="128" width="60" height="72" fill="none" stroke="#3a4753" stroke-width="1.8"/>
+
+      <!-- 全部原始点：灰色 -->
+      <g fill="#3a4753">
+        <circle cx="20" cy="24" r="1.6"/><circle cx="20" cy="48" r="1.6"/><circle cx="20" cy="72" r="1.6"/><circle cx="20" cy="96" r="1.6"/>
+        <circle cx="20" cy="120" r="1.6"/><circle cx="20" cy="144" r="1.6"/><circle cx="20" cy="168" r="1.6"/>
+        <circle cx="52" cy="16" r="1.6"/><circle cx="84" cy="16" r="1.6"/><circle cx="116" cy="16" r="1.6"/>
+        <circle cx="148" cy="16" r="1.6"/><circle cx="180" cy="16" r="1.6"/><circle cx="212" cy="16" r="1.6"/>
+        <circle cx="244" cy="16" r="1.6"/><circle cx="276" cy="16" r="1.6"/><circle cx="308" cy="16" r="1.6"/>
+        <circle cx="182" cy="40" r="1.6"/><circle cx="182" cy="64" r="1.6"/><circle cx="182" cy="88" r="1.6"/><circle cx="182" cy="112" r="1.6"/>
+        <circle cx="240" cy="140" r="1.6"/><circle cx="262" cy="140" r="1.6"/><circle cx="284" cy="140" r="1.6"/>
+        <circle cx="240" cy="176" r="1.6"/><circle cx="262" cy="176" r="1.6"/><circle cx="284" cy="176" r="1.6"/>
+        <circle cx="60" cy="90" r="1.6"/><circle cx="100" cy="120" r="1.6"/><circle cx="130" cy="160" r="1.6"/>
+      </g>
+      <!-- 被选中的平面点：绿 -->
+      <g fill="#3fb950">
+        <circle cx="52" cy="16" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" repeatCount="indefinite"/></circle>
+        <circle cx="116" cy="16" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin=".35s" repeatCount="indefinite"/></circle>
+        <circle cx="180" cy="16" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin=".7s" repeatCount="indefinite"/></circle>
+        <circle cx="244" cy="16" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin="1.05s" repeatCount="indefinite"/></circle>
+        <circle cx="308" cy="16" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin="1.4s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="48" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin=".2s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="120" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin=".9s" repeatCount="indefinite"/></circle>
+        <circle cx="262" cy="176" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin="1.2s" repeatCount="indefinite"/></circle>
+      </g>
+      <!-- 被选中的边缘点：红 -->
+      <g fill="#ff7b72">
+        <circle cx="182" cy="64" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" repeatCount="indefinite"/></circle>
+        <circle cx="182" cy="112" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin=".6s" repeatCount="indefinite"/></circle>
+        <circle cx="240" cy="140" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin="1s" repeatCount="indefinite"/></circle>
+        <circle cx="284" cy="140" r="3.6"><animate attributeName="opacity" values=".35;1;.35" dur="3.4s" begin="1.3s" repeatCount="indefinite"/></circle>
+      </g>
+    </g>
+
+    <!-- 图例（独立区域） -->
+    <g transform="translate(30,290)">
+      <circle cx="6" cy="0" r="4" fill="#3fb950"/>
+      <text x="18" y="4" class="sv-xs">平面点（落在墙上）</text>
+      <circle cx="6" cy="22" r="4" fill="#ff7b72"/>
+      <text x="18" y="26" class="sv-xs">边缘点（落在棱角上）</text>
+      <circle cx="6" cy="44" r="4" fill="#3a4753"/>
+      <text x="18" y="48" class="sv-xs">其他点：直接丢掉，不参与计算</text>
+    </g>
+    <text x="16" y="352" class="sv-xs" fill="#ff9e9e">代价：桌腿这类"不够规整"的结构被当成噪声丢掉了</text>
+  </g>
+
+  <!-- 右 -->
+  <g transform="translate(418,16)">
+    <rect x="0" y="0" width="388" height="368" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#3fb950" font-size="13.5" font-weight="600">新办法：一个都不挑，全拿去算</text>
+    <text x="16" y="48" class="sv-xs">FAST-LIO2 · 2022 年</text>
+
+    <g transform="translate(30,72)">
+      <rect x="0" y="0" width="328" height="200" fill="#121a24" stroke="#3a4753" stroke-width="2.4"/>
+      <line x1="182" y1="0" x2="182" y2="130" stroke="#3a4753" stroke-width="2.4"/>
+      <rect x="232" y="128" width="60" height="72" fill="none" stroke="#3a4753" stroke-width="1.8"/>
+
+      <!-- 所有点都参与，轮流高亮 -->
+      <g fill="#58a6ff">
+        <circle cx="20" cy="24" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="48" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".15s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="72" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".3s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="96" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".45s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="120" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".6s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="144" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".75s" repeatCount="indefinite"/></circle>
+        <circle cx="20" cy="168" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".9s" repeatCount="indefinite"/></circle>
+        <circle cx="52" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".2s" repeatCount="indefinite"/></circle>
+        <circle cx="84" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".35s" repeatCount="indefinite"/></circle>
+        <circle cx="116" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".5s" repeatCount="indefinite"/></circle>
+        <circle cx="148" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".65s" repeatCount="indefinite"/></circle>
+        <circle cx="180" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".8s" repeatCount="indefinite"/></circle>
+        <circle cx="212" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".95s" repeatCount="indefinite"/></circle>
+        <circle cx="244" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin="1.1s" repeatCount="indefinite"/></circle>
+        <circle cx="276" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin="1.25s" repeatCount="indefinite"/></circle>
+        <circle cx="308" cy="16" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin="1.4s" repeatCount="indefinite"/></circle>
+        <circle cx="182" cy="40" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".3s" repeatCount="indefinite"/></circle>
+        <circle cx="182" cy="64" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".45s" repeatCount="indefinite"/></circle>
+        <circle cx="182" cy="88" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".6s" repeatCount="indefinite"/></circle>
+        <circle cx="182" cy="112" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".75s" repeatCount="indefinite"/></circle>
+        <circle cx="240" cy="140" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".4s" repeatCount="indefinite"/></circle>
+        <circle cx="262" cy="140" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".55s" repeatCount="indefinite"/></circle>
+        <circle cx="284" cy="140" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".7s" repeatCount="indefinite"/></circle>
+        <circle cx="240" cy="176" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".85s" repeatCount="indefinite"/></circle>
+        <circle cx="262" cy="176" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin="1s" repeatCount="indefinite"/></circle>
+        <circle cx="284" cy="176" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin="1.15s" repeatCount="indefinite"/></circle>
+        <circle cx="60" cy="90" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".5s" repeatCount="indefinite"/></circle>
+        <circle cx="100" cy="120" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".65s" repeatCount="indefinite"/></circle>
+        <circle cx="130" cy="160" r="2.8"><animate attributeName="opacity" values=".5;1;.5" dur="2.6s" begin=".8s" repeatCount="indefinite"/></circle>
+      </g>
+    </g>
+
+    <g transform="translate(30,290)">
+      <circle cx="6" cy="0" r="4" fill="#58a6ff"/>
+      <text x="18" y="4" class="sv-xs">每个点都要参与"我对齐得准不准"的计算</text>
+      <circle cx="6" cy="22" r="4" fill="#7ee787"/>
+      <text x="18" y="26" class="sv-xs">连桌腿、门槛这些零碎结构也都用上了</text>
+      <circle cx="6" cy="44" r="4" fill="none" stroke="#d29922" stroke-width="1.6"/>
+      <text x="18" y="48" class="sv-xs">换雷达不用改代码：它不认识"特征"</text>
+    </g>
+    <text x="16" y="352" class="sv-xs" fill="#9fe0a8">代价：计算量变大 → 下一节讲怎么解决</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p>两个面板画的是<b>完全相同的场景</b>（一条走廊 + 一个墙角 + 一件家具），区别只在"用哪些点"。</p>
+  <p><b>左边（老办法）</b>：只有绿点（平面点）和红点（边缘点）被选中参与计算，<b>灰点全部丢弃</b>。
+  注意那件家具——它的腿和边缘既不完全是平面也不完全是棱角，很容易被规则当成噪声扔掉。</p>
+  <p><b>右边（新办法）</b>：所有点都参与，蓝色小点轮流闪烁表示"大家都在被计算"。
+  左下角那三个零碎点的位置，正是"不够规整、容易被丢掉"的结构。</p>
+  <p><b>这个转变的意义：</b>问题从"怎么设计更好的挑点规则"变成了"怎么让所有点都算得够快"。
+  于是战场就转移了——转移到下一节这个数据结构问题上。</p>
+</div>
+</div>
+
+<h3>3.3 真正的瓶颈：怎么快速找到"最近的那个点"</h3>
+
+<p>"不挑点"听起来很爽，但马上就遇到一个问题：<b>你凭什么知道新扫到的点，和地图里哪个点是"同一个地方"？</b></p>
+
+<p>做法是比较——对每个新点，在地图里找<b>离它最近的几个点</b>，看距离够不够近、方向对不对得上。
+这个动作叫"找最近邻居"。雷达一秒给 100 万个点，每个点都要问一次，
+所以"找最近邻居"这个操作会被执行几百万次——<b>它的快慢，直接决定整个系统能不能实时跑</b>。</p>
+
+<p>为了快速回答这个问题，人们发明了专门的"数据容器"。最有名的是
+<span class="term" data-tip="k-d 树（k-dimensional tree）：一种把空间反复二分的数据结构，专门用来快速回答「离这个点最近的点是谁」。就像查字典时先按首字母分堆、再按第二个字母分堆，逐层缩小范围，不用一页页翻。">k-d 树</span>——
+它把空间反复二分，像查字典一样层层缩小范围。</p>
+
+<p>但传统 k-d 树有个致命前提：<b>它假设数据是一次性给齐、排好序、之后不再变的</b>。
+而 SLAM 完全相反——机器人<b>一边走一边往地图里加点，还要删掉走远了的老点</b>。
+每次加点都要重建整棵树？那就不用跑了。</p>
+
+<div class="analogy">
+  <p><b>用"找书架上的书"来理解这件事。</b></p>
+  <p><em>最笨的办法</em>：书乱七八糟堆在地上。要找《三体》，只能一本本翻，翻到第 47 本才找到。</p>
+  <p><em>k-d 树的办法</em>：把书按字母分到 A–F、G–L、M–R、S–Z 四个书架；每个书架内部再细分。
+  找《三体》先去 S–Z 那格，再找"三"，<em>三步就找到了</em>。这就是"树"的意义——层层缩小范围。</p>
+  <p><em>SLAM 的麻烦在于</em>：新书在不停地运进来，而且有些书还得下架。
+  如果每次运进一本新书，你就把整个书架推倒重排一遍，那你这辈子都在整理书架。</p>
+  <p><em>ikd-Tree 的解法</em>：新书先随手插到对应格子里；<b>当发现某个格子塞得太满、深得离谱时，只把那一格重新整理一下</b>——
+  不碰其他格子。这样既不耽误使用，又保持了"找书快"。</p>
+</div>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 330" role="img" aria-label="ikd-Tree增量k-d树的动态重平衡">
+  <!-- 左：不平衡 -->
+  <g transform="translate(14,16)">
+    <rect x="0" y="0" width="384" height="298" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#ff7b72" font-size="13.5" font-weight="600">不整理：树越来越歪，找一个点越来越慢</text>
+    <text x="16" y="48" class="sv-xs">新点一直往同一侧插进来</text>
+
+    <g transform="translate(40,62)">
+      <g stroke="#31404f" stroke-width="1.3" fill="none">
+        <line x1="56" y1="18" x2="34" y2="62"/>
+        <line x1="34" y1="62" x2="20" y2="106"/>
+        <line x1="20" y1="106" x2="12" y2="150"/>
+        <line x1="12" y1="150" x2="8" y2="192"/>
+      </g>
+      <g fill="#d29922">
+        <circle cx="56" cy="18" r="8"/><circle cx="34" cy="62" r="8"/><circle cx="20" cy="106" r="8"/>
+        <circle cx="12" cy="150" r="8" opacity=".9"/><circle cx="8" cy="192" r="8" opacity=".75"/>
+      </g>
+      <!-- 走过的步数 -->
+      <g stroke="#ff7b72" stroke-width="1.2" stroke-dasharray="3 3">
+        <line x1="70" y1="18" x2="108" y2="18"/>
+        <line x1="48" y1="62" x2="108" y2="62"/>
+        <line x1="34" y1="106" x2="108" y2="106"/>
+        <line x1="26" y1="150" x2="108" y2="150"/>
+        <line x1="22" y1="192" x2="108" y2="192"/>
+      </g>
+      <g fill="#ff9e9e" font-size="10.5px">
+        <text x="114" y="22">第 1 步</text>
+        <text x="114" y="66">第 2 步</text>
+        <text x="114" y="110">第 3 步</text>
+        <text x="114" y="154">第 4 步</text>
+        <text x="114" y="196">第 5 步</text>
+      </g>
+      <text x="0" y="224" class="sv-xs" fill="#6e7681">最坏情况：要一路走到最深那层 ← 实时系统最怕这个</text>
+    </g>
+  </g>
+
+  <!-- 中间箭头 -->
+  <g transform="translate(408,150)">
+    <path d="M0,0 L56,0" stroke="#7ee787" stroke-width="2"/>
+    <path d="M48,-6 L60,0 L48,6 Z" fill="#7ee787"/>
+    <text x="-12" y="-14" class="sv-xs" fill="#7ee787">定期揉匀</text>
+    <circle cx="28" cy="0" r="14" fill="#7ee787" opacity=".14">
+      <animate attributeName="r" values="12;19;12" dur="2.2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values=".22;.04;.22" dur="2.2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- 右：平衡 -->
+  <g transform="translate(472,16)">
+    <rect x="0" y="0" width="334" height="298" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#3fb950" font-size="13.5" font-weight="600">整理后：层数变浅，每次都快</text>
+    <text x="16" y="48" class="sv-xs">只重排"塞得太满"的那一小块</text>
+
+    <g transform="translate(40,74)">
+      <g stroke="#31404f" stroke-width="1.3" fill="none">
+        <line x1="86" y1="18" x2="46" y2="66"/><line x1="86" y1="18" x2="126" y2="66"/>
+        <line x1="46" y1="66" x2="22" y2="114"/><line x1="46" y1="66" x2="70" y2="114"/>
+        <line x1="126" y1="66" x2="102" y2="114"/><line x1="126" y1="66" x2="150" y2="114"/>
+      </g>
+      <g fill="#3fb950">
+        <circle cx="86" cy="18" r="8"/><circle cx="46" cy="66" r="8"/><circle cx="126" cy="66" r="8"/>
+        <circle cx="22" cy="114" r="8"/><circle cx="70" cy="114" r="8"/><circle cx="102" cy="114" r="8"/><circle cx="150" cy="114" r="8"/>
+      </g>
+      <g stroke="#7ee787" stroke-width="1.2" stroke-dasharray="3 3">
+        <line x1="100" y1="18" x2="180" y2="18"/>
+        <line x1="60" y1="66" x2="180" y2="66"/>
+        <line x1="36" y1="114" x2="180" y2="114"/>
+      </g>
+      <g fill="#9fe0a8" font-size="10.5px">
+        <text x="186" y="22">第 1 步</text>
+        <text x="186" y="70">第 2 步</text>
+        <text x="186" y="118">第 3 步</text>
+      </g>
+      <text x="0" y="146" class="sv-xs" fill="#6e7681">同样多的点，层数从 5 降到 3 → 查询快一倍</text>
+    </g>
+
+    <text x="16" y="240" class="sv-lbl" style="font-size:12px" fill="#e6edf3">它比传统 k-d 树多做了四件事</text>
+    <g fill="#a8b3c0" font-size="10.5px">
+      <text x="16" y="262">① 边跑边加点，不用重建整棵树</text>
+      <text x="16" y="280">② 能删掉过期的点（走远了的老地图）</text>
+    </g>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>左边是问题。</b>地图不停地加点，如果都按"比它大放右边、比它小放左边"的规则硬塞，
+  树就会越来越偏、越来越深。找最深处那个点时，得<b>一层一层走 5 步</b>。
+  在实时系统里，这种偶发的"慢一下"足以导致跟踪丢失。</p>
+  <p><b>右边是解法。</b>发现某条分支太深时，就把那一小块<b>局部拆开重排</b>，让树重新匀称。
+  同样多的点，层数从 5 降到 3，查询快一倍——<b>关键在"只动那一小块"</b>，不推倒全部重来，所以不会让机器人卡顿。</p>
+  <p><b>ikd-Tree 一共比传统 k-d 树多做了四件事</b>（后两条在图外补上）：<br>
+  ① 边跑边加点，不用重建整棵树；② 能删除过期的点；<br>
+  ③ 能在树上直接做"抽稀"，控制地图规模不会无限膨胀；④ 发现某边太深时局部旋转重平衡。</p>
+  <p><b>要记住的一句话：</b>这四条合起来，解决的就是"地图必须能边建边改"这个实时 SLAM 的硬需求。
+  后来的 Faster-LIO 干脆放弃树结构、改用"按格子分桶"的 iVox，又快了一大截——但那是同一个思路的延续：<b>换容器</b>。</p>
+</div>
+</div>
+
+<h3>3.4 另一个坑：一帧点云不是"同一瞬间"拍的</h3>
+
+<p>这个问题很隐蔽，但很致命。</p>
+
+<p>雷达"转一圈"需要时间，比如 0.1 秒。而在这 0.1 秒里，机器人<b>一直在动</b>——
+它可能往前走了 20 厘米，也可能转了 3 度。</p>
+
+<p>结果就是：<b>同一帧里的第一个点和最后一个点，其实是从两个不同位置、不同角度看到的。</b>
+如果算法假装它们来自同一时刻、同一位置，算出来的墙就是歪的。这叫
+<span class="term" data-tip="帧内运动畸变（in-frame motion distortion）：指「一帧」点云内部的各个点并不来自同一时刻、同一位置，导致这帧点云本身就是扭曲的。机器人运动越快，畸变越严重。">帧内运动畸变</span>。</p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 452" role="img" aria-label="帧内运动畸变的产生与逐点补偿消除">
+  <!-- 上：不处理 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="792" height="186" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="18" y="28" class="sv-lbl" fill="#ff7b72" font-size="13.5" font-weight="600">① 把一帧当成"同一瞬间"：墙被拉歪了</text>
+    <text x="18" y="48" class="sv-xs">扫描用了 0.1 秒，这 0.1 秒里机器人也在走</text>
+
+    <!-- 真实场景：一面直墙 -->
+    <g transform="translate(30,66)">
+      <!-- 机器人两个时刻的位置 -->
+      <circle cx="30" cy="76" r="9" fill="#3a4753"/>
+      <circle cx="150" cy="76" r="9" fill="#3a4753" opacity=".5"/>
+      <path d="M40,76 L140,76" stroke="#3a4753" stroke-width="1.2" stroke-dasharray="4 4"/>
+      <text x="60" y="100" class="sv-xs">这一刻它在走</text>
+
+      <!-- 真实的墙 -->
+      <line x1="430" y1="18" x2="430" y2="128" stroke="#3a4753" stroke-width="5"/>
+      <text x="446" y="40" class="sv-xs">真实的墙（笔直的）</text>
+
+      <!-- 射线 -->
+      <g stroke="#7ee787" stroke-width="1" opacity=".55">
+        <line x1="39" y1="66" x2="430" y2="30"/>
+        <line x1="39" y1="76" x2="430" y2="76"/>
+        <line x1="39" y1="86" x2="430" y2="122"/>
+      </g>
+
+      <!-- 算法算出的点：整体被"拉斜" -->
+      <g fill="#ff7b72">
+        <circle cx="300" cy="18" r="3.4"/><circle cx="316" cy="30" r="3.4"/><circle cx="332" cy="42" r="3.4"/>
+        <circle cx="348" cy="54" r="3.4"/><circle cx="364" cy="66" r="3.4"/><circle cx="380" cy="78" r="3.4"/>
+        <circle cx="396" cy="90" r="3.4"/><circle cx="412" cy="102" r="3.4"/><circle cx="428" cy="114" r="3.4"/>
+      </g>
+      <line x1="294" y1="14" x2="434" y2="118" stroke="#ff7b72" stroke-width="1.4" stroke-dasharray="5 4"/>
+      <text x="296" y="8" class="sv-xs" fill="#ff7b72">算法以为的墙（斜的）</text>
+
+      <!-- 说明 -->
+      <text x="560" y="46" class="sv-s" fill="#ff9e9e">为什么会歪？</text>
+      <text x="560" y="68" class="sv-xs">最后一个点其实是从右边</text>
+      <text x="560" y="86" class="sv-xs">那个位置看到的，却被当成</text>
+      <text x="560" y="104" class="sv-xs">"和第一个点同一位置"</text>
+      <text x="560" y="128" class="sv-xs" fill="#7ee787">→ 走得越快，歪得越厉害</text>
+    </g>
+  </g>
+
+  <!-- 下：逐点补偿 -->
+  <g transform="translate(14,216)">
+    <rect x="0" y="0" width="792" height="190" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="18" y="28" class="sv-lbl" fill="#3fb950" font-size="13.5" font-weight="600">② Point-LIO 的做法：每个点在它被"扫到"的那一刻就归位</text>
+    <text x="18" y="48" class="sv-xs">承认"点不是同时采的"，然后按各自时刻补偿</text>
+
+    <g transform="translate(30,66)">
+      <circle cx="30" cy="80" r="9" fill="#3a4753"/>
+      <circle cx="150" cy="80" r="9" fill="#3a4753" opacity=".5"/>
+      <path d="M40,80 L140,80" stroke="#3a4753" stroke-width="1.2" stroke-dasharray="4 4"/>
+
+      <line x1="430" y1="22" x2="430" y2="132" stroke="#3a4753" stroke-width="5"/>
+
+      <g stroke="#7ee787" stroke-width="1" opacity=".5">
+        <line x1="39" y1="70" x2="430" y2="34"/>
+        <line x1="39" y1="80" x2="430" y2="80"/>
+        <line x1="39" y1="90" x2="430" y2="126"/>
+      </g>
+
+      <!-- 点从歪位置滑回墙上 -->
+      <g fill="#3fb950">
+        <circle cy="38" r="3.4" cx="300"><animate attributeName="cx" values="300;426" dur="3.2s" repeatCount="indefinite"/></circle>
+        <circle cy="50" r="3.4" cx="322"><animate attributeName="cx" values="322;427" dur="3.2s" begin=".2s" repeatCount="indefinite"/></circle>
+        <circle cy="62" r="3.4" cx="344"><animate attributeName="cx" values="344;428" dur="3.2s" begin=".4s" repeatCount="indefinite"/></circle>
+        <circle cy="74" r="3.4" cx="366"><animate attributeName="cx" values="366;429" dur="3.2s" begin=".6s" repeatCount="indefinite"/></circle>
+        <circle cy="86" r="3.4" cx="388"><animate attributeName="cx" values="388;429" dur="3.2s" begin=".8s" repeatCount="indefinite"/></circle>
+        <circle cy="98" r="3.4" cx="410"><animate attributeName="cx" values="410;430" dur="3.2s" begin="1.0s" repeatCount="indefinite"/></circle>
+      </g>
+      <line x1="426" y1="24" x2="430" y2="130" stroke="#3fb950" stroke-width="1.8"/>
+      <text x="296" y="16" class="sv-xs" fill="#3fb950">每个点沿着箭头滑回"它真正该在的位置"</text>
+
+      <text x="560" y="50" class="sv-s" fill="#9fe0a8">补偿完之后：</text>
+      <text x="560" y="72" class="sv-xs">点重新落回一条直线，墙直了。</text>
+      <text x="560" y="100" class="sv-s" fill="#9fe0a8">额外好处：</text>
+      <text x="560" y="122" class="sv-xs">不必等"攒够一帧"才输出 →</text>
+      <text x="542" y="140" class="sv-xs">里程计能更新得极频繁，</text>
+      <text x="542" y="158" class="sv-xs">因此能跟上飞快运动</text>
+    </g>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>上面那张是"不管它"的后果。</b>真实的墙是笔直的（深灰粗线），但因为扫描的 0.1 秒里机器人一直在往前跑，
+  算法把最后扫到的点当成"从起点看到的"，于是它算出来的墙面是斜的（红色虚线）。<b>走得越快，歪得越厉害。</b></p>
+  <p><b>下面那张是 Point-LIO 的思路。</b>它承认"这些点不是同时采到的"，
+  然后<b>给每个点单独补偿</b>——按它被扫到的那一时刻、机器人所在的位置，把它挪回正确的地方（绿色点沿着箭头滑向墙）。
+  挪完之后，点重新落回一条直线。</p>
+  <p><b>顺带解决了另一个问题。</b>如果能逐点处理，就不必"攒够一整帧再算"。
+  这意味着机器人的运动估计可以更新得极快——论文里这正是它能跟踪"人类挥舞手臂"那种剧烈运动的原因。</p>
+</div>
+</div>
+
+<h3>3.5 一整条线的世代表</h3>
+
+<p>把前面这些串起来，就是激光 SLAM 的完整演进。每张卡右边写的是它<b>卡在哪</b>，下面写的是它<b>怎么破</b>：</p>
+
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">LOAM / LeGO-LOAM</div><div class="yr">2014 / 2018</div>
+    <div class="lim">处理一帧要花约 100 毫秒（这是 Faster-LIO 论文里的实测数）。机械雷达攒一帧本来就要等，再花这么多时间就更慢了</div>
+    <div class="sol">提取<b>边缘点 + 平面点</b>两类特征，用两步 Levenberg-Marquardt 分开求解；LeGO-LOAM 再加<b>点云分割去噪 + 地面先验</b>，专门为嵌入式平台瘦身</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">LIO-SAM</div><div class="yr">2020</div>
+    <div class="lim">对"整张全局地图"配准，帧数一多就越来越慢</div>
+    <div class="sol">改成<b>只对局部一小撮关键帧配准</b>；把整车状态全放上一张<b>因子图</b>——惯性预积分因子 + 激光里程计因子 + GPS 因子 + 回环因子，配套做关键帧筛选和旧帧淘汰</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">FAST-LIO2</div><div class="yr">2022</div>
+    <div class="lim">手工特征模块是整个系统最大的工程量，换一种雷达就得重新设计一遍</div>
+    <div class="sol"><b>完全不做特征提取</b>，直接拿原始点和地图配准（细微结构也能用上、天然适配各种扫描方式）；地图改用 <b>ikd-Tree</b> 维护，支持增量加点、删点、抽稀、动态重平衡</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">Faster-LIO / iG-LIO</div><div class="yr">2022 / 2024</div>
+    <div class="lim">树结构本身仍有天然的随机访问开销</div>
+    <div class="sol">Faster-LIO 用 <b>iVox 增量体素 + 并行近邻查询</b>，固态雷达下单帧可达 1000–2000 Hz；iG-LIO 把 <b>GICP 配准约束和惯性约束统一在一个最大后验估计里</b>，用体素拟合出的表面协方差来估扫描噪声</div>
+  </div></div>
+  <div class="step"><div class="card b5">
+    <div class="nm">Point-LIO</div><div class="yr">2023</div>
+    <div class="lim">按帧累积必然产生帧内畸变，而且输出频率被"帧率"锁死</div>
+    <div class="sol"><b>逐点处理</b>：每个激光点在它真实的采样时刻立刻融合，不攒帧 → 畸变消失，输出频率接近点的采样率 → 能跟踪极剧烈的运动</div>
+  </div></div>
+</div>
+
+<div class="box">
+  <h4>几条"反方向"的支线，也值得知道</h4>
+  <ul>
+    <li><b>KISS-ICP（2023）—— 把整个领域往回拉了一把。</b>它反过来问："这么多精心设计的组件，到底有没有用？"
+    结论是：只要<b>点对点 ICP + 自适应匹配阈值 + 鲁棒核函数 + 点云抽稀 + 运动补偿</b>，<b>连 IMU 都不用</b>，
+    参数极少而且换一种雷达不用重新调，就能达到有竞争力的精度。它和 FAST-LIO2 的"不做特征提取"一起，
+    构成了对这个领域<b>过度工程化</b>的纠偏。<b>对你来说的实用意义：如果预算紧、场景不难，先试它。</b></li>
+    <li><b>DLO（2022）—— 走"速度优先"</b>：用自适应关键帧机制高效捕获环境信息，配一个定制 ICP 求解器，
+    在消费级处理器上就能实时跑。直接服务于 DARPA 地下挑战赛这类算力紧张的场景。</li>
+    <li><b>BALM（2021）—— 把视觉里的 BA 搬到激光上</b>：直接最小化"特征点到边缘/平面的距离"。
+    它的独特之处是证明了<b>激光里的边缘和平面参数可以用公式直接算出来</b>；
+    而视觉 BA 必须同时解"特征点在哪"和"相机在哪"——这是激光 BA 和视觉 BA 最大的结构差异。</li>
+    <li><b>MULLS（2021）—— 三种误差一起算</b>：把"点到点""点到面""点到线"三种匹配误差放在"粗到细"的层级上<b>一起做最小二乘</b>，而且不依赖扫描线顺序。</li>
+    <li><b>LOG-LIO（2024）—— 补的是法向量</b>：<b>Ring FALS</b> 利用扫描的结构信息做实时法向估计，
+    并且设计了<b>分层匹配策略</b>——优先和"一片小面片"匹配而不是和"一个平面"匹配，大面片又优先于小面片。</li>
+    <li><b>SuMa++（2019）—— 给地图贴上语义标签</b>：把语义标签融进面片地图，再用标签过滤掉移动物体，
+    从而在人多车多的环境里也能建出干净的地图。</li>
+  </ul>
+</div>
+
+<h3>3.6 差异速查表</h3>
+<table>
+  <tr><th>系统</th><th>后端怎么算</th><th>地图用什么存</th><th>挑不挑特征</th><th>最本质的那个不同</th></tr>
+  <tr><td><b>LeGO-LOAM</b></td><td>两步 LM 优化</td><td>特征点云</td><td>挑（边缘/平面）</td><td>加了地面约束和去噪，主打轻量嵌入式</td></tr>
+  <tr><td><b>LIO-SAM</b></td><td>因子图</td><td>局部关键帧子集</td><td>挑</td><td>多传感器因子融合 + 只对局部配准</td></tr>
+  <tr><td><b>FAST-LIO2</b></td><td>迭代 EKF</td><td class="mono">ikd-Tree</td><td><b>不挑</b></td><td>原始点直接配 + 增量 k-d 树</td></tr>
+  <tr><td><b>Faster-LIO</b></td><td>迭代 EKF</td><td class="mono">iVox</td><td><b>不挑</b></td><td>并行近邻查询，1000–2000 Hz</td></tr>
+  <tr><td><b>Point-LIO</b></td><td>迭代 EKF</td><td>逐点（不攒帧）</td><td><b>不挑</b></td><td>点在采样时刻就融合，没有帧内畸变</td></tr>
+  <tr><td><b>KISS-ICP</b></td><td>优化</td><td>抽稀后的点云</td><td><b>不挑</b></td><td><b>不用 IMU</b>，极简，换雷达免调参</td></tr>
+  <tr><td><b>iG-LIO</b></td><td>迭代 EKF</td><td>增量体素</td><td>不挑</td><td>GICP 与惯性约束统一在最大后验框架里</td></tr>
+  <tr><td><b>LOG-LIO</b></td><td>迭代 EKF</td><td>体素 + 面片</td><td>不挑</td><td>Ring FALS 实时法向估计 + 分层匹配</td></tr>
+</table>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>激光雷达是怎么"看"的？</b>它不拍照，而是朝各个方向发射激光、量返回时间，把时间换算成距离，得到一堆"点"。转一圈得到的那批点叫一帧。</li>
+    <li><b>为什么"不提特征"反而是进步？</b>因为挑特征要人工写规则、换雷达就得重设计，还会丢掉桌腿这类"不规整"却有用的结构。不挑之后代码更短、适应性更强，代价只是计算量——而计算量可以用更好的数据结构解决。</li>
+    <li><b>ikd-Tree 和普通 k-d 树差在哪？</b>普通 k-d 树假设"数据一次给齐、不再变动"；ikd-Tree 为"边跑边加点、还要删点"设计，还支持局部重平衡（不会让机器人卡顿）。</li>
+    <li><b>为什么一帧点云会有"畸变"？</b>因为扫描需要时间，这段时间机器人一直在动，同一帧里的点其实来自不同位置。Point-LIO 的办法是给每个点单独补偿。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第四章 ═══════════════ -->
+<h2 id="fusion">四、把激光和摄像头合起来用 <small>"一个管形状，一个管颜色"——但难在怎么合</small></h2>
+
+<div class="tldr">
+  <p>激光能测准"东西在哪"，但不知道"它长什么样"；摄像头能看到纹理和颜色，但说不清"它离多远"。
+  <b>这两个缺点刚好互补</b>，所以把两者合起来几乎是必然的选择。这条线二十年的进展不在于"要不要合"，
+  而在于<b>怎么合</b>——从"各跑各的、最后拼一下"，到"合起来放进同一张地图互相约束"。</p>
+</div>
+
+<h3>4.1 先看清两种传感器各自的"盲区"</h3>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 350" role="img" aria-label="激光、相机、融合三种结果的对比">
+  <!-- 面板1：激光 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="256" height="322" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="28" class="sv-lbl" fill="#3fb950" font-size="13" font-weight="600">① 只有激光雷达</text>
+    <text x="14" y="47" class="sv-xs">有准确的三维形状，但一片灰白</text>
+
+    <!-- 点云风格的沙发 -->
+    <g transform="translate(28,68)">
+      <g fill="#7ee787" opacity=".9">
+        <circle cx="24" cy="6" r="2.1"/><circle cx="46" cy="6" r="2.1"/><circle cx="68" cy="6" r="2.1"/><circle cx="90" cy="6" r="2.1"/>
+        <circle cx="112" cy="6" r="2.1"/><circle cx="134" cy="6" r="2.1"/><circle cx="156" cy="6" r="2.1"/>
+        <circle cx="22" cy="18" r="2.1"/><circle cx="44" cy="18" r="2.1"/><circle cx="66" cy="18" r="2.1"/><circle cx="88" cy="18" r="2.1"/>
+        <circle cx="110" cy="18" r="2.1"/><circle cx="132" cy="18" r="2.1"/><circle cx="154" cy="18" r="2.1"/>
+        <circle cx="20" cy="30" r="2.1"/><circle cx="42" cy="30" r="2.1"/><circle cx="64" cy="30" r="2.1"/><circle cx="86" cy="30" r="2.1"/>
+        <circle cx="108" cy="30" r="2.1"/><circle cx="130" cy="30" r="2.1"/><circle cx="152" cy="30" r="2.1"/>
+      </g>
+      <g fill="#7ee787" opacity=".85">
+        <circle cx="24" cy="56" r="2.1"/><circle cx="48" cy="56" r="2.1"/><circle cx="72" cy="56" r="2.1"/><circle cx="96" cy="56" r="2.1"/>
+        <circle cx="120" cy="56" r="2.1"/><circle cx="144" cy="56" r="2.1"/><circle cx="164" cy="56" r="2.1"/>
+        <circle cx="26" cy="70" r="2.1"/><circle cx="50" cy="70" r="2.1"/><circle cx="74" cy="70" r="2.1"/><circle cx="98" cy="70" r="2.1"/>
+        <circle cx="122" cy="70" r="2.1"/><circle cx="146" cy="70" r="2.1"/><circle cx="166" cy="70" r="2.1"/>
+        <circle cx="28" cy="84" r="2.1"/><circle cx="52" cy="84" r="2.1"/><circle cx="76" cy="84" r="2.1"/><circle cx="100" cy="84" r="2.1"/>
+        <circle cx="124" cy="84" r="2.1"/><circle cx="148" cy="84" r="2.1"/><circle cx="168" cy="84" r="2.1"/>
+      </g>
+      <g fill="#7ee787" opacity=".7">
+        <circle cx="14" cy="42" r="2.1"/><circle cx="14" cy="56" r="2.1"/><circle cx="14" cy="70" r="2.1"/><circle cx="14" cy="84" r="2.1"/>
+        <circle cx="178" cy="42" r="2.1"/><circle cx="178" cy="56" r="2.1"/><circle cx="178" cy="70" r="2.1"/><circle cx="178" cy="84" r="2.1"/>
+        <circle cx="34" cy="102" r="2.1"/><circle cx="92" cy="102" r="2.1"/><circle cx="150" cy="102" r="2.1"/>
+      </g>
+      <text x="96" y="130" class="sv-xs" text-anchor="middle">这是沙发？箱子？还是别的？</text>
+      <text x="96" y="148" class="sv-xs" text-anchor="middle" fill="#6e7681">分不出来——只有形状，没有信息</text>
+    </g>
+    <text x="14" y="252" class="sv-xs" fill="#7ee787">长处：距离准到厘米级</text>
+    <text x="14" y="270" class="sv-xs" fill="#7ee787">长处：不受光照影响，黑夜一样用</text>
+    <text x="14" y="294" class="sv-xs" fill="#ff9e9e">短处：没有颜色纹理，认不出"是什么"</text>
+  </g>
+
+  <!-- 面板2：相机 -->
+  <g transform="translate(282,14)">
+    <rect x="0" y="0" width="256" height="322" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="28" class="sv-lbl" fill="#58a6ff" font-size="13" font-weight="600">② 只有摄像头</text>
+    <text x="14" y="47" class="sv-xs">看得出是什么，但说不清离多远</text>
+
+    <g transform="translate(28,68)">
+      <!-- 照片风格：实心色块 -->
+      <rect x="16" y="0" width="160" height="44" rx="6" fill="#8b4a3d"/>
+      <rect x="16" y="44" width="160" height="12" fill="#a35746"/>
+      <rect x="16" y="56" width="160" height="34" rx="4" fill="#c96b52"/>
+      <rect x="10" y="36" width="12" height="54" rx="4" fill="#7d4235"/>
+      <rect x="170" y="36" width="12" height="54" rx="4" fill="#7d4235"/>
+      <rect x="22" y="90" width="7" height="12" fill="#5c3a2e"/>
+      <rect x="163" y="90" width="7" height="12" fill="#5c3a2e"/>
+      <text x="96" y="126" class="sv-xs" text-anchor="middle" fill="#ffa657">"哦，是一把红色的沙发"</text>
+      <text x="96" y="146" class="sv-xs" text-anchor="middle" fill="#6e7681">但它离我 2 米还是 5 米？</text>
+      <text x="96" y="164" class="sv-xs" text-anchor="middle" fill="#6e7681">照片看不出真实大小</text>
+    </g>
+    <text x="14" y="252" class="sv-xs" fill="#58a6ff">长处：信息极其丰富，能认出东西</text>
+    <text x="14" y="270" class="sv-xs" fill="#58a6ff">长处：便宜、体积小、耗电低</text>
+    <text x="14" y="294" class="sv-xs" fill="#ff9e9e">短处：距离不准；白墙/黑夜直接失效</text>
+  </g>
+
+  <!-- 面板3：融合 -->
+  <g transform="translate(550,14)">
+    <rect x="0" y="0" width="256" height="322" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="28" class="sv-lbl" fill="#d29922" font-size="13" font-weight="600">③ 两者融合</text>
+    <text x="14" y="47" class="sv-xs">形状来自激光，颜色来自照片</text>
+
+    <g transform="translate(28,68)">
+      <!-- 彩色点云沙发 -->
+      <g fill="#6a4a3c">
+        <circle cx="24" cy="6" r="2.1"/><circle cx="46" cy="6" r="2.1"/><circle cx="68" cy="6" r="2.1"/><circle cx="90" cy="6" r="2.1"/>
+        <circle cx="112" cy="6" r="2.1"/><circle cx="134" cy="6" r="2.1"/><circle cx="156" cy="6" r="2.1"/>
+        <circle cx="22" cy="18" r="2.1"/><circle cx="44" cy="18" r="2.1"/><circle cx="66" cy="18" r="2.1"/><circle cx="88" cy="18" r="2.1"/>
+        <circle cx="110" cy="18" r="2.1"/><circle cx="132" cy="18" r="2.1"/><circle cx="154" cy="18" r="2.1"/>
+        <circle cx="20" cy="30" r="2.1"/><circle cx="42" cy="30" r="2.1"/><circle cx="64" cy="30" r="2.1"/><circle cx="86" cy="30" r="2.1"/>
+        <circle cx="108" cy="30" r="2.1"/><circle cx="130" cy="30" r="2.1"/><circle cx="152" cy="30" r="2.1"/>
+      </g>
+      <g fill="#d06856">
+        <circle cx="24" cy="56" r="2.1"/><circle cx="48" cy="56" r="2.1"/><circle cx="72" cy="56" r="2.1"/><circle cx="96" cy="56" r="2.1"/>
+        <circle cx="120" cy="56" r="2.1"/><circle cx="144" cy="56" r="2.1"/><circle cx="164" cy="56" r="2.1"/>
+        <circle cx="26" cy="70" r="2.1"/><circle cx="50" cy="70" r="2.1"/><circle cx="74" cy="70" r="2.1"/><circle cx="98" cy="70" r="2.1"/>
+        <circle cx="122" cy="70" r="2.1"/><circle cx="146" cy="70" r="2.1"/><circle cx="166" cy="70" r="2.1"/>
+        <circle cx="28" cy="84" r="2.1"/><circle cx="52" cy="84" r="2.1"/><circle cx="76" cy="84" r="2.1"/><circle cx="100" cy="84" r="2.1"/>
+        <circle cx="124" cy="84" r="2.1"/><circle cx="148" cy="84" r="2.1"/><circle cx="168" cy="84" r="2.1"/>
+      </g>
+      <g fill="#7d4235">
+        <circle cx="14" cy="42" r="2.1"/><circle cx="14" cy="56" r="2.1"/><circle cx="14" cy="70" r="2.1"/><circle cx="14" cy="84" r="2.1"/>
+        <circle cx="178" cy="42" r="2.1"/><circle cx="178" cy="56" r="2.1"/><circle cx="178" cy="70" r="2.1"/><circle cx="178" cy="84" r="2.1"/>
+      </g>
+      <g fill="#5c3a2e">
+        <circle cx="34" cy="102" r="2.1"/><circle cx="92" cy="102" r="2.1"/><circle cx="150" cy="102" r="2.1"/>
+      </g>
+      <text x="96" y="130" class="sv-xs" text-anchor="middle" fill="#ffa657">"一把红色的布艺沙发，</text>
+      <text x="96" y="148" class="sv-xs" text-anchor="middle" fill="#ffa657">离我 3.2 米，宽 1.4 米"</text>
+      <text x="96" y="168" class="sv-xs" text-anchor="middle" fill="#6e7681">形状+距离来自激光，颜色来自照片</text>
+    </g>
+    <text x="14" y="252" class="sv-xs" fill="#9fe0a8">于是你可以：渲染没拍过的角度</text>
+    <text x="14" y="270" class="sv-xs" fill="#9fe0a8">用颜色/纹理做回环识别</text>
+    <text x="14" y="294" class="sv-xs" fill="#ff9e9e">难处：怎么知道哪个像素对应哪个点？</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p>三个面板画的是<b>同一张沙发</b>，分别是三种传感器配置"眼中的它"。</p>
+  <p><b>① 只有激光</b>：绿色的点勾出了沙发的形状——你能看出"这里有个东西，大概这么高、这么宽"，
+  但<b>它是沙发还是箱子，你分不出来</b>。因为激光只测距离，不记录颜色。</p>
+  <p><b>② 只有相机</b>：这不是点云，而是照片式的实心色块。你一眼就认出"这是红色的沙发"，
+  但<b>它离你 2 米还是 5 米？照片完全看不出来</b>——因为把物体放大一倍、距离也拉远一倍，投影到照片上一模一样。</p>
+  <p><b>③ 融合之后</b>：点云保留了激光的准确形状和距离，每个点又带上了从照片取到的颜色。
+  于是你同时知道"是红色沙发"和"离我 3.2 米、宽 1.4 米"。</p>
+  <p><b>这条线二十年的核心难点就一句话：</b>怎么知道照片里的哪个像素，对应激光点云里的哪个点？
+  两个传感器视角不同、频率不同、还各自有误差。<b>"怎么对齐"就是全部的难度所在。</b></p>
+</div>
+</div>
+
+<h3>4.2 四个阶段：从"各干各的"到"共用一张地图"</h3>
+
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">R3LIVE</div><div class="yr">2022</div>
+    <div class="lim">激光地图缺外观信息，视觉地图缺几何精度</div>
+    <div class="sol"><b>简单分工</b>：激光惯性里程计负责几何结构，视觉惯性里程计负责纹理渲染，
+    最后输出一张稠密的着色点云。<b>两者像"并行干活的同事"——各干各的，最后把成果拼起来</b></div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">FAST-LIVO</div><div class="yr">2022</div>
+    <div class="lim">两个子系统各建各的图，信息并没有真正打通</div>
+    <div class="sol">把激光和视觉<b>紧耦合</b>成两个互相依赖的子系统联合估计状态；关键设计是视觉部分
+    <b>尽量复用激光已经建好的点云地图</b>——把图像小块挂到地图点上，直接最小化"亮度差"，不提取任何视觉特征</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">FAST-LIVO2</div><div class="yr">2025</div>
+    <div class="lim">激光测量和图像测量的"维度"不一样，很难塞进同一次更新里</div>
+    <div class="sol">用 <b>ESIKF + 序贯更新</b>解决维度不匹配——把不同传感器的测量排队一个个更新；
+    反过来<b>激光点的平面先验还提升了图像对齐的精度</b>（而且这个先验会动态精化）；
+    <b>两者融进同一个体素地图</b>，还加了按需光线投射、实时曝光估计、考虑光束发散的测距噪声模型</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">LIV-GaussMap</div><div class="yr">2024</div>
+    <div class="lim">体素地图只能表达几何，没法"渲染一个新角度的画面"</div>
+    <div class="sol">用<b>尺寸自适应体素的激光惯性系统</b>先初始化场景表面的高斯和每一帧的位姿，
+    再用视觉的光度梯度去优化高斯的"质量与密度"；每个高斯带<b>球谐系数</b>，
+    用来承载"从不同方向看颜色不一样"（也就是反光）</div>
+  </div></div>
+</div>
+
+<div class="box ok">
+  <h4>趋势判断</h4>
+  <ul>
+    <li>这条线已经收敛到一个明确答案：<b>不再维护"激光地图"和"视觉地图"两套东西，而是维护一个统一的场景表示</b>，
+    让几何和外观在其中互相约束。</li>
+    <li>FAST-LIVO2 用<b>体素</b>做到这一点，LIV-GaussMap 用<b>高斯</b>做到这一点。载体不同，思路一致。</li>
+    <li>这解释了一个现象：最近几年这个方向的论文，标题里"融合"越来越少，"统一表示"越来越多。</li>
+    <li><b>对你的实用意义：</b>如果你的机器人既要定位又要"看懂环境是什么"（比如要识别"这是椅子所以绕开"），
+    就应该走这条线；如果只需要定位，纯激光方案更简单。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第五章 ═══════════════ -->
+<h2 id="visual">五、摄像头这条线 <small>最便宜的传感器，但有三个天生的硬伤</small></h2>
+
+<div class="tldr">
+  <p>摄像头是所有传感器里最便宜的（几十块钱）、信息最丰富的（一张照片几百万个像素），
+  但它有三个天生的缺陷：<b>① 一个摄像头看不出真实大小</b>；<b>② 怕光照变化和白墙</b>；
+  <b>③ 分不清"是东西在动"还是"我在动"</b>。视觉 SLAM 的整部历史，基本就是在跟这三个硬伤搏斗。</p>
+</div>
+
+<div class="analogy">
+  <p><b>硬伤① 难在哪？</b>给你看一张照片，里面有栋楼。你能看出它是 10 米外的三层小楼，还是 100 米外的三十层大楼吗？
+  <em>看不出。</em>因为把物体放大 10 倍、距离也拉远 10 倍，投影到照片上<b>完全一样</b>。
+  这叫<span class="term" data-tip="尺度不可观测（scale unobservable）：仅凭单目相机无法判断场景的真实大小。数学上表现为：把整个场景按同一个比例缩放，照片看起来毫无变化。所以纯单目 SLAM 的地图可以是「形状完全正确、但整体大小任意」的。">尺度不可观测</span>。</p>
+  <p><b>硬伤② 难在哪？</b>特征法靠"找有特点的小块图案"来跟踪，但白墙、走廊、磨砂玻璃上没有任何可辨认的图案，算法就瞎了。
+  而且它对光照很敏感——同一面墙，中午和黄昏的照片差很远。</p>
+  <p><b>硬伤③ 难在哪？</b>镜头里有个路人走过。从像素角度看，"路人向右移动 50 像素"和"相机向左移动"产生的效果几乎一样。
+  <em>这就是动态物体为什么这么难处理。</em></p>
+</div>
+
+<h3>5.1 三种做法：到底用哪些像素来算？</h3>
+
+<p>面对一张照片，第一件事是决定<b>用哪些像素</b>来做计算。这个选择决定了整个方法的性格。</p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 380" role="img" aria-label="特征法、直接法、半直接法三种范式的对比">
+  <!-- 面板1 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="256" height="352" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="28" class="sv-lbl" fill="#58a6ff" font-size="13" font-weight="600">① 特征法</text>
+    <text x="14" y="47" class="sv-xs">MonoSLAM / PTAM / ORB-SLAM</text>
+
+    <!-- 场景（照片风格） -->
+    <g transform="translate(20,62)">
+      <rect x="0" y="0" width="216" height="150" rx="5" fill="#151d27" stroke="#2a3542"/>
+      <!-- 墙 -->
+      <rect x="0" y="0" width="216" height="150" fill="#1b2532"/>
+      <!-- 家具 -->
+      <rect x="14" y="86" width="66" height="54" fill="#243244" stroke="#39506b" stroke-width="1.4"/>
+      <rect x="120" y="66" width="76" height="74" fill="#243244" stroke="#39506b" stroke-width="1.4"/>
+      <line x1="158" y1="66" x2="158" y2="140" stroke="#39506b" stroke-width="1"/>
+      <!-- 窗户（格栅） -->
+      <rect x="86" y="16" width="46" height="42" fill="#1f2d3d" stroke="#39506b" stroke-width="1.4"/>
+      <line x1="109" y1="16" x2="109" y2="58" stroke="#39506b" stroke-width="1"/>
+      <line x1="86" y1="37" x2="132" y2="37" stroke="#39506b" stroke-width="1"/>
+      <!-- 白墙区域（无特征） -->
+      <rect x="150" y="10" width="60" height="46" fill="#ff7b72" opacity=".1">
+        <animate attributeName="opacity" values="0;.26;0" dur="3.4s" repeatCount="indefinite"/>
+      </rect>
+
+      <!-- 特征点（十字） -->
+      <g stroke="#58a6ff" stroke-width="1.8">
+        <g><line x1="9" y1="81" x2="21" y2="93"/><line x1="21" y1="81" x2="9" y2="93"/></g>
+        <g><line x1="75" y1="81" x2="87" y2="93"/><line x1="87" y1="81" x2="75" y2="93"/></g>
+        <g><line x1="81" y1="11" x2="93" y2="23"/><line x1="93" y1="11" x2="81" y2="23"/></g>
+        <g><line x1="128" y1="11" x2="140" y2="23"/><line x1="140" y1="11" x2="128" y2="23"/></g>
+        <g><line x1="115" y1="61" x2="127" y2="73"/><line x1="127" y1="61" x2="115" y2="73"/></g>
+        <g><line x1="191" y1="61" x2="203" y2="73"/><line x1="203" y1="61" x2="191" y2="73"/></g>
+        <g><line x1="9" y1="135" x2="21" y2="147"/><line x1="21" y1="135" x2="9" y2="147"/></g>
+        <g><line x1="191" y1="135" x2="203" y2="147"/><line x1="203" y1="135" x2="191" y2="147"/></g>
+      </g>
+      <text x="180" y="34" class="sv-xs" fill="#ff7b72" text-anchor="middle" opacity="0">找不到特征<animate attributeName="opacity" values="0;1;0" dur="3.4s" repeatCount="indefinite"/></text>
+    </g>
+
+    <text x="20" y="236" class="sv-xs" fill="#a8b3c0">只挑有辨识度的"角点/斑点"（蓝十字）</text>
+    <text x="20" y="258" class="sv-xs" fill="#7ee787">优点：算得少、不怕光照变化</text>
+    <text x="20" y="284" class="sv-xs" fill="#ff9e9e">缺点：白墙那块（红色闪烁）</text>
+    <text x="20" y="302" class="sv-xs" fill="#ff9e9e">一个点都挑不出来 → 直接失效</text>
+    <text x="20" y="332" class="sv-xs" fill="#6e7681">代表：ORB-SLAM 系列至今仍是主流</text>
+  </g>
+
+  <!-- 面板2 -->
+  <g transform="translate(282,14)">
+    <rect x="0" y="0" width="256" height="352" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="28" class="sv-lbl" fill="#3fb950" font-size="13" font-weight="600">② 直接法</text>
+    <text x="14" y="47" class="sv-xs">LSD-SLAM / DSO / DROID-SLAM</text>
+
+    <g transform="translate(20,62)">
+      <rect x="0" y="0" width="216" height="150" rx="5" fill="#151d27" stroke="#2a3542"/>
+      <rect x="0" y="0" width="216" height="150" fill="#1b2532"/>
+      <rect x="14" y="86" width="66" height="54" fill="#243244" stroke="#39506b" stroke-width="1.4"/>
+      <rect x="120" y="66" width="76" height="74" fill="#243244" stroke="#39506b" stroke-width="1.4"/>
+      <line x1="158" y1="66" x2="158" y2="140" stroke="#39506b" stroke-width="1"/>
+      <rect x="86" y="16" width="46" height="42" fill="#1f2d3d" stroke="#39506b" stroke-width="1.4"/>
+
+      <!-- 全像素网格 -->
+      <g stroke="#3fb950" stroke-width=".4" opacity=".3">
+        <line x1="0" y1="25" x2="216" y2="25"/><line x1="0" y1="50" x2="216" y2="50"/>
+        <line x1="0" y1="75" x2="216" y2="75"/><line x1="0" y1="100" x2="216" y2="100"/>
+        <line x1="0" y1="125" x2="216" y2="125"/>
+        <line x1="36" y1="0" x2="36" y2="150"/><line x1="72" y1="0" x2="72" y2="150"/>
+        <line x1="108" y1="0" x2="108" y2="150"/><line x1="144" y1="0" x2="144" y2="150"/>
+        <line x1="180" y1="0" x2="180" y2="150"/>
+      </g>
+      <g fill="#3fb950">
+        <circle cx="36" cy="25" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" repeatCount="indefinite"/></circle>
+        <circle cx="108" cy="25" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".2s" repeatCount="indefinite"/></circle>
+        <circle cx="180" cy="25" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".4s" repeatCount="indefinite"/></circle>
+        <circle cx="36" cy="75" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".3s" repeatCount="indefinite"/></circle>
+        <circle cx="108" cy="75" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".5s" repeatCount="indefinite"/></circle>
+        <circle cx="180" cy="75" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".7s" repeatCount="indefinite"/></circle>
+        <circle cx="36" cy="125" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".6s" repeatCount="indefinite"/></circle>
+        <circle cx="108" cy="125" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin=".8s" repeatCount="indefinite"/></circle>
+        <circle cx="180" cy="125" r="2"><animate attributeName="opacity" values=".15;.9;.15" dur="2.6s" begin="1s" repeatCount="indefinite"/></circle>
+      </g>
+      <text x="180" y="34" class="sv-xs" fill="#3fb950" text-anchor="middle">白墙也算！</text>
+    </g>
+
+    <text x="20" y="236" class="sv-xs" fill="#a8b3c0">每个像素的"亮度"都参与计算</text>
+    <text x="20" y="258" class="sv-xs" fill="#7ee787">优点：白墙、弱纹理也能用</text>
+    <text x="20" y="284" class="sv-xs" fill="#ff9e9e">缺点：亮度是它唯一的依据，</text>
+    <text x="20" y="302" class="sv-xs" fill="#ff9e9e">所以光照一变就乱</text>
+    <text x="20" y="332" class="sv-xs" fill="#6e7681">代表：DROID-SLAM 精度高但吃 GPU</text>
+  </g>
+
+  <!-- 面板3 -->
+  <g transform="translate(550,14)">
+    <rect x="0" y="0" width="256" height="352" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="28" class="sv-lbl" fill="#d29922" font-size="13" font-weight="600">③ 半直接法</text>
+    <text x="14" y="47" class="sv-xs">SVO（面向无人机设计）</text>
+
+    <g transform="translate(20,62)">
+      <rect x="0" y="0" width="216" height="150" rx="5" fill="#151d27" stroke="#2a3542"/>
+      <rect x="0" y="0" width="216" height="150" fill="#1b2532"/>
+      <rect x="14" y="86" width="66" height="54" fill="#243244" stroke="#39506b" stroke-width="1.4"/>
+      <rect x="120" y="66" width="76" height="74" fill="#243244" stroke="#39506b" stroke-width="1.4"/>
+      <line x1="158" y1="66" x2="158" y2="140" stroke="#39506b" stroke-width="1"/>
+      <rect x="86" y="16" width="46" height="42" fill="#1f2d3d" stroke="#39506b" stroke-width="1.4"/>
+
+      <!-- 少量小块，每块内全像素 -->
+      <g fill="none" stroke="#d29922" stroke-width="1.6">
+        <rect x="6" y="78" width="26" height="26"><animate attributeName="stroke-width" values="1.2;2.4;1.2" dur="3.2s" repeatCount="indefinite"/></rect>
+        <rect x="76" y="78" width="26" height="26"><animate attributeName="stroke-width" values="1.2;2.4;1.2" dur="3.2s" begin=".4s" repeatCount="indefinite"/></rect>
+        <rect x="112" y="58" width="26" height="26"><animate attributeName="stroke-width" values="1.2;2.4;1.2" dur="3.2s" begin=".8s" repeatCount="indefinite"/></rect>
+        <rect x="178" y="58" width="26" height="26"><animate attributeName="stroke-width" values="1.2;2.4;1.2" dur="3.2s" begin="1.2s" repeatCount="indefinite"/></rect>
+        <rect x="80" y="8" width="26" height="26"><animate attributeName="stroke-width" values="1.2;2.4;1.2" dur="3.2s" begin="1.6s" repeatCount="indefinite"/></rect>
+      </g>
+      <g fill="#d29922" opacity=".28">
+        <rect x="6" y="78" width="26" height="26"/><rect x="76" y="78" width="26" height="26"/>
+        <rect x="112" y="58" width="26" height="26"/><rect x="178" y="58" width="26" height="26"/>
+        <rect x="80" y="8" width="26" height="26"/>
+      </g>
+    </g>
+
+    <text x="20" y="236" class="sv-xs" fill="#a8b3c0">先挑少量小块快速求位姿，</text>
+    <text x="20" y="254" class="sv-xs" fill="#a8b3c0">但每块内部算全像素</text>
+    <text x="20" y="278" class="sv-xs" fill="#7ee787">优点：极快极轻，专为无人机设计</text>
+    <text x="20" y="304" class="sv-xs" fill="#ff9e9e">缺点：需要一个还不错的初始位姿</text>
+    <text x="20" y="332" class="sv-xs" fill="#6e7681">代表：SVO，至今仍是轻量方案首选</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p>三个面板是<b>同一个房间</b>（有窗户、家具、还有一块什么都没有的白墙），区别只在"用多少个像素来算"。</p>
+  <p><b>① 特征法</b>：只在有辨识度的位置挑点（蓝色十字——窗户角、家具角、墙角）。白墙那块（红色闪烁）
+  <b>一个点都挑不出来</b>，所以那片区域等于"看不见"。好处是算得少，而且因为比较的是"角点的位置"而不是"亮度"，
+  它对光照变化不敏感。</p>
+  <p><b>② 直接法</b>：整个画面铺满网格，<b>每个像素的亮度都参与计算</b>，白墙那块也一样（绿色小点均匀闪动）。
+  好处是白墙、弱纹理也能用；代价是"亮度"成了唯一的依据，所以光照一变（比如自动曝光），算法就乱了。</p>
+  <p><b>③ 半直接法</b>：折中——只挑几个小块（橙色方框）来快速求位姿，但每块<b>内部</b>算全像素。
+  极快极轻，代价是需要一个还不错的初始位姿（因为它靠小块对齐来找位姿，初始差太远就对不上）。</p>
+  <p><b>一句话记住这个区别：</b>特征法用<b>位置</b>（角点在哪），直接法用<b>亮度</b>（像素值多少），半直接法两者都用一点。</p>
+</div>
+</div>
+
+<h3>5.2 硬伤①的解法：怎么把"真实大小"找回来</h3>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 400" role="img" aria-label="单目尺度不可观测，以及IMU如何提供尺度">
+  <!-- 左：单目的困境 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="388" height="372" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#ff7b72" font-size="13.5" font-weight="600">只有摄像头：照片能对应无穷多种"真实尺寸"</text>
+    <text x="16" y="48" class="sv-xs">同一个画面，可以有两种完全不同的解释</text>
+
+    <!-- 取景框 -->
+    <g transform="translate(30,68)">
+      <rect x="0" y="0" width="232" height="176" rx="6" fill="#151d27" stroke="#39506b" stroke-width="2"/>
+      <!-- 地平线 -->
+      <line x1="0" y1="132" x2="232" y2="132" stroke="#243244" stroke-width="1.4"/>
+      <!-- 树 -->
+      <rect x="112" y="82" width="9" height="50" fill="#4a3a2a"/>
+      <circle cx="116" cy="66" r="26" fill="#2d4a34" stroke="#3d6b45" stroke-width="1.4"/>
+      <circle cx="102" cy="78" r="16" fill="#2d4a34"/>
+      <circle cx="132" cy="76" r="15" fill="#2d4a34"/>
+      <!-- 相机图标 -->
+      <rect x="6" y="146" width="26" height="18" rx="3" fill="#58a6ff"/>
+      <circle cx="19" cy="155" r="5" fill="#0d1117"/>
+      <text x="42" y="159" class="sv-xs" fill="#58a6ff">相机</text>
+      <!-- 取景四角 -->
+      <path d="M10 10 L10 26 M10 10 L26 10" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <path d="M222 10 L222 26 M222 10 L206 10" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <path d="M10 166 L10 150 M10 166 L26 166" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <path d="M222 166 L222 150 M222 166 L206 166" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <text x="116" y="196" class="sv-xs" text-anchor="middle">照片里树就是这么高</text>
+    </g>
+
+    <!-- 两种解释 -->
+    <g transform="translate(30,272)">
+      <rect x="0" y="0" width="330" height="32" rx="6" fill="#1a1213" stroke="#5c2b2b"/>
+      <text x="10" y="21" class="sv-xs" fill="#ff9e9e">解释一：0.5 米高的小树苗，长在 2 米外</text>
+      <rect x="0" y="38" width="330" height="32" rx="6" fill="#1a1213" stroke="#5c2b2b">
+        <animate attributeName="opacity" values=".25;1;.25" dur="4s" repeatCount="indefinite"/>
+      </rect>
+      <text x="10" y="59" class="sv-xs" fill="#ff9e9e">解释二：5 米高的大树，长在 20 米外</text>
+    </g>
+    <text x="16" y="362" class="sv-xs" fill="#6e7681">两种解释拍出来的照片一模一样 → 无法判断谁对</text>
+  </g>
+
+  <!-- 右：加 IMU -->
+  <g transform="translate(418,14)">
+    <rect x="0" y="0" width="388" height="372" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#3fb950" font-size="13.5" font-weight="600">加上 IMU：尺度被"钉"住了</text>
+    <text x="16" y="48" class="sv-xs">IMU 能测加速度，积分两次就是位移 → 基线长度已知</text>
+
+    <!-- 三角测量 -->
+    <g transform="translate(34,74)">
+      <!-- 树 -->
+      <rect x="286" y="60" width="9" height="52" fill="#4a3a2a"/>
+      <circle cx="290" cy="44" r="26" fill="#2d4a34" stroke="#3d6b45" stroke-width="1.4"/>
+      <circle cx="276" cy="56" r="16" fill="#2d4a34"/>
+      <circle cx="306" cy="54" r="15" fill="#2d4a34"/>
+      <text x="290" y="140" class="sv-xs" text-anchor="middle" fill="#3fb950">目标</text>
+
+      <!-- 两个相机位置 -->
+      <rect x="20" y="106" width="26" height="18" rx="3" fill="#3fb950"/>
+      <circle cx="33" cy="115" r="5" fill="#0d1117"/>
+      <text x="14" y="146" class="sv-xs" fill="#3fb950">位置 A</text>
+      <rect x="140" y="106" width="26" height="18" rx="3" fill="#3fb950" opacity=".75"/>
+      <circle cx="153" cy="115" r="5" fill="#0d1117"/>
+      <text x="134" y="146" class="sv-xs" fill="#3fb950">位置 B</text>
+
+      <!-- 基线 -->
+      <line x1="46" y1="115" x2="140" y2="115" stroke="#3fb950" stroke-width="1.8"/>
+      <path d="M46 110 L46 120 M140 110 L140 120" stroke="#3fb950" stroke-width="1.4"/>
+      <text x="93" y="106" class="sv-xs" fill="#7ee787" text-anchor="middle">1.2 米（IMU 量出来的）</text>
+
+      <!-- 视线 -->
+      <line x1="46" y1="106" x2="286" y2="62" stroke="#7ee787" stroke-width="1.3" opacity=".8"/>
+      <line x1="153" y1="106" x2="286" y2="62" stroke="#7ee787" stroke-width="1.3" opacity=".8"/>
+      <!-- 视差角 -->
+      <path d="M60 106 A 22 22 0 0 1 62 94" fill="none" stroke="#d29922" stroke-width="1.4"/>
+      <text x="66" y="90" class="sv-xs" fill="#d29922">视差</text>
+    </g>
+
+    <g transform="translate(30,240)">
+      <rect x="0" y="0" width="330" height="34" rx="6" fill="#101a13" stroke="#24422c"/>
+      <text x="10" y="22" class="sv-xs" fill="#9fe0a8">知道基线 1.2 米 + 知道视差角 → 距离唯一确定</text>
+      <text x="0" y="60" class="sv-lbl" style="font-size:12.5px" fill="#7ee787">算出：树高 5.2 米，距离 18.4 米</text>
+      <text x="0" y="88" class="sv-xs" fill="#a8b3c0">这就是"尺度恢复"：用一段已知长度的位移，把整张地图的</text>
+      <text x="0" y="106" class="sv-xs" fill="#a8b3c0">真实大小一次性确定下来。</text>
+    </g>
+    <text x="16" y="362" class="sv-xs" fill="#6e7681">代价：IMU 自己有偏置和噪声，还得先估出重力朝哪</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>左边是单目的困境。</b>取景框里那棵树，"0.5 米高的小树苗长在 2 米外"和"5 米高的大树长在 20 米外"，
+  拍出来的照片<b>完全一样</b>。所以算法无法判断真实尺寸——它只能给出"形状正确、但整体大小任意"的地图。</p>
+  <p><b>右边是加 IMU 之后。</b>IMU（惯性测量单元，一个测加速度和角速度的小芯片）能测出相机的实际加速度，
+  积分两次就得到真实位移。一旦"我从 A 移动到了 B，距离 1.2 米"这个事实确定，
+  再结合两条视线的夹角（视差），<b>三角形的形状就唯一确定了</b>——树高 5.2 米、距离 18.4 米，都能算出来。</p>
+  <p><b>为什么这条线后面还有那么多论文？</b>因为 IMU 自己也不干净——它有零偏漂移、有噪声，
+  而且必须先估出"重力朝哪个方向"。怎么把视觉和惯性揉在一起、怎么在刚启动时快速收敛、
+  怎么处理旧数据——每一个都是难啃的骨头。<b>这就是 VIO（视觉惯性里程计）这十几年的主战场。</b></p>
+</div>
+</div>
+
+<h3>5.3 VIO 的两大流派</h3>
+
+<div class="box">
+  <h4>先解释这两个词</h4>
+  <ul>
+    <li><b>优化派</b>：把最近一段时间的所有观测攒成一个大问题，一次性求解"让所有约束同时尽量满足"。</li>
+    <li><b>滤波派</b>：只维护"当前状态 + 它有多不确定"，每来一个观测就把状态往前推一步、顺手修正一下。</li>
+    <li><b>打个比方</b>：优化派像"每走一步就把之前所有笔记重读一遍再修正结论"；滤波派像"带着当前判断往前走，边看边改"。
+    <b>优化派更准但更重，滤波派更快但有累积误差。</b></li>
+    <li><b>VIO</b> 是 Visual-Inertial Odometry 的缩写，意思是"视觉 + 惯性 一起做里程计"。</li>
+  </ul>
+</div>
+
+<div class="concepts">
+  <div class="cc">
+    <h4>优化派代表：VINS-Mono</h4>
+    <div class="say">"每步都把所有笔记重读一遍"</div>
+    <p>它的流程是：先纯视觉恢复结构，再做<b>视觉-惯性对齐</b>——一次性算出尺度、重力方向、速度、IMU 零偏；
+    然后用紧耦合的非线性优化来跟踪；回环用一个 4 自由度的位姿图保证全局一致，还能存地图、读地图、合并地图。</p>
+    <p><b>ORB-SLAM3</b> 把这条推得更远：<b>连 IMU 初始化阶段也完全靠最大后验估计</b>，
+    并且用多地图系统配合改进的场景识别，在长时间丢失跟踪之后还能重新接上。</p>
+    <div class="who">VINS-Mono 2018 · ORB-SLAM3 2021</div>
+  </div>
+
+  <div class="cc">
+    <h4>滤波派代表：MSCKF / OpenVINS</h4>
+    <div class="say">"带着判断往前走，边看边改"</div>
+    <p><b>MSCKF</b> 的核心贡献是<b>推导出一个测量模型，用来表达"同一个静止物体被多个相机位置看到"产生的几何约束</b>。
+    妙处在于这样就不用把每个三维点的位置放进状态向量，<b>计算量对特征数量只是线性增长</b>。</p>
+    <p><b>ROVIO</b> 走的是"直接法 + 卡尔曼滤波"。<b>OpenVINS</b> 作为研究平台，
+    特别强调 <b>FEJ 一致性</b>处理——通俗说就是"别让估计过于自信"，同时内置在线标定和仿真器。</p>
+    <div class="who">MSCKF 2007 · ROVIO 2015 · OpenVINS 2020</div>
+  </div>
+
+  <div class="cc">
+    <h4>两大流派共同的地基：IMU 预积分</h4>
+    <div class="say">"把上千次小测量打包成一个约束"</div>
+    <p>两帧图像之间可能有上千次 IMU 测量。如果每个都塞进优化，问题会大到算不动。</p>
+    <p><b>IMU 预积分（2017）</b>把这上千次测量<b>打包压缩</b>成一个"相对运动约束"。</p>
+    <p>难点在于旋转发生在"流形"上——通俗说就是"三个角度不能像普通数字那样简单相加"
+    （转 350° 再转 20°，结果不是 370° 而是 10°）。这篇论文给出了正确的处理方式和可用的求导公式，<b>所有现代 VIO 都建立在它之上</b>。</p>
+    <div class="who">On-Manifold Preintegration 2017</div>
+  </div>
+
+  <div class="cc">
+    <h4>给你一个选择建议</h4>
+    <div class="say">"我该用哪个？"</div>
+    <p><b>要精度、有算力</b> → 优化派（VINS-Mono / ORB-SLAM3）。这是目前大多数系统的选择。</p>
+    <p><b>要省算力、要快</b> → 滤波派（MSCKF / OpenVINS）。嵌入式平台更合适。</p>
+    <p><b>要快速验证算法</b> → OpenVINS 内置仿真器，可以先在电脑上跑通了再上硬件。</p>
+    <div class="who">选型没有标准答案，取决于你的算力和精度要求</div>
+  </div>
+</div>
+
+<h3>5.4 三个难题是怎么被一点点磨掉的</h3>
+
+<div class="chain">
+  <div class="row"><div class="yr">难题一<br>尺度与起跑</div><div class="txt">
+    单目看不出尺度 → VINS-Mono 用"视觉惯性对齐"恢复 → <b>VI-DSO（2018）</b>把尺度和重力方向直接纳入模型，
+    <b>在初始化之后继续联合优化</b>，并提出<b>动态边缘化</b>来应付变量的剧烈变化 →
+    <b>纯惯性初始化优化（2020）</b>专门处理"刚开始只有 IMU 在动"的阶段 →
+    <b>DM-VIO（2022）</b>用<b>延迟边缘化</b>（维护第二张图、推迟边缘化，以便需要时用新的线性化点重建先验）
+    + <b>位姿图 BA</b> + 多阶段 IMU 初始化器 + 动态加权的光度因子。
+    <span class="tag" style="color:var(--c-lidar);border-color:#24422c">看趋势</span>
+    这一串的演化方向很清楚——<b>把"初始化"从一个必须尽快熬过去的阶段，变成可以随时重来、持续优化的过程。</b>
+  </div></div>
+
+  <div class="row"><div class="yr">难题二<br>全局一致性</div><div class="txt">
+    室内跑得好好的，一出门没有 GPS 就不行了 → <b>GVINS</b> 把 <b>GNSS 的原始观测量（卫星伪距 + 多普勒频移）</b>
+    而不是"解算好的位置"直接融进因子图，再用由粗到细的在线标定把"全球坐标"和"局部状态"连起来，实现室内外无缝衔接 →
+    <b>P³-VINS</b> 更进一步，用上了 PPP（精密单点定位）的伪距、载波相位、相位模糊度三类因子。
+    <span class="tag" style="color:var(--c-fusion);border-color:#4a3c17">有意思的点</span>
+    它不直接用 GPS 算出的位置，而是用更原始的卫星信号——<b>原始信号里信息更多，也更容易和其他传感器"平等地"放在一张图上。</b>
+  </div></div>
+
+  <div class="row"><div class="yr">难题三<br>动态环境</div><div class="txt">
+    路上有人有车，怎么知道动的是它、不是自己？ → <b>DynaSLAM</b> 用 Mask R-CNN（一个实例分割网络）+ 多视图几何
+    检测动态物体，并且<b>把被它挡住的背景补回来</b> → DynaSLAM II 把动态物体自己的运动轨迹也输出（多目标跟踪 + SLAM 紧耦合）→
+    <b>Dynam-SLAM（2023）</b>用<b>立体场景流和 IMU 松耦合</b>做动态检测（显式建模场景流的不确定性），
+    然后把动态特征<b>紧耦合进优化、转成"虚拟路标"</b>。
+    <span class="tag" style="color:var(--c-gs);border-color:#5c2b48">值得注意的转向</span>
+    <b>动态特征不再被丢弃，而是变成了可利用的约束。</b>这是个观念上的变化——以前把动的物体当噪声，现在把它当"会动的路标"。
+  </div></div>
+</div>
+
+<div class="qa">
+  <div>
+    <div class="q">问：那到底该用单目、双目，还是 RGB-D？</div>
+    <p class="a"><b>单目</b>：最便宜，但有尺度问题（必须配 IMU），而且初始化麻烦。<br>
+    <b>双目</b>：靠两个镜头之间的固定距离直接算出深度，<b>尺度天然已知</b>，不用 IMU 也行；代价是要标定、算量大、体积大。<br>
+    <b>RGB-D</b>（彩色图 + 深度图，比如 Kinect）：直接给深度，最省事；但深度相机靠红外投影工作，<b>室外阳光下会失效</b>，量程也有限。</p>
+    <p class="a"><b>选择建议：</b>室内小场景用 RGB-D 最省心；室外用双目 + IMU；预算极紧用单目 + IMU。</p>
+  </div>
+  <div>
+    <div class="q">问：VIO 和 SLAM 是一回事吗？</div>
+    <p class="a"><b>不完全是一回事。</b>里程计（Odometry）只负责推算"我移动了多少"，<b>不管全局地图，走久了必然漂移</b>。
+    SLAM 则额外包含回环检测和全局优化，所以能长时间保持准确。</p>
+    <p class="a">实践中常说"VIO"，往往是一个 SLAM 系统里的前端部分。论文标题里写 VIO 的系统，通常也带轻量回环。</p>
+  </div>
+</div>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>为什么单个摄像头不知道"真实大小"？</b>因为照片可以整体缩放而看不出区别，尺寸不唯一。加一个能测加速度的 IMU，就有了"我实际移动了多远"这个锚点。</li>
+    <li><b>特征法和直接法的取舍是什么？</b>特征法用"角点在哪"，省算力、抗光照，但白墙上没角点就失效；直接法用"每个像素的亮度"，白墙也能用，但光照一变就乱。</li>
+    <li><b>优化派和滤波派怎么选？</b>要精度有算力选优化派，要省算力选滤波派。</li>
+    <li><b>动态物体为什么难？</b>因为"物体在动"和"相机在动"在像素层面看起来几乎一样，光靠一帧图像分不出来。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第六章 ═══════════════ -->
+<h2 id="neural">六、神经隐式表示 <small>把整张地图变成一段可以被"训练"的函数</small></h2>
+
+<div class="tldr">
+  <p>前五章的地图都是"存着一堆东西"——点、体素、面片。<b>2021 年有人换了个思路：地图不存东西了，改成一段函数。</b>
+  问它"坐标 (x, y, z) 这里是不是墙"，它回答"是"或"不是"，还顺便告诉你"这里是什么颜色"。
+  函数当然比一堆数据小得多，但它有两个天生的毛病：<b>会糊（细节被平均掉）</b>和<b>不好改（修正误差时没法局部揉一下）</b>。
+  这条线后面所有论文都在解决这两个问题。</p>
+</div>
+
+<div class="analogy">
+  <p><b>先理解"隐式"是什么意思。</b></p>
+  <p><em>显式地图</em>＝一本相册。你想知道"客厅有沙发吗"，得翻到客厅那张照片看。<b>信息实实在在存在那儿。</b></p>
+  <p><em>隐式地图</em>＝一个会画画的人。你问他"客厅有沙发吗"，他凭记忆现场给你画一张。
+  他没存任何照片，但能根据你的提问生成答案。<b>信息藏在他的"记忆"里——也就是网络的参数里。</b></p>
+  <p>好处是：这个人能回答<b>任何你没拍过的角度</b>，因为他在"生成"而不是"查找"。
+  坏处也很明显：他会记混、会把细节画糊；而且<em>你让他"把沙发往左挪 20 厘米"，很难只改这一处而不影响别的记忆。</em></p>
+</div>
+
+<h3>6.1 神经 SLAM 到底在算什么</h3>
+
+<p>它的工作流程可以用一句话概括：<b>沿着视线问一路，"这里有没有东西？什么颜色？"然后累加起来，得到一个像素。</b></p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 340" role="img" aria-label="神经网络如何回答一条视线上每个位置的问题">
+  <rect x="14" y="14" width="792" height="180" rx="10" fill="#111720" stroke="#2b3540"/>
+  <text x="28" y="38" class="sv-lbl" fill="#bc8cff" font-size="13" font-weight="600">相机朝一个方向看出去，沿这条视线撒一串采样点</text>
+
+  <!-- 相机 -->
+  <g transform="translate(74,128)">
+    <rect x="-18" y="-13" width="36" height="26" rx="4" fill="#58a6ff"/>
+    <circle r="7" fill="#0d1117"/>
+    <text x="0" y="36" class="sv-xs" text-anchor="middle" fill="#58a6ff">相机</text>
+  </g>
+
+  <!-- 射线 -->
+  <line x1="94" y1="126" x2="700" y2="126" stroke="#ffa657" stroke-width="1.6" stroke-dasharray="8 5">
+    <animate attributeName="stroke-dashoffset" from="0" to="-52" dur="1.6s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- 采样点：逐渐变大变亮 -->
+  <g>
+    <circle cx="176" cy="126" r="4" fill="#bc8cff" opacity=".18"/>
+    <circle cx="262" cy="126" r="5" fill="#bc8cff" opacity=".25"/>
+    <circle cx="348" cy="126" r="6" fill="#bc8cff" opacity=".34"/>
+    <circle cx="434" cy="126" r="7" fill="#bc8cff" opacity=".45"/>
+    <circle cx="520" cy="126" r="8" fill="#bc8cff" opacity=".6"/>
+    <circle cx="606" cy="126" r="10" fill="#f778ba">
+      <animate attributeName="opacity" values=".75;1;.75" dur="1.8s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="672" cy="126" r="6" fill="#bc8cff" opacity=".12"/>
+  </g>
+  <text x="606" y="98" class="sv-xs" fill="#f778ba" text-anchor="middle">这里密度最大 = 表面在这</text>
+
+  <!-- 墙 -->
+  <line x1="700" y1="70" x2="700" y2="180" stroke="#3a4753" stroke-width="6"/>
+
+  <!-- 神经网络盒子 -->
+  <g transform="translate(250,42)">
+    <rect x="0" y="0" width="230" height="54" rx="8" fill="#1a1425" stroke="#4a3668"/>
+    <text x="12" y="22" class="sv-xs" fill="#bc8cff">问网络 f(x, y, z)：</text>
+    <text x="12" y="40" class="sv-xs" fill="#8b949e">"这里有东西吗？什么颜色？"（问了几十万次）</text>
+  </g>
+
+  <!-- 累加区 -->
+  <g transform="translate(30,214)">
+    <rect x="0" y="0" width="360" height="108" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="24" class="sv-xs" fill="#8b949e">把沿途的答案"按远近加权"累加起来</text>
+    <rect x="16" y="38" width="16" height="34" fill="#bc8cff" opacity=".18"/>
+    <rect x="36" y="42" width="16" height="30" fill="#bc8cff" opacity=".25"/>
+    <rect x="56" y="48" width="16" height="24" fill="#bc8cff" opacity=".34"/>
+    <rect x="76" y="54" width="16" height="18" fill="#bc8cff" opacity=".46"/>
+    <rect x="96" y="46" width="16" height="26" fill="#f778ba" opacity=".92"/>
+    <rect x="116" y="68" width="16" height="4" fill="#bc8cff" opacity=".2"/>
+    <rect x="136" y="70" width="16" height="2" fill="#bc8cff" opacity=".12"/>
+    <text x="16" y="90" class="sv-xs" fill="#6e7681">近 ←—— 沿视线的位置 ——→ 远</text>
+    <text x="16" y="106" class="sv-xs" fill="#f778ba">最高那根 = 表面的贡献最大</text>
+  </g>
+
+  <!-- 结果 -->
+  <g transform="translate(420,214)">
+    <rect x="0" y="0" width="366" height="108" rx="9" fill="#111720" stroke="#2b3540"/>
+    <text x="14" y="24" class="sv-xs" fill="#8b949e">累加的结果 = 这个像素应该是什么颜色</text>
+    <rect x="16" y="36" width="44" height="44" rx="6" fill="#c96b52"/>
+    <text x="72" y="52" class="sv-xs" fill="#a8b3c0">→ 和真实照片同一位置的像素对比</text>
+    <text x="72" y="72" class="sv-xs" fill="#7ee787">→ 差多少，就反过来调整网络参数</text>
+    <text x="16" y="98" class="sv-xs" fill="#6e7681">反复几万次，网络就"记住"了这个场景</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>上半部分：相机朝一个方向看出去</b>，算法沿着这条视线（橘色虚线）撒一串采样点（紫色圆点）。
+  每个点都拿去问神经网络："你这里有多少东西挡着？是什么颜色？"</p>
+  <p>注意圆点<b>越靠近真实表面越大越亮</b>——这表示网络在那个位置的回答是"这里密度很高，有东西"。
+  过了表面之后，圆点又变小变暗了。</p>
+  <p><b>下半部分：把沿途所有答案按远近加权累加。</b>近处的贡献大、远处的贡献小。
+  累加出来的结果就是这个像素应该是什么颜色（那个红方块）。</p>
+  <p><b>最后一步很关键：</b>把这个颜色和真实照片上同一位置的像素对比，差多少就反过来调整网络参数，让它下次答得更准。
+  反复几万次，网络就"记住"了整个场景。<b>这个过程就叫训练，而地图就是训练完的网络本身。</b></p>
+  <p><b>它和传统方法的根本区别：</b>传统方法在"查找"地图，神经方法在"生成"画面。
+  所以神经方法能做到传统方法做不到的事——<b>渲染一个你从来没拍过的角度</b>。
+  代价是它算起来慢得多（每个像素都要问几十次网络），而且在实时 SLAM 里还得边跑边训练。</p>
+</div>
+</div>
+
+<h3>6.2 为什么"纯函数"会糊成一个球</h3>
+
+<p>iMAP 用一个小神经网络充当整张地图。它证明这条路可行，但也暴露了一个根本缺陷——这个缺陷花了三四年才被绕开。</p>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 400" role="img" aria-label="全局网络与局部特征网格的差别">
+  <!-- 左 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="388" height="372" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#ff7b72" font-size="13.5" font-weight="600">① 一个全局网络：改一处，牵动全身</text>
+    <text x="16" y="48" class="sv-xs">iMAP 用的方式（2021 年）</text>
+
+    <!-- 全连接网络 -->
+    <g transform="translate(34,72)">
+      <g stroke="#4a3668" stroke-width=".7" opacity=".5">
+        <line x1="30" y1="24" x2="88" y2="18"/><line x1="30" y1="24" x2="88" y2="46"/><line x1="30" y1="24" x2="88" y2="74"/>
+        <line x1="30" y1="52" x2="88" y2="18"/><line x1="30" y1="52" x2="88" y2="46"/><line x1="30" y1="52" x2="88" y2="74"/>
+        <line x1="30" y1="80" x2="88" y2="18"/><line x1="30" y1="80" x2="88" y2="46"/><line x1="30" y1="80" x2="88" y2="74"/>
+        <line x1="88" y1="18" x2="146" y2="18"/><line x1="88" y1="18" x2="146" y2="46"/><line x1="88" y1="18" x2="146" y2="74"/>
+        <line x1="88" y1="46" x2="146" y2="18"/><line x1="88" y1="46" x2="146" y2="46"/><line x1="88" y1="46" x2="146" y2="74"/>
+        <line x1="88" y1="74" x2="146" y2="18"/><line x1="88" y1="74" x2="146" y2="46"/><line x1="88" y1="74" x2="146" y2="74"/>
+      </g>
+      <g fill="#bc8cff">
+        <circle cx="30" cy="24" r="6"/><circle cx="30" cy="52" r="6"/><circle cx="30" cy="80" r="6"/>
+        <circle cx="88" cy="18" r="6"/><circle cx="88" cy="46" r="6"/><circle cx="88" cy="74" r="6"/>
+        <circle cx="146" cy="18" r="6"/><circle cx="146" cy="46" r="6"/><circle cx="146" cy="74" r="6"/>
+      </g>
+      <circle cx="88" cy="46" r="6" fill="#ff7b72">
+        <animate attributeName="r" values="6;11;6" dur="3.6s" repeatCount="indefinite"/>
+      </circle>
+      <g fill="#ff7b72">
+        <circle cx="30" cy="24" r="6" opacity="0"><animate attributeName="opacity" values="0;0;.75;.75;0" dur="3.6s" begin=".5s" repeatCount="indefinite"/></circle>
+        <circle cx="30" cy="52" r="6" opacity="0"><animate attributeName="opacity" values="0;0;.75;.75;0" dur="3.6s" begin=".5s" repeatCount="indefinite"/></circle>
+        <circle cx="30" cy="80" r="6" opacity="0"><animate attributeName="opacity" values="0;0;.75;.75;0" dur="3.6s" begin=".5s" repeatCount="indefinite"/></circle>
+        <circle cx="146" cy="18" r="6" opacity="0"><animate attributeName="opacity" values="0;0;.75;.75;0" dur="3.6s" begin=".9s" repeatCount="indefinite"/></circle>
+        <circle cx="146" cy="46" r="6" opacity="0"><animate attributeName="opacity" values="0;0;.75;.75;0" dur="3.6s" begin=".9s" repeatCount="indefinite"/></circle>
+        <circle cx="146" cy="74" r="6" opacity="0"><animate attributeName="opacity" values="0;0;.75;.75;0" dur="3.6s" begin=".9s" repeatCount="indefinite"/></circle>
+      </g>
+      <text x="0" y="112" class="sv-xs" fill="#ff7b72">为了记住"这里有个墙角"，</text>
+      <text x="0" y="130" class="sv-xs" fill="#ff7b72">整个网络的参数都得动一动。</text>
+    </g>
+
+    <!-- 结果：糊 -->
+    <g transform="translate(38,228)">
+      <text x="0" y="0" class="sv-xs" fill="#a8b3c0">想建的 vs 实际得到的</text>
+      <path d="M8,14 L8,58 L52,58" fill="none" stroke="#7ee787" stroke-width="2.6" stroke-linejoin="miter"/>
+      <text x="64" y="30" class="sv-xs" fill="#9fe0a8">尖锐的墙角</text>
+      <text x="64" y="50" class="sv-xs" fill="#6e7681">（你想要的）</text>
+      <path d="M8,92 L8,120 Q16,126 30,126 L52,126" fill="none" stroke="#ff7b72" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" opacity=".42"/>
+      <text x="64" y="106" class="sv-xs" fill="#ff9e9e">一团糊</text>
+      <text x="64" y="126" class="sv-xs" fill="#6e7681">（实际得到的）</text>
+    </g>
+  </g>
+
+  <!-- 右 -->
+  <g transform="translate(418,14)">
+    <rect x="0" y="0" width="388" height="372" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#3fb950" font-size="13.5" font-weight="600">② 加一层"局部特征格子"：只影响附近</text>
+    <text x="16" y="48" class="sv-xs">NICE-SLAM / ESLAM / Co-SLAM 的做法（2022–2023 年）</text>
+
+    <g transform="translate(34,72)">
+      <!-- 多层网格 -->
+      <g stroke="#2b3540" stroke-width=".8">
+        <line x1="0" y1="0" x2="170" y2="0"/><line x1="0" y1="0" x2="0" y2="106"/>
+        <line x1="170" y1="0" x2="170" y2="106"/><line x1="0" y1="106" x2="170" y2="106"/>
+      </g>
+      <g stroke="#2b3540" stroke-width=".5" opacity=".85">
+        <line x1="42" y1="0" x2="42" y2="106"/><line x1="85" y1="0" x2="85" y2="106"/><line x1="127" y1="0" x2="127" y2="106"/>
+        <line x1="0" y1="26" x2="170" y2="26"/><line x1="0" y1="53" x2="170" y2="53"/><line x1="0" y1="79" x2="170" y2="79"/>
+      </g>
+      <rect x="85" y="0" width="42" height="26" fill="#3fb950" opacity="0">
+        <animate attributeName="opacity" values="0;.72;.72;0" dur="3.6s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="127" y="0" width="43" height="26" fill="#3fb950" opacity="0">
+        <animate attributeName="opacity" values="0;.32;.32;0" dur="3.6s" begin=".25s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="85" y="26" width="42" height="27" fill="#3fb950" opacity="0">
+        <animate attributeName="opacity" values="0;.32;.32;0" dur="3.6s" begin=".25s" repeatCount="indefinite"/>
+      </rect>
+      <rect x="42" y="0" width="43" height="26" fill="#3fb950" opacity="0">
+        <animate attributeName="opacity" values="0;.32;.32;0" dur="3.6s" begin=".25s" repeatCount="indefinite"/>
+      </rect>
+      <g fill="#3fb950" font-size="10.5px">
+        <text x="180" y="18">只动这一格</text>
+        <text x="180" y="36" fill="#8b949e">旁边的格子</text>
+        <text x="180" y="54" fill="#6e7681">几乎不受影响</text>
+      </g>
+    </g>
+
+    <g transform="translate(34,214)">
+      <text x="0" y="0" class="sv-xs" fill="#a8b3c0">每个空间格子有自己的"小抄"（一串数字）</text>
+      <text x="0" y="20" class="sv-xs" fill="#7ee787">要记住墙角？只改那一格的小抄就够了。</text>
+      <text x="0" y="40" class="sv-xs" fill="#6e7681">网络本身可以保持很小，不用什么都记。</text>
+    </g>
+
+    <g transform="translate(38,282)">
+      <path d="M8,14 L8,58 L52,58" fill="none" stroke="#3fb950" stroke-width="3.2"/>
+      <text x="64" y="30" class="sv-xs" fill="#9fe0a8">墙角保住了</text>
+      <text x="64" y="50" class="sv-xs" fill="#6e7681">而且更省算力</text>
+      <text x="0" y="82" class="sv-xs" fill="#ff9e9e">代价：这些格子本身要占内存，格子越细越占</text>
+    </g>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>左边是 iMAP 那一代的困境。</b>整个场景的信息都被压进一个"全连接"网络——
+  每层的每个节点都连到下一层的每个节点。这种结构的后果是：<b>为了记住"这里有个墙角"，几乎所有参数都得调整</b>，
+  而调整的副作用会把别处的细节一起抹掉。最后重建出来的墙角，就成了一团糊（对比左下角"想要的"和"实际得到的"）。</p>
+  <p><b>右边是解法：在空间上铺一层"特征格子"。</b>每个格子存一小段数字（叫特征向量，可以理解为"这一小块地方的小抄"）。
+  要记住墙角，<b>只改那一格就够</b>，网络本身保持很小很专注，不再牵一发动全身。右下角可以看到墙角被保住了。</p>
+  <p><b>这一招的代价：</b>格子本身要占内存，格子越细内存越大。所以后面几篇论文就是在"格子怎么设计更省"上做文章——
+  NICE-SLAM 用多层次网格；Vox-Fusion 用八叉树，只给"有东西的地方"开格子；
+  ESLAM 用三个轴对齐的平面代替三维格子（省一个维度）；Co-SLAM 用两种编码混合（一种负责平滑、一种负责高频细节）。</p>
+</div>
+</div>
+
+<h3>6.3 神经 SLAM 的世代表</h3>
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">iMAP</div><div class="yr">2021</div>
+    <div class="lim">纯网络不含局部信息 → 重建糊、扩不到大场景</div>
+    <div class="sol">第一次证明<b>单独一个小网络就能当实时 SLAM 的唯一场景表示</b>——在线训练、不需要预先训练别的数据；跟踪 10 Hz、建图 2 Hz</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">NICE-SLAM / Vox-Fusion</div><div class="yr">2022</div>
+    <div class="lim">同上，细节全被平均掉</div>
+    <div class="sol">NICE-SLAM 引入<b>多层次的网格特征</b>，把不同尺度的局部信息注入网络；Vox-Fusion 用<b>八叉树索引的体素嵌入</b>——只在有东西的地方开格子，实现可扩展的细节重建</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">ESLAM / Co-SLAM</div><div class="yr">2023</div>
+    <div class="lim">特征网格还是慢，而且大多数方法只能优化少量"当前活跃"的关键帧</div>
+    <div class="sol">ESLAM 用<b>多尺度轴对齐特征平面 + TSDF 混合表示</b>（三张平面代替一个三维格子，省内存），不需要预训练；Co-SLAM 提出 <b>one-blob 编码（平滑连贯）+ hash 网格（收敛快、抓高频细节）的联合编码</b>，好处是采样策略允许<b>对所有关键帧做全局 BA</b>，而不是只盯着几个活跃帧</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">Point-SLAM / Loopy-SLAM</div><div class="yr">2023 / 2024</div>
+    <div class="lim">网格类表示在"回环校正"时不好改——格子是钉死的</div>
+    <div class="sol">把神经特征<b>挂在点云上，点的密度随输入信息的丰富程度自适应增长</b>；Loopy-SLAM 更进一步：用点基子地图 + 全局场景识别触发回环 + 位姿图在子地图之间做刚性对齐——<b>点基表示让地图修正可以高效完成，不需要保留所有历史输入帧</b></div>
+  </div></div>
+  <div class="step"><div class="card b5">
+    <div class="nm">PIN-SLAM</div><div class="yr">2024</div>
+    <div class="lim">神经 SLAM 普遍缺回环，或者只有局部一致，走久了就飘</div>
+    <div class="sol">第一个<b>完整</b>的隐式神经 SLAM（里程计 + 回环检测 + 全局一致建图三件套齐活）；用<b>稀疏可优化的神经点</b>表达隐式表面，做<b>不需要找对应点的"点对隐式模型"配准</b>来求位姿；神经点<b>天生有弹性、能形变</b>，回环时随全局位姿一起变形</div>
+  </div></div>
+</div>
+
+<div class="qa">
+  <div>
+    <div class="q">问："隐式"到底是什么意思？听起来很玄。</div>
+    <p class="a">就是<b>"不直接把答案存起来，而是存一套能算出答案的规则"</b>。</p>
+    <p class="a">打个比方：显式地图像一本相册——想知道客厅什么样，去翻照片；隐式地图像一个会画画的人——你问他，他现场画给你。
+    所以隐式表示能回答"你没拍过的角度"，代价是它可能画错、画糊。</p>
+  </div>
+  <div>
+    <div class="q">问：那为什么不干脆全用隐式表示？</div>
+    <p class="a">因为它有两个硬伤：<b>① 算得慢</b>（每个像素都要问几十次网络，实时跑很吃力）；
+    <b>② 回环修正困难</b>（发现前面走偏了，要把整张地图挪一下，而隐式地图"挪"起来很别扭）。</p>
+    <p class="a">所以实践中，神经表示目前更多用在"重建和渲染"，而不是"稳定定位"。<b>要定位，激光或视觉惯性方案仍然更可靠。</b></p>
+  </div>
+</div>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>"隐式"是什么意思？</b>地图不是存好的数据，而是一个能回答问题的函数。信息藏在网络参数里，而不是藏在文件里。</li>
+    <li><b>为什么它会糊？</b>因为一开始用的是全局网络——记住一处细节要改动所有参数，副作用就是别处也变了，最后全被平均成一团。</li>
+    <li><b>为什么加"特征格子"就好了？</b>格子把信息按空间位置分开存放，改一处只影响那一格，网络本身可以保持很小很专注。</li>
+    <li><b>那"回环不好改"又是怎么回事？</b>格子是钉在固定坐标上的；一旦发现前面走的路线偏了，要整体挪动这些格子代价很高。所以后来换成了"能形变的神经点"。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第七章 ═══════════════ -->
+<h2 id="gs">七、3D 高斯泼溅 <small>2023 年横空出世，2024 年冲进 SLAM，2025 年补短板</small></h2>
+
+<div class="tldr">
+  <p><b>3DGS（三维高斯泼溅）是这几年视觉领域最轰动的一件事。</b>它的想法简单到有点粗暴：
+  与其用一个神经网络去"算"每个像素的颜色，不如直接在空间里摆一堆半透明的彩色椭球，
+  <b>把椭球"泼"到屏幕上混合起来，画面就出来了</b>。这样做渲染快了几个量级，
+  坏处是——椭球会越摆越多，显存顶不住。这条线在 SLAM 里的进展，就是"怎么边跑边建，同时控制椭球的数量和位置"。</p>
+</div>
+
+<div class="analogy">
+  <p><b>用橡皮泥捏房间来理解。</b></p>
+  <p><em>NeRF 的做法</em>：请一位雕塑家。你问他"朝这个方向看能看到什么颜色"，他凭记忆现场描述给你听。
+  灵活，但每问一次都要等，而且他给出的永远是"描述"不是实物。</p>
+  <p><em>3DGS 的做法</em>：直接抓一把彩色的半透明橡皮泥团摆在空间里。你想看哪个角度，
+  就把这些泥团<b>投影到那个视角的玻璃上叠起来</b>——一秒出结果。因为泥团是"实物"，投影这件事可以高度并行，快得飞起。</p>
+  <p><em>那问题在哪？</em>泥团会越摆越多。想看清细节就得摆更多更小的泥团；
+  一个房间摆几百万团之后，你的桌子（显存）就放不下了。
+  <b>而且想把整堆泥团整体挪一下（回环校正），比挪一张网格难得多。</b></p>
+</div>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 360" role="img" aria-label="3D高斯泼溅的渲染原理">
+  <!-- 左：空间中的椭球 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="392" height="332" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#f778ba" font-size="13.5" font-weight="600">① 空间里摆一堆半透明彩色椭球</text>
+    <text x="16" y="48" class="sv-xs">每个椭球带：位置、形状、颜色、透明度</text>
+
+    <!-- 房间一角 -->
+    <path d="M40 264 L40 96 L200 60" fill="none" stroke="#3a4753" stroke-width="2"/>
+    <path d="M40 264 L330 264" fill="none" stroke="#3a4753" stroke-width="2"/>
+    <path d="M200 60 L200 220" fill="none" stroke="#2b3540" stroke-width="1.4" stroke-dasharray="4 4"/>
+
+    <!-- 椭球（模拟沙发/家具的构成） -->
+    <ellipse cx="128" cy="196" rx="46" ry="26" fill="#f778ba" opacity=".4" transform="rotate(-14 128 196)"/>
+    <ellipse cx="188" cy="186" rx="40" ry="23" fill="#ffa657" opacity=".4" transform="rotate(10 188 186)"/>
+    <ellipse cx="150" cy="228" rx="42" ry="24" fill="#58a6ff" opacity=".4"/>
+    <ellipse cx="216" cy="222" rx="38" ry="22" fill="#3fb950" opacity=".4" transform="rotate(-18 216 222)"/>
+    <ellipse cx="112" cy="152" rx="36" ry="21" fill="#bc8cff" opacity=".4" transform="rotate(16 112 152)"/>
+    <ellipse cx="238" cy="162" rx="34" ry="20" fill="#ff7b72" opacity=".4"/>
+    <ellipse cx="172" cy="252" rx="30" ry="18" fill="#f778ba" opacity=".34"/>
+    <g fill="#e6edf3" opacity=".8">
+      <circle cx="128" cy="196" r="2"/><circle cx="188" cy="186" r="2"/><circle cx="150" cy="228" r="2"/>
+      <circle cx="216" cy="222" r="2"/><circle cx="112" cy="152" r="2"/><circle cx="238" cy="162" r="2"/><circle cx="172" cy="252" r="2"/>
+    </g>
+
+    <!-- 新椭球不断加入 -->
+    <ellipse cx="76" cy="176" rx="20" ry="12" fill="#ffa657" opacity="0">
+      <animate attributeName="opacity" values="0;.4;.4;0" dur="5s" repeatCount="indefinite"/>
+    </ellipse>
+    <ellipse cx="286" cy="212" rx="18" ry="11" fill="#58a6ff" opacity="0">
+      <animate attributeName="opacity" values="0;0;.4;.4;0" dur="5s" begin="1.2s" repeatCount="indefinite"/>
+    </ellipse>
+    <ellipse cx="150" cy="110" rx="17" ry="10" fill="#3fb950" opacity="0">
+      <animate attributeName="opacity" values="0;0;.4;.4;0" dur="5s" begin="2.4s" repeatCount="indefinite"/>
+    </ellipse>
+
+    <text x="16" y="296" class="sv-xs" fill="#ff9e9e">看到新区域就加新椭球 → 数量暴涨 → 显存吃紧</text>
+    <text x="16" y="316" class="sv-xs" fill="#6e7681">而且椭球是"散"的，想整体挪动很难</text>
+  </g>
+
+  <!-- 中间箭头 -->
+  <g transform="translate(408,180)">
+    <path d="M0,0 L44,0" stroke="#f778ba" stroke-width="2"/>
+    <path d="M38,-6 L48,0 L38,6 Z" fill="#f778ba"/>
+    <text x="-14" y="-16" class="sv-xs" fill="#f778ba">投影</text>
+    <text x="-14" y="22" class="sv-xs" fill="#f778ba">混合</text>
+  </g>
+
+  <!-- 右：投影结果 -->
+  <g transform="translate(460,14)">
+    <rect x="0" y="0" width="346" height="332" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#f778ba" font-size="13.5" font-weight="600">② 投到镜头上叠起来 = 直接出画面</text>
+    <text x="16" y="48" class="sv-xs">这个过程可以高度并行，不用逐个像素问网络</text>
+
+    <!-- 屏幕 -->
+    <g transform="translate(30,68)">
+      <rect x="0" y="0" width="286" height="180" rx="6" fill="#151d27" stroke="#39506b" stroke-width="2"/>
+      <defs>
+        <radialGradient id="q1"><stop offset="0%" stop-color="#f778ba" stop-opacity=".9"/><stop offset="100%" stop-color="#f778ba" stop-opacity="0"/></radialGradient>
+        <radialGradient id="q2"><stop offset="0%" stop-color="#ffa657" stop-opacity=".85"/><stop offset="100%" stop-color="#ffa657" stop-opacity="0"/></radialGradient>
+        <radialGradient id="q3"><stop offset="0%" stop-color="#58a6ff" stop-opacity=".85"/><stop offset="100%" stop-color="#58a6ff" stop-opacity="0"/></radialGradient>
+        <radialGradient id="q4"><stop offset="0%" stop-color="#3fb950" stop-opacity=".85"/><stop offset="100%" stop-color="#3fb950" stop-opacity="0"/></radialGradient>
+        <radialGradient id="q5"><stop offset="0%" stop-color="#bc8cff" stop-opacity=".85"/><stop offset="100%" stop-color="#bc8cff" stop-opacity="0"/></radialGradient>
+        <radialGradient id="q6"><stop offset="0%" stop-color="#ff7b72" stop-opacity=".85"/><stop offset="100%" stop-color="#ff7b72" stop-opacity="0"/></radialGradient>
+      </defs>
+      <ellipse cx="88" cy="118" rx="66" ry="42" fill="url(#q1)"/>
+      <ellipse cx="164" cy="102" rx="58" ry="36" fill="url(#q2)"/>
+      <ellipse cx="110" cy="142" rx="62" ry="40" fill="url(#q3)"/>
+      <ellipse cx="196" cy="138" rx="56" ry="35" fill="url(#q4)"/>
+      <ellipse cx="72" cy="84" rx="52" ry="32" fill="url(#q5)"/>
+      <ellipse cx="216" cy="90" rx="50" ry="31" fill="url(#q6)"/>
+      <ellipse cx="148" cy="164" rx="46" ry="29" fill="url(#q1)" opacity=".65"/>
+      <!-- 取景四角 -->
+      <path d="M10 10 L10 24 M10 10 L24 10" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <path d="M276 10 L276 24 M276 10 L262 10" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <path d="M10 170 L10 156 M10 170 L24 170" stroke="#39506b" stroke-width="1.6" fill="none"/>
+      <path d="M276 170 L276 156 M276 170 L262 170" stroke="#39506b" stroke-width="1.6" fill="none"/>
+    </g>
+
+    <g transform="translate(30,266)">
+      <text x="0" y="0" class="sv-xs" fill="#7ee787">快在哪：投影+混合天生适合显卡并行</text>
+      <text x="0" y="20" class="sv-xs" fill="#7ee787">神经方法渲染一个像素要问几十次网络，</text>
+      <text x="0" y="38" class="sv-xs" fill="#7ee787">高斯方法几毫秒就能出一整帧</text>
+      <text x="0" y="62" class="sv-xs" fill="#6e7681">这就是为什么它能做"实时渲染地图"</text>
+    </g>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>左边：空间里摆着一堆半透明彩色椭球。</b>每一个椭球带四项信息：<b>在哪（位置）、多大什么形状、什么颜色、有多不透明</b>。
+  一堆椭球凑在一起，就"堆"出了场景的样子（图中这几个椭球合起来大概是一张沙发）。</p>
+  <p><b>中间："投影 + 混合"。</b>把这一堆椭球投影到"镜头看到的那个平面"上，按远近和透明度叠加起来。</p>
+  <p><b>右边：屏幕上就出现了画面。</b>注意这个画面是朦胧的、有点"发光"的——因为椭球是半透明的，
+  叠加后会互相渗透。这正是 3DGS 的视觉特征。</p>
+  <p><b>为什么它比神经方法快？</b>神经方法要"逐个像素去问网络"，而高斯方法是"把一堆现成的东西投影下来叠加"——
+  后者天生适合显卡并行计算，几毫秒就能出一整帧。</p>
+  <p><b>但注意左边的三条红字</b>：椭球会越加越多，显存吃紧；而且椭球是散的，
+  想把它们<b>整体挪动一下</b>（比如发现前面走的路线偏了，要整体校正）非常困难。<b>这两点就是 2024–2025 年那批论文在解决的问题。</b></p>
+</div>
+</div>
+
+<h3>7.1 世代演进：从"能用"到"能装在机器人上"</h3>
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">3DGS / InstantNGP</div><div class="yr">2023 / 2022</div>
+    <div class="lim">NeRF 那种"逐点查询"渲染太慢，训练要按小时算</div>
+    <div class="sol">3DGS 用<b>显式三维高斯基元</b>（位置 / 形状 / 不透明度 / 球谐系数），通过可微光栅化渲染，训练和渲染都快得多；InstantNGP 的<b>多分辨率哈希编码</b>把训练压到秒级；Plenoxels 更极端，证明<b>连神经网络都可以不要</b>——稀疏三维网格加球谐系数就够了</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">MonoGS</div><div class="yr">2024</div>
+    <div class="lim">原版 3DGS 需要离线算好的精确位姿，根本没法当 SLAM 用</div>
+    <div class="sol">第一个以 3DGS 为<b>唯一</b>表示的近实时 SLAM，而且支持<b>单目</b>（只有一个摄像头）：直接对高斯去优化相机位姿（在"李群"上求解析导数）、对高斯形状做<b>各向同性正则化</b>（防止椭球被拉成细长条到处穿墙）、加几何验证</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">SplaTAM / GS-SLAM</div><div class="yr">2024</div>
+    <div class="lim">把离线合成的 3DGS 拿来重建整个场景时，缺一套"什么时候该往这儿加椭球"的策略</div>
+    <div class="sol">SplaTAM 用<b>轮廓掩码（silhouette mask）</b>优雅地表达"这块区域到底建过没建过"，从而快速判断某处是否需要新加高斯，用一个未定位的 RGB-D 相机就能做高保真重建；GS-SLAM 提出<b>自适应高斯扩展策略</b>——动态增删高斯以覆盖新看到的区域并改进旧区域，跟踪时用"由粗到细"的方式挑可靠高斯</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">Photo-SLAM</div><div class="yr">2024</div>
+    <div class="lim">学术方案算力需求太高，落不到真实的机器人上</div>
+    <div class="sol"><b>hyper primitives map</b>——<b>同时用显式几何特征做定位、用学到的隐式光度特征表达纹理</b>；基于几何特征主动致密化；<b>高斯金字塔训练</b>让多级特征渐进学习；最终能在 <b>Jetson AGX Orin 这类嵌入式平台上实时运行</b></div>
+  </div></div>
+  <div class="step"><div class="card b5">
+    <div class="nm">WildGS-SLAM / Splat-SLAM</div><div class="yr">2025</div>
+    <div class="lim">真实环境有人走动；只有 RGB 时缺几何先验；地图和位姿的优化互相牵制</div>
+    <div class="sol">WildGS-SLAM 用浅层网络 + <b>DINOv2 特征</b>预测一张<b>不确定性地图</b>，用它引导剔除动态物体（<b>不需要深度信息也不需要显式语义分割</b>）；Splat-SLAM 是<b>第一个全局优化的纯 RGB 方案</b>，提出 <b>DSPO</b>（视差-尺度-位姿联合优化）做 BA，高斯地图会随着关键帧位姿和深度更新而动态适配</div>
+  </div></div>
+</div>
+
+<div class="qa">
+  <div>
+    <div class="q">问：3DGS 为什么不能直接拿来跑 SLAM？看起来它已经能建出很好的场景了。</div>
+    <p class="a">因为原版 3DGS 的前提是"<b>你已经告诉它每张照片是从哪儿拍的</b>"——它需要先用传统方法（SfM）算出精确位姿，然后再优化场景。</p>
+    <p class="a">而 SLAM 恰恰要<b>自己算出这个位姿</b>。所以直接搬过来是循环依赖，用不了。MonoGS 那一批论文做的，就是把"位姿"也变成可优化的量。</p>
+  </div>
+  <div>
+    <div class="q">问：这条线现在最大的麻烦是什么？</div>
+    <p class="a">两个：<b>① 椭球数量随场景线性增长</b>（去个大商场，显存就爆了）；
+    <b>② 回环校正困难</b>——发现前面走偏了，要把这一大堆椭球整体挪动，代价很高。</p>
+    <p class="a">（对比一下：神经点方案因为点本身"能形变"，做这件事就轻松得多，这是 PIN-SLAM 的优势。）</p>
+  </div>
+  <div>
+    <div class="q">问：我要做机器人导航，现在该上高斯吗？</div>
+    <p class="a"><b>建议先不要当主定位方案。</b>高斯 SLAM 目前更适合"重建与可视化"——
+    比如让你有个好看的三维地图、能渲染没拍过的角度。定位的稳定性和实时性，激光/视觉惯性方案仍然更成熟。</p>
+    <p class="a">如果确实想用，可以看看 <b>Photo-SLAM</b>（2024），它是少数明确标榜"能在嵌入式平台实时跑"的方案。</p>
+  </div>
+</div>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>3DGS 为什么比 NeRF 快？</b>NeRF 是"逐点问网络算颜色"，3DGS 是"把一堆现成的椭球投影到屏幕叠加"——后者天生适合显卡并行。</li>
+    <li><b>为什么 3DGS 不能直接拿来跑 SLAM？</b>它默认你已经告诉它"每张照片是从哪拍的"，而 SLAM 恰恰要自己算出这个。</li>
+    <li><b>这条线现在最大的麻烦？</b>椭球数量随场景线性增长（显存），以及回环校正时这一大堆椭球不好整体挪动。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第八章 ═══════════════ -->
+<h2 id="front">八、深度学习最先吃掉了哪一块 <small>不是整个 SLAM，而是"匹配"和"检索"这两个子问题</small></h2>
+
+<div class="tldr">
+  <p>深度学习进入 SLAM 的方式很有讲究：它<b>没有一上来就替换整个系统</b>，
+  而是先从两个"最像模式识别"的子问题下手——<b>①两张图里哪些点在描述同一个东西（特征匹配）</b>、
+  <b>②这张图我来过没有（场景检索）</b>。这两个问题的答案都难以用公式写全，但人一看就知道对不对，
+  正好是神经网络最擅长的。等这两块站稳了，才逐渐有了端到端方法和基础模型。</p>
+</div>
+
+<div class="analogy">
+  <p><b>为什么从"匹配"和"检索"下手？</b>因为这两个问题有个共同点：<em>答案很难用规则写出来，但人一看就知道对不对。</em></p>
+  <p>"这两张照片里，哪个点在拍同一个墙角？"——传统做法是给每个点算一串数字（叫描述子），希望"同一个墙角在不同角度下这串数字相近"。
+  但"相近"这件事很难写全规则：换了光照呢？换了角度呢？换了尺度呢？<b>这正是神经网络的主场——给它大量例子，它自己学出"什么算像"。</b></p>
+  <p>而 SLAM 的主干（怎么优化位姿、怎么维护地图）反而一直是传统方法占优，
+  因为那些部分有明确的数学模型，可解释、可控，出了错也知道错在哪。<b>神经网络在这些地方反而容易犯"说不清为什么"的错。</b></p>
+</div>
+
+<h3>8.1 "匹配"在做什么</h3>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 400" role="img" aria-label="特征匹配与错误匹配剔除">
+  <text x="410" y="26" class="sv-s" text-anchor="middle">同一个房间，相机动了一点点，拍了两张照片 —— 找出哪些点在拍同一个东西</text>
+
+  <!-- 左照片 -->
+  <g transform="translate(26,44)">
+    <rect x="0" y="0" width="330" height="220" rx="6" fill="#151d27" stroke="#39506b" stroke-width="2"/>
+    <!-- 场景：窗户 + 沙发 + 墙角 -->
+    <rect x="0" y="0" width="330" height="220" fill="#1b2532"/>
+    <line x1="206" y1="0" x2="206" y2="220" stroke="#39506b" stroke-width="2.4"/>
+    <line x1="0" y1="150" x2="330" y2="150" stroke="#39506b" stroke-width="1.4"/>
+    <rect x="30" y="34" width="72" height="66" fill="#1f2d3d" stroke="#39506b" stroke-width="1.6"/>
+    <line x1="66" y1="34" x2="66" y2="100" stroke="#39506b" stroke-width="1"/>
+    <line x1="30" y1="67" x2="102" y2="67" stroke="#39506b" stroke-width="1"/>
+    <rect x="122" y="112" width="70" height="46" rx="4" fill="#2a3a4d" stroke="#456080" stroke-width="1.4"/>
+    <rect x="238" y="96" width="72" height="62" rx="4" fill="#2c3b33" stroke="#4c6f58" stroke-width="1.4"/>
+    <!-- 特征点 -->
+    <g fill="#58a6ff">
+      <circle cx="30" cy="34" r="5"/><circle cx="102" cy="34" r="5"/><circle cx="66" cy="34" r="5"/>
+      <circle cx="206" cy="30" r="5"/><circle cx="206" cy="182" r="5"/>
+      <circle cx="122" cy="112" r="5"/><circle cx="192" cy="112" r="5"/>
+      <circle cx="238" cy="96" r="5"/><circle cx="310" cy="96" r="5"/>
+      <circle cx="30" cy="118" r="5"/><circle cx="150" cy="196" r="5"/><circle cx="286" cy="176" r="5"/>
+    </g>
+    <text x="165" y="244" class="sv-xs" text-anchor="middle">时间 t</text>
+  </g>
+
+  <!-- 右照片 -->
+  <g transform="translate(464,44)">
+    <rect x="0" y="0" width="330" height="220" rx="6" fill="#151d27" stroke="#39506b" stroke-width="2"/>
+    <rect x="0" y="0" width="330" height="220" fill="#1b2532"/>
+    <line x1="188" y1="0" x2="188" y2="220" stroke="#39506b" stroke-width="2.4"/>
+    <line x1="0" y1="150" x2="330" y2="150" stroke="#39506b" stroke-width="1.4"/>
+    <rect x="18" y="38" width="72" height="66" fill="#1f2d3d" stroke="#39506b" stroke-width="1.6"/>
+    <line x1="54" y1="38" x2="54" y2="104" stroke="#39506b" stroke-width="1"/>
+    <line x1="18" y1="71" x2="90" y2="71" stroke="#39506b" stroke-width="1"/>
+    <rect x="106" y="116" width="70" height="46" rx="4" fill="#2a3a4d" stroke="#456080" stroke-width="1.4"/>
+    <rect x="220" y="100" width="72" height="62" rx="4" fill="#2c3b33" stroke="#4c6f58" stroke-width="1.4"/>
+    <g fill="#58a6ff">
+      <circle cx="18" cy="38" r="5"/><circle cx="90" cy="38" r="5"/><circle cx="54" cy="38" r="5"/>
+      <circle cx="188" cy="34" r="5"/><circle cx="188" cy="186" r="5"/>
+      <circle cx="106" cy="116" r="5"/><circle cx="176" cy="116" r="5"/>
+      <circle cx="220" cy="100" r="5"/><circle cx="292" cy="100" r="5"/>
+      <circle cx="18" cy="122" r="5"/><circle cx="134" cy="200" r="5"/><circle cx="268" cy="180" r="5"/>
+    </g>
+    <text x="165" y="244" class="sv-xs" text-anchor="middle">时间 t+1（相机稍微移动了）</text>
+  </g>
+
+  <!-- 匹配连线 -->
+  <g stroke="#3fb950" stroke-width="1.6" fill="none">
+    <line x1="56" y1="78" x2="482" y2="82"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" repeatCount="indefinite"/></line>
+    <line x1="128" y1="78" x2="554" y2="82"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" begin=".3s" repeatCount="indefinite"/></line>
+    <line x1="232" y1="74" x2="652" y2="78"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" begin=".6s" repeatCount="indefinite"/></line>
+    <line x1="148" y1="156" x2="570" y2="160"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" begin=".9s" repeatCount="indefinite"/></line>
+    <line x1="264" y1="140" x2="684" y2="144"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" begin="1.2s" repeatCount="indefinite"/></line>
+    <line x1="176" y1="240" x2="598" y2="244"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" begin="1.5s" repeatCount="indefinite"/></line>
+    <line x1="312" y1="220" x2="732" y2="224"><animate attributeName="opacity" values=".3;1;.3" dur="3.6s" begin="1.8s" repeatCount="indefinite"/></line>
+  </g>
+  <!-- 一个错误匹配 -->
+  <g>
+    <line x1="56" y1="162" x2="732" y2="144" stroke="#ff7b72" stroke-width="1.6" stroke-dasharray="6 4">
+      <animate attributeName="opacity" values="0;0;0;1;1;0;0" dur="3.6s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <!-- 图例（底部独立带） -->
+  <g transform="translate(26,304)">
+    <line x1="0" y1="0" x2="34" y2="0" stroke="#3fb950" stroke-width="1.8"/>
+    <text x="42" y="4" class="sv-xs">绿线 = 判断为"同一个物理点"</text>
+    <line x1="300" y1="0" x2="334" y2="0" stroke="#ff7b72" stroke-width="1.8" stroke-dasharray="6 4"/>
+    <text x="342" y="4" class="sv-xs">红线 = 匹配错了（必须剔除，否则定位会歪）</text>
+    <text x="0" y="34" class="sv-xs" fill="#8b949e">注意地上那两个点：它们在两张图里看起来很像，但其实是地面上的不同位置 → 最容易配错</text>
+    <text x="0" y="56" class="sv-xs" fill="#7ee787">SuperGlue 的贡献：不只找匹配，还要判断"这个匹配可不可信"，把不可信的丢掉</text>
+    <text x="0" y="78" class="sv-xs" fill="#7ee787">LightGlue 的贡献：容易匹配的时候算得快，难的时候才多花力气</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p>上面是<b>同一个房间在前后两个时刻的两张照片</b>（相机稍微移动了一点）。蓝色小点是算法挑出来的"有辨识度的位置"
+  （窗户角、家具角、墙角、地面上的点）。</p>
+  <p>算法要做的事是：<b>判断左边照片里的某个点，和右边照片里的哪个点，是空间里的同一个东西。</b>
+  绿色连线是判断正确的匹配；<b>红色虚线是判断错误的</b>——比如地面上的点，在两张图里看起来都很像，就可能被配错。</p>
+  <p><b>为什么一个错误匹配很要命？</b>因为后面算相机位置时，会把这些匹配当作"约束"。
+  一个错误的约束会把算出的位置往错的方向拉，导致整个轨迹歪掉。</p>
+  <p><b>深度学习带来了什么改变？</b>传统做法是"分别给每个点算一串数字特征，然后比谁最像"——
+  <b>只看单个点，不看全局</b>。而 SuperGlue 把两张图的所有点放在一起，
+  用注意力机制<b>全局地推理</b>："如果 A 点和 B 点匹配，那 C 点就不该和 D 点匹配"。
+  它还会输出一个"这个匹配有多可信"的分数，让不可靠的匹配被剔除掉。</p>
+</div>
+</div>
+
+<h3>8.2 四块阵地，各自的进展</h3>
+<div class="concepts">
+  <div class="cc">
+    <h4>① 特征匹配</h4>
+    <div class="say">"两张图里哪个点是同一个东西？"</div>
+    <p><b>SuperGlue（2020）</b>用图神经网络 + 可微最优传输，把两组特征点放在一起联合求解匹配关系，还能拒绝"根本没法匹配"的点。</p>
+    <p><b>LightGlue（2023）</b>重新审视了 SuperGlue 的多个设计决策，给出更简单有效的改进。
+    它最关键的品质是<b>自适应</b>：图像对容易匹配时（重叠大、外观变化小）推理明显更快，内存和算力都更省。</p>
+    <p><b>LoFTR（2021）</b>换了条思路——<b>干脆不检测特征点</b>：先在粗糙层做逐像素的稠密匹配，再到精细层精化，靠 Transformer 的自注意力和交叉注意力提取特征。</p>
+    <div class="who">SuperGlue 2020 · LoFTR 2021 · LightGlue 2023 · SiLK 2023</div>
+  </div>
+
+  <div class="cc">
+    <h4>② 回环与场景识别</h4>
+    <div class="say">"这地方我来过没有？"</div>
+    <p><b>DBoW2（2012）</b>用"二进制词袋"做快速场景识别——把图像里的局部特征归类成"单词"，整张图就变成一个"词袋"，比较词袋就知道像不像。它是 ORB-SLAM 系列回环检测的技术基础。</p>
+    <p><b>Scan Context（2018）</b>另辟蹊径：不做直方图、不需要训练，<b>直接记录"可见空间的三维结构"</b>，
+    因此对视角变化（比如反方向重访同一个地方、转弯）不敏感。Scan Context++（2022）进一步做到对<b>横向偏移</b>也鲁棒——针对的是城市道路上不可避免的车道级变化。</p>
+    <p><b>LCDNet（2022）</b>同时做地点识别和 6 自由度相对位姿估计，用<b>非平衡最优传输</b>构造可微的相对位姿模块，在<b>反向回环</b>这个难点上大幅领先。</p>
+    <p><b>LCR-Net（2024）</b>把回环检测和重定位统一进一个框架，用位姿感知的注意力，<b>不再依赖耗时的鲁棒位姿估计器</b>。</p>
+    <div class="who">DBoW2 2012 · Scan Context 2018/2022 · LCDNet 2022 · OverlapTransformer 2022 · LCR-Net 2024 · SALAD 2024</div>
+  </div>
+
+  <div class="cc">
+    <h4>③ 端到端深度 VO</h4>
+    <div class="say">"直接从图像算出我走了多远"</div>
+    <p><b>DeepVO（2017）</b>第一次证明单目视觉里程计可以<b>端到端</b>做——直接从 RGB 图像估计位姿，不需要先验知识或额外参数来恢复绝对尺度。</p>
+    <p><b>UnDeepVO（2018）</b>用无监督方式，<b>训练时借助立体像对</b>来获得带绝对尺度的位姿和稠密深度。</p>
+    <p><b>DROID-SLAM（2021）</b>是转折点：通过一个 <b>Dense Bundle Adjustment（稠密光束法平差）层</b>，
+    对相机位姿和逐像素深度做<b>循环迭代更新</b>——精度大幅提升，而且<b>灾难性失败显著减少</b>。</p>
+    <p><b>DPVO（2023）</b>把稠密光流换成<b>跟踪图像小块</b>的循环网络结构，保持精度的同时大幅降低计算量。</p>
+    <div class="who">DeepVO 2017 · UnDeepVO 2018 · D3VO 2020 · DROID-SLAM 2021 · DPVO 2023</div>
+  </div>
+
+  <div class="cc">
+    <h4>④ 基础模型进入 SLAM</h4>
+    <div class="say">"让通用大模型来当零件"</div>
+    <p><b>DUSt3R（2024）</b>提出 <b>pointmap（点图）表示</b>——网络直接预测规范坐标系下的三维点图，
+    同时保留"每个像素对应场景中哪个三维点"这层隐式关系。好处是<b>统一了单目和双目的三维重建</b>，
+    而且不需要相机标定、不需要初始位姿。</p>
+    <p><b>MASt3R-SLAM（2025）</b>是第一个<b>以双视图三维重建先验为基础</b>的实时 SLAM：
+    做点图匹配、跟踪与局部融合、图构建与回环、二阶全局优化，还能处理"通用且随时间变化的相机模型"。</p>
+    <p><b>SLAM3R（2024）</b>用前馈网络直接从 RGB 视频预测统一坐标系下的三维点图。</p>
+    <p><b>DINOv2 / SAM</b> 作为特征提取和分割的基础模型，被下游 SLAM 直接调用
+    （比如 WildGS-SLAM 就用 DINOv2 特征判断"哪里可能是动态物体"）。</p>
+    <div class="who">DINOv2 2023 · SAM 2023 · DUSt3R 2024 · SLAM3R 2024 · Metric3D v2 2024 · MASt3R-SLAM 2025</div>
+  </div>
+</div>
+
+<div class="box ok">
+  <h4>读完这一章你应该能回答</h4>
+  <ul>
+    <li><b>为什么深度学习从"匹配"和"检索"切入？</b>因为这两个问题的答案难以用公式写全（光照、视角、尺度一变就失效），但"像不像"人类一看就知道，正好适合用大量数据训练。</li>
+    <li><b>SLAM 主干为什么还是传统方法占优？</b>因为位姿优化、地图维护有明确的数学模型，可解释、可控制，神经网络在这里反而容易出"说不清为什么"的错。</li>
+    <li><b>DROID-SLAM 的意义是什么？</b>它证明了把"优化过程"本身嵌进神经网络（做成一个可微的层）比纯端到端黑箱效果更好，而且大幅减少了灾难性失败。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════ 第九章 ═══════════════ -->
+<h2 id="multi">九、多台机器人一起干 <small>难点从"能不能协同"变成了"出错怎么办"</small></h2>
+
+<div class="tldr">
+  <p>多台机器人各自建图，然后互相交换信息、拼成一张大图。听起来只是"跑很多遍单机 SLAM 再合并"，
+  但真正难的地方在于：<b>两台机器都以为"我们到过同一个地方"，其实其中一台认错了</b>。
+  这种错误一旦被采信，整张地图就会被拧成一团。所以这条线的演进方向是：<b>从"能协同"，走向"能自动识别并拒绝错误协同"</b>。</p>
+</div>
+
+<div class="analogy">
+  <p><b>想象三个朋友分头逛一个陌生商场，然后通过对讲机汇总路线。</b></p>
+  <p>甲说："我在优衣库门口。" 乙说："我也在优衣库门口。"
+  ——如果两人真的在同一个门口，他们的地图就能对齐，这是好事。</p>
+  <p>但如果商场里有三个优衣库（或者乙看错了楼层），他们就会把两张不相干的图<b>强行拼在一起</b>，
+  <em>结果整张商场地图被拧成麻花，而且比不拼还糟</em>。更麻烦的是，事后很难发现是哪儿出的错。</p>
+  <p>所以这条线的核心技术问题就是：<b>怎么在没人监督的情况下，判断"这次协同到底是不是真的"。</b></p>
+</div>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 350" role="img" aria-label="集中式与分布式多机SLAM的拓扑对比">
+  <!-- 左：集中式 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="388" height="322" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#d29922" font-size="13.5" font-weight="600">集中式：所有数据汇总到一台服务器</text>
+    <text x="16" y="48" class="sv-xs">COVINS · LAMP 2.0</text>
+
+    <g transform="translate(194,158)">
+      <!-- 中心服务器 -->
+      <rect x="-30" y="-24" width="60" height="48" rx="6" fill="#d29922" opacity=".9"/>
+      <rect x="-22" y="-16" width="44" height="6" rx="2" fill="#0d1117" opacity=".55"/>
+      <rect x="-22" y="-4" width="44" height="6" rx="2" fill="#0d1117" opacity=".55"/>
+      <rect x="-22" y="8" width="44" height="6" rx="2" fill="#0d1117" opacity=".55"/>
+      <text x="0" y="44" class="sv-xs" text-anchor="middle" fill="#d29922">中央服务器</text>
+
+      <!-- 五个机器人 -->
+      <g>
+        <line x1="-30" y1="-14" x2="-118" y2="-68" stroke="#d29922" stroke-width="1.1" opacity=".5" stroke-dasharray="5 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" repeatCount="indefinite"/></line>
+        <line x1="-34" y1="0" x2="-128" y2="0" stroke="#d29922" stroke-width="1.1" opacity=".5" stroke-dasharray="5 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" begin=".3s" repeatCount="indefinite"/></line>
+        <line x1="-30" y1="14" x2="-118" y2="68" stroke="#d29922" stroke-width="1.1" opacity=".5" stroke-dasharray="5 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" begin=".6s" repeatCount="indefinite"/></line>
+        <line x1="30" y1="-14" x2="118" y2="-68" stroke="#d29922" stroke-width="1.1" opacity=".5" stroke-dasharray="5 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" begin=".9s" repeatCount="indefinite"/></line>
+        <line x1="34" y1="0" x2="128" y2="0" stroke="#d29922" stroke-width="1.1" opacity=".5" stroke-dasharray="5 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" begin="1.2s" repeatCount="indefinite"/></line>
+        <line x1="30" y1="14" x2="118" y2="68" stroke="#d29922" stroke-width="1.1" opacity=".5" stroke-dasharray="5 4">
+          <animate attributeName="stroke-dashoffset" from="0" to="-18" dur="1.6s" begin="1.5s" repeatCount="indefinite"/></line>
+      </g>
+      <g fill="#58a6ff">
+        <g transform="translate(-124,-74)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(-134,0)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(-124,74)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(124,-74)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(134,0)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(124,74)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+      </g>
+    </g>
+
+    <text x="16" y="266" class="sv-xs" fill="#7ee787">优点：全局信息完整，容易做对</text>
+    <text x="16" y="288" class="sv-xs" fill="#ff9e9e">缺点一：服务器一挂，全队失联</text>
+    <text x="16" y="308" class="sv-xs" fill="#ff9e9e">缺点二：机器人一多，带宽顶不住</text>
+  </g>
+
+  <!-- 右：分布式 -->
+  <g transform="translate(418,14)">
+    <rect x="0" y="0" width="388" height="322" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="16" y="28" class="sv-lbl" fill="#39c5cf" font-size="13.5" font-weight="600">分布式：只在能通信的邻居之间直接交换</text>
+    <text x="16" y="48" class="sv-xs">DOOR-SLAM · Kimera-Multi · Swarm-SLAM · D²SLAM · DCL-SLAM</text>
+
+    <g transform="translate(194,158)">
+      <!-- 网状连接 -->
+      <g stroke="#39c5cf" stroke-width="1.1" opacity=".48">
+        <line x1="-124" y1="-68" x2="-24" y2="-86"/><line x1="-24" y1="-86" x2="66" y2="-56"/>
+        <line x1="66" y1="-56" x2="126" y2="8"/><line x1="126" y1="8" x2="66" y2="76"/>
+        <line x1="66" y1="76" x2="-32" y2="82"/><line x1="-32" y1="82" x2="-126" y2="46"/>
+        <line x1="-126" y1="46" x2="-124" y2="-68"/><line x1="-24" y1="-86" x2="66" y2="76"/>
+        <line x1="-124" y1="-68" x2="66" y2="-56"/><line x1="-24" y1="-86" x2="126" y2="8"/>
+      </g>
+      <g fill="#58a6ff">
+        <g transform="translate(-124,-68)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(-24,-86)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(66,-56)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(126,8)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(66,76)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+        <g transform="translate(-32,82)"><circle r="10"/><circle cx="-6" cy="11" r="3" fill="#33475e"/><circle cx="6" cy="11" r="3" fill="#33475e"/></g>
+      </g>
+      <!-- 错误的回环 -->
+      <line x1="-24" y1="-86" x2="-126" y2="46" stroke="#ff7b72" stroke-width="2" stroke-dasharray="6 4">
+        <animate attributeName="opacity" values=".35;1;.35" dur="2.6s" repeatCount="indefinite"/>
+      </line>
+      <g transform="translate(-76,-24)">
+        <circle r="13" fill="#101a13" stroke="#3fb950" stroke-width="1.6"/>
+        <text x="0" y="5" class="sv-xs" fill="#3fb950" text-anchor="middle">✕</text>
+      </g>
+      <text x="-10" y="-92" class="sv-xs" fill="#ff7b72">这条"我们见过"其实是错的</text>
+    </g>
+
+    <text x="16" y="266" class="sv-xs" fill="#7ee787">优点一：没有单点故障，谁掉线都不影响别人</text>
+    <text x="16" y="288" class="sv-xs" fill="#7ee787">优点二：通信量小，机器人多了也能撑</text>
+    <text x="16" y="308" class="sv-xs" fill="#ff9e9e">缺点：机器之间必须先"达成一致"，算法复杂</text>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>左边是集中式</b>：每台机器人（蓝色小圆点）把数据发给中央服务器，服务器统一算完再发回去。
+  优点是全局信息完整、容易做对；缺点是<b>服务器一挂整队就瘫</b>，而且机器人一多，带宽就顶不住。</p>
+  <p><b>右边是分布式</b>：每台机器人只和自己通信范围内的邻居直接交换数据，没有中心。
+  优点是<b>没有单点故障、通信量小</b>。</p>
+  <p><b>注意那根红色虚线和旁边的 ✕。</b>它表示"两台机器误以为到过同一个地方"的错误协同——
+  右下角那个绿圈里的叉号，表示<b>这个错误被算法自动识别并剔除了</b>。</p>
+  <p><b>为什么"剔除错误协同"是这条线最重要的事？</b>因为一旦错误的协同被采信，整张地图会被拧成一团，而且事后很难发现。
+  分布式系统里没有中心可以统揽全局判断，所以每台机器都必须自己有能力识破这种错误——
+  这就是 DOOR-SLAM 的"分布式一致集最大化"、Kimera-Multi 的"分布式渐进非凸"在解决的事。</p>
+</div>
+</div>
+
+<h3>9.1 九个系统的关键差异</h3>
+<table>
+  <tr><th>系统</th><th>架构</th><th>最本质的那个不同</th></tr>
+  <tr><td><b>Multi-UAV-SLAM</b> 2017</td><td>集中式</td><td>协同 SLAM 的早期架构原型：一台中央服务器 + 多个智能体 + 无线通信</td></tr>
+  <tr><td><b>DOOR-SLAM</b> 2020</td><td>完全分布式</td><td>用<b>分布式两两一致测量集最大化（PCM）</b>剔除机间伪回环——因为不怕虚假回环了，就可以用<b>更激进的参数</b>而不牺牲召回率；只靠点对点通信，前端不交换原始传感器数据（省带宽）</td></tr>
+  <tr><td><b>COVINS</b> 2021</td><td>集中式</td><td>面向"多智能体 + 多用户 AR"的大规模协同视觉惯性 SLAM</td></tr>
+  <tr><td><b>Kimera-Multi</b> 2022</td><td>完全分布式</td><td>用<b>分布式渐进非凸（GNC）</b>做鲁棒位姿图优化，能识别并拒绝由感知歧义导致的机间和机内错误回环；最终输出全局一致的<b>度量-语义三维网格</b>（不只是轨迹，还有带语义的模型）</td></tr>
+  <tr><td><b>LAMP 2.0</b> 2022</td><td>集中式</td><td>DARPA 地下挑战赛 Team CoSTAR 的方案：一个能适配不同里程计来源的单机前端接口 + 可扩展的多机前端 + 鲁棒的多机后端；回环检测模块能<b>处理并优先排序迅速增长的候选</b></td></tr>
+  <tr><td><b>DiSCo-SLAM</b> 2022</td><td>分布式</td><td>第一个把轻量的 <b>Scan Context 描述子</b>用于多机 SLAM，实现数据高效的机间观测交换；<b>两阶段（全局 + 局部）优化</b>应对"不知道彼此初始位置"的情况</td></tr>
+  <tr><td><b>Swarm-SLAM</b> 2024</td><td>去中心化</td><td>四个性质：可扩展 / 灵活 / 去中心化 / 稀疏；<b>邻机管理模块</b>持续跟踪"谁在通信范围内、已经交换过什么数据"；<b>机间回环优先级排序</b>降低通信量、加快收敛；ROS 2 实现在五个数据集 + 三种自组网上实测</td></tr>
+  <tr><td><b>D²SLAM</b> 2024</td><td>去中心化分布式</td><td>面向<b>空中集群</b>：区分<b>近场估计</b>（近距离的精确相对状态）和<b>远场估计</b>（一致的全局轨迹）；前端同时支持立体和全向相机以应对空中视场受限；分布式优化在网络延迟下仍保持扩展性和韧性</td></tr>
+  <tr><td><b>DCL-SLAM</b> 2024</td><td>完全分布式</td><td><b>前端无关</b>——可以快速迁移到不同的激光雷达 / 平台 / 场景；机间回环用<b>三级通信流水线</b>做到数据高效</td></tr>
+</table>
+
+<!-- ═══════════════ 第十章 ═══════════════ -->
+<h2 id="event">十、事件相机 <small>一种不拍"画面"、只报告"哪里变了"的传感器</small></h2>
+
+<div class="tldr">
+  <p>普通相机每秒拍 30 张完整照片；<b>事件相机不拍照片</b>。它每一个像素只干一件事：
+  一旦这个像素的亮度变化超过阈值，就立刻发一个信号说"我这里变了"，并附上是变亮了还是变暗了。
+  这样做的好处简直是作弊——<b>没有运动模糊、明暗反差能到 120 dB（普通相机约 60 dB）</b>。
+  坏处也很致命：<b>场景不动的时候，它什么都不输出</b>。</p>
+</div>
+
+<div class="analogy">
+  <p><b>把普通相机想象成每 1/30 秒拍一张全班合影；把事件相机想象成一个坐在教室后排的记录员。</b></p>
+  <p>合影的问题在于：如果有人在快门那一瞬间快速挥手，照片上就是一道糊影——<em>你不知道手到底在哪</em>。</p>
+  <p>记录员不一样：他不管谁坐着不动，只记"谁动了"。所以哪怕有人飞速挥手，
+  他也能精确记下"第 3 秒手抬起来了，第 3.02 秒放下了"——<em>时间精度极高，而且完全没有"模糊"这回事。</em></p>
+  <p>但如果全班纹丝不动呢？记录员的本子上就是一片空白。
+  <b>所以事件相机不能单独用，它必须和普通相机（或 IMU）搭配。</b>这也正是这条线上所有论文的共同结构。</p>
+</div>
+
+<div class="anim" data-anim>
+<svg viewBox="0 0 820 432" role="img" aria-label="普通相机与事件相机的对比">
+  <!-- 上：普通相机 -->
+  <g transform="translate(14,14)">
+    <rect x="0" y="0" width="792" height="182" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="18" y="28" class="sv-lbl" fill="#ffa657" font-size="13.5" font-weight="600">普通相机：每 1/30 秒拍一张完整画面</text>
+    <text x="18" y="48" class="sv-xs">快门打开的这段时间里，物体一直在动 → 照片上留下一道糊影</text>
+
+    <!-- 三帧连拍 -->
+    <g transform="translate(34,66)">
+      <rect x="0" y="0" width="132" height="72" rx="5" fill="#151d27" stroke="#39506b"/>
+      <circle cx="34" cy="36" r="11" fill="#ffa657"/>
+      <text x="0" y="92" class="sv-xs">第 1 帧</text>
+      <text x="0" y="108" class="sv-xs" fill="#7ee787">球清晰</text>
+
+      <rect x="158" y="0" width="132" height="72" rx="5" fill="#151d27" stroke="#39506b"/>
+      <ellipse cx="76" cy="36" rx="34" ry="11" fill="#ffa657" opacity=".55"/>
+      <text x="158" y="92" class="sv-xs">第 2 帧</text>
+      <text x="158" y="108" class="sv-xs" fill="#ff9e9e">开始糊了</text>
+
+      <rect x="316" y="0" width="132" height="72" rx="5" fill="#151d27" stroke="#39506b"/>
+      <ellipse cx="76" cy="36" rx="56" ry="11" fill="#ffa657" opacity=".4"/>
+      <text x="316" y="92" class="sv-xs">第 3 帧</text>
+      <text x="316" y="108" class="sv-xs" fill="#ff9e9e">糊成一条线，"它在哪"丢了</text>
+    </g>
+
+    <g transform="translate(540,70)">
+      <text x="0" y="14" class="sv-s" fill="#ff9e9e">三个问题：</text>
+      <text x="0" y="40" class="sv-xs">① 动得越快，糊得越长</text>
+      <text x="0" y="62" class="sv-xs">② 明暗反差大的场景（逆光）</text>
+      <text x="0" y="80" class="sv-xs">　 亮的全白、暗的全黑，中间全丢</text>
+      <text x="0" y="102" class="sv-xs">③ 最高只有约 60 dB 动态范围</text>
+    </g>
+  </g>
+
+  <!-- 下：事件相机 -->
+  <g transform="translate(14,210)">
+    <rect x="0" y="0" width="792" height="180" rx="10" fill="#111720" stroke="#2b3540"/>
+    <text x="18" y="28" class="sv-lbl" fill="#3fb950" font-size="13.5" font-weight="600">事件相机：每个像素只在"自己亮度变了"的时候发一个信号</text>
+    <text x="18" y="48" class="sv-xs">不动的区域一声不响；动过的地方留下一串带精确时间戳的点</text>
+
+    <g transform="translate(34,66)">
+      <rect x="0" y="0" width="486" height="86" rx="5" fill="#151d27" stroke="#39506b"/>
+      <!-- 静止区 -->
+      <text x="14" y="20" class="sv-xs" fill="#6e7681">静止区域 → 完全空白（没有信息）</text>
+      <line x1="14" y1="30" x2="120" y2="60" stroke="#2b3540" stroke-width="1" stroke-dasharray="3 4"/>
+      <text x="14" y="76" class="sv-xs" fill="#6e7681">静止区：什么都不输出</text>
+
+      <!-- 运动轨迹事件点 -->
+      <g fill="#3fb950">
+        <circle cx="150" cy="58" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" repeatCount="indefinite"/></circle>
+        <circle cx="176" cy="56" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin=".15s" repeatCount="indefinite"/></circle>
+        <circle cx="202" cy="55" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin=".3s" repeatCount="indefinite"/></circle>
+        <circle cx="228" cy="55" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin=".45s" repeatCount="indefinite"/></circle>
+        <circle cx="254" cy="56" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin=".6s" repeatCount="indefinite"/></circle>
+        <circle cx="280" cy="58" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin=".75s" repeatCount="indefinite"/></circle>
+        <circle cx="306" cy="61" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin=".9s" repeatCount="indefinite"/></circle>
+        <circle cx="332" cy="61" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin="1.05s" repeatCount="indefinite"/></circle>
+        <circle cx="358" cy="58" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin="1.2s" repeatCount="indefinite"/></circle>
+        <circle cx="384" cy="55" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin="1.35s" repeatCount="indefinite"/></circle>
+        <circle cx="410" cy="55" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin="1.5s" repeatCount="indefinite"/></circle>
+        <circle cx="436" cy="57" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin="1.65s" repeatCount="indefinite"/></circle>
+        <circle cx="462" cy="60" r="3"><animate attributeName="opacity" values="0;1;1;0" dur="3s" begin="1.8s" repeatCount="indefinite"/></circle>
+      </g>
+      <text x="176" y="80" class="sv-xs" fill="#3fb950">球摆动的轨迹 → 沿路爆出一串点，每个点都带时间戳</text>
+    </g>
+
+    <g transform="translate(524,72)">
+      <text x="0" y="10" class="sv-s" fill="#9fe0a8">好处：</text>
+      <text x="0" y="34" class="sv-xs">① 完全没有运动模糊</text>
+      <text x="0" y="56" class="sv-xs">② 动态范围 120 dB</text>
+      <text x="0" y="74" class="sv-xs">　 逆光、夜晚也能用</text>
+      <text x="0" y="96" class="sv-xs">③ 时间精度到微秒级</text>
+      <text x="0" y="120" class="sv-s" fill="#ff9e9e">但静止时"瞎"了 →</text>
+      <text x="0" y="140" class="sv-xs" fill="#ff9e9e">必须配普通相机或 IMU</text>
+    </g>
+  </g>
+</svg>
+<div class="cap">
+  <span class="h">怎么看这张图</span>
+  <p><b>上面是普通相机的困境。</b>快门打开的这段时间里，球一直从左边移到右边，
+  于是照片上留下的不是"一个球"，而是<b>一道糊影</b>。球动得越快、糊得越长，"它此刻到底在哪"这个信息就丢了。</p>
+  <p>另外还有两个问题：逆光场景里亮的全白、暗的全黑，中间层次全丢；动态范围只有约 60 dB。</p>
+  <p><b>下面的事件相机完全换了个机制。</b>它不"拍"画面，而是每个像素自己盯着自己的亮度。
+  亮度变了就发一个带时间戳和正负号的信号；没变就一声不吭。
+  所以你会看到：<b>静止区域一片空白，运动轨迹上爆出一串点</b>。</p>
+  <p><b>这个机制带来的两个特性，也决定了它的两个用途：</b><br>
+  ① 没有运动模糊 + 极高动态范围 → <b>适合高速运动和极端光照</b>（无人机穿越、隧道出入口）；<br>
+  ② 静止时没输出 → <b>必须和普通相机或 IMU 配合使用</b>——这正是这条线所有系统都是"事件 + 帧 + IMU"三件套的原因。</p>
+</div>
+</div>
+
+<h3>10.1 这条线上做了什么</h3>
+<div class="box">
+  <ul>
+    <li><b>动机（来自论文正文）</b>：事件相机是仿生视觉传感器，输出像素级亮度变化而非标准强度帧。
+    它<b>不受运动模糊影响</b>、<b>动态范围极高</b>，因此在高速运动和极端光照下依然能提供可靠视觉信息。
+    反过来，运动量小的时候它信息很少——而普通相机在低速、光照良好时信息丰富。<b>两者天然互补。</b></li>
+    <li><b>Ultimate SLAM（2018）</b>：第一个把<b>事件 + 标准帧 + IMU 三者紧耦合</b>的完整流水线，用于 HDR 和高速场景。</li>
+    <li><b>EVO（2017）</b>：用<b>边缘图做"图像到模型"的对齐</b>来跟踪，配合事件式的三维重建，
+    构成第一个事件相机的并行跟踪与建图流水线；在 CPU 上实时，每秒能估计数百个位姿，恢复半稠密三维地图。</li>
+    <li><b>ESVO（2021）</b>：事件式双目视觉里程计，核心是<b>一个衡量双目事件流时空一致性的目标函数</b>，
+    并利用<b>逆深度的概率特性</b>做融合，提升稠密度和精度。</li>
+    <li><b>DEVO（2022）</b>：深度相机 + 高分辨率事件相机的混合双目；
+    用<b>阈值化的 time-surface 图</b>做边缘检测和半稠密深度提取，做 6 自由度位姿估计。</li>
+    <li><b>ESVIO（2023）</b>：第一个<b>纯事件式的双目惯性里程计</b>（ESIO，滑窗图优化），
+    并扩展出图像辅助版本，把双目事件流、双目图像帧、IMU 三者紧耦合。</li>
+    <li><b>PL-EVIO（2024）</b>：把<b>事件角点特征 + 基于线的事件特征 + 基于点的图像特征</b>三种紧耦合；
+    专门针对"纯点特征在人工环境中容易退化"的问题（因为人造环境里全是直线和平面）。</li>
+    <li><b>CMax-SLAM（2024）</b>：用<b>对比度最大化</b>做事件相机的旋转运动光束法平差，
+    同时重建出场景边缘的<b>锐利全景图</b>。</li>
+  </ul>
+</div>
+
+<div class="qa">
+  <div>
+    <div class="q">问：事件相机是不是更先进的相机，迟早会取代普通相机？</div>
+    <p class="a"><b>不会。</b>它们采集的是两种完全不同的信息：普通相机记录"哪里亮"，
+    事件相机记录"哪里变了"。</p>
+    <p class="a">静止的时候事件相机一片空白——你没法用它来看一张照片、识别一个静止的物体。
+    所以它是<b>互补</b>关系，不是替代关系。目前所有主流方案都是"事件 + 普通帧 + IMU"三件套。</p>
+  </div>
+  <div>
+    <div class="q">问：那我什么时候该考虑用它？</div>
+    <p class="a">三个典型场景：<b>① 高速运动</b>（无人机快速穿越、机械臂高速动作）；
+    <b>② 极端光照</b>（隧道出入口的高对比、夜间、强逆光）；
+    <b>③ 要求极低延迟</b>（事件相机的响应延迟是微秒级）。</p>
+    <p class="a">如果你的机器人是在光照良好的室内慢慢走，<b>用不上</b>——省下这个钱。</p>
+  </div>
+</div>
+
+<!-- ═══════════════ 第十一章 ═══════════════ -->
+<h2 id="terms">十一、术语总表 <small>用大白话讲一遍，读论文卡住时回来查</small></h2>
+<p>下面这些词在读论文时会反复出现。每个都给了"一句话大白话"和必要的补充，按主题分了组。</p>
+
+<div class="concepts">
+  <div class="cc">
+    <h4>基础概念</h4>
+    <p><b>SLAM</b> —— Simultaneous Localization And Mapping，同时定位与建图。一边走一边搞清楚"我在哪"和"周围什么样"，两件事互相纠正。</p>
+    <p><b>定位 / 建图</b> —— "我在哪" / "周围什么样"。两者互为前提，必须一起解。</p>
+    <p><b>里程计（Odometry）</b> —— 只靠自身传感器推算"我移动了多少"，不管全局地图。走久了必然漂移。</p>
+    <p><b>漂移（Drift）</b> —— 误差滚雪球。每步错一点点，累积成大偏差。像闭眼走直线。</p>
+    <p><b>回环检测（Loop Closure）</b> —— 认出"这地方我来过"，从而一次性修正累积误差。SLAM 能长时间运行的关键。</p>
+    <p><b>位姿（Pose）</b> —— 位置 + 朝向，一共 6 个数字（3 个位置 + 3 个角度）。</p>
+    <p><b>紧耦合 / 松耦合</b> —— 紧耦合是"把多个传感器的数据放进同一个方程里一起解"；松耦合是"各自解完再合并结果"。紧耦合更准，更难写。</p>
+    <p><b>退化（Degeneracy）</b> —— 环境缺少足够的几何特征，导致某个方向的位置算不出来。比如一条笔直无特征的隧道里，前后方向就是退化的。</p>
+  </div>
+
+  <div class="cc">
+    <h4>数学与优化</h4>
+    <p><b>因子图（Factor Graph）</b> —— 把估计问题画成图：圆点是待求的量（位姿、路标），方块是已知的约束（一次观测、一段惯性积分）。求解 = 调整圆点让所有约束尽量同时满足。</p>
+    <p><b>BA（光束法平差）</b> —— 同时优化"相机位置"和"三维点位置"，让它们投影回图像后和观测到的位置尽量吻合。SLAM 最核心的优化。</p>
+    <p><b>卡尔曼滤波 / EKF</b> —— 一种"边走边修正"的递推估计方法，只维护当前状态和它的不确定性。EKF 是它的非线性版本。</p>
+    <p><b>ESIKF</b> —— 误差状态迭代卡尔曼滤波。FAST-LIO 系列用的后端。"误差状态"指只估计小偏差而不是绝对量，数值上更稳定。</p>
+    <p><b>协方差矩阵</b> —— 一张"谁和谁有关、各自有多不确定"的表格。EKF 时代它的大小是状态数的平方，所以扩展到大规模就崩。</p>
+    <p><b>边缘化（Marginalization）</b> —— 滑动窗口优化时"丢掉旧数据"的操作。不可逆，而且会锁死当时的线性化点。</p>
+    <p><b>延迟边缘化</b> —— DM-VIO 提出的技巧：推迟边缘化，维护第二张图，以便需要时用新的线性化点重建先验。</p>
+    <p><b>流形（Manifold）</b> —— 通俗说就是"三个角度不能像普通数字那样直接相加"的空间（转 350° 再转 20° 等于 10°）。旋转就发生在流形上。</p>
+    <p><b>IMU 预积分</b> —— 把两帧之间成百上千次 IMU 测量"打包"成一个相对运动约束，免得每个采样都塞进优化。</p>
+    <p><b>鲁棒核函数</b> —— 一种"降低异常数据影响"的技巧。有它之后，少数错得离谱的匹配不会把整体结果带偏。</p>
+  </div>
+
+  <div class="cc">
+    <h4>数据结构与地图表示</h4>
+    <p><b>点云（Point Cloud）</b> —— 一堆三维坐标点的集合，没有行列结构，通常也没有颜色。</p>
+    <p><b>体素（Voxel）</b> —— 三维的"像素"，把空间切成小立方体。</p>
+    <p><b>TSDF（截断符号距离场）</b> —— 每个体素存"离最近的真实表面有多远"，正数在外、负数在内，只看表面附近一定范围内的值（截断）。</p>
+    <p><b>k-d 树</b> —— 专为"找最近邻居"设计的数据结构，像查字典一样层层二分缩小范围。</p>
+    <p><b>ikd-Tree</b> —— FAST-LIO2 提出的增量 k-d 树，能边跑边加点/删点、还能局部重平衡。解决"地图要能边建边改"的问题。</p>
+    <p><b>iVox</b> —— Faster-LIO 用的增量体素结构，放弃树、改用"按格子分桶"，支持并行近邻查询。</p>
+    <p><b>surfel（面片）</b> —— 用一个带位置、法向、半径的小圆片代表一块表面，比点信息更多、比网格更轻。</p>
+    <p><b>八叉树（Octree）</b> —— 一种"只在有东西的地方继续细分"的树，用来省内存。</p>
+    <p><b>特征网格 / hash 网格</b> —— 在空间里铺格子，每格存一小段数字（特征向量）。让神经网络"只看局部就改局部"，避免全局牵动。</p>
+    <p><b>球谐系数</b> —— 用来表达"同一个点从不同方向看颜色不同"（也就是反光和光泽）的一组数字。</p>
+  </div>
+
+  <div class="cc">
+    <h4>视觉与神经表示</h4>
+    <p><b>特征点 / 角点</b> —— 图像里有辨识度的小块图案（墙角、斑点），可以被稳定地在多张图里找到。</p>
+    <p><b>描述子</b> —— 把一个局部图像块压成一串数字，希望"同一个物理点在不同角度下这串数字接近"。</p>
+    <p><b>光度误差</b> —— 直接比较"预测的像素亮度"和"实际拍到的亮度"的差距，而不是比较角点位置。</p>
+    <p><b>重投影误差</b> —— "这个三维点投影回图像后应该落在哪"和"实际观测到落在哪"的差距。特征法用的指标。</p>
+    <p><b>NeRF（神经辐射场）</b> —— 用神经网络表示场景：给它位置和视线方向，它回答"这里的密度和颜色"。渲染时沿视线累加。</p>
+    <p><b>隐式表示</b> —— 地图不存数据，而是一段能回答问题的函数。信息藏在网络参数里。</p>
+    <p><b>可微渲染</b> —— 渲染过程本身可以求导，所以"画面和照片的差距"能反向传播回去调整场景表示。</p>
+    <p><b>3DGS（三维高斯泼溅）</b> —— 用一堆显式的半透明彩色椭球表示场景，渲染时把它们投影到屏幕叠加，速度比 NeRF 快几个量级。</p>
+    <p><b>过度平滑</b> —— 神经网络倾向给出"平均答案"，导致尖锐的角落也被渲染成一团糊。</p>
+    <p><b>pointmap（点图）</b> —— DUSt3R 提出的表示：网络直接预测每个像素对应的三维点，同时保留像素与场景的对应关系。</p>
+  </div>
+
+  <div class="cc">
+    <h4>传感器与场景</h4>
+    <p><b>LiDAR（激光雷达）</b> —— 靠"发射激光 + 测量返回时间"来测距的传感器，输出点云。精度高，但没有颜色和纹理。</p>
+    <p><b>IMU</b> —— 惯性测量单元，一个小芯片，测加速度和角速度。频率高（几百 Hz），但会漂移。</p>
+    <p><b>GNSS 原始观测</b> —— 卫星原始信号（伪距、多普勒），而不是已经算好的位置。信息更多，更容易和其他传感器联合优化。</p>
+    <p><b>帧内运动畸变</b> —— 一帧点云内部的点其实来自不同时刻、不同位置，导致这帧自身就是扭曲的。</p>
+    <p><b>事件相机</b> —— 不拍画面，只报告"哪个像素亮度变了"。没有运动模糊、动态范围极高，但静止时没输出。</p>
+    <p><b>time-surface</b> —— 事件相机里的一种表示：把最近每个像素"最后一次变化的时间"做成一张图，用来提取边缘。</p>
+    <p><b>VIO / LIO / LIVO</b> —— 视觉惯性 / 激光惯性 / 激光-惯性-视觉里程计。按使用哪几种传感器命名。</p>
+    <p><b>RGB-D</b> —— 彩色图 + 深度图一起输出的相机（比如 Kinect）。</p>
+  </div>
+
+  <div class="cc">
+    <h4>工程与评测</h4>
+    <p><b>帧（frame）</b> —— 一次完整的传感数据采集（一张图、一圈激光扫描）。</p>
+    <p><b>关键帧（Keyframe）</b> —— 不是每一帧都值得存，挑出来的有代表性的帧。用来平衡精度和算力。</p>
+    <p><b>滑动窗口</b> —— 只保留最近一段时间的状态一起优化，旧的自然丢掉。控制算力规模的通用手段。</p>
+    <p><b>ATE / RPE</b> —— 绝对轨迹误差 / 相对位姿误差。评测 SLAM 精度的两个标准指标。</p>
+    <p><b>Hilti-Oxford 数据集</b> —— 用毫米级真值、微米级验证的外参、硬件时间同步，把 SLAM 评测从"相对排名"推向"绝对精度"。</p>
+    <p><b>DARPA SubT</b> —— 美国国防部的地下挑战赛。这个领域的"极限压力测试"，很多方法都是为它开发的。</p>
+    <p><b>GNC（渐进非凸）</b> —— 一种鲁棒优化策略：先宽容地接受所有数据，再逐渐收紧、逐步剔除异常项。Kimera-Multi 用它剔除错误回环。</p>
+    <p><b>ROS 2</b> —— 机器人操作系统第 2 代，机器人软件的通用框架。</p>
+  </div>
+</div>
+
+<!-- ═══════════════ 第十二章 ═══════════════ -->
+<h2 id="pick">十二、你的场景该选哪条路 <small>点一下你的情况，看看推荐</small></h2>
+<p>这个领域没有"最好的方法"，只有"适合你场景的方法"。下面按常见场景给了推荐路线和理由。</p>
+
+<div class="picker">
+  <div class="opts" id="pickBtns">
+    <button data-k="indoor">室内移动机器人（算力有限）</button>
+    <button data-k="auto">室外自动驾驶（大规模）</button>
+    <button data-k="uav">无人机（高速、轻载）</button>
+    <button data-k="ar">AR / VR 眼镜</button>
+    <button data-k="mine">地下 / 矿井 / 隧道</button>
+    <button data-k="swarm">多机器人集群</button>
+    <button data-k="lowcost">低成本 / 可消耗平台</button>
+  </div>
+  <div id="pickOut"></div>
+</div>
+
+<!-- ═══════════════ 第十三章 ═══════════════ -->
+<h2 id="open">十三、还没解决的难题 <small>来自 DARPA SubT 综述的冷静结论</small></h2>
+
+<div class="tldr">
+  <p>这一节的内容来自一篇被广泛引用的综述（那个地下挑战赛的赛后总结）。它的价值在于<b>说了实话</b>：
+  在很多场景下 SLAM 确实"基本解决了"，但<b>真正让机器人失败的原因，跟论文里优化的那些指标基本无关</b>。</p>
+</div>
+
+<div class="box warn">
+  <h4>六个还没解决的问题</h4>
+  <ul>
+    <li><b>① 领域的"胜利"是有条件的。</b>在"配备了高质量多模态传感套件"的前提下，地下 SLAM 问题可以说已经解决——
+    但仅限于环境、尺度、传感器、参数调优和算力<b>都满足特定条件</b>的情况。换成别的条件就不一定。</li>
+    <li><b>② 最常见的失效原因不是精度不够，而是被撞。</b>穿越崎岖地形时的<b>跌落、撞击导致定位失败</b>才是主要杀手。
+    这些剧烈运动无法被机载感知系统完全捕获（比如结构光传感器采样率偏低），会导致运动估计变差，最终彻底丢失定位。
+    <b>也就是说：在实验室里优化 1% 的精度，不如解决"摔一下还能站起来"。</b></li>
+    <li><b>③ 领域缺少"弹性"的基础研究。</b>现在的鲁棒系统是设计来"承受"的（加冗余、加保护）；
+    但真正需要的是在<b>意外碰撞与传感器流中断</b>下可靠的失效检测与恢复机制。
+    这不是"多装几个传感器"能解决的，缺的是方法论层面的研究。</li>
+    <li><b>④ 向上扩展（更多机器人）。</b>集中式方案在 5–10 台机器人能达到精确实时；
+    去中心化方案在中等规模（小于 1 公里）不依赖机间回环也能达到很小误差。
+    但扩展到 <b>100 台以上</b>仍是开放问题。</li>
+    <li><b>⑤ 向下扩展（更便宜的机器人）。</b>现有方案大多依赖一个或多个激光雷达 + 强力嵌入计算机。
+    用<b>低成本组件</b>达到同等能力、以支持大量"可消耗"机器人执行高风险任务（搜索救援、行星探索），还需要大量工作。</li>
+    <li><b>⑥ 非传统传感器还没被充分利用。</b>热成像可以穿透视觉退化条件（烟、尘、黑暗），雷达能在低光或粉尘中维持工作。
+    引入这些新模态、并设计相应的失效检测与恢复方法，是有明确价值的方向。</li>
+  </ul>
+</div>
+
+<div class="box ok">
+  <h4>如果你要选一个研究方向，这里可能是机会</h4>
+  <ul>
+    <li><b>"摔了之后怎么办"</b> —— 失效检测、重定位、地图修复的完整闭环。目前没有公认的框架。</li>
+    <li><b>低成本方案的上限在哪</b> —— 一颗几十元的摄像头 + 便宜 IMU，能做到什么程度？这个答案会直接决定机器人能不能大规模铺开。</li>
+    <li><b>把"动态物体"变成资产而不是噪声</b> —— Dynam-SLAM 已经开始把动态特征转成"虚拟路标"，这条思路可以走得更远。</li>
+    <li><b>评测标准的迁移</b> —— 从"相对排名"走向"绝对精度"（Hilti-Oxford 那条路），会让很多"看起来很好"的方法失去优势，也让真正扎实的方法凸显出来。</li>
+  </ul>
+</div>
+
+<footer>
+  语料库：<span class="mono">papers/</span> 255 篇论文 PDF（1.3 GB） · <span class="mono">md/</span> 全文 Markdown（268 MB） · <span class="mono">md/images/</span> 9081 张原文插图<br>
+  逐篇技术索引：<span class="mono">md/_compact.md</span>（每篇的自述差异） · <span class="mono">md/_digest.md</span>（完整抽取版）<br>
+  本页所有技术描述均来自论文正文的抽取内容（摘要 / 作者自述贡献 / 方法段 / 实验设置），未做凭标题的推测。<br>
+  所有插图均为本页手绘 SVG，用于解释机制，不代表论文原图。<br><br>
+  <b style="color:#a8b3c0">配套文档：</b>
+  <a href="SLAM%E6%8A%80%E6%9C%AF%E6%BC%94%E8%BF%9B%E8%AF%A6%E8%A7%A3.html" style="color:#58a6ff">《SLAM 技术演进与差异 · 详解》</a>（速查版，术语密度高，适合入门后精读） ·
+  <a href="论文语料库总目录.md" style="color:#58a6ff">《论文语料库总目录》</a>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var prog = document.getElementById('prog'), top = document.getElementById('top');
+  function onScroll(){
+    var h = document.documentElement.scrollHeight - window.innerHeight;
+    var p = h > 0 ? (window.scrollY / h) * 100 : 0;
+    prog.style.width = p.toFixed(2) + '%';
+    top.classList.toggle('on', window.scrollY > 700);
+  }
+  window.addEventListener('scroll', onScroll, {passive: true});
+  onScroll();
+  top.addEventListener('click', function(){ window.scrollTo({top: 0, behavior: 'smooth'}); });
+
+  var anims = document.querySelectorAll('.anim[data-anim]');
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        var on = e.isIntersecting;
+        e.target.classList.toggle('play', on);
+        var svgs = e.target.querySelectorAll('svg');
+        for (var i = 0; i < svgs.length; i++) {
+          try { if (on) { svgs[i].unpauseAnimations(); } else { svgs[i].pauseAnimations(); } } catch (_) {}
+        }
+      });
+    }, {threshold: 0.15});
+    for (var i = 0; i < anims.length; i++) io.observe(anims[i]);
+  } else {
+    for (var j = 0; j < anims.length; j++) anims[j].classList.add('play');
+  }
+
+  var DATA = {
+    indoor: {
+      t: '室内移动机器人（算力有限，比如 Jetson 级别）',
+      lead: '这类场景的典型约束是：算力有限、环境里人不少、需要长时间稳定运行。主推激光惯性这条线，因为它在算力效率和鲁棒性之间最平衡。',
+      steps: [
+        ['主选', '<b>FAST-LIO2</b>（2022）—— 不做特征提取 + ikd-Tree，代码量小、对不同的激光雷达适应性强。是当前室内激光惯性事实上的基线。'],
+        ['算力更紧', '<b>Faster-LIO</b>（2022）—— 用 iVox 替代树结构，并行近邻查询，吞吐高一个档次。或者 <b>DLO</b>（2022），专为算力受限场景设计。'],
+        ['要回环一致', '<b>LIO-SAM</b>（2020）—— 如果场景大、必须闭环，它把 IMU、激光、回环全放上因子图，工程成熟度高。'],
+        ['极简路线', '<b>KISS-ICP</b>（2023）—— 连 IMU 都不用，参数极少、换雷达免调参。预算紧就先用它试，跑不动再升级。'],
+        ['要渲染能力', '<b>Photo-SLAM</b>（2024）—— 如果还需要三维可视化，它是能在 Jetson AGX Orin 上实时跑的高斯方案。'],
+        ['避坑', '别把神经隐式或高斯 SLAM 当主定位源——它们目前更适合「重建与渲染」，而不是「稳定定位」。']
+      ]
+    },
+    auto: {
+      t: '室外自动驾驶（大规模、高速、有 GPS）',
+      lead: '这类场景的约束是：尺度极大（几公里到几十公里）、速度高、必须处理光照剧变，但通常有 GNSS 且算力相对充足。主推「激光惯性 + GNSS 紧融合」加「场景识别」。',
+      steps: [
+        ['主选', '<b>LIO-SAM</b>（2020）—— 因子图框架天然适合塞进 GPS 因子，是激光 + IMU + GNSS + 回环的标准组合。'],
+        ['GNSS 弱信号', '<b>GVINS</b> —— 不用「算好的位置」，而是把 GNSS 原始观测量（伪距 + 多普勒）直接融进因子图，室内外无缝衔接。要高精度就看 <b>P³-VINS</b>。'],
+        ['回环识别', '<b>Scan Context++</b>（2022）—— 专门应对城市里不可避免的「车道级横向偏移」，对反向重访也鲁棒。'],
+        ['动态物体多', '<b>Dynam-SLAM</b>（2023）—— 把动态特征转成「虚拟路标」而不是丢弃；或者走 <b>DynaSLAM</b> 那条线（分割网络 + 几何检测 + 背景修补）。'],
+        ['评测参考', '<b>Hilti-Oxford</b>（2023）—— 用毫米级真值做绝对精度评测，比相对排名更可信。']
+      ]
+    },
+    uav: {
+      t: '无人机（高速运动、载重和算力都受限）',
+      lead: '核心矛盾是：飞得快 → 运动剧烈 → 传统按帧处理会产生严重畸变；载重有限 → 装不了重传感器和强算力。所以两件事最值钱：逐点处理和轻量方案。',
+      steps: [
+        ['主选', '<b>Point-LIO</b>（2023）—— 逐点处理，每个点在采样时刻就融合，消除帧内畸变，输出频率接近点的采样率，能跟踪极剧烈的运动。'],
+        ['视觉惯性', '<b>VINS-Mono</b> —— 如果只能装摄像头 + IMU，它是最成熟的单目惯性方案；要更轻更快就上 <b>SVO</b>（半直接法，专为无人机设计）。'],
+        ['极端光照', '事件相机那条线：<b>Ultimate SLAM</b>（2018，事件+帧+IMU 三件套）、<b>DEVO</b>（2022，深度+事件混合双目）。没有运动模糊、动态范围 120 dB。'],
+        ['空中集群', '<b>D²SLAM</b>（2024）—— 面向空中集群，区分近场（精确相对状态）和远场（一致全局轨迹），前端同时支持立体和全向相机。']
+      ]
+    },
+    ar: {
+      t: 'AR / VR 眼镜（小体积、低功耗、要渲染）',
+      lead: '这类场景特殊在：它既要定位，又要「把虚拟物体渲染到正确位置」。所以能渲染和能定位同等重要，而且功耗和体积卡得很死。',
+      steps: [
+        ['主选', '<b>ORB-SLAM3</b>（2021）—— 支持单目/双目/RGB-D 与 IMU，多地图系统，长时间丢失跟踪后还能合并回来。AR/VR 最常用的工业级方案。'],
+        ['想用高斯渲染', '<b>MonoGS</b>（2024）—— 第一个以 3DGS 为唯一表示的近实时 SLAM；或 <b>Photo-SLAM</b>（2024），能在嵌入式平台实时，带高斯金字塔训练。'],
+        ['要抗动态', '<b>WildGS-SLAM</b>（2025）—— 用 DINOv2 特征预测「不确定性地图」来引导剔除动态物体，不需要深度也不需要显式语义分割。'],
+        ['要纯 RGB', '<b>Splat-SLAM</b>（2025）—— 第一个全局优化的纯 RGB 高斯方案，用 DSPO（视差-尺度-位姿联合优化）做 BA。'],
+        ['大模型路线', '<b>MASt3R-SLAM</b>（2025）—— 基于双视图三维重建先验的实时 SLAM，还能处理「随时间变化的相机模型」。']
+      ]
+    },
+    mine: {
+      t: '地下 / 矿井 / 隧道（无光、无 GPS、退化场景）',
+      lead: '这是最严苛的场景：无 GNSS、光线差或全黑、走廊长且重复度高（几何退化）、还有粉尘和碰撞。DARPA SubT 挑战赛就是为它设的。',
+      steps: [
+        ['主选', '<b>LAMP 2.0</b>（2022）—— DARPA SubT Team CoSTAR 的方案，前端可适配不同里程计源，后端鲁棒，回环模块能处理并优先排序迅速增长的候选。'],
+        ['激光惯性', '<b>FAST-LIO2</b> 或 <b>Point-LIO</b> —— 长直隧道里几何退化严重时，逐点处理和直接配准都比提特征的老方法稳。'],
+        ['多传感器', '<b>FAST-LIVO2</b>（2025）—— 激光建几何、视觉补纹理，融进同一个体素地图，还加了实时曝光估计和考虑光束发散的噪声模型。全黑环境要自己带光源。'],
+        ['关键提醒', '读一读那篇 SubT 综述（在语料库里）。它明确说：<b>最常见的失败原因是跌落和撞击，不是精度不够</b>，而领域缺少「弹性」的基础研究。如果你要做课题，这里是明确的缺口。']
+      ]
+    },
+    swarm: {
+      t: '多机器人集群',
+      lead: '核心矛盾从「能不能协同」变成了「出错怎么办」——因为一次错误的机间回环会把整张地图拧成一团。所以选型要看它怎么处理异常回环。',
+      steps: [
+        ['完全分布式', '<b>Kimera-Multi</b>（2022）—— 用分布式渐进非凸（GNC）做鲁棒位姿图优化，能识别并拒绝感知歧义导致的错误回环；输出全局一致的度量-语义三维网格。'],
+        ['怕伪回环', '<b>DOOR-SLAM</b>（2020）—— 用分布式两两一致测量集最大化（PCM）剔除伪回环。因为不怕异常了，它反而能用更激进的参数而不牺牲召回率。'],
+        ['要可扩展、省通信', '<b>Swarm-SLAM</b>（2024）—— 可扩展/灵活/去中心化/稀疏四性质，有邻机管理模块和机间回环优先级排序，ROS 2 实现并在真实自组网测过。'],
+        ['前端无关', '<b>DCL-SLAM</b>（2024）—— 可快速迁移到不同激光雷达/平台/场景，机间回环用三级通信流水线做到数据高效。'],
+        ['规模上限', '注意 SubT 综述的结论：集中式在 5–10 台可精确实时；去中心化在 1 公里以内中等规模表现不错。但<b>扩展到 100 台以上仍是开放问题</b>。']
+      ]
+    },
+    lowcost: {
+      t: '低成本 / 可消耗平台（预算敏感）',
+      lead: '这个方向的核心问题是「用便宜零件能做到什么程度」。目前主流方案都依赖激光雷达 + 强算力，把成本压下来是个明确的研究缺口。',
+      steps: [
+        ['最省的路', '<b>KISS-ICP</b>（2023）—— 只用点对点 ICP + 自适应阈值 + 鲁棒核 + 抽稀 + 运动补偿，<b>连 IMU 都不用</b>，参数极少而且换雷达免调参。堪称极简主义代表作。'],
+        ['视觉路线', '<b>SVO</b>（半直接法，为无人机设计，极轻）或 <b>ORB-SLAM3</b> 的单目模式。再省一点可以用 <b>DROID-SLAM</b> / <b>DPVO</b> 这类学习式方法，但它们要 GPU。'],
+        ['单目尺度问题', '记住单目看不出真实尺度。要么加 IMU（走 VIO），要么接受「形状对但大小任意」的地图。'],
+        ['先验证再买', '<b>OpenVINS</b> 内置仿真器，适合在真买硬件之前先把算法跑通。'],
+        ['研究方向', 'SubT 综述明确指出：用低成本组件达到同等能力、以支持大量可消耗机器人执行高风险任务，<b>仍需大量工作</b>。这既是缺口也是机会。']
+      ]
+    }
+  };
+
+  var btns = document.querySelectorAll('#pickBtns button');
+  var out = document.getElementById('pickOut');
+  for (var k = 0; k < btns.length; k++) {
+    btns[k].addEventListener('click', function(){
+      for (var m = 0; m < btns.length; m++) btns[m].classList.remove('on');
+      this.classList.add('on');
+      var d = DATA[this.getAttribute('data-k')];
+      if (!d) return;
+      var h = '<div class="verdict"><h4>' + d.t + '</h4><p style="font-size:13.5px;color:#a8b3c0;margin:0 0 6px">' + d.lead + '</p><div class="ladder">';
+      for (var s = 0; s < d.steps.length; s++) {
+        h += '<div><span class="n">' + (s + 1) + '</span><span><b style="color:#e6edf3">' + d.steps[s][0] + '</b> —— ' + d.steps[s][1] + '</span></div>';
+      }
+      h += '</div></div>';
+      out.innerHTML = h;
+      out.classList.add('on');
+    });
+  }
+})();
+</script>
+</body>
+</html>

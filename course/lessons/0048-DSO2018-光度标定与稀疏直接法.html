@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DSO（2018）：光度标定与稀疏直接法 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0048</div>
+      <h1>DSO（2018）：光度标定与稀疏直接法</h1>
+      <p class="subtitle">直接法的巅峰：把「直接 ≠ 稠密」讲透，并给直接法装上光度标定 📸</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稀疏 + 直接、光度标定、滑动窗边缘化</span>
+        <span>👥 作者：Engel, Koltun, Cremers（慕尼黑工大）</span>
+        <span>📅 2018 · <i>Direct Sparse Odometry</i>（IEEE TPAMI）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">四象限自我定位</a>
+        <a href="#b">光度标定</a>
+        <a href="#c">仿射亮度变换 a,b</a>
+        <a href="#d">均匀化采样四策略</a>
+        <a href="#e">滑动窗与边缘化</a>
+        <a href="#f">直接法 vs 间接法裁决</a>
+        <a href="#g">实验数字</a>
+        <a href="#h">局限与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「直接 ≠ 稠密」并用四象限定位 DSO；写出光度响应模型 $I_i=G(t_i V B_i)$ 与残差公式；解释仿射亮度 $a,b$ 为何对数参数化、梯度权重为何下调大梯度；复述均匀化采样的三轮固定顺序；讲清滑动窗（$N_f=7,N_p=2000$）与 FEJ；并用噪声实验得出「直接法 vs 间接法」的适用边界。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 它直接收束 <b>0046 DTAM</b>（稠密直接法）与 <b>0047 LSD-SLAM</b>（半稠密直接法）这条直接法主线，并把 <b>悬念④（提取 vs 不提取特征）</b> 推进到最干净的一站：DSO 把「稀疏」和「直接」组合起来。<b>单目尺度不可观</b>这条线（<b>0024/0025 VO 教程</b>）在它之前已由 LSD-SLAM 用 sim(3) 处理；DSO 把它改回「不估尺度、只做 VO」。边缘化的 Schur 补接 <b>0019 BA 上下</b>。</p></div>
+      </div>
+
+      <h2>1. ★ 四象限自我定位：直接 ≠ 稠密</h2>
+      <p>很多人一听「直接法」就以为是「稠密法」。原文开篇就明确指出，<b>「稀疏 vs 稠密」与「直接 vs 间接」是两个正交的轴</b>，四种组合都真实存在，并且 DSO 自己占据的是<b>「稀疏 + 直接」</b>这一格。原文逐格举例：</p>
+      <ul>
+        <li><b>Sparse + Indirect</b>：monoSLAM / PTAM / ORB-SLAM——提关键点、用几何误差；</li>
+        <li><b>Dense + Indirect</b>：稠密光流场 + 平滑正则（几何误差 + 几何先验）；</li>
+        <li><b>Dense + Direct</b>：DTAM / REMODE / LSD-SLAM——光度误差 + 几何先验；</li>
+        <li><b>Sparse + Direct</b>：<b>本文的 DSO</b>；</li>
+        <li><b>hybrid</b>：SVO——先用直接法做初始对齐与获取对应，再用间接法做联合优化。</li>
+      </ul>
+      <p>★ 这句话是本节最重要的纠正：<b>「直接」指的是误差函数的来源（直接吃像素强度），「稠密/稀疏」指的是参与优化的像素多少</b>。DSO 就是「直接但不稠密」——它只在约 2000 个像素上做光度残差，却依然是完全的直接法。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 560" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">四象限：dense↔sparse（纵） ×  indirect↔direct（横）</text>
+          <!-- axis labels -->
+          <text x="450" y="548" fill="#1565c0" font-size="14" text-anchor="middle" font-weight="700">← indirect        direct →</text>
+          <text x="20" y="300" fill="#1565c0" font-size="14" text-anchor="middle" font-weight="700" transform="rotate(-90,20,300)">dense ↑          ↓ sparse</text>
+          <!-- grid 2x2 -->
+          <!-- top-left: dense+indirect (flow field) -->
+          <rect x="60" y="70" width="380" height="210" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="250" y="92" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">Dense + Indirect</text>
+          <!-- fake photo: gradient bg -->
+          <rect x="80" y="105" width="340" height="155" fill="#cfc6b4"/>
+          <line x1="100" y1="180" x2="160" y2="165" stroke="#1565c0" stroke-width="2.5"/>
+          <line x1="170" y1="200" x2="230" y2="185" stroke="#1565c0" stroke-width="2.5"/>
+          <line x1="250" y1="150" x2="310" y2="140" stroke="#1565c0" stroke-width="2.5"/>
+          <line x1="140" y1="230" x2="200" y2="220" stroke="#1565c0" stroke-width="2.5"/>
+          <text x="250" y="270" fill="#6d4c41" font-size="12" text-anchor="middle">稠密流场 + 平滑正则</text>
+          <!-- top-right: dense+direct -->
+          <rect x="460" y="70" width="380" height="210" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="650" y="92" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">Dense + Direct</text>
+          <rect x="480" y="105" width="340" height="155" fill="#a5d6a7" fill-opacity="0.55"/>
+          <text x="650" y="190" fill="#1b5e20" font-size="13" text-anchor="middle">整张涂满半透明色块</text>
+          <text x="650" y="270" fill="#6d4c41" font-size="12" text-anchor="middle">DTAM / REMODE / LSD-SLAM</text>
+          <!-- bottom-left: sparse+indirect -->
+          <rect x="60" y="300" width="380" height="210" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="250" y="322" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">Sparse + Indirect</text>
+          <rect x="80" y="335" width="340" height="155" fill="#cfc6b4"/>
+          <circle cx="120" cy="370" r="6" fill="#c62828"/>
+          <circle cx="200" cy="420" r="6" fill="#c62828"/>
+          <circle cx="300" cy="380" r="6" fill="#c62828"/>
+          <circle cx="360" cy="450" r="6" fill="#c62828"/>
+          <circle cx="150" cy="460" r="6" fill="#c62828"/>
+          <text x="250" y="505" fill="#6d4c41" font-size="12" text-anchor="middle">只标几个关键点</text>
+          <!-- bottom-right: sparse+direct (DSO) -->
+          <rect x="460" y="300" width="380" height="210" fill="#f3efe6" stroke="#c62828" stroke-width="3"/>
+          <text x="650" y="322" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">Sparse + Direct（本文 DSO）</text>
+          <rect x="480" y="335" width="340" height="155" fill="#cfc6b4"/>
+          <rect x="510" y="360" width="10" height="10" fill="#1565c0"/>
+          <rect x="560" y="400" width="10" height="10" fill="#1565c0"/>
+          <rect x="620" y="370" width="10" height="10" fill="#1565c0"/>
+          <rect x="690" y="440" width="10" height="10" fill="#1565c0"/>
+          <rect x="540" y="460" width="10" height="10" fill="#1565c0"/>
+          <rect x="660" y="350" width="10" height="10" fill="#1565c0"/>
+          <text x="650" y="505" fill="#c62828" font-size="12" text-anchor="middle">零星散布的小方块（被选中的像素）</text>
+          <!-- SVO hybrid badge -->
+          <rect x="370" y="250" width="160" height="44" fill="#fff3e0" stroke="#ef6c00" stroke-width="2"/>
+          <text x="450" y="270" fill="#ef6c00" font-size="12" text-anchor="middle" font-weight="700">hybrid = SVO</text>
+          <text x="450" y="287" fill="#ef6c00" font-size="11" text-anchor="middle">少量关键点 + 一块直接对齐</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把四种方法放进「稠密↔稀疏 × 直接↔间接」的 2×2 格子，每格画一张「看到的画面」：稀疏+间接只标几个红点；稠密+直接整张涂满绿块；稀疏+直接（DSAM）是零星蓝方块；hybrid（SVO）是少量关键点加一小块直接区域。<br>
+          <b>怎么看这张图：</b>① 横轴区分误差来源（直接吃像素、间接吃几何），纵轴区分参与像素多少；② 红框是 DSO 的位置——只在少量像素上做直接法；③ SVO 落在边界，因为它先用直接法、后用间接法。<br>
+          <b>要记住的一句话：</b>直接 ≠ 稠密。DSO = 稀疏 + 直接，是四象限里被前人忽略的那一格。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>「直接法」和「稠密法」是什么关系？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="原文把 dense↔sparse 与 direct↔indirect 视为两个正交轴；DSO 占据 sparse+direct 一格，所以它既直接又不稠密。两者是独立维度。" onclick="lessonKit.answer(this,'q0048a')">两正交维度</button>
+          <button data-correct="no" data-explanation="直接指误差吃像素强度、稠密指参与像素多，二者独立。DSO 恰恰是「直接但稀疏」，所以不能等同。" onclick="lessonKit.answer(this,'q0048a')">直接就是稠密</button>
+        </div>
+        <div class="quiz-feedback" id="q0048a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 光度标定（photometric calibration）</h2>
+      <p>相机把「真实辐照度」变成「像素灰度」不是简单的乘法，而是一条带畸变的链路。原文给出的成像模型（公式 2）是：</p>
+      <div class="formula-box"><div class="flow-formula">$$I_i(\mathbf x)=G\big(t_i\,V(\mathbf x)\,B_i(\mathbf x)\big)$$</div></div>
+      <p>逐一解释每个符号：</p>
+      <ul>
+        <li>$B_i(\mathbf x)$：场景的<b>辐照度</b>（真实有多少光打到像素），是我们要恢复的物理量；</li>
+        <li>$t_i$：第 $i$ 帧的<b>曝光时间</b>；</li>
+        <li>$V(\mathbf x)$：镜头的<b>暗角（vignetting）</b>衰减——同一辐照度，中心亮、边角暗；</li>
+        <li>$G(\cdot)$：相机的<b>响应函数</b>（gamma / 非线性），把线性光压成 8-bit 灰度。</li>
+      </ul>
+      <p>★ 关键纠正：原文是<b>外边套一个 $G$</b>，即「先算 $t_i V B_i$，再整体过一遍响应函数 $G$」——<b>不是三者直接相乘</b>。DSO 把视频帧做的第一步，就是用 $I_i'=G^{-1}(I_i)/V$ 把这条链路反算回去、得到线性辐照度 $B_i$（公式 3），之后的所有光度残差都基于<b>校正后的图像</b>计算。</p>
+      <p>为什么不做就玩不转？原文在实验中给出两个硬证据：</p>
+      <ul>
+        <li><b>曝光跨度极大</b>：同一序列里曝光时间从 <b>0.018 ms 到 10.5 ms，相差约 500 倍</b>（Fig. 3 底部）；不校正的话，相邻帧亮度可能差几个数量级。</li>
+        <li><b>消融实验逐项掉性能</b>：把响应函数、暗角、曝光逐一关掉，DSO 误差阶梯上升；而 ORB-SLAM（间接法）在原始图上反而更好，所以它用原始图评测。</li>
+        <li><b>竞争对手直接翻车</b>：LSD-SLAM 和 SVO 因为假设亮度恒定（忽略曝光变化），在含剧烈曝光变化的真实数据集上「<i>consistently fail</i>」。</li>
+      </ul>
+      <p>另注：<b>候选点检测仍用未校正的原始图像</b>——原文明确说，这一步用原始图、在校正之前做，原因是为了在原始对比度下挑梯度大的像素。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">光度标定的三件事：曝光 t、暗角 V、响应 G</text>
+          <!-- Left: exposure frames -->
+          <rect x="40" y="55" width="240" height="300" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="160" y="78" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">① 曝光 t（同墙、不同 t）</text>
+          <rect x="60" y="95" width="80" height="55" fill="#0d0d0d"/>
+          <rect x="150" y="95" width="80" height="55" fill="#3a3a3a"/>
+          <rect x="60" y="160" width="80" height="55" fill="#777777"/>
+          <rect x="150" y="160" width="80" height="55" fill="#bdbdbd"/>
+          <rect x="60" y="225" width="80" height="55" fill="#e0e0e0"/>
+          <rect x="150" y="225" width="80" height="55" fill="#fafafa"/>
+          <text x="160" y="308" fill="#6d4c41" font-size="11" text-anchor="middle">t 越大越亮（0.018→10.5 ms）</text>
+          <text x="160" y="326" fill="#6d4c41" font-size="11" text-anchor="middle">差约 500 倍</text>
+          <!-- Middle: vignette curve -->
+          <rect x="330" y="55" width="240" height="300" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="450" y="78" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">② 暗角 V（中心亮边角暗）</text>
+          <rect x="350" y="95" width="200" height="200" fill="#9aa0a6"/>
+          <polyline points="320.00,80.00 322.60,80.01 325.20,80.04 327.80,80.09 330.40,80.17 333.00,80.26 335.60,80.37 338.20,80.51 340.80,80.67 343.40,80.84 346.00,81.04 348.60,81.26 351.20,81.50 353.80,81.76 356.40,82.04 359.00,82.34 361.60,82.66 364.20,83.01 366.80,83.37 369.40,83.75 372.00,84.16 374.60,84.59 377.20,85.03 379.80,85.50 382.40,85.99 385.00,86.50 387.60,87.03 390.20,87.58 392.80,88.15 395.40,88.75 398.00,89.36 400.60,89.99 403.20,90.65 405.80,91.33 408.40,92.02 411.00,92.74 413.60,93.48 416.20,94.24 418.80,95.02 421.40,95.82 424.00,96.64 426.60,97.48 429.20,98.35 431.80,99.23 434.40,100.13 437.00,101.06 439.60,102.01 442.20,102.97 444.80,103.96 447.40,104.97 450.00,106.00 452.60,107.05 455.20,108.12 457.80,109.21 460.40,110.33 463.00,111.46 465.60,112.61 468.20,113.79 470.80,114.99 473.40,116.20 476.00,117.44 478.60,118.70 481.20,119.98 483.80,121.28 486.40,122.60 489.00,123.94 491.60,125.30 494.20,126.69 496.80,128.09 499.40,129.51 502.00,130.96 504.60,132.43 507.20,133.91 509.80,135.42 512.40,136.95 515.00,138.50 517.60,140.07 520.20,141.66 522.80,143.27 525.40,144.91 528.00,146.56 530.60,148.23 533.20,149.93 535.80,151.65 538.40,153.38 541.00,155.14 543.60,156.92 546.20,158.72 548.80,160.54 551.40,162.38 554.00,164.24 556.60,166.12 559.20,168.03 561.80,169.95 564.40,171.89 567.00,173.86 569.60,175.85 572.20,177.85 574.80,179.88 577.40,181.93 580.00,184.00" fill="none" stroke="#c62828" stroke-width="3"/>
+          <line x1="350" y1="340" x2="550" y2="340" stroke="#37474f" stroke-width="1"/>
+          <text x="450" y="352" fill="#37474f" font-size="10" text-anchor="middle">中心 → 边角（半径）</text>
+          <text x="450" y="368" fill="#6d4c41" font-size="11" text-anchor="middle">V 从 1 衰减到约 0.6</text>
+          <!-- Right: response curve G -->
+          <rect x="620" y="55" width="250" height="300" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="745" y="78" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">③ 响应 G（线性光→灰度）</text>
+          <polyline points="610.00,340.00 613.06,304.78 616.12,291.89 619.18,282.26 622.24,274.29 625.29,267.34 628.35,261.13 631.41,255.47 634.47,250.23 637.53,245.34 640.59,240.75 643.65,236.40 646.71,232.26 649.76,228.31 652.82,224.52 655.88,220.88 658.94,217.37 662.00,213.98 665.06,210.70 668.12,207.51 671.18,204.42 674.24,201.41 677.29,198.48 680.35,195.62 683.41,192.83 686.47,190.10 689.53,187.43 692.59,184.82 695.65,182.25 698.71,179.74 701.76,177.28 704.82,174.86 707.88,172.49 710.94,170.15 714.00,167.85 717.06,165.59 720.12,163.37 723.18,161.18 726.24,159.02 729.29,156.89 732.35,154.79 735.41,152.72 738.47,150.68 741.53,148.66 744.59,146.67 747.65,144.71 750.71,142.77 753.76,140.85 756.82,138.95 759.88,137.08 762.94,135.23 766.00,133.39 769.06,131.58 772.12,129.79 775.18,128.01 778.24,126.25 781.29,124.51 784.35,122.79 787.41,121.08 790.47,119.39 793.53,117.72 796.59,116.06 799.65,114.41 802.71,112.78 805.76,111.17 808.82,109.57 811.88,107.98 814.94,106.40 818.00,104.84 821.06,103.29 824.12,101.75 827.18,100.23 830.24,98.71 833.29,97.21 836.35,95.72 839.41,94.24 842.47,92.77 845.53,91.31 848.59,89.86 851.65,88.43 854.71,87.00 857.76,85.58 860.82,84.17 863.88,82.77 866.94,81.38 870.00,80.00" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <line x1="610" y1="340" x2="870" y2="340" stroke="#37474f" stroke-width="1"/>
+          <line x1="610" y1="340" x2="610" y2="80" stroke="#37474f" stroke-width="1"/>
+          <text x="740" y="358" fill="#37474f" font-size="10" text-anchor="middle">线性辐照度 →</text>
+          <text x="600" y="200" fill="#37474f" font-size="10" text-anchor="middle" transform="rotate(-90,600,200)">8-bit 灰度</text>
+          <text x="745" y="375" fill="#6d4c41" font-size="11" text-anchor="middle">S 形：G 用 y=255·(x/255)^0.45 计算</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三联图展示光度标定的三件事。左：同一面墙在不同曝光 $t$ 下整体变亮/变暗；中：一张均匀白纸从中心到边角的灰度衰减（暗角 $V$）；右：响应函数 $G$ 把线性辐照度压成非线性 8-bit 灰度。<br>
+          <b>怎么看这张图：</b>① 左联说明 $t$ 能把同场景拉出 500 倍亮度差；② 中联红线是按 $V=1-0.4r^2$ 算的暗角曲线（中心 1、边角约 0.6）；③ 右联蓝线是按 $y=255(x/255)^{0.45}$ 算的真实 S 形响应曲线。<br>
+          <b>要记住的一句话：</b>原始模型是「先乘 $tVB_i$、再套响应 $G$」，DSO 反过来校正得到线性辐照度再做残差。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_Direct_Sparse_Odometry/855633a6f947eec4aacc3b642792cfcba3877d38da09f445733f11315e68c8e0.jpg" alt="DSO photometric calibration Fig 3">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Photometric calibration. Top: Inverse response function $G^{-1}$ and lens attenuation V of the camera used for Fig. 1. Bottom: Exposure t in milliseconds for a sequence containing an indoor and an outdoor part. Note how it varies by a factor of more than 500, from 0.018 to 10.5 ms.（光度标定。上：Fig. 1 所用相机的逆响应函数 $G^{-1}$ 与镜头衰减 $V$；下：含室内外一段序列的曝光时间 $t$（毫秒），注意从 0.018 到 10.5 ms 相差 500 倍以上。）<br>
+          <b>怎么看这张图：</b>① 上排是相机真实的 $G^{-1}$（把灰度还原成线性光）与暗角 $V$（中心 1、边角下降）；② 下排是逐帧曝光时间，在室内外切换时剧烈跳变；③ 这正是 DSO 必须把光度标定做进误差模型的动因。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 仿射亮度变换 $a,b$</h2>
+      <p>即便不校正、或者曝光未知，DSO 还给每帧自带一对<b>仿射亮度参数 $a_j,b_j$</b>，残差（公式 4）长这样：</p>
+      <div class="formula-box"><div class="flow-formula">$$r = \big(I_j[\mathbf p']-b_j\big)\;-\;\frac{t_j e^{a_j}}{t_i e^{a_i}}\big(I_i[\mathbf p]-b_i\big)$$</div></div>
+      <p>其中 $\mathbf p'$ 是 $\mathbf p$ 投影到目标帧的位置，$e^{a_j-a_i}$ 是<b>增益</b>（吸收整体亮度放缩），$b$ 是<b>偏移</b>（吸收整体亮度平移）。换句话说，<b>即便曝光完全未知，这对 $a,b$ 也能把两帧之间的亮度变化吸收掉</b>，让直接法在曝光跳变下仍可用。原文还把增益写成 $e^{-a_i}(I_i-b_i)$ 的<b>对数参数化</b>，并说明两个原因：</p>
+      <ul>
+        <li><b>防止变负</b>：对数化后 $e^{a}$ 恒正，不会出现负增益把图像翻成负值；</li>
+        <li><b>避免乘性漂移</b>：线性参数会有指数式增长的漂移，对初值敏感、数值不稳。</li>
+      </ul>
+      <p>此外 DSO 用一个<b>梯度相关的权重</b> $w_{\mathbf p}$ 下调大梯度像素（公式 7）：</p>
+      <div class="formula-box"><div class="flow-formula">$$w_{\mathbf p}=\frac{c^2}{c^2+\lVert\nabla I_i(\mathbf p)\rVert_2^2}$$</div></div>
+      <p>直观理解：梯度大的像素（强边缘）对几何小错位特别敏感、光度残差不可靠，所以给它<b>低权重</b>；梯度平缓处反而更稳，权重接近 1。原文还补了一刀：这个权重在概率上等价于「在投影点位置上加一点独立几何噪声并立刻边缘化」，近似掉小几何误差。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">仿射亮度模型 (a,b)：同一条桌沿在两帧灰度上的关系</text>
+          <!-- panel1: no change y=x -->
+          <rect x="40" y="55" width="260" height="310" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="170" y="80" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">无变化</text>
+          <polyline points="130.29,254.15 87.90,310.59 166.05,213.55 161.25,215.98 82.01,332.24 90.98,315.27 147.27,235.72 113.33,289.34 181.49,179.01 142.58,248.11 240.31,90.93 124.52,264.66 100.01,298.41 213.31,140.28 106.16,306.30 138.48,256.27 168.05,205.89 110.42,288.23 190.42,184.26 174.43,196.45 152.11,235.86 193.56,158.16 116.85,289.98 223.26,136.27 198.69,171.64 95.60,286.26 146.19,239.10 158.14,227.64 82.30,336.13 172.31,215.77 223.32,136.64 175.91,185.25 173.47,217.32 234.99,110.45 155.63,227.71 193.98,175.10 184.81,168.96 123.68,271.56 140.74,247.88 153.54,230.68 104.02,296.10 205.23,154.62 97.50,307.37 222.63,123.57 89.27,329.55 224.65,126.01 213.84,139.97 145.72,245.35 136.18,236.84 101.14,317.11 105.40,295.71 157.46,217.19 175.03,199.02 146.33,238.34 137.95,270.74 192.12,183.83 162.61,226.09 84.79,334.18 227.37,122.33 210.23,167.26" fill="none" stroke="#1565c0" stroke-width="1"/>
+          <polyline points="60.00,360.00 260.00,80.00" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <line x1="60" y1="360" x2="260" y2="360" stroke="#37474f" stroke-width="1"/>
+          <line x1="60" y1="360" x2="60" y2="80" stroke="#37474f" stroke-width="1"/>
+          <text x="170" y="358" fill="#37474f" font-size="10" text-anchor="middle" dy="14">帧 i 灰度 →</text>
+          <text x="44" y="220" fill="#37474f" font-size="10" text-anchor="middle" transform="rotate(-90,44,220)">帧 j 灰度</text>
+          <!-- panel2: gain only -->
+          <rect x="330" y="55" width="260" height="310" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="460" y="80" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">只有增益（斜率变）</text>
+          <polyline points="411.85,197.15 452.64,108.60 356.18,301.37 373.06,270.13 403.03,211.57 371.19,276.32 362.80,294.73 493.12,80.00 449.24,113.97 404.27,203.86 407.09,191.26 513.15,80.00 424.26,172.35 362.92,292.80 403.46,212.40 372.91,256.46 349.58,309.99 370.41,281.24 437.28,131.61 510.69,80.00 491.27,80.00 407.52,209.08 373.85,269.49 477.06,80.00 401.28,212.60 511.77,80.00 489.46,80.00 470.45,90.12 383.92,258.72 350.57,319.15 350.40,319.84 462.46,84.41 506.98,80.00 512.30,80.00 506.73,80.00 383.94,245.84 378.86,257.35 497.50,80.00 487.41,80.00 480.53,80.00 359.98,309.40 477.60,80.00 472.18,80.00 478.76,80.00 401.76,206.97 412.44,214.92 413.37,177.43 374.35,274.59 367.11,273.58 481.68,80.00 370.34,266.73 456.52,124.99 404.77,212.65 348.09,324.68 509.41,80.00 503.12,80.00 418.84,168.28 381.27,267.77 388.15,243.69 444.58,121.13" fill="none" stroke="#1565c0" stroke-width="1"/>
+          <polyline points="330.00,360.00 468.00,80.00" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <line x1="330" y1="360" x2="530" y2="360" stroke="#37474f" stroke-width="1"/>
+          <line x1="330" y1="360" x2="330" y2="80" stroke="#37474f" stroke-width="1"/>
+          <!-- panel3: offset only -->
+          <rect x="620" y="55" width="260" height="310" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="750" y="80" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">只有偏移（截距平移）</text>
+          <polyline points="659.42,242.44 769.14,82.50 675.34,227.31 768.18,83.10 686.62,191.29 705.37,179.18 703.96,166.62 646.56,255.27 616.35,297.04 695.53,192.97 737.97,135.72 703.09,179.95 709.35,167.59 710.17,171.40 657.59,243.49 701.30,164.85 710.41,165.78 690.43,214.32 718.98,165.52 732.50,136.44 691.96,202.62 774.45,80.00 733.59,119.56 659.46,253.01 710.04,151.76 638.81,273.10 636.20,274.08 656.26,241.59 628.02,289.80 766.95,101.29 641.73,265.87 639.80,278.47 764.56,85.13 776.30,80.00 682.84,232.12 756.06,100.96 642.91,271.10 672.87,215.14 648.69,259.26 618.97,282.23 709.11,170.37 671.59,220.74 720.90,155.50 781.80,80.00 748.63,109.42 660.47,237.64 622.36,289.00 637.53,275.88 686.89,186.13 659.29,247.14 640.87,254.36 733.80,139.81 630.77,265.94 687.41,194.46 627.90,270.97 750.86,115.07 629.81,277.82 761.17,98.49 692.20,198.41 771.95,80.00" fill="none" stroke="#1565c0" stroke-width="1"/>
+          <polyline points="600.00,321.57 772.50,80.00" fill="none" stroke="#c62828" stroke-width="2.5"/>
+          <line x1="620" y1="360" x2="820" y2="360" stroke="#37474f" stroke-width="1"/>
+          <line x1="620" y1="360" x2="620" y2="80" stroke="#37474f" stroke-width="1"/>
+          <text x="450" y="390" fill="#6d4c41" font-size="12" text-anchor="middle">散点由 Python 生成（加高斯噪声）；红线为拟合直线</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>横轴是第 $i$ 帧某像素的灰度，纵轴是第 $j$ 帧同一像素的灰度。三格分别画「无变化（45° 线）」「只有增益（斜率≠1）」「只有偏移（截距平移）」，每个格子里是带噪声的散点 + 拟合直线。<br>
+          <b>怎么看这张图：</b>① 左格 $y=x$ 表示两帧亮度一致；② 中格斜率偏离 1，表示整体变亮/变暗（由 $a$ 吸收）；③ 右格直线整体平移，表示均匀加亮（由 $b$ 吸收）。<br>
+          <b>要记住的一句话：</b>$a,b$ 把两帧之间的亮度变化吸收进残差，所以即使曝光未知，直接法也能跑。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 均匀化采样四策略（三轮固定顺序，不是随机）</h2>
+      <p>DSO 要保证约 2000 个活动点既「梯度够大」又「空间均匀」。它把图像先切成 <b>32×32 的块</b>，每块单独算阈值：该块内梯度的<b>中位数</b> + 全局常数 $g_{\text{th}}$（默认 <b>7</b>）。然后按块选梯度最大的点，超阈值的才入选。为了兼顾弱纹理（白墙上的渐变色），它<b>再重跑两遍</b>：阈值降低、块尺寸放大到 $2d$ 和 $4d$，把弱梯度区域也补上一些点。最后激活新点时，优先选「离已有点最远」的，保证均匀。</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>① 分块阈值</h4><p>32×32 块，阈值 = 块内梯度中位数 + $g_{\text{th}}=7$，选块内梯度最大点。</p></div>
+        <div class="mini-card"><h4>② 重跑补弱纹理</h4><p>第 2、3 遍降低阈值、块尺寸放大到 $2d$、$4d$，捕捉白墙等弱梯度区域。</p></div>
+        <div class="mini-card"><h4>③ 最远点优先</h4><p>激活时投影到最新关键帧，优先选离已有点最远的点，保持空间均匀。</p></div>
+      </div>
+      <p>★ <b>重要纠正（务必记牢）</b>：原文是<b>三轮固定顺序</b>（pass 1 → pass 2 → pass 3，绿/蓝/红点对应 Fig. 9），<b>不是「随机化」</b>。Fig. 9 底部明确写：绿点是第一轮、蓝点是第二轮、红点是第三轮。另外原文还有一条容易被忽略的注：<b>候选点检测用的是未校正的原始图像</b>（在校正之前），因为要在原始对比度下挑梯度。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_Direct_Sparse_Odometry/a14d24eb724c76666fb51f07d95300c80c75d648a5fdc9946534ec89c65b7364.jpg" alt="DSO candidate selection Fig 9">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Candidate selection. The top row shows the original images, the bottom row shows the points chosen as candidates to be added to the map (2,000 in each frame). Points selected on the first pass are shown in green, those selected on the second and third pass in blue and red respectively. Green candidates are evenly spread across gradient-rich areas, while points added on the second and third pass also cover regions with very weak intensity variations, but are much sparser.（候选点选择。上排原图，下排被选中的候选点（每帧 2000 个）。第一遍绿、第二三遍蓝/红；绿点均匀铺在富梯度区，蓝/红点覆盖弱灰度变化区但更稀疏。）<br>
+          <b>怎么看这张图：</b>① 绿点是第一轮在富纹理区的均匀采样；② 蓝、红点是在弱纹理区（白墙）靠降阈值补出来的；③ 这正对应「三轮固定顺序、不是随机化」的纠正。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DSO 的候选点采样，第二、三遍的作用是？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="第一轮只在富梯度区选；第二三遍降低阈值、放大块到 2d/4d，专门补白墙等弱纹理区域，且是固定顺序而非随机。" onclick="lessonKit.answer(this,'q0048b')">补弱纹理区</button>
+          <button data-correct="no" data-explanation="原文是三轮固定顺序，绿/蓝/红分别对应 pass 1/2/3，并非随机挑点；而且目的是捕捉弱梯度而非加密边缘。" onclick="lessonKit.answer(this,'q0048b')">随机加密边缘</button>
+        </div>
+        <div class="quiz-feedback" id="q0048b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 滑动窗与边缘化（接 0019 BA 的 Schur 补）</h2>
+      <p>DSO 维持一个滑动窗：最多 <b>$N_f=7$ 个活动关键帧</b>、<b>$N_p=2000$ 个活动点</b>。每当窗太满，就边缘化（marginalize）掉最老的帧——这一步用 <b>Schur 补</b>把被删变量的信息压成先验，正是 <b>0019 BA 上下</b> 里讲过的「消元」。原文给出的顺序非常关键：</p>
+      <ul>
+        <li><b>先边缘化该帧内的所有点</b>，再边缘化该帧本身；</li>
+        <li>并删掉会破坏 Hessian 稀疏模式的残差项。</li>
+      </ul>
+      <p>★ 这里有两条一致性要求，是 DSO 把直接法做稳定的命门：</p>
+      <ol>
+        <li><b>边缘化会把切空间固定住</b>：被边缘化的变量一旦进入先验，它的线性化点就被钉死，之后不能再改；</li>
+        <li><b>必须用 First Estimate Jacobians（FEJ）</b>：所有用到该变量组的残差，都要在同一个初始估计点求雅可比，避免「同一变量、不同线性化点」破坏一致性。</li>
+      </ol>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">滑动窗：抽走最老的关键帧，连线压成一根「先验弹簧」</text>
+          <!-- window of keyframes -->
+          <g>
+          <polygon points="90,150 130,120 170,150 130,180" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <polygon points="220,150 260,120 300,150 260,180" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <polygon points="350,150 390,120 430,150 390,180" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <polygon points="480,150 520,120 560,150 520,180" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <polygon points="610,150 650,120 690,150 650,180" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <polygon points="740,150 780,120 820,150 780,180" fill="#c62828" stroke="#7a1f00" stroke-width="1.5"/>
+          </g>
+          <text x="130" y="205" fill="#0d3c75" font-size="12" text-anchor="middle">KF1</text>
+          <text x="260" y="205" fill="#0d3c75" font-size="12" text-anchor="middle">KF2</text>
+          <text x="390" y="205" fill="#0d3c75" font-size="12" text-anchor="middle">KF3</text>
+          <text x="520" y="205" fill="#0d3c75" font-size="12" text-anchor="middle">KF4</text>
+          <text x="650" y="205" fill="#0d3c75" font-size="12" text-anchor="middle">KF5</text>
+          <text x="780" y="205" fill="#c62828" font-size="12" text-anchor="middle">最老 KF6</text>
+          <!-- connections to remaining -->
+          <line x1="780" y1="150" x2="650" y2="150" stroke="#c62828" stroke-width="2.5" stroke-dasharray="6 4"/>
+          <!-- spring to remaining -->
+          <path d="M820,150 q12,-12 24,0 q12,12 24,0 q10,-10 20,0" fill="none" stroke="#ef6c00" stroke-width="3"/>
+          <text x="852" y="116" fill="#ef6c00" font-size="11" text-anchor="middle">先验</text>
+          <text x="852" y="166" fill="#ef6c00" font-size="11" text-anchor="middle">弹簧</text>
+          <text x="450" y="250" fill="#37474f" font-size="13" text-anchor="middle">抽走 KF6 → 它与其余变量的所有连线被压成一根先验弹簧</text>
+          <rect x="120" y="275" width="660" height="60" fill="#fff3e0" stroke="#ef6c00" stroke-width="2"/>
+          <text x="450" y="300" fill="#ef6c00" font-size="13" text-anchor="middle">这根弹簧只在小范围内有效：线性化点被固定</text>
+          <text x="450" y="322" fill="#ef6c00" font-size="12" text-anchor="middle">（所以用 FEJ；一旦尺度/运动偏离线性化点太远，先验会拉偏系统）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一排相机（关键帧）代表优化窗，红色的是最老的关键帧。把它抽走时，它和其余变量之间的所有连接被 Schur 补压成一根「先验弹簧」拴在剩余变量上。<br>
+          <b>怎么看这张图：</b>① 橙色的弹簧就是被边缘化掉的信息；② 弹簧只在线性化点附近的小范围内成立；③ 一旦系统移动到离该点很远（比如 IMU 要把尺度改很大），这根弹簧会把解拉偏——这正是下一课 VI-DSO 要解决的「动态边缘化」问题。<br>
+          <b>要记住的一句话：</b>边缘化 = Schur 补成先验，但会钉死线性化点；必须用 FEJ 保持一致。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ 噪声实验：直接法 vs 间接法的裁决</h2>
+      <p>这是全篇最有价值的一段。原文故意往图像里加两类噪声，对比 DSO 与 ORB-SLAM：</p>
+      <ul>
+        <li><b>低频几何噪声</b>（模拟卷帘快门 / 标定不准）：DSO 迅速恶化，当 $\delta_g>1.5$ 时「优化完全失败」；而 ORB-SLAM 几乎不受影响——因为关键点检测是局部操作，几何噪声伤不到它。</li>
+        <li><b>高频各向异性模糊</b>（光度噪声）：DSO 略优于 ORB-SLAM——因为联合优化光度误差比局部关键点匹配更能扛模糊。</li>
+      </ul>
+      <p>原文的结论原文写得清楚（也是本季最该记住的一句话）：<i>「直接法在标定良好的数据上胜过间接法，但在强几何噪声下不适用……这让间接法更适合手机 / 普通摄像头，直接法在专用机器视觉相机上才发挥全部潜力。」</i></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_Direct_Sparse_Odometry/359a2833911aab68ebf810464a9c88e1959120a3a3860452374cc3189028bdef.jpg" alt="DSO geometric noise Fig 20">
+        <figcaption>
+          <b>原图注（Fig. 20）：</b>Geometric noise. Effect of applying low-frequency geometric noise to the image, simulating geometric distortions such as a rolling shutter (evaluated on the TUM-monoVO dataset). The top row shows an example image with $\delta_g=2$.（几何噪声。对图像施加低频几何噪声，模拟卷帘快门等几何畸变；上排 $\delta_g=2$ 示例。）<br>
+          <b>怎么看这张图：</b>① 上排示例里人的肉眼几乎看不出变形，但 DSO 误差随 $\delta_g$ 直线上升；② 原文说 $\delta_g>1.5$ 时「优化完全失败」，而 ORB-SLAM 几乎不变——这是直接法对几何噪声脆弱的铁证。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_Direct_Sparse_Odometry/b35481d058471b11d7801b8d1eb26dfdc145afd0adeec1e470ed682e95a8c431.jpg" alt="DSO photometric noise Fig 21">
+        <figcaption>
+          <b>原图注（Fig. 21）：</b>Photometric noise. Effect of applying high-frequent, non-isotropic blur to the image, simulating photometric noise (evaluated on the TUM-monoVO dataset). The top row shows an example image with $\delta_p=6$, the effect is clearly visible.（光度噪声。施加高频各向异性模糊模拟光度噪声；上排 $\delta_p=6$ 示例。）<br>
+          <b>怎么看这张图：</b>① 上排模糊肉眼可见；② 在这种光度噪声下，DSO 反而比 ORB-SLAM 略好——因为联合优化光度误差比局部关键点匹配更扛模糊。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>加低频几何噪声（模拟卷帘快门）时，DSO 为什么比 ORB-SLAM 差很多？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="直接法的残差直接吃像素、假设几何精确；几何噪声破坏了这个假设，δ_g>1.5 时线性化半径被超出、优化完全失败。而关键点检测是局部操作、对低频几何噪声不敏感。" onclick="lessonKit.answer(this,'q0048c')">几何噪声破假设</button>
+          <button data-correct="no" data-explanation="恰恰相反：几何噪声直接法最怕，光度噪声才是对手更怕的。题干问的是几何噪声情形。" onclick="lessonKit.answer(this,'q0048c')">光度噪声破假设</button>
+        </div>
+        <div class="quiz-feedback" id="q0048c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字：它到底有多快</h2>
+      <p>原文给出的运行时数据（全部<b>单线程</b>）：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>每帧（初始对齐 + 候选点追踪）</h4><p><b>18 ms/帧</b>（reduced <b>6.5 ms</b>）。</p></div>
+        <div class="mini-card"><h4>新建关键帧</h4><p><b>143 ms</b>（reduced <b>43 ms</b>）。</p></div>
+        <div class="mini-card"><h4>reduced 设置的吞吐</h4><p>可跑 <b>5 倍实时</b>（关掉大量点/帧、低分辨率、≤4 次 GN 迭代）。</p></div>
+        <div class="mini-card"><h4>默认关键帧率</h4><p><b>8 关键帧/秒</b>（TUM monoVO 默认 $T_{\text{kf}}=1$）。</p></div>
+      </div>
+      <p>数据集覆盖 TUM monoVO（50 段、105 分钟）、EuRoC MAV、ICL-NUIM。原文还验证了「光用更多数据不提升精度」（超过 $N_p=500$、 $N_f=7$ 后几乎无收益），所以默认用 2000 点主要是为了更密的重建。</p>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 局限与衔接</h2>
+      <p>原文自己承认的边界：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 纯 VO，无回环无地图重用</h4><p>DSO 只做视觉里程计，不建全局一致地图、没有回环。</p></div>
+        <div class="mini-card"><h4>② 主要失败：几乎纯旋转</h4><p>纯旋转退化运动无法三角化新点，是它最主要的失败来源。</p></div>
+        <div class="mini-card"><h4>③ 强全局光照变化会失败</h4><p>移动光源、昼夜变化会破坏光度假设；短期 VO 尚可，长期建图需改能量。</p></div>
+        <div class="mini-card"><h4>④ 需要已知内参</h4><p>对几何标定敏感（见第 6 节）；同一像素可能被多条残差重复使用（一致性近似）。</p></div>
+      </div>
+      <p>★ <b>收束与承接：</b>DSO 把直接法主线（DTAM → LSD-SLAM → DSO）推到「稀疏 + 直接」的巅峰，并用光度标定 + FEJ 把它做稳。但它仍受两条线牵制：<b>单目尺度不可观</b>（这里干脆不估，纯 VO）与<b>几何噪声脆弱</b>。下一课 <b>0049 VI-DSO</b> 会给它接上 IMU 以解决尺度，并发明「动态边缘化」来修补本节约好的那根「会拉偏的先验弹簧」。<b>悬念⑤（IMU 初始化）</b>也在那里偿还。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用四象限说明「直接 ≠ 稠密」，并写出 DSO 占据哪一格、SVO 为什么是 hybrid。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>dense↔sparse 与 direct↔indirect 是两个正交轴；DSO = Sparse+Direct；SVO 先用直接法做对齐/获取对应、再用间接法做联合优化，故 hybrid。原文四格举例：Sparse+Indirect=monoSLAM/PTAM/ORB；Dense+Indirect=光流+平滑；Dense+Direct=DTAM/REMODE/LSD；Sparse+Direct=DSO。</div></details>
+          </li>
+          <li>写出光度模型 $I_i=G(t_i V B_i)$，解释每个符号，并说明为什么是「外边套 G」而不是三者直接相乘。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>$B_i$ 辐照度、$t_i$ 曝光、$V$ 暗角、$G$ 响应函数；真实链路是先算 $t_i V B_i$ 再整体过 $G$，所以校正应是 $I_i'=G^{-1}(I_i)/V$ 得到线性辐照度。不是三者直接相乘。</div></details>
+          </li>
+          <li>仿射亮度 $a,b$ 为什么用对数参数化？梯度权重 $w_{\mathbf p}$ 为什么下调大梯度像素？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>$e^{a}$ 对数参数化防止增益变负、避免乘性指数漂移；$w_{\mathbf p}=c^2/(c^2+\lVert\nabla I\rVert^2)$ 让强边缘（对几何错位敏感、光度不可靠）权重低，平缓区权重近 1。</div></details>
+          </li>
+          <li>DSO 的均匀化采样是随机的吗？分块阈值怎么算？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>不是随机，是三轮固定顺序：32×32 块，阈值=块内梯度中位数 + $g_{\text{th}}=7$，选块内最大梯度点；第 2、3 遍降阈值、块放大到 2d/4d 补弱纹理；激活时最远点优先。注意候选检测用未校正原始图。</div></details>
+          </li>
+          <li>边缘化的顺序和两条一致性要求是什么？它们和 0019 的 Schur 补、FEJ 什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>顺序：先边缘化帧内所有点，再边缘化该帧本身。一致性：①边缘化钉死切空间（线性化点），②必须用 FEJ。这直接接 0019 的 Schur 消元与 FEJ 一致性。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0047-LSD-SLAM2014-半稠密与尺度漂移.html">← LSD-SLAM（2014）：半稠密与尺度漂移</a>
+        <a class="next" href="0049-VI-DSO2018-动态边缘化.html">VI-DSO（2018）：动态边缘化 →</a>
+      </div>
+      <p class="foot-note">DSO 把直接法做到「稀疏 + 直接」的巅峰，但几何噪声与尺度仍绑住它——下一课 VI-DSO 用 IMU 与动态边缘化来解套 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,380 @@
+# HUGS: Holistic Urban 3D Scene Understanding via Gaussian Splatting
+
+Hongyu Zhou<sup>1</sup>, Jiahao Shao<sup>1</sup>, Lu Xu<sup>1</sup>, Dongfeng Bai<sup>2</sup>, Weichao Qiu<sup>2</sup>, Bingbing Liu<sup>2</sup> Yue Wang<sup>1</sup>, Andreas Geiger<sup>3,4</sup>, Yiyi Liao<sup>1B</sup>
+
+<sup>1</sup> Zhejiang University <sup>2</sup> Huawei Noah’s Ark Lab <sup>3</sup> University of Tubingen ¨ <sup>4</sup> Tubingen AI Center¨
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/b82f6c504654e72650ab3d6bd0c1e197c3c073f87f97a6215da53e3bc25d222c.jpg)  
+Figure 1. Illustration. Given posed RGB images as input, our method lifts noisy 2D & 3D predictions to the 3D space via decomposed 3D Gaussians, and enables holistic scene understanding in 2D and 3D space.
+
+## Abstract
+
+Holistic understanding of urban scenes based on RGB images is a challenging yet important problem. It encompasses understanding both the geometry and appearance to enable novel view synthesis, parsing semantic labels, and tracking moving objects. Despite considerable progress, existing approaches often focus on specific aspects of this task and require additional inputs such as LiDAR scans or manually annotated 3D bounding boxes. In this paper, we introduce a novel pipeline that utilizes 3D Gaussian Splattingfor holistic urban scene understanding. Our main idea involves the joint optimization of geometry, appearance, semantics, and motion using a combination of static and dynamic 3D Gaussians, where moving object poses are regularized via physical constraints. Our approach offers the ability to render new viewpoints in real-time, yielding 2D and 3D semantic information with high accuracy, and reconstruct dynamic scenes, even in scenarios where 3D bounding box detection are highly noisy. Experimental results on KITTI, KITTI-360, and Virtual KITTI 2 demonstrate the effectiveness of our approach. Our project page is at https://xdimlab.github.io/hugs website.
+
+## 1. Introduction
+
+Reconstructing urban scenes is an important task in computer vision with numerous applications. Consider the creation of a photorealistic simulator for autonomous driving, in this context, it becomes crucial to holistically represent all aspects of the scene relevant to driving. This entails tasks like synthesizing images at interpolated and extrapolated viewpoints in real-time, reconstructing 2D and 3D semantics, generating depth information, and tracking dynamic objects. To minimize sensor cost, achieving such a holistic understanding exclusively from posed RGB images holds significant value.
+
+With the rise of neural rendering, many approaches have emerged to lift 2D information to 3D space, enabling scene understanding based solely on RGB images. Several previous works focus on reconstructing static urban scenes, achieving high-quality novel view appearance and semantic synthesis [11, 30, 51]. Another line of work addresses dynamic scenes [19, 27, 40, 46], but most of them require ground truth 3D bounding boxes of dynamic objects as input, which are costly to acquire. PNF [19] is the only method that utilizes noisy bounding boxes obtained through monocular 3D detection and tracking, where the transformations of the bounding boxes are jointly optimized during training. However, na¨ıve joint optimization of per-frame pose transformations is prone to local minima and sensitive to the initialization. Furthermore, while existing methods are capable of rendering accurate 2D semantic labels, it is non-trivial to extract accurate semantics in 3D due to the inaccurate (inferred) 3D geometry. In addition, most of these methods are unable to achieve real-time rendering.
+
+In this paper, We leverage predicted 2D semantic labels, optical flow, and 3D tracks, despite their inherent noise and imperfections, to achieve a holistic understanding of the dynamic scenes based on RGB images (see Fig. 1). Towards this goal, we infer geometry, appearance, semantics, and motion in 3D space using a decomposed scene representation. We leverage 3D Gaussians as the scene representation, which have recently demonstrated superior novel view synthesis performance on static scenes with real-time rendering capability [17]. Specifically, we propose to decompose the scene into static regions and rigidly moving dynamic objects. We model the poses of these moving objects while adhering to the physical constraints of a unicycle model, effectively reducing the impact of noise during tracking and leading to superior performance compared to optimizing object poses individually. This allows us to reconstruct dynamic scenes even when 3D bounding box predictions are highly noisy. Further, we extend 3D Gaussian Splatting to model camera exposure and explore initialization on dynamic scenes, enabling state-of-the-art novel view synthesis performance on urban scenes. Additionally, we incorporate semantic information into 3D Gaussians, enabling the rendering of semantic maps and the extracting of 3D semantic point clouds. Finally, we integrate the RGB, semantics and optical flow to jointly supervise the model training, and investigate the interaction between these image cues to improve the performance of the scene understanding tasks.
+
+Our main contributions are as follows: 1) Our method addresses the task of dynamic 3D urban scene understanding by extending Gaussian Splatting to model additional modalities, including semantic, flow, and camera exposure, as well as dynamic objects. 2) We achieve the decomposition of static and multiple dynamic objects from sparse urban images and noisy labels by incorporating physical constraints, omitting the requirement of ground truth 3D bounding boxes for reconstructing dynamic scenes. 3) Our method achieves state-of-the-art performance on various benchmarks, including novel view appearance and semantic synthesis, as well as 3D semantic reconstruction.
+
+## 2. Related Work
+
+3D Scene Understanding: Understanding urban scenes from various aspects has been considered essential for autonomous driving. Numerous techniques have focused on predicting semantic labels [5, 9, 35], depth maps [10, 28], and optical flows [42] solely from 2D input images. While these methods have demonstrated impressive accuracy within the confines of the 2D space, they often fall short of grasping a profound understanding of the underlying 3D environment. Consequently, this limitation can hinder the multi-view consistency of their predictions. Another line of approach suggests conducting semantic scene understanding solely based on 3D input [29, 31]. This approach heavily relies on LiDAR input, which is known to be costly and resource-intensive to collect.
+
+More recently, a particular approach has emerged, aiming to elevate 2D information to the 3D space to facilitate scene understanding within the 2D image domain. This advancement is made possible through the utilization of differential neural rendering techniques, such as NeRF (Neural Radiance Fields) [25]. Numerous NeRF-based approaches [2–4, 14, 26, 34, 38] have made significant advancements in terms of both quality and efficiency. Furthermore, some other techniques have empowered NeRF with improved scene understanding capabilities. Semantic NeRF [52] first proposes the lifting of noisy 2D annotations to the 3D space based on NeRF. Significant progress has been achieved through the efforts of the following works [37, 44, 49]. While these methods have shown promising results, they are currently limited to dense input viewpoints within indoor scenes and are only applicable to static environments. In this study, our focus lies in dynamic 3D scene understanding specifically tailored to urban settings, achieved by lifting 2D information to the 3D space.
+
+Urban Scene Reconstruction: Numerous studies have been conducted to reconstruct urban scenes using various methods. These methods can be categorized into three classes: point-based [1, 32], mesh-based [12, 20] and NeRF-based [15, 22, 24, 30, 33, 39, 51]. While point-based and mesh-based methods demonstrate faithful reconstructions, they struggle to recover all aspects of the scene, especially when it comes to high-quality appearance modeling. In contrast, NeRF-based models allow for reconstructing scene appearance and enable high-quality rendering of novel viewpoints. However, these approaches are primarily designed for static scenes, lacking the ability to handle dynamic urban environments. In this study, our focus lies in addressing the challenges of dynamic urban scenes.
+
+Several methods have also been developed to address the reconstruction of dynamic urban scenes. Many of these approaches rely on the availability of accurate 3D bounding boxes for moving objects in order to separate the dynamic elements from the static components, as seen in NSG [27], MARS [40] and UniSim [46]. PNF [19] takes a different approach by leveraging monocular-based 3D bounding box predictions and proposes a joint optimization of object poses during the reconstruction process. However, our experimental observations indicate that the straightforward optimization of object poses yields unsatisfactory results due to the absence of physical constraints. Another method, SUDS [36], avoids the use of 3D bounding boxes by grouping the scene based on learned feature fields. However, the accuracy of this approach lags behind. In parallel, the concurrent work EmerNeRF [45] follows a similar idea to SUDS by decomposing the scene purely into static and dynamic components. In our research, we possess the capability to further decompose individual dynamic objects within the scene and estimate their motion.
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/5da5d4ce619b8bd4c7bb8ba0e348906c3143f62ee02a530d5fff01df40c68941.jpg)  
+Figure 2. Method Overview. We decompose the scene into static regions and N rigidly moving dynamic objects. Each dynamic object is represented using 3D Gaussians in its canonical space and then transformed to the world coordinates based on transformations constrained by a unicycle model. We use N unicycle models of different parameters to individually represent the motion of N dynamic objects. Each 3D Gaussian encompasses information about appearance and semantics, whereas the optical flow can be obtained by calculating the Gaussian center’s motion, enabling the rendering of RGB images, semantic maps, and optical flow within a unified model. Our method is supervised using RGB images, noisy 2D semantic labels, and noisy optical flow, denoted as $\mathcal { L } _ { \mathbf { I } } , \mathcal { L } _ { \mathbf { S } }$ , and $\mathcal { L } _ { \mathbf { F } } .$ , respectively.
+
+Gaussian Splatting: 3D Gaussians are demonstrated as a powerful scene representation for novel view synthesis. While the original 3D Gaussian Splatting [17] primarily focuses on static scenes, subsequent research has extended this approach to handle dynamic scenes. Dynamic 3D Gaussians [23] necessitates a substantial number of training views accompanied by ground truth masks. Other studies [43, 47, 48, 53] have also attempted to decompose 3D Gaussians into static and dynamic components, without further decomposing multiple dynamic objects. In our work, we strive to achieve the decomposition of each individual dynamic object while being capable of learning such decomposition from sparse urban images and noisy labels.
+
+## 3. Method
+
+Fig. 2 illustrates our proposed method, HUGS. Our algorithm takes as input posed images of a dynamic urban scene. We decompose the scene into static and dynamic 3D Gaussians, with the motion of dynamic vehicles being modeled via a unicycle model. The 3D Gaussians represent not only appearance but also semantic and flow information, allowing for rendering the RGB images, semantic labels, as well as optical flow through volume rendering.
+
+## 3.1. Decomposed Scene Representation
+
+We assume that the scene is composed of static regions and a total of N dynamic vehicles exhibiting rigid motions. Static regions are represented using static Gaussians in the world coordinate system. Each of the N dynamic vehicles is modeled using dynamic Gaussians in a canonical coordinate system along with a set of rigid transformations $\{ ( \mathbf { R } _ { t } ^ { n } , \mathbf { t } _ { t } ^ { n } ) \} _ { t = 1 } ^ { T }$ <sub>1</sub> with t denoting the timestamp.
+
+Static and Dynamic 3D Gaussians: Following Gaussian
+
+Splatting [17], we model both static and dynamic regions using 3D Gaussians. Each Gaussian is defined by a 3D covariance matrix $ { \Sigma } \in \mathbb { R } ^ { 3 \times 3 }$ and a 3D position $\mu \in \mathbb { R } ^ { 3 }$ , as well as an opacity $\alpha \in \mathbb { R } ^ { + }$
+
+$$
+G ( \mathbf { x } ) = \alpha \exp \left( - \frac { 1 } { 2 } ( \mathbf { x } - \boldsymbol { \mu } ) ^ { T } \Sigma ^ { - 1 } ( \mathbf { x } - \boldsymbol { \mu } ) \right)\tag{1}
+$$
+
+In addition, each Gaussian represents a color vector $\mathbf { c } \in \mathbb { R } ^ { 3 }$ parameterized as SH coefficients. In this work, we propose to additionally model semantic logits $\mathbf { s } \in \mathbb { R } ^ { S }$ of each 3D Gaussian, allowing for rendering 2D semantic labels. Furthermore, we can naturally obtain a rendered optical flow $\mathbf { f } _ { t _ { 1 }  t _ { 2 } } \in \mathbb { R } ^ { 2 }$ for each 3D Gaussian by projecting the 3D position $\mu$ to the image space at two different timestamps, t<sub>1</sub> and $t _ { 2 } .$ , and calculating the motion.
+
+Unicycle Model: We parameterize the transformations $\left( \mathbf { R } _ { t } , \mathbf { t } _ { t } \right)$ following the unicycle model<sup>1</sup>. The state of a unicycle model is parameterized by three elements: $( x _ { t } , y _ { t } , \theta _ { t } )$ where $x _ { t }$ and $y _ { t }$ represent the first two axes of t with $\mathbf { t } _ { t } = [ x _ { t } , y _ { t } , z _ { t } ]$ , and $\theta _ { t }$ is the yaw angle of $\mathbf { R } _ { t }$ . To adapt the continuous unicycle model to discrete frames, we derive the calculus of the unicycle model for the vehicle transition from timestamp t to $t + 1$ as follows:
+
+$$
+\begin{array} { l } { x _ { t + 1 } = x _ { t } + \displaystyle \frac { v _ { t } } { \omega _ { t } } ( \sin \theta _ { t + 1 } - \sin \theta _ { t } ) } \\ { y _ { t + 1 } = y _ { t } - \displaystyle \frac { v _ { t } } { \omega _ { t } } ( \cos \theta _ { t + 1 } - \cos \theta _ { t } ) } \\ { \theta _ { t + 1 } = \theta _ { t } + \omega _ { t } } \end{array}\tag{2}
+$$
+
+Here, $v _ { t }$ represents the forward velocity, and $\omega _ { t }$ is the angular velocity. This model integrates physical constraints when compared to directly optimizing the transformations of dynamic vehicles at every frame independently, thus enabling smoother motion modeling of moving objects and making them less prone to local minima.
+
+While it is possible to define an initial state $( x _ { 1 } , y _ { 1 } , \theta _ { 1 } )$ and derive the following states recursively based on velocities, $v _ { t }$ and $\omega _ { t }$ , such a recursive parameterization is challenging to optimize. In practice, we define a set of trainable states $\bar { \{ ( x _ { t } , y _ { t } , \theta _ { t } ) \} } _ { t = 1 } ^ { \bar { T } }$ along with trainable velocities $\{ v _ { t } , \omega _ { t } \} _ { t = 1 } ^ { T - 1 }$ , and add a regularization term to ensure that the vehicle’s states adhere to the characteristics of a unicycle model in Eq. 2. The regularization terms will be described in Section 3.3. Additionally, we model the vertical locations of the vehicle, $\{ z _ { t } \} _ { t = 1 } ^ { T }$ , as optimizable parameters.
+
+## 3.2. Holistic Urban Gaussian Splatting
+
+Given the HUGS representation specified above, we are able to render images, semantic maps and optical flow to supervise the model or make predictions at inference time. We now elaborate on the rendering of each modality.
+
+Novel View Synthesis: The combination of static and dynamic Gaussians can be sorted and projected onto the image plane via α-blending:
+
+$$
+\pi : \quad \mathbf { C } = \sum _ { i \in \mathcal { N } } \mathbf { c } _ { i } \alpha _ { i } ^ { \prime } \prod _ { j = 1 } ^ { i - 1 } ( 1 - \alpha _ { j } ^ { \prime } )\tag{3}
+$$
+
+Here, $\alpha _ { j } ^ { \prime }$ is determined by the projected 2D Gaussian and the 3D opacity $\alpha ,$ see supplement for details.
+
+In contrast to single-object scenes, urban scenes typically involve more complex lighting conditions and the images are usually captured with auto white balance and auto exposure. NeRF-based methods [24] typically feed a perframe appearance embedding along with the 3D positions into a neural network to compute the color, thereby compensating exposure. However, when working with 3D Gaussians, there is no neural network capable of processing appearance embeddings. Inspired by Urban Radiance Field [30], we generate an exposure affine matrix for each camera by mapping the camera’s extrinsic parameters to an affine matrix $\bar { \mathbf { A } } \in \mathbb { R } ^ { 3 \times 3 }$ and vector $\mathbf { b } \in \mathbb { R } ^ { 3 }$ via a small MLP:
+
+$$
+\tilde { \mathbf { C } } = \mathbf { A } \times \mathbf { C } + \mathbf { b }\tag{4}
+$$
+
+We demonstrate that modeling the exposure improves rendering quality in the experimental section.
+
+Semantic Reconstruction: Similarly to Eq. 3, we can obtain 2D semantic labels via α-blending based on the 3D semantic logit s:
+
+$$
+\pi : { \bf S } = \sum _ { i \in \mathcal { N } } \mathrm { s o f t m a x } ( \mathbf { s } _ { i } ) \alpha _ { i } ^ { \prime } \prod _ { j = 1 } ^ { i - 1 } ( 1 - \alpha _ { j } ^ { \prime } )\tag{5}
+$$
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/b65f2fbec8a122aabdd9d38a256afd62b36648765ead991a3e4d51892f4ad023.jpg)  
+Figure 3. 3D Semantic Reconstruction. Comparison between applying softmax to accumulated 2D semantic logits (left) and to 3D semantic logits (right). Normalizing semantic logits in 3D space clearly reduces floaters and yields better 3D semantic reconstruction than the 2D normalization counterpart.
+
+Note that we perform the softmax operation on 3D semantic logits $\mathbf { s } _ { i }$ prior to $\alpha$ blending, in contrast to most existing methods that apply softmax to 2D semantic logits S<sup>¯</sup> obtained by accumulating unnormalized 3D semantic log its $\mathbf { s } _ { i }$ [11, 52]. As shown in Fig. 3, applying softmax in 2D space leads to noisy 3D semantic labels. This is due to the fact that 2D space softmax can produce accurate 2D semantics by adjusting the scale of the 3D semantic logits, allowing a single sampled point with a substantial logit value to significantly influence the volume rendering outcome. For example, an undesired floating point labeled with “car” may not be penalized despite the target rendered label is “tree”, as long as there is a 3D Gaussian providing a large logit value of “tree” along this ray. Our solution instead removes such floaters by normalizing logits in 3D space. See supplement for more quantitative and qualitative details.
+
+Optical Flow: The 3D Gaussian representation also enables the rendering of optical flow. Given two timestamps $t _ { 1 }$ and $t _ { 2 } ,$ , we first calculate the optical flow of each 3D Gaussian’s center $\mu$ as $\mathbf { f } _ { t _ { 1 }  t _ { 2 } } ,$ . Specifically, we project $\mu$ to the 2D image space based on the camera’s intrinsic and extrinsic parameters:
+
+$$
+\begin{array} { r } { \mu _ { 1 } ^ { \prime } = \mathbf { K } [ \mathbf { R } _ { t _ { 1 } } ^ { \mathrm { c a m } } ; \mathbf { t } _ { t _ { 1 } } ^ { \mathrm { c a m } } ] \boldsymbol { \mu } , \quad \mu _ { 2 } ^ { \prime } = \mathbf { K } [ \mathbf { R } _ { t _ { 2 } } ^ { \mathrm { c a m } } ; \mathbf { t } _ { t _ { 2 } } ^ { \mathrm { c a m } } ] \boldsymbol { \mu } , } \end{array}\tag{6}
+$$
+
+and then calculate the motion vector as $\mathbf { f } _ { t _ { 1 }  t _ { 2 } } = \mu _ { 2 } ^ { \prime } - \mu _ { 1 } ^ { \prime }$ Next, we render the optical flow via accumulate the optical flows via volume rendering:
+
+$$
+\pi : \quad \mathbf { F } = \sum _ { i \in \mathcal { N } } \mathbf { f } _ { i } \alpha _ { i } ^ { \prime } \prod _ { j = 1 } ^ { i - 1 } ( 1 - \alpha _ { j } ^ { \prime } )\tag{7}
+$$
+
+Note that this rendering process assumes that any pixel of a 2D Gaussian splat shares the same optical flow direction as the corresponding Gaussian center but with scaled magnitude. While this is indeed a simplified approximation, we observe this to work well in practice.
+
+In our experiments, we demonstrate that supervising the rendered optical flow with pseudo ground truth helps to improve the performance of the geometry in terms of rendered depth maps. This is due to the fact that flow provides explicit pixel correspondences, which is inherently supervising the underlying surface location.
+
+## 3.3. Loss Functions
+
+We leverage pre-trained recognition models to provide noisy 2D semantic and instance predictions, noisy 2D optical flow, as well as noisy 3D tracking results. These easyto-obtain predictions are critical to enable RGB-only holistic scene understanding in both 2D and 3D space, without relying on LiDAR input or 3D semantic supervision.
+
+Image-based Losses: Our model is supervised with the ground truth images using a combination of L1 and SSIM losses. Let <sup>˜</sup>I denote the rendered image and <sup>ˆ</sup>I the ground truth, our rendering loss is defined as follows:
+
+$$
+\mathcal { L } _ { \bf I } = ( 1 - \lambda _ { S S I M } ) \| \hat { \bf I } - \tilde { \bf I } \| _ { 1 } + \lambda _ { S S I M } \mathrm { S S I M } ( \hat { \bf I } , \tilde { \bf I } )\tag{8}
+$$
+
+We additionally apply the cross-entropy loss to the rendered semantic label wrt. pseudo-2D semantic segmentation ground truth S<sup>ˆ</sup>:
+
+$$
+\mathcal { L } _ { \mathbf { S } } = - \sum _ { k = 0 } ^ { S - 1 } \hat { \mathbf { S } } _ { k } \log ( \mathbf { S } _ { k } )\tag{9}
+$$
+
+Similarly, we leverage pseudo optical flow ground truth $\hat { \mathbf { F } }$ to supervise the rendered optical flow using:
+
+$$
+\mathcal { L } _ { \mathbf { F } } = \| \hat { \mathbf { F } } - \mathbf { F } \| _ { 1 }\tag{10}
+$$
+
+While 3D Gaussians can enable the rendering of optical flow without any supervision, we observe artifacts in the rendered flow without supervision. Further, the optical flow supervision yields an improvement in the depth maps as shown in our ablation study.
+
+Unicycle Model Losses: We use a unicycle model to guide the noisy 3D bounding box predictions:
+
+$$
+\mathcal { L } _ { \mathbf { t } } = \sum _ { t } \| x _ { t } - \hat { x } _ { t } \| _ { 2 } + \sum _ { t } \| y _ { t } - \hat { y } _ { t } \| _ { 2 }\tag{11}
+$$
+
+where $\hat { x } _ { t }$ and $\hat { y } _ { t }$ are the $x$ and $y$ locations of a noisy 3D bounding box at timestamp t.
+
+As mentioned earlier, we parameterize the vehicle’s states $( x _ { t } , y _ { t } , \theta _ { t } )$ and the velocities $v _ { t } , \omega _ { t }$ as learnable parameters. Hence, we add the following regularization to make the states adhere to the unicycle model as follows:
+
+$$
+\begin{array} { c } { \displaystyle \mathcal { L } _ { u n i } = \sum _ { t } \| x _ { t + 1 } - x _ { t } - \frac { v _ { t } } { \omega _ { t } } ( \sin \theta _ { t + 1 } - \sin \theta _ { t } ) \| + } \\ { \displaystyle \sum _ { t } \| y _ { t + 1 } - y _ { t } + \frac { v _ { t } } { \omega _ { t } } ( \cos \theta _ { t + 1 } - \cos \theta _ { t } ) \| + } \\ { \displaystyle \sum _ { t } \| \theta _ { t + 1 } - \theta _ { t } - \omega _ { t } \| } \end{array}\tag{12}
+$$
+
+In addition, we regularize the acceleration of the forward velocity $v _ { t }$ and angular velocity $\omega _ { t }$ to be smooth:
+
+$$
+\begin{array} { c } { \mathcal { L } _ { r e g } = \displaystyle \sum _ { t } \| v _ { t + 1 } + v _ { t - 1 } - 2 v _ { t } \| _ { 2 } + } \\ { \sum _ { t } \| \theta _ { t + 1 } + \theta _ { t - 1 } - 2 \theta _ { t } \| _ { 2 } } \end{array}\tag{13}
+$$
+
+The total loss can be summarized as follows:
+
+$$
+\begin{array} { r } { \mathcal { L } = \mathcal { L } _ { \bf I } + \lambda _ { \bf S } \mathcal { L } _ { \bf S } + \lambda _ { \bf F } \mathcal { L } _ { \bf F } + \lambda _ { \bf t } \mathcal { L } _ { \bf t } + \lambda _ { u n i } \mathcal { L } _ { u n i } + \lambda _ { r e g } \mathcal { L } _ { r e g } } \\ { ( 1 4 ) } \end{array}
+$$
+
+## 3.4. Implementation Details
+
+Initialization: While 3D Gaussian Splatting is not highly sensitive to the initialization, better initialization can yield better performance. We utilize the dense point cloud obtained from COLMAP for initialization by default. When the ego-vehicle is static, we use random initialization.
+
+Pseudo-GTs: We utilize InverseForm [5] to generate pseudo ground truth for semantic segmentation. For initializing the unicycle model, we employ a monocular-based method, QD-3DT [16], to acquire pseudo ground truth for 3D bounding boxes and tracking IDs at each training view. For optical flow, we use Unimatch [41] to obtain pseudo ground truth.
+
+Training: We train the model for 30,000 iterations on dynamic scenes. For the KITTI-360 leaderboard, we perform early stopping at 15,000 iterations. Following [17], we adopt the approach of setting the weight parameter λ<sub>SSIM</sub> to 0.2. Furthermore, we assign weights $\lambda _ { \mathbf { S } }$ and $\lambda _ { \mathbf { F } }$ as 0.01, while $\lambda _ { \mathbf { t } } , \lambda _ { u n i }$ and $\lambda _ { r e g }$ are set as 0.1. The learning rate of the unicycle model parameters progressively decreases during training.
+
+Time Consuming: Our approach can converge within 30 minutes and achieve inference at a speed of approximately 93 fps on a single NVIDIA RTX 4090. While NSG and MARS inference at a speed of less than 1 fps. A speed breakdown of our method is provided in the supplement.
+
+## 4. Experiments
+
+Datasets: We perform a range of experiments to assess the performance of our model across various tasks, such as novel view synthesis, novel semantic synthesis, and 3D semantic reconstruction. These experiments are conducted using the KITTI [13], Virtual KITTI 2 (vKITTI) [7], and KITTI-360 datasets [21]. We apply 50% dropout rate following existing evaluation protocols [21, 40] on all of these datasets.
+
+Baselines: We evaluate the dynamic scene novel view synthesis task by comparing our method with NSG [27] and
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/eb9957a15e55b0f1685bdf76fa93d6759fdc8d574c1f14c3c85bb700e8217e7b.jpg)
+
+Figure 4. Qualitative Comparison on KITTI and vKITTI. We use monocular-based 3D bounding box predictions for KITTI, and manually jittered 3D bounding boxes for vKITTI. We zoom in on a patch of a dynamic object for each KITTI scene.
+<table><tr><td></td><td colspan="3">KITTI Scene02</td><td colspan="3">KITTI Scene06</td><td colspan="3">vKITTI Scene02</td><td colspan="3">vKITTI Scene06</td></tr><tr><td></td><td>PSNR↑</td><td>SSIM↑</td><td>LPIPS↓</td><td>PSNR↑</td><td>SSIM↑</td><td>LPIPS↓</td><td>PSNR↑</td><td>SSIM↑</td><td>LPIPS↓</td><td>PSNR↑</td><td>SSIM↑</td><td>LPIPS↓</td></tr><tr><td>NSG [27]</td><td>23.00</td><td>0.664</td><td>0.373</td><td>23.78</td><td>0.717</td><td>0.234</td><td>21.40</td><td>0.689</td><td>0.376</td><td>20.60</td><td>0.719</td><td>0.255</td></tr><tr><td>MARS [40]</td><td>23.30</td><td>0.731</td><td>0.139</td><td>25.09</td><td>0.856</td><td>0.083</td><td>22.67</td><td>0.882</td><td>0.128</td><td>21.67</td><td>0.856</td><td>0.134</td></tr><tr><td>Ours</td><td>25.42</td><td>0.821</td><td>0.092</td><td>28.20</td><td>0.919</td><td>0.027</td><td>26.21</td><td>0.911</td><td>0.040</td><td>26.65</td><td>0.921</td><td>0.030</td></tr></table>
+
+Table 1. Novel View Synthesis on Dynamic Scenes with predicted or noisy 3D trackings.
+
+MARS [40], which are two open-source methods for dynamic urban scenes. Additionally, we compare the static novel view appearance and semantic synthesis task with mip-NeRF [2], PNF [19], and MARS [40]. Furthermore, we assess the quality of 3D semantic scene reconstruction by comparing it with Semantic Nerfacto [34].
+
+Evaluation Metrics: For novel view synthesis, we adopt the default setting for quantitative assessments, including the evaluation of PSNR, SSIM and LPIPS [50]. Regarding novel view semantic synthesis, we follow KITTI-360 [21], which reports the mean Intersection over Union on class $\mathrm { ( m I o U _ { c l s } ) }$ and category $\mathrm { ( m I o U _ { \mathrm { c a t } } ) } .$ , respectively. Further, we evaluate our performance on 3D Semantic Segmentation against a ground truth semantic LiDAR point cloud, measuring both geometric reconstruction quality and semantic accuracy. The geometric quality is evaluated as the chamfer distance between two point clouds, including completeness and accuracy, whereas the semantic accuracy is also measured using mIoU<sub>cls</sub>. In our ablation study, we evaluate 3D tracking performance by measuring the rotation and translation error e<sub>R</sub> and $e _ { \mathbf { t } }$ of our optimized 3D bounding boxes wrt. the ground truth.
+
+## 4.1. Novel View Synthesis
+
+We first evaluate HUGS for novel view synthesis on various datasets including dynamic and static scenes. For dynamic scenes, we leverage noisy 3D bounding box predictions as input, instead of using the ground truth. Despite not being our main focus, we include a comparison of using ground truth 3D bounding boxes in the supplement.
+
+Dynamic Scene with Noisy 3D Bounding Boxes: Following [27, 40], we evaluate our performance on dynamic scenes of the KITTI and vKITTI datasets. In contrast to these methods that leverage ground truth poses, we investigate a more practical scenario where the bounding boxes are generated by a monocular-based 3D tracking algorithm, QD-3DT [16], in Table 1. Here, the predicted 3D bounding boxes are only provided for training views, as testing views should not be used as inputs for the tracking model. In experiments where the unicycle model is not utilized, the bounding boxes of testing views are obtained through linear interpolation from neighbour training views. Where the unicycle model is used, the bounding boxes of testing views are computed using Eq. 2. For vKITTI, there is no pre-trained monocular tracking algorithm. We hence jitter the ground truth poses to simulate noisy monocular predictions, with an average noise of 0.5 meters in translation and 5 degrees in rotation. Our model’s robustness wrt. various levels of noise will be analyzed in the ablation study.
+
+Table 1 demonstrate that our method consistently outperforms against the baselines. Note, that QD-3DT yields reasonable predictions on the KITTI dataset<sup>2</sup>. Hence, NSG and MARS reconstruct the dynamic objects reasonably well, but with more blurriness and artifacts (see Fig. 4), as they do not model the optimization of the object poses. In contrast, our method allows for reconstructing dynamic objects with sharp details, not only in cases of minor pose error on the KITTI dataset but also on the vKITTI dataset with more severe noise.
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/5db050cd005a7f40c6815cfb7101a5f2d8acb3730f5da45afe29f34899aca1d8.jpg)  
+Figure 5. Details Qualitative Comparison with MARS on KITTI-360 Leaderboard.
+
+<table><tr><td></td><td>PSNR↑</td><td>SSIM↑</td><td>LPIPS↓</td><td>|mIoUcls ↑ mIoUcat ↑</td><td></td></tr><tr><td>mip-NeRF [2]]</td><td>21.54</td><td>0.778</td><td>0.365</td><td>48.25</td><td>67.47</td></tr><tr><td>PNF [19]</td><td>22.07</td><td>0.820</td><td>0.221</td><td>73.06</td><td>84.97</td></tr><tr><td>MARS [40]</td><td>23.09</td><td>0.857</td><td>0.174</td><td></td><td></td></tr><tr><td>Ours</td><td>23.38</td><td>0.870</td><td>0.121</td><td>72.65</td><td>85.64</td></tr></table>
+
+Table 2. Novel View Semantic and Appearance Synthesis on KITTI-360.
+
+Static Scene Leaderboard: We further evaluate our performance on the KITTI-360 leaderboard, which contains 5 static sequences. Our method achieves state-of-the-art performance on the leaderboard as in Table 2 (left), demonstrating the effectiveness of the 3D Gaussian representation in modeling complex urban scenes. As we will discuss in the ablation study, incorporating the affine transform to model camera exposure is important for reaching high fidelity. Fig. 5 shows the qualitative comparison of our proposed method to another top-ranking method, MARS, on the leaderboard.
+
+## 4.2. Semantic and Geometric Scene Understanding
+
+Next, we evaluate our model on various semantic and geometric scene understanding tasks on the KITTI-360 dataset.
+
+Novel View Semantic Synthesis: Our holistic representation also enables novel view semantic synthesis. Hence, we submit our novel view semantic synthesis performance to the KITTI-360 leaderboard for comparison as well, see Table 2 (right). Despite not leveraging category-level prior as done in previous work [19], our approach achieves comparable performance to the SOTA [19] as shown in Fig. 6.
+
+3D Semantic Scene Reconstruction: While existing 2Dto-3D semantic lifting methods solely evaluate their performance in the 2D image space, we further evaluate our performance in the 3D space to examine the underlying 3D geometry. To this goal, we leverage the ground truth LiDAR points provided by the KITTI-360 dataset for evaluation. With each Gaussian possessing semantic information, we can obtain a semantic point cloud by extracting the Gaussian’s center µ and its semantic label. We evaluate the geometric quality and semantic accuracy of this semantic point cloud in Table 3. We compare our method with Semantic Nerfacto [34], a Semantic NeRF implemented using a more advanced backbone, as the state-of-the-art novel view semantic synthesis method, PNF, in Table 2 is not opensource. For this baseline, we extract a semantic point cloud by specifying a threshold to the density field. While Semantic Nerfacto enables rendering faithful 2D semantic labels as shown in the supplement, the underlying 3D semantic point cloud is significantly worse in comparison. The Gaussian based representation instead allows for extracting a much more accurate semantic point cloud in comparison.
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/8eb6cc21cab960ffd1869c5100e900d338b8d350a52c77c3df37b1913b5ad2a4.jpg)  
+Figure 6. Qualitative Comparison with PNF on KITTI-360 Leaderboard.
+
+<table><tr><td></td><td>acc.↓</td><td>comp.↓</td><td>mIoUcls ↑</td></tr><tr><td>Semantic Nerfacto</td><td>1.508</td><td>24.28</td><td>0.055</td></tr><tr><td>Ours</td><td>0.233</td><td>0.214</td><td>0.505</td></tr></table>
+
+Table 3. 3D Semantic Reconstruction on KITTI-360. Note that all metrics are calculated in 3D space.
+
+## 4.3. Scene Editing
+
+Our decomposed scene representation enables various downstream applications. Our method allows for decomposing foreground moving objects from the background as shown in Fig. 7. Further, we can edit the scene by swapping dynamic objects, or manipulating their rotation and translations, see Fig. 8.
+
+## 4.4. Ablation Study
+
+We conduct ablation studies on dynamic and static scenes, respectively.
+
+Dynamic Scene: As KITTI provides accurate 3D bounding box ground truth, we ablate the effectiveness of our unicycle model on KITTI by manually adding noise to the 3D bounding boxes and evaluate both the novel view synthesis results and the tracking performance, see Table 4. In this experiment, we compare our full model to two variants, i.e., using the noises without optimization (w/o opt., w/o uni.), and performing na¨ıve per-frame optimization without using the unicycle model (w/ opt., w/o uni.). The results validate the effectiveness of the unicycle model, which obviously improves the rendering quality and 3D tracking accuracy. Qualitative results in Fig. 9 further verify the effectiveness of our unicycle model in enabling accuracy object reconstruction given noisy 3D bounding boxes.
+
+Edited
+<table><tr><td></td><td colspan="5">KITTI (5% noise)</td><td colspan="5">KITTI (10% noise)</td><td colspan="5">KITTI (20% noise) SSIM↑ LPIPS↓ eR ↓</td></tr><tr><td></td><td>PSNR↑</td><td></td><td>SSIM↑ LPIPS↓</td><td>eR↓</td><td>et↓</td><td>PSNR↑</td><td></td><td>SSIM↑ LPIPS↓</td><td>eR↓</td><td>et↓</td><td>PSNR↑</td><td></td><td></td><td></td><td>et↓</td></tr><tr><td>w/o opt., w/o uni.</td><td>23.83</td><td>0.878</td><td>0.062</td><td>0.031</td><td>0.027</td><td>22.16</td><td>0.861</td><td>0.079</td><td>0.063</td><td>0.106</td><td>20.28</td><td>0.835</td><td></td><td>0.101</td><td>0.125 0.425</td></tr><tr><td>w/ opt., w/o uni.</td><td>24.80</td><td>0.897</td><td>0.038</td><td>0.022</td><td>0.051</td><td>22.75</td><td>0.879</td><td>0.056</td><td></td><td>0.054 0.130</td><td>20.56</td><td></td><td>0.855</td><td>0.081</td><td>0.135 0.612</td></tr><tr><td>w/ opt., w/ uni. (Ours)</td><td>28.78</td><td>0.928</td><td>0.023</td><td>0.017 0.022</td><td></td><td>26.66</td><td>0.908</td><td>0.032</td><td></td><td>0.037 0.035</td><td>23.59</td><td>0.875</td><td>0.061</td><td></td><td>0.081 0.176</td></tr></table>
+
+Table 4. Ablation Study on Dynamic Scenes of KITTI.
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/024b4e10b911118ee96bf2dcf9b8b22d09e592e43ae29b7a5648684733059a57.jpg)  
+Background
+
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/0cbfa7d17c7f007b87e83dcfe0d2f2b960c9e9d60fbfc294792e5f626ecf66a9.jpg)  
+Foreground
+
+Figure 7. Scene Decomposition on KITTI. Our approach enables clear decomposition of foreground and background.  
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/711aeef24d6e55fa8c552449a4c891fc18394ac0ade8f267b15417e505e0825e.jpg)  
+Original  
+Figure 8. Scene Editing on KITTI. Our decomposed scene representation enables replacing dynamic objects (1st row) and moving dynamic objects around (2nd & 3rd rows).
+
+Static Scene: We further study the effect of different components on three static scenes of KITTI-360 in Table 5. This allows us to ablate design choices without mixing up the impact of dynamic objects. The results indicate the significance of exposure modeling, which is particularly important for scenes with strong exposure variance. The semantic and flow losses have little contribution in improving novel view synthesis. It is rational as imposing a constraint on the semantic or flow does not necessarily contribute to appear-
+
+<table><tr><td></td><td>PSNR↑</td><td>SSIM↑</td><td>LPIPS↓ Depth ↓</td><td></td></tr><tr><td>w/o Affine transform</td><td>24.18</td><td>0.827</td><td>0.083</td><td></td></tr><tr><td>w/o  $\mathcal { L } _ { \mathbf { S } }$ </td><td>24.47</td><td>0.831</td><td>0.081</td><td>0.892</td></tr><tr><td>w/o  $\mathcal { L } _ { \mathbf { F } }$ </td><td>24.45</td><td>0.831</td><td>0.080</td><td>1.031</td></tr><tr><td>Ours</td><td>24.52</td><td>0.833</td><td>0.081</td><td>0.872</td></tr></table>
+
+Table 5. Ablation Study on Static Scenes on KITTI-360.  
+![](images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/06c3c6a6ef09b7bbe521db8048878de63d20bc5bc531ad6dc5a21d7c9b82a365.jpg)  
+w/o opt., w/o uni.  
+w/ opt., w/o uni.
+
+Figure 9. Detail Qualitative Comparison on KITTI with Noisy Bounding Boxes.
+
+ance. However, note that incorporating the flow supervision clearly improves the underlying geometry, since optical flow provides explicit correspondence. See supplement for qualitative comparison.
+
+## 5. Conclusion
+
+In this paper, we present HUGS, a holistic scene representation that jointly optimizes appearance, geometry, and motion for urban scenes. This leads to state-of-the-art performance on various tasks. Our method has several limitations. Firstly, the reconstructed dynamic objects can only rotate to a certain degree. Future work may explore category-level prior, to enable accurate reconstruction of the full object. Further, our model lacks control of more degrees of freedom, e.g., light editing, which could be a promising direction to explore based on the Gaussian representation.
+
+Acknowledgements: This work is supported by NSFC under grant 62202418, U21B2004 and the National Key R&D Program of China under Grant 2021ZD0114501. Yiyi Liao is with the Zhejiang Provincial Key Laboratory of Information Processing, Communication and Networking (IPCAN). Andreas Geiger was supported by the ERC Starting Grant LEGO-3D (850533) and the DFG EXC number 2064/1 - project number 390727645.
+
+## References
+
+[1] Sameer Agarwal, Yasutaka Furukawa, Noah Snavely, Ian Simon, Brian Curless, Steven M. Seitz, and Richard Szeliski. Building Rome in a day. Communications of the ACM, 54 (10):105–112, 2011. 2
+
+[2] Jonathan T. Barron, Ben Mildenhall, Matthew Tancik, Peter Hedman, Ricardo Martin-Brualla, and Pratul P. Srinivasan. Mip-NeRF: A Multiscale Representation for Anti-Aliasing Neural Radiance Fields, 2021. arXiv:2103.13415 [cs]. 2, 6, 7
+
+[3] Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter Hedman. Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields, 2022. arXiv:2111.12077 [cs].
+
+[4] Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter Hedman. Zip-NeRF: Anti-Aliased Grid-Based Neural Radiance Fields, 2023. arXiv:2304.06706 [cs]. 2
+
+[5] Shubhankar Borse, Ying Wang, Yizhe Zhang, and Fatih Porikli. InverseForm: A Loss Function for Structured Boundary-Aware Segmentation, 2021. arXiv:2104.02745 [cs]. 2, 5
+
+[6] Shubhankar Borse, Ying Wang, Yizhe Zhang, and Fatih Porikli. InverseForm: A Loss Function for Structured Boundary-Aware Segmentation, 2021. arXiv:2104.02745 [cs]. 14
+
+[7] Yohann Cabon, Naila Murray, and Martin Humenberger. Virtual KITTI 2, 2020. arXiv:2001.10773 [cs, eess]. 5, 12
+
+[8] Xu Chen, Zijian Dong, Jie Song, Andreas Geiger, and Otmar Hilliges. Category Level Object Pose Estimation via Neural Analysis-by-Synthesis, 2020. arXiv:2008.08145 [cs]. 12
+
+[9] Bowen Cheng, Maxwell D. Collins, Yukun Zhu, Ting Liu, Thomas S. Huang, Hartwig Adam, and Liang-Chieh Chen. Panoptic-DeepLab: A Simple, Strong, and Fast Baseline for Bottom-Up Panoptic Segmentation, 2020. arXiv:1911.10194 [cs]. 2
+
+[10] Ainaz Eftekhar, Alexander Sax, Roman Bachmann, Jitendra Malik, and Amir Zamir. Omnidata: A Scalable Pipeline for Making Multi-Task Mid-Level Vision Datasets from 3D Scans, 2021. 2
+
+[11] Xiao Fu, Shangzhan Zhang, Tianrun Chen, Yichong Lu, Lanyun Zhu, Xiaowei Zhou, Andreas Geiger, and Yiyi Liao. Panoptic NeRF: 3D-to-2D Label Transfer for Panoptic Urban Scene Segmentation, 2022. arXiv:2203.15224 [cs]. 1, 4, 12
+
+[12] David Gallup, Jan-Michael Frahm, and Marc Pollefeys. Piecewise planar and non-planar stereo for urban scene reconstruction. In 2010 IEEE Computer Society Conference on Computer Vision and Pattern Recognition, pages 1418– 1425, San Francisco, CA, USA, 2010. IEEE. 2
+
+[13] A. Geiger, P. Lenz, and R. Urtasun. Are we ready for autonomous driving? The KITTI vision benchmark suite. In 2012 IEEE Conference on Computer Vision and Pattern Recognition, pages 3354–3361, Providence, RI, 2012. IEEE. 5, 12
+
+[14] Lily Goli, Cody Reading, Silvia Sellan, Alec Jacobson, and´ Andrea Tagliasacchi. Bayes’ Rays: Uncertainty Quantifica-
+
+tion for Neural Radiance Fields, 2023. arXiv:2309.03185 [cs]. 2
+
+[15] Jianfei Guo, Nianchen Deng, Xinyang Li, Yeqi Bai, Botian Shi, Chiyu Wang, Chenjing Ding, Dongliang Wang, and Yikang Li. StreetSurf: Extending Multiview Implicit Surface Reconstruction to Street Views, 2023. arXiv:2306.04988 [cs]. 2
+
+[16] Hou-Ning Hu, Yung-Hsu Yang, Tobias Fischer, Trevor Darrell, Fisher Yu, and Min Sun. Monocular Quasi-Dense 3D Object Tracking, 2021. arXiv:2103.07351 [cs]. 5, 6, 15
+
+[17] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkuhler,¨ and George Drettakis. 3D Gaussian Splatting for Real-Time Radiance Field Rendering. 42(4). 2, 3, 5
+
+[18] Bernhard Kerbl, Georgios Kopanas, Thomas Leimkuehler, and George Drettakis. 3D Gaussian Splatting for Real-Time Radiance Field Rendering. ACM Transactions on Graphics, 42(4):1–14, 2023. 11
+
+[19] Abhijit Kundu, Kyle Genova, Xiaoqi Yin, Alireza Fathi, Caroline Pantofaru, Leonidas Guibas, Andrea Tagliasacchi, Frank Dellaert, and Thomas Funkhouser. Panoptic Neural Fields: A Semantic Object-Aware Neural Scene Representation, 2022. arXiv:2205.04334 [cs]. 1, 2, 6, 7, 13
+
+[20] Florent Lafarge, Renaud Keriven, Mathieu Bredif, and Hoang-Hiep Vu. A Hybrid Multiview Stereo Algorithm for Modeling Urban Scenes. IEEE Transactions on Pattern Analysis and Machine Intelligence, 35(1):5–17, 2013. 2
+
+[21] Yiyi Liao, Jun Xie, and Andreas Geiger. KITTI-360: A Novel Dataset and Benchmarks for Urban Scene Understanding in 2D and 3D. IEEE Transactions on Pattern Analysis and Machine Intelligence, pages 1–1, 2022. 5, 6, 12
+
+[22] Fan Lu, Yan Xu, Guang Chen, Hongsheng Li, Kwan-Yee Lin, and Changjun Jiang. Urban Radiance Field Representation with Deformable Neural Mesh Primitives, 2023. arXiv:2307.10776 [cs]. 2
+
+[23] Jonathon Luiten, Georgios Kopanas, Bastian Leibe, and Deva Ramanan. Dynamic 3D Gaussians: Tracking by Persistent Dynamic View Synthesis, 2023. arXiv:2308.09713 [cs]. 3
+
+[24] Ricardo Martin-Brualla, Noha Radwan, Mehdi S. M. Sajjadi, Jonathan T. Barron, Alexey Dosovitskiy, and Daniel Duckworth. NeRF in the Wild: Neural Radiance Fields for Unconstrained Photo Collections, 2021. arXiv:2008.02268 [cs]. 2, 4
+
+[25] Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ramamoorthi, and Ren Ng. NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis, 2020. arXiv:2003.08934 [cs]. 2
+
+[26] Thomas Muller, Alex Evans, Christoph Schied, and Alexan-¨ der Keller. Instant neural graphics primitives with a multiresolution hash encoding. ACM Transactions on Graphics, 41 (4):1–15, 2022. 2
+
+[27] Julian Ost, Fahim Mannan, Nils Thuerey, Julian Knodt, and Felix Heide. Neural Scene Graphs for Dynamic Scenes, 2021. arXiv:2011.10379 [cs]. 1, 2, 5, 6, 13, 14
+
+[28] Luigi Piccinelli, Christos Sakaridis, and Fisher Yu. iDisc: Internal Discretization for Monocular Depth Estimation, 2023. arXiv:2304.06334 [cs]. 2
+
+[29] Charles Ruizhongtai Qi, Li Yi, Hao Su, and Leonidas J Guibas. PointNet++: Deep Hierarchical Feature Learning on Point Sets in a Metric Space. In Advances in Neural Information Processing Systems. Curran Associates, Inc., 2017. 2
+
+[30] Konstantinos Rematas, Andrew Liu, Pratul P. Srinivasan, Jonathan T. Barron, Andrea Tagliasacchi, Thomas Funkhouser, and Vittorio Ferrari. Urban Radiance Fields, 2021. arXiv:2111.14643 [cs]. 1, 2, 4
+
+[31] Damien Robert, Bruno Vallet, and Loic Landrieu. Learning Multi-View Aggregation In the Wild for Large-Scale 3D Semantic Segmentation. In 2022 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 5565–5574, New Orleans, LA, USA, 2022. IEEE. 2
+
+[32] Johannes L. Schonberger and Jan-Michael Frahm. Structurefrom-Motion Revisited. In 2016 IEEE Conference on Computer Vision and Pattern Recognition (CVPR), pages 4104– 4113, Las Vegas, NV, USA, 2016. IEEE. 2
+
+[33] Matthew Tancik, Vincent Casser, Xinchen Yan, Sabeek Pradhan, Ben Mildenhall, Pratul P. Srinivasan, Jonathan T. Barron, and Henrik Kretzschmar. Block-NeRF: Scalable Large Scene Neural View Synthesis, 2022. arXiv:2202.05263 [cs]. 2
+
+[34] Matthew Tancik, Ethan Weber, Evonne Ng, Ruilong Li, Brent Yi, Justin Kerr, Terrance Wang, Alexander Kristoffersen, Jake Austin, Kamyar Salahi, Abhik Ahuja, David McAllister, and Angjoo Kanazawa. Nerfstudio: A Modular Framework for Neural Radiance Field Development. In Special Interest Group on Computer Graphics and Interactive Techniques Conference Conference Proceedings, pages 1–12, 2023. arXiv:2302.04264 [cs]. 2, 6, 7, 13, 15
+
+[35] Andrew Tao, Karan Sapra, and Bryan Catanzaro. Hierarchical Multi-Scale Attention for Semantic Segmentation, 2020. arXiv:2005.10821 [cs]. 2
+
+[36] Haithem Turki, Jason Y. Zhang, Francesco Ferroni, and Deva Ramanan. SUDS: Scalable Urban Dynamic Scenes, 2023. arXiv:2303.14536 [cs]. 2
+
+[37] Suhani Vora, Noha Radwan, Klaus Greff, Henning Meyer, Kyle Genova, Mehdi S. M. Sajjadi, Etienne Pot, Andrea Tagliasacchi, and Daniel Duckworth. NeSF: Neural Semantic Fields for Generalizable Semantic Segmentation of 3D Scenes, 2021. arXiv:2111.13260 [cs]. 2
+
+[38] Peng Wang, Yuan Liu, Zhaoxi Chen, Lingjie Liu, Ziwei Liu, Taku Komura, Christian Theobalt, and Wenping Wang. F\$ˆ{2}\$-NeRF: Fast Neural Radiance Field Training with Free Camera Trajectories, 2023. arXiv:2303.15951 [cs]. 2
+
+[39] Felix Wimbauer, Nan Yang, Christian Rupprecht, and Daniel Cremers. Behind the Scenes: Density Fields for Single View Reconstruction, 2023. arXiv:2301.07668 [cs]. 2
+
+[40] Zirui Wu, Tianyu Liu, Liyi Luo, Zhide Zhong, Jianteng Chen, Hongmin Xiao, Chao Hou, Haozhe Lou, Yuantao Chen, Runyi Yang, Yuxin Huang, Xiaoyu Ye, Zike Yan, Yongliang Shi, Yiyi Liao, and Hao Zhao. MARS: An Instance-aware, Modular and Realistic Simulator for Autonomous Driving, 2023. arXiv:2307.15058 [cs]. 1, 2, 5, 6, 7, 13, 14
+
+[41] Haofei Xu, Jing Zhang, Jianfei Cai, Hamid Rezatofighi, Fisher Yu, Dacheng Tao, and Andreas Geiger. Unifying
+
+Flow, Stereo and Depth Estimation, 2023. arXiv:2211.05783 [cs]. 5
+
+[42] Haofei Xu, Jing Zhang, Jianfei Cai, Hamid Rezatofighi, Fisher Yu, Dacheng Tao, and Andreas Geiger. Unifying Flow, Stereo and Depth Estimation, 2023. arXiv:2211.05783 [cs]. 2
+
+[43] Zhen Xu, Sida Peng, Haotong Lin, Guangzhao He, Jiaming Sun, Yujun Shen, Hujun Bao, and Xiaowei Zhou. 4K4D: Real-Time 4D View Synthesis at 4K Resolution, 2023. arXiv:2310.11448 [cs]. 3
+
+[44] Bangbang Yang, Yinda Zhang, Yinghao Xu, Yijin Li, Han Zhou, Hujun Bao, Guofeng Zhang, and Zhaopeng Cui. Learning Object-Compositional Neural Radiance Field for Editable Scene Rendering. In 2021 IEEE/CVF International Conference on Computer Vision (ICCV), pages 13759– 13768, Montreal, QC, Canada, 2021. IEEE. 2
+
+[45] Jiawei Yang, Boris Ivanovic, Or Litany, Xinshuo Weng, Seung Wook Kim, Boyi Li, Tong Che, Danfei Xu, Sanja Fidler, Marco Pavone, and Yue Wang. EmerNeRF: Emergent Spatial-Temporal Scene Decomposition via Self-Supervision, 2023. arXiv:2311.02077 [cs]. 2
+
+[46] Ze Yang, Yun Chen, Jingkang Wang, Sivabalan Manivasagam, Wei-Chiu Ma, Anqi Joyce Yang, and Raquel Urtasun. UniSim: A Neural Closed-Loop Sensor Simulator. 1, 2
+
+[47] Ziyi Yang, Xinyu Gao, Wen Zhou, Shaohui Jiao, Yuqing Zhang, and Xiaogang Jin. Deformable 3D Gaussians for High-Fidelity Monocular Dynamic Scene Reconstruction, 2023. arXiv:2309.13101 [cs]. 3
+
+[48] Zeyu Yang, Hongye Yang, Zijie Pan, Xiatian Zhu, and Li Zhang. Real-time Photorealistic Dynamic Scene Representation and Rendering with 4D Gaussian Splatting, 2023. arXiv:2310.10642 [cs]. 3
+
+[49] Zehao Yu, Songyou Peng, Michael Niemeyer, Torsten Sattler, and Andreas Geiger. MonoSDF: Exploring Monocular Geometric Cues for Neural Implicit Surface Reconstruction, 2022. arXiv:2206.00665 [cs]. 2
+
+[50] Richard Zhang, Phillip Isola, Alexei A. Efros, Eli Shechtman, and Oliver Wang. The Unreasonable Effectiveness of Deep Features as a Perceptual Metric. In 2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 586–595, Salt Lake City, UT, 2018. IEEE. 6, 12
+
+[51] Xiaoshuai Zhang, Abhijit Kundu, Thomas Funkhouser, Leonidas Guibas, Hao Su, and Kyle Genova. Nerflets: Local Radiance Fields for Efficient Structure-Aware 3D Scene Representation from 2D Supervisio, 2023. arXiv:2303.03361 [cs]. 1, 2
+
+[52] Shuaifeng Zhi, Tristan Laidlow, Stefan Leutenegger, and Andrew J. Davison. In-Place Scene Labelling and Understanding with Implicit Scene Representation, 2021. arXiv:2103.15875 [cs]. 2, 4, 12
+
+[53] Wojciech Zielonka, Timur Bagautdinov, Shunsuke Saito, Michael Zollhofer, Justus Thies, and Javier Romero. Driv-¨ able 3D Gaussian Avatars, 2023. arXiv:2311.08581 [cs]. 3
+
+[54] M. Zwicker, H. Pfister, J. Van Baar, and M. Gross. EWA splatting. IEEE Transactions on Visualization and Computer Graphics, 8(3):223–238, 2002. 11

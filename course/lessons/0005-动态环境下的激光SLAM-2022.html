@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态环境下的激光 SLAM（2022）· SW-NDT — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0005</div>
+      <h1>动态环境下的激光 SLAM：给 NDT 加一个"静态权重"</h1>
+      <p class="subtitle">这一节有个特殊之处：它<b>原本被路线图标成了"激光方向的权威综述"</b>，但打开正文才发现它是一篇方法论文。我们按真实内容讲——而且它讲的问题很基础、很有代表性：<b>动态物体会怎样伤害点云配准？</b>🚗</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态环境下的激光里程计</span>
+        <span>👥 Binbin Feng, Chunyun Fu, Lizhou Liao, Yun Zhu（重庆大学 / 陕西师范大学）</span>
+        <span>📅 2022 · <i>Lidar-based SLAM in Dynamic Environments</i>（原名含 Survey 属命名误配）</span>
+      </div>
+      <div class="toc">
+        <a href="#errata">先修正一处路线图错误</a>
+        <a href="#problem">动态物体怎么伤害点云配准</a>
+        <a href="#three">三个模块的总体设计</a>
+        <a href="#swndt">核心机制：静态权重</a>
+        <a href="#relate">和前几课接上</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="errata">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清"帧间配准的静态世界假设"具体在哪里被打破；② 解释动态物体为什么不仅伤害位姿估计、还会伤害回环检测；③ 理解"给每个点加一个静态概率权重"这种软性处理思路。</p>
+        </div>
+        <div class="callout">
+          <h4>路线图勘误（第 0001 课提过的那处）</h4>
+          <p>路线图把这篇标为"LiDAR SLAM 综述（2022）· 激光方向的权威综述，第四章可当激光路线图用"。<b>实际正文标题是 <i>Lidar-based Simultaneous Localization and Mapping in Dynamic Environments</i></b>，作者为重庆大学冯彬彬等，是一篇讲动态环境的<b>方法论文</b>。本课按真实内容讲，不把它当综述使用。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>这件事的教训（值得单独说一句）</h4>
+        <p>文件名里带 <code>Survey</code> 完全不代表它是综述——这篇的文件名是下载时按路线图意图起的，与正文不符。<b>任何"按标题/文件名归类"的做法都会埋雷。</b>这也解释了为什么本课程坚持逐篇开正文核对。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="problem">
+      <h2>1. 静态世界假设：激光 SLAM 最脆的那根神经</h2>
+      <p>原文在引言里把问题说得非常直接。它先梳理了帧间配准的三大类方法：</p>
+      <table>
+        <thead><tr><th>类别</th><th>代表</th><th>做法</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>基于特征</b></td>
+            <td>LOAM</td>
+            <td>提取曲率大的角点与曲率小的面点，然后最小化"角点到线""面点到面"的距离来估计位姿</td>
+          </tr>
+          <tr>
+            <td><b>直接点云配准</b></td>
+            <td>ICP / GICP / <b>NDT</b></td>
+            <td>ICP 最小化点到点距离；GICP 最小化面到面距离；NDT <b>最大化概率密度函数</b>来估计相对变换</td>
+          </tr>
+          <tr>
+            <td><b>多传感器融合</b></td>
+            <td>激光 + IMU</td>
+            <td>可分<b>松耦合</b>与<b>紧耦合</b>。原文明确：一般融合匹配比单纯点云匹配更准</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>然后原文给出了这一节最关键的一句判断：</p>
+      <div class="callout">
+        <h4>关键句</h4>
+        <p><b>上述所有帧间位姿估计方法，都建立在一个假设上——运行的场景是静态环境，或者场景中没有运动物体；而这一点在实际应用中是不现实的。</b></p>
+        <p>接着它给出因果链：<b>运动物体上的观测点会在帧间匹配过程中导致错误的数据关联，进而使位姿估计结果大幅偏移甚至不收敛。此外，环境中存在运动物体还会导致回环检测的漏检与误检。</b></p>
+      </div>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$
+        \text{运动物体上的点}
+        \rightarrow
+        \text{错误数据关联}
+        \rightarrow
+        \begin{cases}
+        \text{位姿估计偏移 / 不收敛} \\
+        \text{回环检测漏检 / 误检}
+        \end{cases}
+        $$</div>
+      </div>
+
+      <div class="callout">
+        <h4>注意第二支：为什么动态物体还伤害回环检测？</h4>
+        <p>很多人只想到第一支（位姿被带偏）。但原文明说了第二支：<b>车辆、行人的移动会改变场景外观，使当前扫描与历史扫描"看起来不一样"</b>，于是真回环可能被漏掉；反过来，两处不同地点因为恰好都有类似的动态遮挡，也可能被误判成同一处。</p>
+        <p>把这一支和前面接上：第 0004 课讲回环检测的三种判据（map-to-map / image-to-image / image-to-map），其中"外观比对"这一路最怕的就是外观变化——而动态物体正是外观变化的头号来源。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="three">
+      <h2>2. 总体设计：三个模块</h2>
+      <p>原文的方法由三个模块组成，结构非常清晰：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>模块一：带静态权重的激光里程计</h4>
+          <p>即 <b>Static Weight NDT（SW-NDT）</b>。核心是把"静态权重"加入 NDT。<b>所谓静态权重，描述的是"一个点云点属于静态物体的概率"。</b>目的是降低动态物体产生的点云对位姿估计的不利影响。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块二：后端优化</h4>
+          <p>用 <b>Scan Context</b> 检测当前帧与历史帧之间是否形成闭环；若检测到闭环，则执行<b>位姿图优化（pose graph optimization）</b>，优化闭环内所有关键帧的位姿。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块三：全局地图拼接</h4>
+          <p>按照优化后的位姿，把各关键帧的点云拼起来，形成全局地图。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LiDAR-SLAM-Survey/329495d61ee89ff131b6f27f0a2c77232a349a5fcd4a743f81e7c631568246d4.jpg" alt="Pipeline of our 3D Lidar SLAM system">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Pipeline of our 3D Lidar simultaneous localization and mapping system（本文三维激光 SLAM 系统的流程图）。
+          <br><b>怎么看这张图：</b>把它和第 0003 课的那张"图优化三步"骨架图对照着看，你会发现结构完全一致——<b>前端配准 → 回环检测 → 后端位姿图优化 → 拼全局地图</b>。差别只在前端多了一个"静态权重"的环节。这正是读论文该有的姿势：<b>先看清它在哪个既有骨架的哪个零件上做了改动</b>，而不是从头到尾重新理解一个系统。
+        </figcaption>
+      </figure>
+
+      <h3>静态权重从哪来？用 PV-RCNN 检测"可能运动的物体"</h3>
+      <p>原文用 <b>PV-RCNN</b>（一个三维目标检测网络）来检测<b>可能有运动的物体的三维包围框</b>。有了包围框，落在框内（或附近）的点云就可以被赋予较低的静态权重。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LiDAR-SLAM-Survey/9c3587631819a5d09b64316fe7a2f9a0bdd0ef742c1518bc83aeb488ddd8cc77.jpg" alt="Use of PV-RCNN to detect bounding boxes">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Use of PV-RCNN to detect the bounding boxes of objects with possible motion（用 PV-RCNN 检测可能有运动的物体的包围框）。
+          <br><b>怎么看这张图：</b>这是"检测驱动动态过滤"这条路线在激光域的标准做法。请回忆第 0001 课导览里那张路线图——D-Fusion SLAM 那类视觉工作也是同一套路（先检测，再决定哪些点不参与几何）。<b>视觉和激光在这个问题上的思路是高度同构的：先用语义/检测把"不可信区域"标出来，再让几何优化绕开它。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="swndt">
+      <h2>3. 核心机制：为什么是"权重"而不是"一刀切"</h2>
+      <p>这里值得停下来体会设计思想。处理动态物体有两条路线：</p>
+      <table>
+        <thead><tr><th>路线</th><th>做法</th><th>代价</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>硬剔除</b></td>
+            <td>检测到是动态物体，就把框内所有点直接删掉</td>
+            <td>检测框通常不准（漏检、框偏大）；框内往往含有真实的静态背景点，删掉会损失信息</td>
+          </tr>
+          <tr>
+            <td><b>软加权</b>（本文）</td>
+            <td>给每个点一个"属于静态物体的概率"，让这个概率进入优化的权重</td>
+            <td>需要额外算权重；但分类错误的代价更小</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>为什么"软加权"更稳</h4>
+        <p>因为它是<b>连续、可退化</b>的。如果检测器某一次把背景误判成动态物体，硬剔除会直接丢掉一批有效点，几何约束突然变少；而软加权只是把这批点的权重压低，如果它们本来就和其他约束一致，影响有限。反过来如果检测器漏检了一个运动物体，硬剔除完全没防住；软加权也不必完全正确——<b>它只需要"大致压低"就能减轻污染。</b></p>
+        <p>这个"用概率/权重替代硬判定"的思路，你后面会在很多地方遇到：鲁棒核函数（第 0002 课）、贝叶斯滤波式回环检测（第 0004 课的 FAB-MAP）、不确定性建模（第 0010 课）。</p>
+      </div>
+
+      <h3>为什么选择改造 NDT 而不是改造 LOAM？</h3>
+      <p>请注意原文的措辞：它把静态权重"<b>加入 NDT</b>"。这是一个有意的选择。回顾上面对比：NDT 的思路是<b>最大化概率密度函数</b>来求相对变换——也就是说，NDT 本来就是一个"把点云表示成概率分布再匹配"的方法。<b>要把"某个点是静态的概率"融进去，在概率框架里是最自然的。</b></p>
+      <p>如果你去看 LOAM 那一类，它的误差项是"点到线距离""点到面距离"这种纯几何量，要引入静态概率就得额外加权——不是不能做，但不如 NDT 顺手。</p>
+      <div class="callout">
+        <h4>一句话方法论</h4>
+        <p><b>改造一个方法时，优先选择"机制上本来就接近"的那个作为宿主。</b>这一步的推理，比具体公式更能决定论文能否成立。</p>
+      </div>
+
+      <h3>验证：KITTI 上的轨迹对比与全局地图</h3>
+      <p>原文用 KITTI 数据集验证，结论是该方法在定位精度上<b>优于另外三种方法</b>。原文给出了一组轨迹对比图，以及"有无后端优化"两种情形下的轨迹与全局点云地图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LiDAR-SLAM-Survey/51e7118c2a5b38d451eae1e5d320926748a8342afe8ee123d0d16a17b95e8633.jpg" alt="Comparison between trajectories of SW-NDT and other methods using the KITTI dataset">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Comparison between trajectories of SW-NDT and other methods using the KITTI dataset（在 KITTI 数据集上 SW-NDT 与其他方法的轨迹对比）。
+          <br><b>怎么看这张图：</b>轨线对比图是激光里程计论文的"标准证据"。读的时候请不要只看"哪条线更贴近真值"，而要问：<b>误差是均匀分布还是集中在某几段？</b>如果误差集中出现，那段路很可能就是动态物体最密集的地方（跟车、会车、行人多），这才是"静态权重起作用"的直接证据。这个读图习惯在后面的 FAST-LIO / KISS-ICP 等课程里会一直用。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LiDAR-SLAM-Survey/dfdebe8de89bdb075d14a1d54016277670b241b9d9f9caf2a1ab0c83ba7f1ce1.jpg" alt="Vehicle trajectories and global point cloud maps">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Vehicle trajectories and global point cloud maps. The blue and green trajectories represent the results of SW-NDT and the results after back-end optimization, respectively. The global maps are on the right（车辆轨迹与全局点云地图；蓝色为 SW-NDT 结果，绿色为后端优化后的结果；右侧为全局地图）。
+          <br><b>怎么看这张图：</b>请左右对照——<b>左（纯里程计）的轨迹会"漂"，右（加了回环与位姿图优化）的轨迹会闭合。</b>这就是第 0003 课"累积误差 → 回环检测 → 后端图优化"三步在真实数据上的样子。也请顺便注意：全局地图是在位姿优化<b>之后</b>才拼的——先修位姿、再拼图，顺序不能反。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>⚠️ 关于实验数据的一点提醒</h4>
+        <p>原文的 Table I / Table II 分别给出"四种激光里程计方法<b>未加回环</b>"与"<b>加了后端优化</b>"的精度对比。这两张表是表格而非插图，本课程没有把它们作为图片贴出（按你的要求：不硬塞无意义的图）。如果你想核对具体数值，请直接打开 <code>md/2022_LiDAR-SLAM-Survey.md</code> 查 Table I / II。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="relate">
+      <h2>4. 这一节和前面几课怎么接上</h2>
+      <table>
+        <thead><tr><th>前面讲的</th><th>在本节的对应</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>第 0003 课 · 图优化三步（前端 → 回环 → 后端）</td>
+            <td>本文的 Fig. 1 就是这个骨架，只是前端多了一个"静态权重"环节。</td>
+          </tr>
+          <tr>
+            <td>第 0002 课 · 鲁棒损失函数（Huber / Tukey）抵抗外点</td>
+            <td>本文的"静态权重"是同一个思想在<b>激光域</b>的具体化：不是换损失函数，而是给每个点预先估一个"可信度"。两者都在做"降低坏数据的发言权"。</td>
+          </tr>
+          <tr>
+            <td>第 0004 课 · 视觉 SLAM 失败三大主因之一：动态环境</td>
+            <td>本文把这第三条主因搬到了激光域。值得注意的是，激光对光照变化免疫（这是它相对相机的优势），<b>但对动态物体同样敏感</b>——因为动态物体在点云里同样是"移动的硬结构"，同样会破坏配准的静态假设。</td>
+          </tr>
+          <tr>
+            <td>第 0004 课 · 回环检测三种判据</td>
+            <td>本文的回环用 <b>Scan Context</b>（一种基于点云结构的描述子）而不是词袋。原因第 0008 课会讲：<b>BoW 那套是为视觉设计的，对激光不那么直接适用。</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>如果检测器（PV-RCNN）把一辆静止停放的卡车也检测出来并赋予低静态权重，会产生什么后果？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。静止卡车本身不会造成配准错误，所以不会导致轨迹突变；它带来的问题是"有用的几何约束被削弱了"。" onclick="lessonKit.answer(this,'q0005')">位姿会突然跳变，因为静态物体被当成了动态</button>
+          <button data-correct="yes" data-explanation="对。静止的卡车是合法且有用的静态结构。把它压低权重，等于主动削弱了一部分几何约束，会让配准变得更"没把握"——尤其在这种大型平面结构本就稀缺的场景里。这正是"软加权"相对"硬剔除"的优势：误判的代价是渐进的，而不是灾难性的。" onclick="lessonKit.answer(this,'q0005')">会削弱一部分本来有效的几何约束，使配准变得更容易受噪声影响</button>
+          <button data-correct="no" data-explanation="不对。软加权设计的意义就在于误判不会造成这种硬性失效；如果会直接失效，那这个设计就没价值了。" onclick="lessonKit.answer(this,'q0005')">没有任何影响，因为权重只是概率值</button>
+        </div>
+        <div class="quiz-feedback" id="q0005"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>
+            请解释为什么"动态物体会导致回环检测的漏检与误检"，并分别说明这两种情况的成因。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>漏检：当前帧的扫描里被大量动态物体占据（比如前面堵着一排车），描述子算出来的结构与历史帧（当时那里是空的）差异很大，超过阈值，于是真回环被判为不匹配。误检：两处不同地点恰好都有相似的动态遮挡物（比如都停着一排类似的车、都有相似的围挡），使得它们的描述子意外地相似，从而被判为同一处。这也说明一件事：动态物体对回环检测的伤害，本质上是通过"改变外观/结构"实现的——所以应对方式通常是在描述子层面做鲁棒化，或在检测层面把动态区域先剔掉再算描述子。</div>
+            </details>
+          </li>
+          <li>
+            本文用"静态权重"而不是"直接删掉动态点"。请举一个现实例子说明"硬剔除"会更糟的情形。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>典型例子是"动态物体占满视野"的场景：比如车辆跟在公交车后面通过一条隧道，或行人在狭窄走廊里走在机器人前面。此时检测框会覆盖画面/点云的大部分，硬剔除会直接删掉绝大多数点，导致帧间配准几乎没有约束可用，位姿估计直接失败或剧烈跳变。而软加权只是把这些点的权重整体压低，仍保留了少量背景结构的贡献，系统会表现为"精度变差但仍能跟踪"——对工程系统来说，"退化"远比"崩溃"可接受。</div>
+            </details>
+          </li>
+          <li>
+            本节提到"一般融合匹配比单纯点云匹配更准"。请至少说出两个原因。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>① 激光提供精确的几何与结构信息（不受光照影响），IMU 提供高频的角速度与加速度，两者在不同时间尺度上互补；单一激光在快速运动或结构退化（长走廊、隧道）时约束不足，IMU 能在短时间内提供"运动先验"，帮助配准收敛到正确解。② 激光的帧率通常远低于 IMU，IMU 可以在两帧激光之间做递推，既提供更好的初值（降低配准搜索范围、减少落入坏局部最优的风险），也能补偿帧内运动畸变。另外，紧耦合还能让 IMU 的零偏被激光观测约束住（否则 IMU 自身的零偏会随时间漂移）。</div>
+            </details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0004-视觉SLAM早期综述2012-特征匹配与数据关联.html">← 视觉 SLAM 早期综述（2012）</a>
+        <a class="next" href="0006-LiDAR里程计综述2024-算法分类与九大挑战.html">LiDAR 里程计综述（2024）→</a>
+      </div>
+      <p class="foot-note">动态物体这一课讲完了。下一节我们看一篇<b>真正的</b>激光综述，把它给出的算法分类与"remaining challenges"一次讲清 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

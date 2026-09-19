@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DTAM（2011）：稠密直接法的开端 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0046</div>
+      <h1>DTAM（2011）：稠密直接法的开端</h1>
+      <p class="subtitle">不提特征点，也能实时建图——代价是什么？🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稠密直接法 + 光度误差 + 代价体</span>
+        <span>👥 作者：Newcombe, Lovegrove, Davison（帝国理工）</span>
+        <span>📅 2011 · <i>DTAM: Dense Tracking and Mapping in Real-Time</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">入口：不提特征也能走通</a>
+        <a href="#b">与特征法的根本分歧</a>
+        <a href="#c">光度误差与 warp</a>
+        <a href="#d">多基线代价体</a>
+        <a href="#e">它是一个优化问题</a>
+        <a href="#f">GPU、地图与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 DTAM 与特征法的根本分歧；写出光度误差与 warp 的定义；解释「逆深度」为什么好；讲清代价体如何把两帧扩展到上百帧（接 SGM）；说准它用的正则与求解器；并列出代价（GPU、光照、单目尺度）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 这是<b>第二季悬念④（提取 vs 不提取特征）</b>的前半段。直接法在<b>双目匹配</b>上的版本是 <b>0026 SGM</b>（半全局代价聚合、disparity space image）；DTAM 是同一思想在<b>运动估计</b>上的版本——把「不提特征、用全部像素」从双目推广到单目视频。它也接 <b>0043/0044/0045 ORB 系列</b>（那套是特征法巅峰，这里正面对照）。</p></div>
+      </div>
+
+      <h2>1. 入口：不提特征点，这条路一开始怎么就走通了</h2>
+      <p>你还记得 <b>0026 SGM</b> 吗？它做双目深度时，不提任何特征点，而是在每个像素上算一个「匹配代价」，再用半全局聚合把整张视差图求出来——那一课我们就说过，SGM 是「稠密、不提取特征」在<b>双目匹配</b>上的代表。DTAM 的脑子一模一样，只是把场景从「左右两张图」换成了「一台手持相机飞过场景时的<b>上百帧视频</b>」。</p>
+      <p>论文摘要第一句就亮明立场：<i>DTAM is a system for real-time camera tracking and reconstruction which relies not on feature extraction but dense, every pixel methods.</i>（DTAM 是一个实时相机跟踪与重建系统，它依赖的不是特征提取，而是稠密的、逐像素的方法。）换句话说，它从第一天起就决定：<b>不用特征点，用每一个像素</b>。这一节我们就回答两件事——它凭什么敢这么干，以及它为此付出了什么代价。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="34" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">同一个思想，两种舞台：SGM（双目）与 DTAM（单目视频）</text>
+          <!-- 左：双目 SGM -->
+          <rect x="50" y="70" width="360" height="230" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="230" y="98" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">SGM（0026 · 双目匹配）</text>
+          <rect x="80" y="120" width="130" height="80" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.5"/>
+          <rect x="250" y="120" width="130" height="80" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.5"/>
+          <text x="145" y="170" fill="#37474f" font-size="12" text-anchor="middle">左图</text>
+          <text x="315" y="170" fill="#37474f" font-size="12" text-anchor="middle">右图</text>
+          <text x="230" y="230" fill="#6a554d" font-size="12" text-anchor="middle">只两帧 → 逐像素代价 → 视差图</text>
+          <text x="230" y="258" fill="#888" font-size="11" text-anchor="middle">disparity space image（DSI）</text>
+          <!-- 右：DTAM 单目视频 -->
+          <rect x="490" y="70" width="360" height="230" fill="#f3efe6" stroke="#8a7a5c" stroke-width="2"/>
+          <text x="670" y="98" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">DTAM（本课 · 单目视频）</text>
+          <rect x="510" y="120" width="60" height="40" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.2"/>
+          <rect x="585" y="120" width="60" height="40" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.2"/>
+          <rect x="660" y="120" width="60" height="40" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.2"/>
+          <rect x="735" y="120" width="60" height="40" fill="#cfd8dc" stroke="#607d8b" stroke-width="1.2"/>
+          <text x="670" y="150" fill="#37474f" font-size="11" text-anchor="middle">多帧…</text>
+          <text x="670" y="200" fill="#6a554d" font-size="12" text-anchor="middle">上百帧 → 逐像素代价体 → 稠密深度图</text>
+          <text x="670" y="228" fill="#888" font-size="11" text-anchor="middle">cost volume（DSI 的多帧推广）</text>
+          <!-- 中间箭头 -->
+          <line x1="410" y1="185" x2="490" y2="185" stroke="#b15d44" stroke-width="3" marker-end="url(#arrA)"/>
+          <text x="450" y="175" fill="#b15d44" font-size="12" text-anchor="middle">扩展</text>
+          <defs><marker id="arrA" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#b15d44"/></marker></defs>
+          <text x="450" y="335" fill="#888" font-size="12" text-anchor="middle">核心思想一致：不提特征，用全部像素的匹配代价；舞台从「两帧」扩到「上百帧」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是 0026 SGM，用左右两帧算逐像素视差（DSI）；右边是本课 DTAM，把同样的逐像素代价思路用到一台相机飞过的上百帧视频上，得到稠密深度图（cost volume）。<br>
+          <b>怎么看这张图：</b>① 两者都「不提特征、用全部像素」；② SGM 的代价只在两帧之间聚合，DTAM 把很多帧的代价<b>平均</b>成一个代价体；③ 中间箭头表示「从两帧扩到多帧」是同一个思想的自然推广。<br>
+          <b>要记住的一句话：</b>DTAM 是 SGM 那种「稠密不提特征」思想在运动估计上的版本，差别只在帧数。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 与特征法的根本分歧：原文怎么批评「只用少量稀疏特征」</h2>
+      <p>DTAM 写于 2011 年，当时实时单目 SLAM 几乎都是特征法（PTAM 那一类）。论文引言第一段直接点名这种主流做法：</p>
+      <div class="formula-box"><div class="flow-formula"><i>「Algorithms for real-time SFM … have almost always worked by generating and tracking sparse feature-based models of the world. However, it is increasingly clear that in both reconstruction and tracking it is possible to get more complete, accurate and robust results using dense methods which make use of all of the data in an image.」</i></div></div>
+      <p>翻译过来就是：实时 SfM 几乎一直靠「生成并跟踪稀疏特征模型」；但越来越清楚的是，在重建和跟踪两方面，<b>用上图像里全部数据的稠密方法，能给出更完整、更准确、更鲁棒的结果</b>。这是它对特征法的核心批评：<b>只提少量特征，等于主动扔掉了图像里绝大部分信息</b>。</p>
+      <p>论文还补了一句更狠的观点：<i>「the high quality correspondence required by both tracking and reconstruction will always be most robustly and accurately enabled by dense methods, where matching at every pixel is supported by the totality of data across an image and model.」</i> 即：高质量的对应（correspondence）归根到底要靠稠密方法，因为每个像素的匹配都被「整张图 + 整张模型」的数据支撑着。</p>
+      <p>★ 这就接上了<b>悬念④</b>：为什么大家会在「提特征」和「不提特征」之间来回摆动？因为两条路各有甜区——特征法省算力、好做长期数据关联；稠密法信息全、对弱纹理和快速运动更稳。DTAM 是「不提特征」这一侧的第一个实时单目系统，它要回答的是：<b>这条路走得通，但代价是什么？</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DTAM 对「只用稀疏特征」的主要批评是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="原文说稀疏特征法扔掉了图像里大部分数据；只有用上全部像素的稠密方法，才能在重建与跟踪上得到更完整、准确、鲁棒的结果。" onclick="lessonKit.answer(this,'q0046a')">丢弃了多数信息</button>
+          <button data-correct="no" data-explanation="DTAM 不否认特征法能跑实时，它批评的是「只提少量特征＝主动丢弃信息」，而不是说特征法算得慢。慢的是稠密法自己（要 GPU）。" onclick="lessonKit.answer(this,'q0046a')">特征法太慢了</button>
+        </div>
+        <div class="quiz-feedback" id="q0046a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 核心一：光度误差（photometric error）与 warp 函数</h2>
+      <p>特征法靠「重投影误差」：把一个 3D 点投回图像，看和观测点差几个像素。DTAM 换了一套语言——<b>光度误差</b>：假设同一个物体的表面亮度不变，那么把一帧的像素「变形」到另一帧后，灰度应该一致；不一致的那部分就是误差。</p>
+      <p>先定义地图：每个关键帧 $r$ 带一张<b>逆深度图</b> $\xi_r:\Omega\to\mathbb R$（每个像素一个逆深度 $d=\xi(\mathbf u)$）和一张参考彩色图 $\mathbf I_r$。把一个像素 $\mathbf u$ 连同它的逆深度 $d$ 反投影成 3D 点，原文给的是：</p>
+      <div class="formula-box"><div class="flow-formula">$$\pi^{-1}(\mathbf u, d)=\frac{1}{d}\,\mathrm K^{-1}\dot{\mathbf u},\qquad \dot{\mathbf u}=(u,v,1)^\top$$</div></div>
+      <p>这里 $\mathrm K$ 是预先标定好的内参。所谓 <b>warp（变形）</b>，就是把源帧（参考帧 $r$）的某个像素，按当前逆深度 $d$ 投到目标帧 $m$ 的像素位置：先做 3D 反投影，再用相对位姿 $\mathrm T_{mr}$ 变换，最后投影回像素。原文把单个重叠帧的光度误差写成（公式 3）：</p>
+      <div class="formula-box"><div class="flow-formula">$$\rho_r(\mathbf I_m,\mathbf u,d)=\mathbf I_r(\mathbf u)-\mathbf I_m\!\big(\pi(\mathrm K\,\mathrm T_{mr}\,\pi^{-1}(\mathbf u,d))\big)$$</div></div>
+      <p>读起来很长，意思就一句：<b>参考帧在 $\mathbf u$ 的灰度，减去「把 $\mathbf u$ 按深度 $d$ 投到帧 $m$ 后」那个位置的灰度</b>。两个灰度越接近，说明这个 $d$ 猜得越对。</p>
+      <p>★ <b>为什么用逆深度 $d=1/z$ 来参数化，而不是深度 $z$ 本身？</b>论文在 §2.2.2 给了一个非常具体的理由：<i>「Linear sampling in inverse depth leads to a linear sampling along epipolar lines when computing $\rho$.」</i>（在逆深度上线性采样，等价于沿极线线性采样。）换句话说，当你在逆深度上等间隔取候选值时，这些候选点投到另一帧会沿着极线<b>等间隔排开</b>——搜索起来既均匀又省事。此外，逆深度参数化对<b>远处点</b>也更友好：远处点的逆深度变化平缓，参数化数值上更稳定，这也是单目 SLAM 普遍选逆深度的原因。下一节那张几何图会把这件事画清楚。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="32" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">同一场景（桌子 + 马克杯）在两帧里：特征法 vs 直接法</text>
+          <!-- 左：特征法 -->
+          <text x="245" y="62" fill="#b15d44" font-size="15" text-anchor="middle" font-weight="700">特征法（稀疏）</text>
+          <rect x="70" y="80" width="350" height="190" fill="#fbf7f0" stroke="#8a7a5c" stroke-width="2"/>
+          <rect x="120" y="210" width="210" height="50" fill="#e7dcc8" stroke="#a8916f" stroke-width="1.5"/>
+          <text x="225" y="240" fill="#6a554d" font-size="12" text-anchor="middle">桌子</text>
+          <path d="M175 95 q35 55 70 0 q-12 70 -35 110 q-23 -40 -35 -110 Z" fill="#cdb89a" stroke="#8a6f4f" stroke-width="1.5"/>
+          <circle cx="300" cy="120" r="9" fill="#e64a19" stroke="#7a1f00" stroke-width="1.5"/>
+          <text x="318" y="124" fill="#7a1f00" font-size="12">关键点</text>
+          <rect x="70" y="300" width="350" height="190" fill="#fbf7f0" stroke="#8a7a5c" stroke-width="2"/>
+          <rect x="140" y="430" width="210" height="50" fill="#e7dcc8" stroke="#a8916f" stroke-width="1.5"/>
+          <text x="245" y="460" fill="#6a554d" font-size="12" text-anchor="middle">桌子</text>
+          <path d="M210 315 q35 55 70 0 q-12 70 -35 110 q-23 -40 -35 -110 Z" fill="#cdb89a" stroke="#8a6f4f" stroke-width="1.5"/>
+          <circle cx="330" cy="342" r="9" fill="#e64a19" stroke="#7a1f00" stroke-width="1.5"/>
+          <line x1="300" y1="120" x2="330" y2="342" stroke="#1565c0" stroke-width="2.5" stroke-dasharray="5 4"/>
+          <text x="245" y="520" fill="#1565c0" font-size="13" text-anchor="middle">重投影误差：两点之间的像素距离</text>
+          <!-- 右：直接法 -->
+          <text x="695" y="62" fill="#b15d44" font-size="15" text-anchor="middle" font-weight="700">直接法（稠密）</text>
+          <rect x="470" y="80" width="350" height="190" fill="#fbf7f0" stroke="#8a7a5c" stroke-width="2"/>
+          <path d="M560 95 q35 55 70 0 q-12 70 -35 110 q-23 -40 -35 -110 Z" fill="#cdb89a" stroke="#8a6f4f" stroke-width="1.5"/>
+          <rect x="580" y="120" width="64" height="64" fill="none" stroke="#e64a19" stroke-width="2.5"/>
+          <text x="612" y="112" fill="#7a1f00" font-size="12" text-anchor="middle">像素块</text>
+          <rect x="585" y="125" width="14" height="14" fill="#d9d9d9"/><rect x="599" y="125" width="14" height="14" fill="#bdbdbd"/><rect x="613" y="125" width="14" height="14" fill="#9e9e9e"/><rect x="627" y="125" width="14" height="14" fill="#c9c9c9"/>
+          <rect x="585" y="139" width="14" height="14" fill="#b0b0b0"/><rect x="599" y="139" width="14" height="14" fill="#8a8a8a"/><rect x="613" y="139" width="14" height="14" fill="#7a7a7a"/><rect x="627" y="139" width="14" height="14" fill="#a8a8a8"/>
+          <rect x="585" y="153" width="14" height="14" fill="#cfcfcf"/><rect x="599" y="153" width="14" height="14" fill="#9c9c9c"/><rect x="613" y="153" width="14" height="14" fill="#888888"/><rect x="627" y="153" width="14" height="14" fill="#bcbcbc"/>
+          <rect x="585" y="167" width="14" height="14" fill="#c2c2c2"/><rect x="599" y="167" width="14" height="14" fill="#a0a0a0"/><rect x="613" y="167" width="14" height="14" fill="#909090"/><rect x="627" y="167" width="14" height="14" fill="#b4b4b4"/>
+          <rect x="470" y="300" width="350" height="190" fill="#fbf7f0" stroke="#8a7a5c" stroke-width="2"/>
+          <path d="M600 315 q35 55 70 0 q-12 70 -35 110 q-23 -40 -35 -110 Z" fill="#cdb89a" stroke="#8a6f4f" stroke-width="1.5"/>
+          <rect x="620" y="340" width="64" height="64" fill="none" stroke="#e64a19" stroke-width="2.5"/>
+          <rect x="625" y="345" width="14" height="14" fill="#b9b9b9"/><rect x="639" y="345" width="14" height="14" fill="#9d9d9d"/><rect x="653" y="345" width="14" height="14" fill="#7e7e7e"/><rect x="667" y="345" width="14" height="14" fill="#a9a9a9"/>
+          <rect x="625" y="359" width="14" height="14" fill="#908090"/><rect x="639" y="359" width="14" height="14" fill="#6a6a6a"/><rect x="653" y="359" width="14" height="14" fill="#5a5a5a"/><rect x="667" y="359" width="14" height="14" fill="#888888"/>
+          <rect x="625" y="373" width="14" height="14" fill="#afafaf"/><rect x="639" y="373" width="14" height="14" fill="#7c7c7c"/><rect x="653" y="373" width="14" height="14" fill="#686868"/><rect x="667" y="373" width="14" height="14" fill="#9c9c9c"/>
+          <rect x="625" y="387" width="14" height="14" fill="#a2a2a2"/><rect x="639" y="387" width="14" height="14" fill="#808080"/><rect x="653" y="387" width="14" height="14" fill="#707070"/><rect x="667" y="387" width="14" height="14" fill="#949494"/>
+          <text x="695" y="520" fill="#e64a19" font-size="13" text-anchor="middle">光度误差：对应像素灰度差之和</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个「桌子 + 马克杯」场景在两帧（上、下）里的样子。左半「特征法」只在杯把标一个关键点，两帧之间用蓝虚线连起对应点，误差＝两点像素距离。右半「直接法」在杯身框出一小块 patch，把这块的灰度画成深浅小格；第二帧同一块整体变暗了，误差＝这些小格灰度差之和。<br>
+          <b>怎么看这张图：</b>① 左图只关心「那个点跑到哪了」（一个点）；② 右图关心「这块图案的亮度变了多少」（一整块像素）；③ 右图第二帧小格整体偏暗，正是光度误差的来源。<br>
+          <b>要记住的一句话：</b>特征法只关心「点跑到哪了」，直接法关心「这块图案变暗了多少」。这是全季最重要的一对概念辨析。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="32" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">warp 的几何含义：为什么逆深度参数化好</text>
+          <!-- 相机1 -->
+          <rect x="60" y="200" width="70" height="44" fill="#607d8b" stroke="#37474f" stroke-width="2"/>
+          <text x="95" y="258" fill="#37474f" font-size="13" text-anchor="middle">相机 1</text>
+          <!-- 相机2 -->
+          <rect x="770" y="200" width="70" height="44" fill="#607d8b" stroke="#37474f" stroke-width="2"/>
+          <text x="805" y="258" fill="#37474f" font-size="13" text-anchor="middle">相机 2</text>
+          <!-- 射线 -->
+          <line x1="130" y1="222" x2="470" y2="120" stroke="#b15d44" stroke-width="2.5"/>
+          <text x="250" y="160" fill="#b15d44" font-size="13" text-anchor="middle">射线（穿过像素 u）</text>
+          <!-- 候选 3D 点（沿射线） -->
+          <circle cx="210" cy="196" r="7" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <circle cx="290" cy="170" r="7" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <circle cx="370" cy="144" r="7" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <circle cx="450" cy="118" r="7" fill="#1565c0" stroke="#0d3c75" stroke-width="1.5"/>
+          <text x="210" y="214" fill="#0d3c75" font-size="11" text-anchor="middle">d1</text>
+          <text x="290" y="188" fill="#0d3c75" font-size="11" text-anchor="middle">d2</text>
+          <text x="370" y="162" fill="#0d3c75" font-size="11" text-anchor="middle">d3</text>
+          <text x="452" y="108" fill="#0d3c75" font-size="11" text-anchor="middle">d4</text>
+          <!-- 极线（在相机2图像平面附近画一条斜线，带刻度） -->
+          <line x1="615" y1="120" x2="760" y2="250" stroke="#2e7d32" stroke-width="2.5"/>
+          <text x="690" y="100" fill="#2e7d32" font-size="13" text-anchor="middle">极线（相机 2 上）</text>
+          <circle cx="640" cy="140" r="5" fill="#2e7d32"/>
+          <circle cx="675" cy="170" r="5" fill="#2e7d32"/>
+          <circle cx="710" cy="200" r="5" fill="#2e7d32"/>
+          <circle cx="745" cy="230" r="5" fill="#2e7d32"/>
+          <text x="600" y="270" fill="#2e7d32" font-size="11">等间隔逆深度</text>
+          <text x="775" y="292" fill="#2e7d32" font-size="11">等间隔像素</text>
+          <line x1="470" y1="350" x2="840" y2="350" stroke="#888" stroke-width="1"/>
+          <text x="470" y="378" fill="#888" font-size="12">结论：逆深度上均匀采样 → 在极线上均匀采样（原文 §2.2.2）</text>
+          <text x="450" y="412" fill="#888" font-size="12" text-anchor="middle">远处点（d 小）对应极线上密集、近处点（d 大）对应稀疏，但「均匀逆深度」让搜索天然均匀</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>从相机 1 出发、穿过像素 $\mathbf u$ 的一条射线，上面标了 4 个候选 3D 位置（不同逆深度 $d_1<d_2<d_3<d_4$）。这些点投到相机 2 时，会沿一条极线（绿线）排开，且<b>等间隔的逆深度对应等间隔的像素位置</b>。<br>
+          <b>怎么看这张图：</b>① 蓝点是同一射线上不同深度的候选；② 绿点是它们投到相机 2 极线上的位置；③ 原文明确说「逆深度上线性采样＝沿极线线性采样」，所以搜索窗口可以均匀铺开。<br>
+          <b>要记住的一句话：</b>逆深度参数化让「沿极线均匀搜索」变成天然成立的事，这就是 DTAM 选它的关键理由。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 核心二：多基线——把很多帧汇总成一个代价体</h2>
+      <p>单个重叠帧的光度误差 $\rho$ 往往有很多局部极小（原文 Fig.2 的 (a) 纹理缺失区、(c) 重复纹理区都很明显）。DTAM 的妙招是：<b>不要只比两帧，而是把几十到上百帧对同一像素的观测都加起来</b>。原文把每个像素 $\mathbf u$ 在不同逆深度 $d$ 上的平均光度误差定义成「代价体」（公式 2）：</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathbf C_r(\mathbf u,d)=\frac{1}{|\mathcal T(r)|}\sum_{m\in\mathcal T(r)}\big\|\rho_r(\mathbf I_m,\mathbf u,d)\big\|_1$$</div></div>
+      <p>这里 $\mathcal T(r)$ 是靠近且覆盖关键帧 $r$ 的那一叠帧（原文说 <i>tens to hundreds of video frames</i>），取 $L_1$ 平均。$\mathbf C_r(\mathbf u,d)$ 的形状是一张「表」：行是像素，列是逆深度，表里每个数都是「这个像素取这个逆深度时的平均光度误差」。</p>
+      <p>★ <b>这一步要和 0026 SGM 对照着看。</b>原文自己就点破了这层关系：这个代价体 <i>「is called a disparity space image in stereo matching [14], and generalised more recently in [10] for any discrete per pixel labelling」</i>。换句话说，<b>SGM 的 DSI（disparity space image）就是两帧版的代价体；DTAM 把它从「两帧」推广到「上百帧」</b>。多帧平均的好处原文也讲得很直白：单帧 $\rho$ 有很多局部极小、且遮挡区没信息；用很多帧 + 鲁棒 $L_1$ 后，遮挡帧会自动变成离群值被压下去，而总代价通常只剩一个清晰的最小值（Fig.2 的 (b) 强纹理区）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="32" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">代价体：沿极线堆叠的匹配代价曲线</text>
+          <!-- 三片（三帧）堆叠 -->
+          <text x="120" y="70" fill="#6a554d" font-size="13" text-anchor="middle">帧 1 的代价曲线</text>
+          <polyline points="120,210 200,205 280,180 360,120 440,180 520,205 600,210" fill="none" stroke="#b15d44" stroke-width="2.5"/>
+          <text x="120" y="248" fill="#6a554d" font-size="13" text-anchor="middle">帧 2 的代价曲线</text>
+          <polyline points="120,212 200,208 280,205 360,130 440,205 520,208 600,212" fill="none" stroke="#b15d44" stroke-width="2.5"/>
+          <text x="120" y="286" fill="#6a554d" font-size="13" text-anchor="middle">帧 3 的代价曲线</text>
+          <polyline points="120,208 200,206 280,190 360,125 440,190 520,206 600,208" fill="none" stroke="#b15d44" stroke-width="2.5"/>
+          <!-- 平均（谷） -->
+          <text x="780" y="70" fill="#1565c0" font-size="13" text-anchor="middle">平均代价 C(u,d)</text>
+          <polyline points="660,205 700,198 740,180 770,150 780,120 790,150 820,180 860,198 892,205" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <circle cx="780" cy="120" r="7" fill="#e64a19" stroke="#7a1f00" stroke-width="1.5"/>
+          <text x="780" y="105" fill="#7a1f00" font-size="12" text-anchor="middle">最小值</text>
+          <text x="360" y="330" fill="#888" font-size="12" text-anchor="middle">每片＝一帧沿极线的匹配代价；多帧平均后谷更尖、更可信</text>
+          <text x="360" y="358" fill="#888" font-size="12" text-anchor="middle">这就是「代价体」：所有帧的代价在深度方向叠成一条清晰的河谷</text>
+          <text x="780" y="248" fill="#1565c0" font-size="12" text-anchor="middle">谷底的逆深度</text>
+          <text x="780" y="272" fill="#1565c0" font-size="12" text-anchor="middle">＝该像素的真实深度</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左三片是三帧各自沿极线的匹配代价曲线（红），右一是把它们平均后得到的代价体一行 $\mathbf C(\mathbf u,d)$（蓝），谷底（红点）对应的逆深度就是该像素估出的深度。<br>
+          <b>怎么看这张图：</b>① 单帧曲线各有各的抖动和假谷；② 平均后假谷被抹平，真谷（最小值）更突出；③ 这就是「多基线」把很多帧信息汇总的直观结果。<br>
+          <b>要记住的一句话：</b>代价体 = SGM 的 DSI 从两帧扩到上百帧；$L_1$ 平均让遮挡帧自动变成离群值。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2011_DTAM__Dense_tracking_and_mapping_in_real-time/bee9358e881676ba1c24535bffc1e16dd2f4c07deb78cae66a6f6597177be1d2.jpg" alt="DTAM keyframe and cost volume">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>A keyframe $r$ consists of a reference image $I$ with pose $\mathrm T_{rw}$ and data cost volume $\mathbf C_r$. Each pixel of the reference frame $\mathbf u_r$ has an associated row of entries $\mathbf C_r(\mathbf u)$ (shown in red) that store the average photometric error or cost $\mathbf C_r(\mathbf u,d)$ computed for each inverse depth $d$ in the inverse depth range $\mathcal D=[\xi_{\min},\xi_{\max}]$. We use tens to hundreds of video frames indexed as $m\in\mathcal T(r)$.（关键帧 $r$ 由参考图 $I$、位姿 $\mathrm T_{rw}$ 与数据代价体 $\mathbf C_r$ 组成；参考帧每个像素 $\mathbf u_r$ 有一行 $\mathbf C_r(\mathbf u)$（红）存着对每个逆深度 $d$ 的平均光度误差，逆深度范围 $\mathcal D=[\xi_{\min},\xi_{\max}]$；用几十到上百帧 $m\in\mathcal T(r)$。）<br>
+          <b>怎么看这张图：</b>① 左是参考彩色图；② 中间那条红色「行」就是某个像素的代价体一行 $\mathbf C_r(\mathbf u,d)$（横轴=逆深度，纵轴=误差）；③ 原文用「tens to hundreds of video frames」点明多基线思想。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 核心三：它是一个优化问题（非凸数据项 + 凸正则 + 原始对偶分裂）</h2>
+      <p>代价体只给了一个「逐像素取最小」的初始深度（原文 Fig.3 左）。但纹理缺失区、深度边缘处这个初值会出错，所以 DTAM 把整张逆深度图当成一个<b>能量最小化问题</b>来解：数据项是刚才的代价体（非凸，因为单帧 $\rho$ 有多个极小），再加一个<b>凸正则项</b>让逆深度图在空间上平滑、但允许在边缘处断开。</p>
+      <p>正则项用<b>加权 Huber 范数</b>作用在逆深度图的梯度上：$g(\mathbf u)\|\nabla\xi(\mathbf u)\|_\epsilon$。Huber 范数本身是两段拼起来的（公式 4）：</p>
+      <div class="formula-box"><div class="flow-formula">$$\|x\|_\epsilon=\begin{cases}\dfrac{\|x\|_2^2}{2\epsilon},&\|x\|_2\le\epsilon\\[6pt]\|x\|_1-\dfrac{\epsilon}{2},&\text{否则}\end{cases}$$</div></div>
+      <p>也就是说：梯度小的地方用 $L_2^2$（鼓励平滑），梯度大的地方退化为 $L_1$，即<b>全变分（TV）正则</b>——它允许深度在边缘处出现突变而不被模糊掉。权重 $g(\mathbf u)=e^{-\alpha\|\nabla\mathbf I_r(\mathbf u)\|_2^\beta}$（公式 5）让「图像本身边缘强」的地方少做平滑，免得把物体边界抹平。最终能量（公式 6）：</p>
+      <div class="formula-box"><div class="flow-formula">$$E_\xi=\int_\Omega\Big\{g(\mathbf u)\|\nabla\xi(\mathbf u)\|_\epsilon+\lambda\,\mathbf C(\mathbf u,\xi(\mathbf u))\Big\}\,\mathrm d\mathbf u$$</div></div>
+      <p>★ <b>原文用的正则与求解器，照实抄：</b>正则就是上面的「加权 Huber / TV」；求解器，原文 §2.2.1 末尾明确写——这个非凸数据项 + 凸正则的能量的凸部分「<i>can be efficiently optimised using a primal-dual approach [1][16][3]</i>」（可用原始对偶方法高效优化）。其中 [3] 就是 Chambolle–Pock 2011 的 <i>「A first-order primal-dual algorithm for convex problems with applications to imaging」</i>。具体做法：引入一个辅助变量 $\alpha$ 把数据项与正则项「耦合」开（公式 7），然后对凸的「梯度 + 耦合」部分用<b>原始对偶（primal-dual）分裂</b>迭代，对仍非凸的辅助变量部分做<b>逐点穷举搜索</b>。原文还加了「加速穷举」和一步牛顿细化（sub-pixel）。<b>我没有替它补任何原文没有的求解器</b>——就是 Chambolle–Pock 那一类的原始对偶一阶算法。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2011_DTAM__Dense_tracking_and_mapping_in_real-time/739c73dcc5706591c89c7ad97bd1b8ba3799cdf8ef752a23017d61ce0c1e34e6.jpg" alt="DTAM incremental cost volume construction">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Incremental cost volume construction; we show the current inverse depth map extracted as the current minimum cost for each pixel row $d_{\mathbf u}^{\min}=\arg\min_d\mathbf C(\mathbf u,d)$ as 2, 10 and 30 overlapping images are used in the data term (left). Also shown is the regularised solution that we solve to provide each keyframe inverse depth map (4th from left). In comparison to the nearly $300\times10^3$ points estimated in our keyframe, we show the $\approx 1000$ point features used in the same frame for localisation in PTAM ([6]).（代价体随帧数 2/10/30 增量构建；左为逐像素取最小得到的逆深度图；第 4 张是正则化后的结果；对比 PTAM 在同一帧只用了约 1000 个特征点，而 DTAM 关键帧估了近 30 万点。）<br>
+          <b>怎么看这张图：</b>① 帧数越多，逆深度图越干净（假极小被平均掉）；② 最右是正则化后的稠密结果；③ 红字对比强调「稠密（30 万点）vs 稀疏（1000 特征）」——这正是本节开篇那句批评的可视化。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DTAM 求解逆深度图时，对凸的正则部分用的是什么算法？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="原文写的是 primal-dual approach（Chambolle–Pock 一阶原始对偶算法），非凸的辅助变量部分再做逐点穷举搜索。我们没替它补别的求解器。" onclick="lessonKit.answer(this,'q0046b')">原始对偶分裂</button>
+          <button data-correct="no" data-explanation="DTAM 全文没有说用深度学习或端到端网络；2011 年也不存在。它是几何能量 + 原始对偶优化的经典做法。" onclick="lessonKit.answer(this,'q0046b')">神经网络回归</button>
+        </div>
+        <div class="quiz-feedback" id="q0046b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 为什么必须用 GPU、地图怎么表示、以及代价清单</h2>
+      <p><b>为什么必须 GPU？</b>原文毫不避讳地说：实时条件下有限的算力「<i>seemed to preclude dense methods</i>」（似乎排除了稠密方法），而「<i>the recent availability of powerful commodity GPGPU processors is a major enabler</i>」（强大的民用 GPGPU 的出现是主要推动者）。实验平台就是一块 <b>NVIDIA GTX 480 GPU</b> 配 i7 四核 CPU，相机 640×480、30 Hz。代价体、原始对偶迭代、跟踪时的整图对齐，全都要在 GPU 上并行才算得动——这是「不提特征、用全部像素」最直接的一笔账。</p>
+      <p><b>地图表示：</b>每个关键帧就是一张<b>逆深度图</b>（每像素一个逆深度）+ 一张参考彩色图。从逆深度图可以反投影出稠密 3D 点，并进一步算出<b>表面法向</b>，最后生成三角网格（§2.2.6）用于跟踪时的新视角合成。所以它建出来的是一张<b>稠密深度图 + 由它导出的表面</b>，而不是稀疏点云。</p>
+      <p><b>代价清单（局限）：</b></p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 单目尺度</h4><p>单目本质没有绝对尺度；DTAM 用点特征立体法 bootstrap 出第一个关键帧，但整体仍受单目尺度不可观约束。</p></div>
+        <div class="mini-card"><h4>② 光照敏感</h4><p>全程假设「亮度恒定」。原文承认对真实世界的全局光照变化不鲁棒（只靠跟踪时的局部阈值扛一扛）。</p></div>
+        <div class="mini-card"><h4>③ 难做大尺度</h4><p>为保匹配质量，它刻意只用「很近视点」的一叠窄基线帧，场景规模受手持范围限制，不是大尺度建图。</p></div>
+        <div class="mini-card"><h4>④ 必须 GPU</h4><p>稠密逐像素 + 原始对偶迭代，离开 GPGPU 实时跑不动——这正是它和特征法在算力上的根本差距。</p></div>
+      </div>
+      <p>★ <b>收束与承接：</b>DTAM 证明了「不提特征、用全部像素」这条路在单目上能实时走通，代价是 GPU、光照敏感、单目尺度。它把 0026 SGM 的「稠密不提特征」从双目搬到了运动估计，是<b>悬念④</b>前半段的主角。但它有两个没解决好的痛点：<b>必须 GPU</b>、以及<b>单目尺度不可观</b>。下一课 <b>0047 LSD-SLAM</b> 会正面接住这两个痛点——用「半稠密」把算力砍到 CPU 能跑，并用 <b>sim(3)</b> 把尺度漂移从「污染项」变成「待估变量」。那也是<b>单目尺度不可观</b>这条线（你学过 0024/0025）的第 1 站。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>DTAM 对「只用稀疏特征」的主要批评是什么？它自己靠什么思想走通？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>原文说稀疏特征法主动丢弃了图像里大部分数据，而用全部像素的稠密方法在重建与跟踪上更完整、准确、鲁棒。它靠「逐像素光度误差 + 多帧代价体 + 凸正则化」走通，是 SGM 那种「稠密不提特征」思想在运动估计上的版本。</div></details>
+          </li>
+          <li>写出光度误差 $\rho$ 与逆深度反投影的定义；为什么 DTAM 用逆深度 $d$ 而不是深度 $z$ 参数化？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>$\rho_r(\mathbf I_m,\mathbf u,d)=\mathbf I_r(\mathbf u)-\mathbf I_m(\pi(\mathrm K\mathrm T_{mr}\pi^{-1}(\mathbf u,d)))$，$\pi^{-1}(\mathbf u,d)=\frac1d\mathrm K^{-1}\dot{\mathbf u}$。用逆深度是因为原文明确说「逆深度上线性采样＝沿极线线性采样」，搜索天然均匀；且远处点逆深度变化平缓、数值更稳定。</div></details>
+          </li>
+          <li>代价体 $\mathbf C_r(\mathbf u,d)$ 是什么？它和 0026 SGM 的 DSI 有什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>代价体是「每个像素在不同逆深度上的平均 $L_1$ 光度误差」构成的三维数组（行=像素，列=逆深度）。原文自己说它「called a disparity space image in stereo matching」——即 SGM 的 DSI 就是两帧版代价体，DTAM 把它从两帧推广到几十到上百帧，用 $L_1$ 平均压掉遮挡离群值。</div></details>
+          </li>
+          <li>DTAM 的能量函数由哪两项组成？正则与求解器分别是什么（照原文）？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>数据项 $\lambda\mathbf C(\mathbf u,\xi(\mathbf u))$（非凸）+ 正则项 $g(\mathbf u)\|\nabla\xi(\mathbf u)\|_\epsilon$（加权 Huber / TV，凸）。求解器原文写的是 primal-dual approach（Chambolle–Pock 一阶原始对偶算法），非凸的辅助变量部分做逐点穷举 + 一步牛顿细化。我们没有替它补别的求解器。</div></details>
+          </li>
+          <li>DTAM 的主要代价（局限）有哪些？它给下一课 LSD-SLAM 留下了哪两个待解痛点？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>代价：单目尺度不可观、光照敏感（亮度恒定假设）、难做大尺度、必须 GPU。留给 LSD-SLAM 的两个痛点：① 把算力从 GPU 砍到 CPU（用半稠密）；② 把单目尺度漂移显式建模（用 sim(3)）。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0045-ORB-SLAM3-2021-多地图与视觉惯性.html">← ORB-SLAM3（2021）：多地图与视觉惯性</a>
+        <a class="next" href="0047-LSD-SLAM2014-半稠密与尺度漂移.html">LSD-SLAM（2014）：半稠密与尺度漂移 →</a>
+      </div>
+      <p class="foot-note">DTAM 用「不提特征、用全部像素」证明了稠密直接法能实时走通，代价是 GPU 与单目尺度。下一课 LSD-SLAM 会把算力砍到 CPU，并把尺度漂移变成可估的变量 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,1343 @@
+# SLAM 语料库 · 紧凑技术对照索引
+
+> **抽取式**：技术标签与文字均来自论文正文，未做生成式改写。
+> 每篇给出「作者自述的核心贡献/差异」，用于核对技术演进与代际区别。
+> 共 255 篇，按年份排序。完整版见 `_digest.md`。
+
+
+---
+
+## 2000 年
+
+### Bundle Adjustment — A Modern Synthesis
+- `2000_BundleAdjustment` · 优化后端 / 深度学习前端
+- **自述差异**：usually sparse functions of the parameters) and object-centred software organization, and it avoids many tedious displays of chain-rule results. Implementors are assumed to be capable of choosing appropriate functions and calculating derivatives themselves. One aim of this paper is to correct a number of misconceptions that seem to be common in the vision literature:
+
+• “Optimization / bundle adjustment is slow”: Suc
+
+
+---
+
+## 2007 年
+
+### A Multi-State Constraint Kalman Filter for Vision-aided Inertial Navigation
+- `2007_A_Multi-State_Constraint_Kalman_Filter_for_Vision-aided_` · 滤波后端 / LiDAR-惯性耦合 / 深度学习前端 / GNSS融合 / 嵌入式实时
+- **自述差异**：the derivation of a measurement model that is able to express the geometric constraints that arise when a static feature is observed from multiple camera poses. This measurement model does not require including the 3D feature position in the state vector of the EKF and is optimal, up to linearization errors. The vision-aided inertial navigation algorithm we propose has computational complexity only linear in the numb
+
+### MonoSLAM: Real-Time Single Camera SLAM
+- `2007_MonoSLAM__Real-Time_Single_Camera_SLAM` · 视觉-惯性耦合 / LiDAR-视觉融合 / 嵌入式实时
+- **自述差异**：an active approach to mapping and measurement, the use of a general motion model for smooth camera movement, and solutions for monocular feature initialization and feature orientation estimation. Together, these add up to an extremely efficient and robust algorithm which runs at 30 Hz with standard PC and camera hardware. This work extends the range of robotic systems in which SLAM can be usefully applied, but also o
+
+### Parallel Tracking and Mapping for Small AR Workspaces
+- `2007_Parallel_Tracking_and_Mapping_for_Small_AR_Workspaces` · 视觉-惯性耦合 / 嵌入式实时
+- **自述差异**：This paper presents a method of estimating camera pose in an unknown scene. While this has previously been attempted by adapting SLAM algorithms developed for robotic exploration, we propose a system specifically designed to track a hand-held camera in a small AR workspace. We propose to split tracking and mapping into two separate tasks, processed in parallel threads on a dual-core computer: one thread deals with th
+
+
+---
+
+## 2008 年
+
+### Stereo Processing by Semiglobal Matching and Mutual Information
+- `2008_Stereo_Processing_by_Semiglobal_Matching_and_Mutual_Info`
+- **自述差异**：Heiko Hirschmu¨ ller
+
+Abstract—This paper describes the Semiglobal Matching (SGM) stereo method. It uses a pixelwise, Mutual Information (MI)-based matching cost for compensating radiometric differences of input images. Pixelwise matching is supported by a smoothness constraint that is usually expressed as a global cost function.
+
+
+---
+
+## 2010 年
+
+### 2010 GraphSLAM-Tutorial
+- `2010_GraphSLAM-Tutorial` · GNSS融合
+- **自述差异**：o efficiently solve many tasks envisioned to be carried out by mobile robots including transportation, search and rescue, or automated vacuum cleaning robots need a map of the environment. The availability of an accurate map allows for the 
+design of systems that can operate in complex envi 
+ronments only based on their on-board sensors and 
+without relying on external reference system like, e.g., 
+GPS. The acquisiti
+
+
+---
+
+## 2011 年
+
+### 3D is here: Point Cloud Library (PCL)
+- `2011_3D_is_here__Point_Cloud_Library__PCL_` · 特征法
+- **自述差异**：For robots to work in unstructured environments, they need to be able to perceive the world. Over the past 20 years, we’ve come a long way, from simple range sensors based on sonar or IR providing a few bytes of information about the world, to ubiquitous cameras to laser scanners. In the past few years, sensors like the Velodyne spinning LIDAR used in the DARPA Urban Challenge and the tilting laser scanner used on th
+
+### DTAM: Dense Tracking and Mapping in Real-Time
+- `2011_DTAM__Dense_tracking_and_mapping_in_real-time` · 特征法 / LiDAR-惯性耦合 / 嵌入式实时
+- **自述差异**：DTAM is a systemfor real-time camera tracking and reconstruction which relies not on feature extraction but dense, every pixel methods. As a single hand-held RGB camera flies over a static scene, we estimate detailed textured depth maps at selected keyframes to produce a surface patchwork with millions of vertices. We use the hundreds of images available in a video stream to improve the quality of a simple photometri
+
+### KinectFusion: Real-Time Dense Surface Mapping and Tracking
+- `2011_KinectFusion` · 特征法 / 激光里程计 / LiDAR-视觉融合 / 稠密重建 / 嵌入式实时
+- **自述差异**：We present a system for accurate real-time mapping of complex and arbitrary indoor scenes in variable lighting conditions, using only a moving low-cost depth camera and commodity graphics hardware. We fuse all of the depth data streamed from a Kinect sensor into a single global implicit surface model of the observed scene in real-time. The current sensor pose is simultaneously obtained by tracking the live depth fram
+
+### 2011 Visual Odometry  Tutorial 
+- `2011_Visual_Odometry__Tutorial_` · 嵌入式实时
+- **自述差异**：# Visual Odometry
+
+# Part I: The First 30 Years and Fundamentals
+
+By Davide Scaramuzza and Friedrich Fraundorfer
+
+isual odometry (VO) is the process of estimating the egomotion of an agent (e.g., vehicle, human, and robot) using only the input of a single or multiple cameras attached to it. Application domains include robotics, wearable computing, augmented reality, and automotive. The term VO was coined in 2004 by N
+
+### $\mathbf { g } ^ { 2 } \mathbf { o } \colon$ A General Framework for Graph Optimization
+- `2011_g2o` · 优化后端
+- **自述差异**：A wide range of problems in robotics as well as in computer-vision involve the minimization of a nonlinear error function that can be represented as a graph. Typical instances are simultaneous localization and mapping (SLAM) [19], [5], [22], [10], [16], [26] or bundle adjustment (BA) [27], [15], [18]. The overall goal in these problems is to find the configuration of parameters or state variables that maximally expla
+
+
+---
+
+## 2012 年
+
+### A Benchmark for the Evaluation of RGB-D SLAM Systems
+- `2012_A_benchmark_for_the_evaluation_of_RGB-D_SLAM_systems` · 回环检测 / 基础模型
+- **自述差异**：Public datasets and benchmarks greatly support the scientific evaluation and objective comparison of algorithms. Several examples of successful benchmarks in the area computer vision have demonstrated that common datasets and clear evaluation metrics can significantly help to push the stateof-the-art forward. One highly relevant problem in robotics is the so-called simultaneous localization (SLAM) problem where the g
+
+### 2012 Bags of Binary Words for Fast Place Recognition in Image
+- `2012_Bags_of_Binary_Words_for_Fast_Place_Recognition_in_Image` · 回环检测 / 基础模型
+- **自述差异**：One of the most significant requirements for long-term visual simultaneous localization and mapping (SLAM) is robust place recognition. After an exploratory period, when areas nonobserved for long are reobserved, standard matching algorithms fail. When they are robustly detected, loop closures provide correct data association to obtain consistent maps.
+
+### Visual simultaneous localization and mapping: a survey
+- `2012_Visual_simultaneous_localization_and_mapping__a_survey` · 基础模型
+- **自述差异**：Jorge Fuentes-Pacheco José Ruiz-Ascencio Juan Manuel Rendón-Mancha
+
+Published online: 13 November 2012
+
+© Springer Science+Business Media Dordrecht 2012
+
+Abstract Visual SLAM (simultaneous localization and mapping) refers to the problem of using images, as the only source of external information, in order to establish the position of a robot, a vehicle, or a moving camera in an environment, and at the same time, cons
+
+
+---
+
+## 2013 年
+
+### Dense Visual SLAM for RGB-D Cameras
+- `2013_Dense_visual_SLAM_for_RGB-D_cameras` · 特征法 / 优化后端 / 激光里程计 / 视觉-惯性耦合 / 回环检测 / 嵌入式实时
+- **自述差异**：All authors are with the Computer Vision Group, Department of Computer Science, Technical University of Munich {christian.kerl, juergen.sturm, daniel.cremers}@in.tum.de This work has partially been supported by the DFG under contract number FO 180/17-1 in the Mapping on Demand (MOD) project. Fig. 1: We propose a dense SLAM method for RGB-D cameras that uses keyframes and an entropy-based loop closure detection to eli
+
+### Real-time 3D Reconstruction at Scale using Voxel Hashing
+- `2013_VoxelHashing` · 特征法 / 点云地图结构 / LiDAR-视觉融合 / 稠密重建 / 嵌入式实时
+- **自述差异**：Online 3D reconstruction is gaining newfound interest due to the availability of real-time consumer depth cameras. The basic problem takes live overlapping depth maps as input and incrementally fuses these into a single 3D model. This is challenging particularly when real-time performance is desired without trading quality or scale.
+
+
+---
+
+## 2014 年
+
+### 2014 3-D Mapping With an RGB-D Camera
+- `2014_3-D_Mapping_With_an_RGB-D_Camera`
+- **自述差异**：## A. System Architecture Overview
+
+In general, a graph-based SLAM system can be broken up into three modules [27], [28]: Frontend, backend, and final map representation. The frontend processes the sensor data to extract geometric relationships, e.g., between the robot and landmarks at different points in time.
+
+### LSD-SLAM: Large-Scale Direct Monocular SLAM
+- `2014_LSD-SLAM__Large-Scale_Direct_Monocular_SLAM` · 直接法 / 嵌入式实时
+- **自述差异**：(1) a framework for large-scale, direct monocular SLAM, in particular a novel scale-aware image alignment algorithm to directly estimate the similarity transform ξ sim(3) between two keyframes, and (2) probabilistically consistent incorporation of uncertainty of the estimated depth into tracking.
+
+### SVO: Fast Semi-Direct Monocular Visual Odometry
+- `2014_SVO__Fast_semi-direct_monocular_visual_odometry` · 直接法 / 半直接法 / 视觉-惯性耦合 / 基础模型 / GNSS融合 / 嵌入式实时
+- **自述差异**：(1) a novel semidirect VO pipeline that is faster and more accurate than the current state-of-the-art for MAVs, (2) the integration of a probabilistic mapping method that is robust to outlier measurements. Fig. 1: Tracking and mapping pipeline
+
+Section II provides an overview of the pipeline and Section III, thereafter, introduces some required notation.
+
+
+---
+
+## 2015 年
+
+### Fully Convolutional Networks for Semantic Segmentation
+- `2015_Fully_convolutional_networks_for_semantic_segmentation` · 特征法 / 深度学习前端 / 语义建图
+- **自述差异**：Convolutional networks are powerful visual models that yield hierarchies of features. We show that convolutional networks by themselves, trained end-to-end, pixelsto-pixels, exceed the state-of-the-art in semantic segmentation. Our key insight is to build “fully convolutional” networks that take input of arbitrary size and produce correspondingly-sized output with efficient inference and learning.
+
+### Going Deeper with Convolutions
+- `2015_Going_deeper_with_convolutions` · 深度学习前端
+- **自述差异**：We propose a deep convolutional neural network architecture codenamed Inception that achieves the new state of the art for classification and detection in the ImageNet Large-Scale Visual Recognition Challenge 2014 (ILSVRC14). The main hallmark of this architecture is the improved utilization of the computing resources inside the network. By a carefully crafted design, we increased the depth and width of the network w
+
+### ORB-SLAM: A Versatile and Accurate Monocular SLAM System
+- `2015_ORB-SLAM__A_Versatile_and_Accurate_Monocular_SLAM_System` · 特征法 / 优化后端 / 视觉-惯性耦合 / 回环检测 / 基础模型 / 嵌入式实时
+- **自述差异**：as follows. 1) Use of the same features for all tasks: tracking, mapping, relocalization, and loop closing. This makes our system more efficient, simple, and reliable.
+
+### PoseNet: A Convolutional Network for Real-Time 6-DOF Camera Relocalization
+- `2015_PoseNet` · 特征法 / 回环检测 / 深度学习前端 / 基础模型 / 嵌入式实时
+- **自述差异**：the deep convolutional neural network camera pose regressor. We introduce two novel techniques to achieve this. We leverage transfer learning from recognition to relocalization with very large scale classification datasets.
+
+### Robust Visual Inertial Odometry Using a Direct EKF-Based Approach
+- `2015_Robust_visual_inertial_odometry_using_a_direct_EKF-based` · 滤波后端 / 视觉-惯性耦合 / 基础模型 / 嵌入式实时 · 数据集: Zurich
+- **自述差异**：Navigation and control of autonomous robots in rough and highly unstructured environments requires high-bandwidth and precise knowledge of position and orientation. Especially in dynamic operation of robots, the underlying state estimation can quickly become the bottleneck in terms of achievable bandwidth, robustness and speed. To enable the required performance for highly dynamic operation of robots, we combine comp
+
+
+---
+
+## 2016 年
+
+### Deep Residual Learning for Image Recognition
+- `2016_Deep_Residual_Learning_for_Image_Recognition` · 视觉-惯性耦合 / 深度学习前端
+- **自述差异**：Deeper neural networks are more difficult to train. We present a residual learning framework to ease the training of networks that are substantially deeper than those used previously. We explicitly reformulate the layers as learning residualfunctions with reference to the layer inputs, instead of learning unreferenced functions.
+
+### Past, Present, and Future of Simultaneous Localization and Mapping: Toward the Robust-Perception Age
+- `2016_Past__Present__and_Future_of_Simultaneous_Localization_a` · 优化后端 / 语义建图
+- **自述差异**：the work of Liu et al. [159] and Rosen et al. [211].
+
+### Real-Time Loop Closure in 2D LIDAR SLAM
+- `2016_Real-time_loop_closure_in_2D_LIDAR_SLAM` · 激光里程计 / 回环检测 / 嵌入式实时
+- **自述差异**：a novel method for reducing the computational requirements of computing loop closure constraints from laser range data. This technique has enabled us to map very large floors, tens-of-thousands of square meters, while providing the operator fully optimized results in real-time.
+
+### Structure-from-Motion Revisited
+- `2016_StructureFromMotion`
+- **自述差异**：Incremental Structure-from-Motion is a prevalent strategy for 3D reconstruction from unordered image collections. While incremental reconstruction systems have tremendously advanced in all regards, robustness, accuracy, completeness, and scalability remain the key problems towards building a truly general-purpose pipeline. We propose a new SfM technique that improves upon the state of the art to make a further step t
+
+### You Only Look Once: Unified, Real-Time Object Detection
+- `2016_You_Only_Look_Once__Unified__Real-Time_Object_Detection` · 深度学习前端 / 嵌入式实时
+- **自述差异**：We present YOLO, a new approach to object detection. Prior work on object detection repurposes classifiers to perform detection. Instead, we frame object detection as a regressionproblem to spatially separated bounding boxes and associated class probabilities.
+
+
+---
+
+## 2017 年
+
+### Aggregated Residual Transformations for Deep Neural Networks
+- `2017_Aggregated_Residual_Transformations_for_Deep_Neural_Netw` · 深度学习前端 / 基础模型
+- **自述差异**：We present a simple, highly modularized network architecturefor image classification. Our network is constructed by repeating a building block that aggregates a set oftransformations with the same topology. Our simple design results in a homogeneous, multi-branch architecture that has only a few hyper-parameters to set.
+
+### CNN-SLAM: Real-time dense monocular SLAM with learned depth prediction
+- `2017_CNN-SLAM__Real-Time_Dense_Monocular_SLAM_with_Learned_De` · 深度学习前端 / 语义建图 / 嵌入式实时
+- **自述差异**：Given the recent advances in depth predictionfrom Convolutional Neural Networks (CNNs), this paper investigates how predicted depth maps from a deep neural network can be deployed for accurate and dense monocular reconstruction. We propose a method where CNN-predicted dense depth maps are naturally fused together with depth measurements obtained from direct monocular SLAM. Our fusion scheme privileges depth predictio
+
+### Co-Fusion: Real-time Segmentation, Tracking and Fusion of Multiple Objects
+- `2017_Co-Fusion` · 视觉-惯性耦合 / 动态环境 / 嵌入式实时
+- **自述差异**：a system that would allow a robot not only to reconstruct its surrounding environment but also to acquire the detailed 3D geometry of unknown objects that move in the scene. Moreover, our system would equip a robot with the capability to discover new objects in the scene and learn accurate 3D models of them through active motion. We demonstrate Co-Fusion on different scenarios – placing different previously unseen ob
+
+### DeepVO: Towards End-to-End Visual Odometry with Deep Recurrent Convolutional Neural Networks
+- `2017_DeepVO__Towards_end-to-end_visual_odometry_with_deep_Rec` · 优化后端 / 深度学习前端 / GNSS融合 · 数据集: KITTI
+- **自述差异**：threefold: 1) We demonstrate that the monocular VO problem can be addressed in an end-to-end fashion based on DL, i.e., directly estimating poses from raw RGB images. Neither prior knowledge nor parameter is needed to recover the absolute scale. To the best of our knowledge, this is the first end-to-end approach on the monocular VO through Deep Neural Networks (DNNs).
+
+### EVO: A Geometric Approach to Event-Based 6-DOF Parallel Tracking and Mapping in Real Time
+- `2017_EVO` · 事件相机 / 嵌入式实时
+- **自述差异**：(i) a novel event-based tracking approach based on image-tomodel alignment using edge maps (Sections III-A, IV) and (ii) its integration with a recent event-based 3D reconstruction algorithm [10] to produce the first parallel tracking and mapping pipeline for event cameras that runs in real-time on the CPU. EVO can estimate up to several hundreds of poses per second while recovering a semi-dense, 3D map of the enviro
+
+### Focal Loss for Dense Object Detection
+- `2017_Focal_Loss_for_Dense_Object_Detection` · 视觉-惯性耦合 / 深度学习前端 / 基础模型
+- **自述差异**：The highest accuracy object detectors to date are based on a two-stage approach popularized by R-CNN, where a classifier is applied to a sparse set of candidate object locations. In contrast, one-stage detectors that are applied over a regular, dense sampling ofpossible object locations have the potential to be faster and simpler, but have trailed the accuracy of two-stage detectors thus far. In this paper, we invest
+
+### Low-drift and real-time lidar odometry and mapping
+- `2017_LOAM-Journal` · 回环检测 / GNSS融合 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：Ji Zhang<sup>1</sup> Sanjiv Singh<sup>1</sup>
+
+Received: 25 October 2014 / Accepted: 7 February 2016 / Published online: 18 February 2016
+
+© Springer Science+Business Media New York 2016
+
+Abstract Here we propose a real-time method for low-drift odometry and mapping using range measurements from a 3D laser scanner moving in 6-DOF. The problem is hard because the range measurements are received at different times, and
+
+### Lidar System Architectures and Circuits
+- `2017_Lidar_System_Architectures_and_Circuits`
+- **自述差异**：3D imaging technologies are applied in numerous areas, including self-driving cars, drones, and robots, and in advanced industrial, medical, scientific, and consumer applications. 3D imaging is usually accomplished by finding the distance to multiple points on an object or in a scene, and then creating a point cloud of those range measurements. Different methods can be used for the ranging.
+
+### Mask R-CNN
+- `2017_Mask_R-CNN` · 特征法 / 深度学习前端 / 基础模型 / 语义建图
+- **自述差异**：We present a conceptually simple, flexible, and general frameworkfor object instance segmentation. Our approach efficiently detects objects in an image while simultaneously generating a high-quality segmentation mask for each instance. The method, called Mask R-CNN, extends Faster R-CNN by adding a branch for predicting an object mask in parallel with the existing branch for bounding box recognition.
+
+### Multi-UAV Collaborative Monocular SLAM
+- `2017_MultiUAV-SLAM` · 回环检测 / 多机协同 / 嵌入式实时 · 数据集: Zurich
+- **自述差异**：The system architecture of our collaborative SLAM approach is depicted in Figure 2. It comprises multiple agents, each equipped with a monocular camera, and one central server that is able to communicate with all agents. Any communication is established via a wireless network.
+
+### ORB-SLAM2: An Open-Source SLAM System for Monocular, Stereo, and RGB-D Cameras
+- `2017_ORB-SLAM2__An_Open-Source_SLAM_System_for_Monocular__Ste` · 特征法 / 优化后端 / 回环检测 / 深度学习前端 / 嵌入式实时
+- **自述差异**：Simultaneous localization and mapping (SLAM) has been a hot research topic in the last two decades in the computer vision and robotics communities, and has recently attracted the attention of hightechnological companies. SLAM techniques build a map ofan unknown environment and localize the sensor in the map with a strong focus on real-time operation. Among the different sensor modalities, cameras are cheap and provid
+
+### On-Manifold Preintegration for Real-Time Visual–Inertial Odometry
+- `2017_On-Manifold_Preintegration_for_Real-Time_Visual--Inertia` · 优化后端 / IMU预积分 / 视觉-惯性耦合 / 深度学习前端 / GNSS融合 / 嵌入式实时
+- **自述差异**：apreintegration theory that properly addresses the manifold structure of the rotation group. We formally discuss the generative measurement model as well as the nature of the rotation noise and derive the expression for the maximum a posteriori state estimator. Our theoretical development enables the computation of all necessary Jacobians for the optimization and a posteriori bias correction in analytic form.
+
+### SemanticFusion: Dense 3D Semantic Mapping with Convolutional Neural Networks
+- `2017_SemanticFusion` · 特征法 / 点云地图结构 / 深度学习前端 / 语义建图 / 稠密重建 / 全局一致性 / 嵌入式实时
+- **自述差异**：Our SemanticFusion pipeline is composed of three separate units; a real-time SLAM system ElasticFusion, a Convolutional Neural Network, and a Bayesian update scheme, as illustrated in Figure 2. The role of the SLAM system is to provide correspondences between frames, and a globally consistent map of fused surfels. Separately, the CNN receives a 2D image (for our architecture this is RGB or RGBD, for Eigen et al.
+
+### Simultaneous Localization and Mapping: A Survey of Current Trends in Autonomous Driving
+- `2017_Simultaneous_Localization_and_Mapping__A_Survey_of_Curre` · 回环检测 / 多机协同 / GNSS融合 / 嵌入式实时
+- **自述差异**：IMULTANEOUS Localization And Mapping (SLAM) has S been a hugely popular topic among the mobile robotics community for more than 25 years now. The success of this field is tightly bound to the fact that “solving” the SLAM problem, that is localizing a robot thanks to a map of the surroundings built incrementally, has numerous applications ranging from spatial exploration to autonomous driving. The recent spotlight put
+
+### Voxblox: Incremental 3D Euclidean Signed Distance Fields for On-Board MAV Planning
+- `2017_Voxblox` · 特征法 / 点云地图结构 / 神经隐式场 / 稠密重建 / 嵌入式实时 · 数据集: Zurich
+- **自述差异**：as follows:
+
+• Present the first method to incrementally build ESDFs out of TSDFs in dynamically growing maps. • Analyze different methods of building a TSDF to maximize reconstruction speed and surface accuracy at large voxel sizes. • Provide both analytical and experimental analysis of errors in the final ESDF, and propose safety margins to overcome these errors.
+
+
+---
+
+## 2018 年
+
+### CodeSLAM — Learning a Compact, Optimisable Representation for Dense Visual SLAM
+- `2018_CodeSLAM_-_Learning_a_Compact__Optimisable_Representatio` · 特征法 / 语义建图 / 全局一致性 / 嵌入式实时
+- **自述差异**：The representation of geometry in real-time 3D perception systems continues to be a critical research issue. Dense maps capture complete surface shape and can be augmented with semantic labels, but their high dimensionality makes them computationally costly to store and process, and unsuitable for rigorous probabilistic inference. Sparse feature-based representations avoid these problems but capture only partial scen
+
+### DS-SLAM: A Semantic Visual SLAM towards Dynamic Environments
+- `2018_DS-SLAM__A_Semantic_Visual_SLAM_towards_Dynamic_Environm` · 特征法 / 语义建图 / 动态环境 / 嵌入式实时 · 数据集: TUM RGB-D
+- **自述差异**：1. A complete semantic SLAM system in dynamic environments (DS-SLAM) is proposed based on ORB-SLAM2 [2], which could reduce the influence of dynamic objects on pose estimation. The effectiveness of the system is evaluated on TUM RGB-D dataset [9].
+
+### Direct Sparse Odometry
+- `2018_Direct_Sparse_Odometry` · 特征法 / 直接法 / 基础模型
+- **自述差异**：Jakob Engel , Vladlen Koltun, and Daniel Cremers
+
+Abstract—Direct Sparse Odometry (DSO) is a visual odometry method based on a novel, highly accurate sparse and direct structure and motion formulation. It combines a fully direct probabilistic model (minimizing a photometric error) with consistent, joint optimization of all model parameters, including geometry-represented as inverse depth in a reference frame-and came
+
+### DynaSLAM: Tracking, Mapping, and Inpainting in Dynamic Scenes
+- `2018_DynaSLAM` · 特征法 / 视觉-惯性耦合 / 深度学习前端 / 动态环境
+- **自述差异**：Fig. 2 shows an overview of our system. First of all, the RGB channels pass through a CNN that segments out pixel-wise all the a priori dynamic content, e.g., people or vehicles.
+
+### Event-Based, 6-DOF Camera Tracking from Photometric Depth Maps
+- `2018_EventTracking` · 事件相机 / 稠密重建
+- **自述差异**：Guillermo Gallego , Jon E.A. Lund, Elias Mueggler , Henri Rebecq , Tobi Delbruck , Fellow, IEEE, and Davide Scaramuzza
+
+Abstract—Event cameras are bio-inspired vision sensors that output pixel-level brightness changes instead of standard intensity frames. These cameras do not suffer from motion blur and have a very high dynamic range, which enables them to provide reliable visual information during high-speed motions
+
+### LeGO-LOAM: Lightweight and Ground-Optimized Lidar Odometry and Mapping on Variable Terrain
+- `2018_LeGO-LOAM` · 优化后端 / 激光里程计 / 回环检测 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：The framework proposed in this paper is validated using datasets gathered from Velodyne VLP-16 and HDL-64E 3D lidars. The VLP-16 measurement range is up to 100m with an accuracy of ± 3cm. It has a vertical field of view (FOV) of $3 0 ^ { \circ } ( \pm 1 5 ^ { \circ } )$ and a horizontal FOV of $3 6 0 ^ { \circ }$ .
+
+### MaskFusion: Real-Time Recognition, Tracking and Reconstruction of Multiple Moving Objects
+- `2018_MaskFusion` · 点云地图结构 / 视觉-惯性耦合 / 语义建图 / 动态环境 / 嵌入式实时
+- **自述差异**：We present MaskFusion, a real-time, object-aware, semantic and dynamic RGB-D SLAM system that goes beyond traditional systems which output a purely geometric map of a static scene. MaskFusion recognizes, segments and assigns semantic class labels to different objects in the scene, while tracking and reconstructing them even when they move independently from the camera. As an RGB-D camera scans a cluttered scene, imag
+
+### Scan Context: Egocentric Spatial Descriptor for Place Recognition within 3D Point Cloud Map
+- `2018_ScanContext` · 视觉-惯性耦合 / 回环检测 / 深度学习前端 / 动态环境 / 全局一致性
+- **自述差异**：In many robotics applications, place recognition is the important problem. For SLAM, in particular, this recognition provides candidates for loop-closure, which is essential for correcting drift error and building a globally consistent map [1]. While the loop-closure is critical for robot navigation, wrong registration can be catastrophic and careful registration is required.
+
+### Ultimate SLAM? Combining Events, Images, and IMU for Robust Visual SLAM in HDR and High-Speed Scenarios
+- `2018_UltimateSLAM` · 视觉-惯性耦合 / 事件相机
+- **自述差异**：mented/virtual reality or autonomous robot control. In recent years, great progress has been achieved using visual and inertial information ([1]–[3]). However, due to some well-known limitations of traditional cameras (motion blur and low dynamicrange), these Visual Inertial Odometry (VIO) pipelines still struggle to cope with a number of situations, such as high-speed motions or high-dynamic range scenarios.
+
+### UnDeepVO: Monocular Visual Odometry through Unsupervised Deep Learning
+- `2018_UnDeepVO__Monocular_Visual_Odometry_Through_Unsupervised` · 特征法 / 直接法 / 深度学习前端 · 数据集: KITTI
+- **自述差异**：as follows:
+
+We demonstrate a monocular VO system with recovered absolute scale, and we achieve this in an unsupervised manner by harnessing both spatial and temporal geometric constraints. Not only estimated pose but also estimated dense depth map are generated with absolute scales thanks to the use of stereo image pairs during training. We evaluate our VO system using KITTI dataset, and the results show UnDeepVO ac
+
+### Direct Sparse Visual-Inertial Odometry using Dynamic Marginalization
+- `2018_VI-DSO` · 直接法 / 优化后端 / IMU预积分 / 视觉-惯性耦合 / 深度学习前端 / GNSS融合 / 嵌入式实时 · 数据集: EuRoC
+- **自述差异**：a direct sparse visual-inertial odometry system. a novel initialization strategy where scale and gravity direction are included into the model and jointly optimized after initialization. we introduce ”dynamic marginalization” as a technique to adaptively employ marginalization strategies even in cases where certain variables undergo drastic changes.
+
+### VINS-Mono: A Robust and Versatile Monocular Visual-Inertial State Estimator
+- `2018_VINS-Mono__A_Robust_and_Versatile_Monocular_Visual-Inert` · 优化后端 / 视觉-惯性耦合 / 回环检测 / 全局一致性 / 嵌入式实时
+- **自述差异**：open-source system integration, real-time demonstration for drone navigation, and mobile applications. The whole system has been successfully applied to small-scale AR scenarios, medium-scale drone navigation, and large-scale stateestimation tasks, as shown in Fig. 1.
+
+
+---
+
+## 2019 年
+
+### EM-Fusion: Dynamic Object-Level SLAM With Probabilistic Data Association
+- `2019_EM-Fusion` · 神经隐式场 / 动态环境 / 稠密重建
+- **自述差异**：The majority of approaches for acquiring dense 3D environment maps with RGB-D cameras assumes static environments or rejects moving objects as outliers. The representation and tracking ofmoving objects, however, has significant potentialfor applications in robotics or augmented reality. In this paper, we propose a novel approach to dynamic SLAM with dense object-level representations.
+
+### 2019 Kimera-Semantics
+- `2019_Kimera-Semantics` · 点云地图结构 / 视觉-惯性耦合 / 语义建图 / 动态环境 / 稠密重建 / 嵌入式实时
+- **自述差异**：Kimera, the first fully automatic method to build a DSG from visual-inertial data. Kimera includes accurate algorithms for visual-inertia SLAM, metric-semantic 3D reconstruction, object localization, human pose and shape estimation, and scene parsing. Our third contribution is a comprehensive evaluation of Kimera in real-life datasets and photo-realistic simulations, including a newly released dataset, uHumans2, whic
+
+### MID-Fusion: Octree-based Object-Level Multi-Instance Dynamic SLAM
+- `2019_MID-Fusion` · 点云地图结构 / 深度学习前端 / 基础模型 / 语义建图 / 动态环境 / 稠密重建
+- **自述差异**：## A. System overview
+
+Fig. 2 shows the pipeline of our proposed system.
+
+### PanopticFusion: Online Volumetric Semantic Mapping at the Level of Stuff and Things
+- `2019_PanopticFusion` · 点云地图结构 / 视觉-惯性耦合 / 语义建图 / 稠密重建 · 数据集: ScanNet
+- **自述差异**：the following:
+
+• The first reported semantic mapping system that realizes scene understanding at the level of stuff and things. • Large-scale 3D reconstruction and labeled mesh extraction thanks to the use of a spatially hashed volumetric map representation. • Map regularization using a fully connected CRF with a novel unary potential approximation and map division strategy.
+
+### 2019 RTABMap
+- `2019_RTABMap` · 回环检测 / 多机协同 · 数据集: KITTI, EuRoC, TUM
+- **自述差异**：Distributed as an open‐source library since 2013, real‐time appearance‐based mapping (RTAB‐Map) started as an appearance‐based loop closure detection approach with memory management to deal with large‐scale and long‐term online operation. It then grew to implement simultaneous localization and mapping (SLAM) on various robots and mobile platforms. As each application brings its own set of constraints on sensors, proc
+
+### SuMa++: Efficient LiDAR-based Semantic SLAM
+- `2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM` · 特征法 / 激光里程计 / 点云地图结构 / LiDAR-惯性耦合 / 视觉-惯性耦合 / 深度学习前端 / 基础模型 / 语义建图 / 动态环境 / 稠密重建 · 数据集: KITTI
+- **自述差异**：an approach to integrate semantics into a surfel-based map representation and a method to filter dynamic objects exploiting these semantic labels. In sum, we claim that we are (i) able to accurately map an environment especially in situations with a large number of moving objects and we are (ii) able to achieve a better performance than the same mapping system simply removing possibly moving objects in general enviro
+
+### Tightly Coupled 3D Lidar Inertial Odometry and Mapping
+- `2019_Tightly_Coupled_3D_Lidar_Inertial_Odometry_and_Mapping` · LiDAR-惯性耦合
+- **自述差异**：Ego-motion estimation plays a major role in many navigation tasks and is one of the key problems for autonomous robots. It offers the knowledge of robot poses and can provide instant feedback to the pose controllers. Besides, together with the various sensors perceiving the environment, it provides crucial information for simultaneous localization and mapping (SLAM).
+
+
+---
+
+## 2020 年
+
+### Visual-Inertial Mapping With Non-Linear Factor Recovery
+- `2020_Basalt` · 特征法 / 优化后端 / 视觉-惯性耦合 / 全局一致性
+- **自述差异**：\- We propose a novel two-layered visual-inertial mapping approach that integrates keypoint-based bundleadjustment with inertial and short-term visual tracking through non-linear factor recovery. \- As the first layer of our mapping approach we propose a VIO system which outperforms the state-of-the-art methods in terms of trajectory accuracy on the majority of the evaluated sequences. This is achieved by carefully c
+
+### D3VO: Deep Depth, Deep Pose and Deep Uncertainty for Monocular Visual Odometry
+- `2020_D3VO__Deep_Depth__Deep_Pose_and_Deep_Uncertainty_for_Mon` · 视觉-惯性耦合 / 深度学习前端 · 数据集: KITTI, EuRoC
+- **自述差异**：We propose D3VO as a novel framework for monocular visual odometry that exploits deep networks on three levels – deep depth, pose and uncertainty estimation. We first propose a novel self-supervised monocular depth estimation network trained on stereo videos without any external supervision. In particular, it aligns the training image pairs into similar lighting condition with predictive brightness transformation par
+
+### DOOR-SLAM: Distributed, Online, and Outlier Resilient SLAM for Robotic Teams
+- `2020_DOOR-SLAM` · 优化后端 / 回环检测 / 多机协同 / GNSS融合
+- **自述差异**：ULTI-ROBOT systems already constitute the backbone
+
+Manuscript received September 10, 2019; accepted January 2, 2020. Date of publication January 20, 2020; date of current version February 6, 2020. This letter was recommended for publication by Associate Editor M.
+
+### DeepFactors: Real-Time Probabilistic Dense Monocular SLAM
+- `2020_DeepFactors` · 优化后端 / 深度学习前端 / 嵌入式实时
+- **自述差异**：The system builds and maintains a keyframe map. Incoming new camera images are resized and corrected to match the network focal length and tracked against the nearest keyframe (Section V-A). Once sufficient baseline and other criteria are met, a new keyframe is initialised at the estimated pose with an initial code prediction and added to the graph (Section V-C).
+
+### DEEPV2D: VIDEO TO DEPTH WITH DIFFERENTIABLE STRUCTURE FROM MOTION
+- `2020_DeepV2D` · 深度学习前端
+- **自述差异**：We propose DeepV2D, an end-to-end deep learning architecture for predicting depth from video. DeepV2D combines the representation ability of neural networks with the geometric principles governing image formation. We compose a collection of classical geometric algorithms, which are converted into trainable modules and combined into an end-to-end differentiable architecture.
+
+### 2020 EventSLAM-Survey
+- `2020_EventSLAM-Survey` · 特征法 / 深度学习前端 / 事件相机
+- **自述差异**：In recent decades, visual simultaneous localization and mapping (vSLAM) has gained significant interest in both academia and industry. It estimates camera motion and reconstructs the environment concurrently using visual sensors on a moving robot. However, conventional cameras are limited by hardware, including motion blur and low dynamic range, which can negatively impact performance in challenging scenarios like hi
+
+### Inertial-Only Optimization for Visual-Inertial Initialization
+- `2020_Inertial-Only_Optimization_for_Visual-Inertial_Initializ` · 特征法 / 视觉-惯性耦合 · 数据集: EuRoC
+- **自述差异**：Simultaneous Localization and Mapping (SLAM) techniques allow robots and AR/VR systems to be aware of their environments, while locating themselves in the reconstructed scene. Visual-inertial SLAM with a single monocular camera and a low-cost Inertial Measurement Unit (IMU) sensor, offers a small, compact and low power solution for most applications. IMU sensors measure acceleration and angular velocity, providing ro
+
+### Kimera: an Open-Source Library for Real-Time Metric-Semantic Localization and Mapping
+- `2020_Kimera__an_Open-Source_Library_for_Real-Time_Metric-Sema` · 特征法 / 优化后端 / 视觉-惯性耦合 / 语义建图 / 稠密重建 / 全局一致性 / 嵌入式实时
+- **自述差异**：Metric-semantic understanding is the capability to simultaneously estimate the 3D geometry of a scene and attach a semantic label to objects and structures (e.g., tables, walls). Geometric information is critical for robots to navigate safely and to manipulate objects, while semantic information provides the ideal level of abstraction for a robot to understand and execute human instructions (e.g., “bring me a cup of 
+
+### LIO-SAM: Tightly-coupled Lidar Inertial Odometry via Smoothing and Mapping
+- `2020_LIO-SAM__Tightly-coupled_Lidar_Inertial_Odometry_via_Smo` · 优化后端 / IMU预积分 / LiDAR-惯性耦合 / 回环检测 / 基础模型 / 嵌入式实时
+- **自述差异**：State estimation, localization and mapping are fundamental prerequisites for a successful intelligent mobile robot, required for feedback control, obstacle avoidance, and planning, among many other capabilities. Using vision-based and lidar-based sensing, great efforts have been devoted to achieving high-performance real-time simultaneous localization and mapping (SLAM) that can support a mobile robot’s six degree-of
+
+### NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis
+- `2020_NeRF` · 神经隐式场 / 基础模型 / 稠密重建
+- **自述差异**：– An approach for representing continuous scenes with complex geometry and materials as 5D neural radiance fields, parameterized as basic MLP networks. – A diferentiable rendering procedure based on classical volume rendering techniques, which we use to optimize these representations from standard RGB images. This includes a hierarchical sampling strategy to allocate the MLP’s capacity towards space with visible scen
+
+### The Newer College Dataset: Handheld LiDAR, Inertial and Vision with Ground Truth
+- `2020_NewerCollege` · LiDAR-惯性耦合 / 视觉-惯性耦合 / 回环检测 / GNSS融合 · 数据集: Newer College, KITTI, EuRoC
+- **自述差异**：Research in robotics and autonomous navigation has benefited significantly from the public availability of standard datasets which enable systematic testing and validation of algorithms. Over the past 10 years, datasets such as KITTI [1], the New College [2] and EuRoC MAV [3] have been released and provided a transparent benchmark of performance. These datasets were collected on a variety of platforms (UGVs, UAVs and
+
+### OpenVINS: A Research Platform for Visual-Inertial Estimation
+- `2020_OpenVINS` · 优化后端 / 视觉-惯性耦合
+- **自述差异**：Autonomous robots and consumer-grade mobile devices such as drones and smartphones are becoming ubiquitous, in part due to a large increase in computing ability and a simultaneous reduction in power consumption and cost. To endow these robots and mobile devices with the ability to perceive and understand their contextual locations within local environments, which is desired in many different ap plications from mobile
+
+### RAFT: Recurrent All-Pairs Field Transforms for Optical Flow
+- `2020_RAFT` · 特征法 / 动态环境 · 数据集: KITTI
+- **自述差异**：Zachary Teed<sup>(B)</sup> and Jia Deng
+
+Princeton University, Princeton, USA zteed,jiadeng @cs.princeton.edu
+
+Abstract. We introduce Recurrent All-Pairs Field Transforms (RAFT), a new deep network architecture for optical flow. RAFT extracts perpixel features, builds multi-scale 4D correlation volumes for all pairs of pixels, and iteratively updates a flow field through a recurrent unit that performs lookups on the 
+
+### SuperGlue: Learning Feature Matching with Graph Neural Networks
+- `2020_SuperGlue` · 深度学习前端 / 嵌入式实时
+- **自述差异**：This paper introduces SuperGlue, a neural network that matches two sets of local features by jointly nding correspondences and rejecting non-matchable points. Assignments are estimated by solving a differentiable optimal transport problem, whose costs are predicted by a graph neural network. We introduce a flexible context aggregation mechanism based on attention, enabling SuperGlue to reason about the underlying 3D 
+
+
+---
+
+## 2021 年
+
+### BALM: Bundle Adjustment for Lidar Mapping
+- `2021_BALM` · 特征法 / 优化后端 / 激光里程计 / 点云地图结构 / 视觉-惯性耦合 / 稠密重建 / 嵌入式实时
+- **自述差异**：as follows: 1) We formulate the BA on sparse lidar feature points, including both edges and planes, by directly minimizing the distance from the feature point to the edge or plane (see Fig. 1(b)). Unlike visual BA which simultaneously solves the feature location and camera poses, we show that the feature (edge and plane) parameters in lidar BA can be analytically solved in closed-form solution, leading to a BA optimi
+
+### COVINS: Visual-Inertial SLAM for Centralized Collaboration
+- `2021_COVINS` · 视觉-惯性耦合 / 回环检测 / 多机协同 / 嵌入式实时
+- **自述差异**：Collaborative SLAM enables a group of agents to simultaneously co-localize and jointly map an environment, thus paving the way to wide-ranging applications of multi-robot perception and multi-user AR experiences by eliminating the need for external infrastructure or pre-built maps. This article presents COVINS, a novel collaborative SLAM system, that enables multi-agent, scalable SLAM in large environments and for la
+
+### DROID-SLAM: Deep Visual SLAM for Monocular, Stereo, and RGB-D Cameras
+- `2021_DROID-SLAM` · 优化后端 / 深度学习前端
+- **自述差异**：We introduce DROID-SLAM, a new deep learning based SLAM system. DROID-SLAM consists of recurrent iterative updates of camera pose and pixelwise depth through a Dense Bundle Adjustment layer. DROID-SLAM is accurate, achieving large improvements over prior work, and robust, suffering from substantially fewer catastrophic failures.
+
+### DeepSLAM: A Robust Monocular SLAM System With Unsupervised Deep Learning
+- `2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis` · 特征法 / 优化后端 / 回环检测 / 深度学习前端
+- **自述差异**：summarized as follows. (a) 
+ 
+(b) 
+Fig. 1.
+
+### DynaSLAM II: Tightly-Coupled Multi-Object Tracking and SLAM
+- `2021_DynaSLAM-II` · 特征法 / 优化后端 / 视觉-惯性耦合 / 语义建图 / 动态环境 / 多机协同
+- **自述差异**：DynaSLAM II builds on the popular ORB-SLAM2 [1]. It takes synchronized and calibrated stereo/RGB-D images as input, and outputs the camera and the dynamic-object poses for each frame, as well as a spatial/temporal map containing the dynamic objects. For each incoming frame, pixel-wise semantic segmentation is computed and ORB features [27] are extracted and matched across stereo image pairs.
+
+### Event-Based Stereo Visual Odometry
+- `2021_Event-Based_Stereo_Visual_Odometry` · 特征法 / 事件相机 / 嵌入式实时
+- **自述差异**：as follows. 1) A novel mapping method based on the optimization of an objective function designed to measure spatio-temporal consistency across stereo event streams (see Section IV-A). 2) A fusion strategy based on the probabilistic characteristics of the estimated inverse depth to improve density and accuracy of the recovered 3-D structure (see Section IV-B).
+
+### FAST-LIO: A Fast, Robust LiDAR-Inertial Odometry Package by Tightly-Coupled Iterated Kalman Filter
+- `2021_FAST-LIO__A_Fast__Robust_LiDAR-Inertial_Odometry_Package` · 特征法 / 滤波后端 / LiDAR-惯性耦合 / 嵌入式实时
+- **自述差异**：as follows: 1) To cope with fast-motion, noisy or cluttered environments where degeneration occurs, we adopt a tightly-coupled iterated Kalman filter to fuse LiDAR feature points with IMU measurements. We propose a formal back-propagation process to compensate for the motion distortion; 2) To lower the computation load caused by a large number of LiDAR feature points, we propose a new formula for computing the Kalman
+
+### LoFTR: Detector-Free Local Feature Matching with Transformers
+- `2021_LoFTR` · 深度学习前端
+- **自述差异**：We present a novel method for local image feature matching. Instead of performing image feature detection, description, and matching sequentially, we propose to first establish pixel-wise dense matches at a coarse level and later refine the good matches at a fine level. In contrast to dense methods that use a cost volume to search correspondences, we use selfand cross attention layers in Transformer to obtainfeature 
+
+### MULLS: Versatile LiDAR SLAM via Multi-metric Linear Least Square
+- `2021_MULLS__Versatile_LiDAR_SLAM_via_Multi-metric_Linear_Leas` · 特征法 / 优化后端 / 激光里程计 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：listed as follows:
+
+• A scan-line independent LiDAR-only SLAM solution named MULLS<sup>1</sup>, with low drift and real-time performance on various scenarios. Currently, MULLS ranks top 10 on the competitive KITTI benchmark<sup>2</sup>. • An efficient point cloud local registration algorithm named MULLS-ICP that realizes the linear least square optimization of point-to-point (plane, line) error metrics jointly in rou
+
+### ORB-SLAM3: An Accurate Open-Source Library for Visual, Visual–Inertial, and Multimap SLAM
+- `2021_ORB-SLAM3` · 特征法 / 视觉-惯性耦合 / 回环检测 / 嵌入式实时 · 数据集: EuRoC
+- **自述差异**：the ORB-SLAM3 library itself [5], the most complete and accurate visual, visual–inertial, and multimap SLAM system to date (see Table I). The main novelties of ORB-SLAM3 are as follows. 1) A monocular and stereo visual–inertial SLAM system that fully relies on MAP estimation, even during the inertial measurement unit (IMU) initialization phase.
+
+### Pyramid Vision Transformer: A Versatile Backbone for Dense Prediction without Convolutions
+- `2021_Pyramid_Vision_Transformer__A_Versatile_Backbone_for_Den` · 深度学习前端 / 语义建图
+- **自述差异**：as follows:
+
+(1) We propose Pyramid Vision Transformer (PVT), which is the first pure Transformer backbone designed for various pixel-level dense prediction tasks. Combining our PVT and DETR, we can construct an end-to-end object detection system without convolutions and handcrafted components such as dense anchors and non-maximum suppression (NMS). (2) We overcome many difficulties when porting Transformer to dense 
+
+### A Survey of simultaneous localization and mapping for robot
+- `2021_SLAM-Survey` · 滤波后端 / 深度学习前端 / 基础模型 / 语义建图 / GNSS融合 / 全局一致性
+- **自述差异**：Precise positioning and maps are the basis for mobile robots to navigate. In urban roads, robots can obtain their own absolute position by GPS while navigating with known road maps. However, when the robot is in an unknown environment such as indoors, underground, or mountains, the robot cannot get the map of the current environment, and it is difficult to locate by GPS.
+
+### Swin Transformer: Hierarchical Vision Transformer using Shifted Windows
+- `2021_Swin_Transformer__Hierarchical_Vision_Transformer_using_` · 视觉-惯性耦合 / 神经隐式场 / 深度学习前端 / 语义建图
+- **自述差异**：This paper presents a new vision Transformer, called Swin Transformer, that capably serves as a general-purpose backbone for computer vision. Challenges in adapting Transformerfrom language to vision arisefrom differences between the two domains, such as large variations in the scale of visual entities and the high resolution of pixels in images compared to words in text. To address these differences, we propose a hi
+
+### TartanVO: A Generalizable Learning-based VO
+- `2021_TartanVO` · 深度学习前端 · 数据集: KITTI, EuRoC
+- **自述差异**：Wenshan Wang<sup>∗</sup> Carnegie Mellon University
+
+Yaoyu Hu Carnegie Mellon University
+
+Sebastian Scherer Carnegie Mellon University
+
+Abstract: We present the first learning-based visual odometry (VO) model, which generalizes to multiple datasets and real-world scenarios, and outperforms geometry-based methods in challenging scenes. We achieve this by leveraging the SLAM dataset TartanAir, which provides a large am
+
+### iMAP: Implicit Mapping and Positioning in Real-Time
+- `2021_iMAP` · 特征法 / LiDAR-视觉融合 / 神经隐式场 / 深度学习前端 / 基础模型 / 嵌入式实时
+- **自述差异**：We show for the first time that a multilayer perceptron (MLP) can serve as the only scene representation in a realtime SLAM systemfor a handheld RGB-D camera. Our network is trained in live operation without prior data, building a dense, scene-specific implicit 3D model of occupancy and colour which is also immediately usedfor tracking. Achieving real-time SLAM via continual training of a neural network against a liv
+
+
+---
+
+## 2022 年
+
+### A Comparative Analysis of LiDAR SLAM-Based Indoor Navigation for Autonomous Vehicles
+- `2022_A_Comparative_Analysis_of_LiDAR_SLAM-Based_Indoor_Naviga` · 特征法
+- **自述差异**：as follows:
+
+• <sup>For</sup> <sup>SLAM</sup> <sup>technologies,</sup> <sup>we</sup> <sup>systematically</sup> <sup>analyzed</sup> the advantages and disadvantages of seven representative LiDAR-based SLAM methods, which can help researchers quickly and comprehensively understand the main ideas and contributions of them. For indoor-navigation solutions, we compared the performance of existing LiDAR SLAM-based methods 
+
+### A LiDAR SLAM With PCA-Based Feature Extraction and Two-Stage Matching
+- `2022_A_LiDAR_SLAM_With_PCA-Based_Feature_Extraction_and_Two-S` · 激光里程计 / 视觉-惯性耦合 / 全局一致性 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：## A. System Overview
+
+As shown in Fig. 1, the proposed system includes three modules: feature extraction, frame tracking, and mapping.
+
+### A Novel Lidar-Assisted Monocular Visual SLAM Framework for Mobile Robots in Outdoor Environments
+- `2022_A_Novel_Lidar-Assisted_Monocular_Visual_SLAM_Framework_f` · 嵌入式实时 · 数据集: KITTI, NCLT
+- **自述差异**：as follows. 1) We propose a novel 3-D LAMV-SLAM framework, which allows a mobile robot to achieve real-time performance only with a CPU in large-scale environments. 2) An online photometric calibration module is integrated into LAMV-SLAM seamlessly, which significantly enhances the tracking robustness against the photometric disturbances in real-world applications.
+
+### 2022 A Progress Review on Solid State LiDAR and Nanophotonics
+- `2022_A_Progress_Review_on_Solid_State_LiDAR_and_Nanophotonics`
+- **自述差异**：www.lpr-journal.org
+
+# A Progress Review on Solid-State LiDAR and Nanophotonics-Based LiDAR Sensors
+
+Nanxi Li,\* Chong Pei Ho, Jin Xue, Leh Woon Lim, Guanyu Chen, Yuan Hsing Fu, and Lennon Yao Ting Lee
+
+Light detection and ranging (LiDAR) sensors enable precision sensing of an object in 3D. LiDAR technology is widely used in metrology, environment monitoring, archaeology, and robotics. It also shows high potential to
+
+### 2022 Accurate Dynamic SLAM Using CRF-Based Long-Term Consiste
+- `2022_Accurate_Dynamic_SLAM_Using_CRF-Based_Long-Term_Consiste` · 视觉-惯性耦合 / 动态环境 · 数据集: TUM
+- **自述差异**：# Accurate Dynamic SLAM Using CRF-Based Long-Term Consistency
+
+Zheng-Jun Du, Shi-Sheng Huang, Tai-Jiang Mu , Qunhe Zhao, Ralph R. Martin, and Kun Xu , Member, IEEE
+
+Abstract—Accurate camera pose estimation is essential and challenging for real world dynamic 3D reconstruction and augmented reality applications. In this article, we present a novel RGB-D SLAM approach for accurate camera pose tracking in dynamic environ
+
+### AdaFusion: Visual-LiDAR Fusion With Adaptive Weights for Place Recognition
+- `2022_AdaFusion__Visual-LiDAR_Fusion_With_Adaptive_Weights_for` · LiDAR-视觉融合 / 回环检测 / 深度学习前端
+- **自述差异**：In this section, we show how AdaFusion leverages the weighted global descriptor to perform place recognition in varying environments. A brief illustration of the whole approach is shown in Fig. 1.
+
+### An Intensity-Augmented LiDAR-Inertial SLAM for Solid-State LiDARs in Degenerated Environments
+- `2022_An_Intensity-Augmented_LiDAR-Inertial_SLAM_for_Solid-Sta` · LiDAR-惯性耦合 / 深度学习前端 / 嵌入式实时
+- **自述差异**：listed as follows. 1) A novel feature extraction is proposed that can not only extract geometry planar points and edge points but also intensity edge points using intensity (reflectivity) returned by LiDAR measurements. 2) To improve accuracy and robustness, we design two multiweighting functions that jointly fuse the local geometry and intensity information and an iterative reweighed least-squares problem is solved 
+
+### 2022 Beyond Dents and Scratches  Logical Constraints in Unsup
+- `2022_Beyond_Dents_and_Scratches__Logical_Constraints_in_Unsup` · 视觉-惯性耦合 / 深度学习前端 / 全局一致性
+- **自述差异**：The unsupervised detection and localization of anomalies in natural images is an intriguing and challenging problem. Anomalies manifest themselves in very different ways and an ideal benchmark dataset for this task should contain representative examples for all of them. We find that existing datasets are biased towards local structural anomalies such as scratches, dents, or contaminations.
+
+### CFP-SLAM: A Real-time Visual SLAM Based on Coarse-to-Fine Probability in Dynamic Environments
+- `2022_CFP-SLAM__A_Real-time_Visual_SLAM_Based_on_Coarse-to-Fin` · 特征法 / 滤波后端 / 视觉-惯性耦合 / 语义建图 / 动态环境 / 嵌入式实时
+- **自述差异**：as follows:
+
+• Compensating missed detection based on EKF and Hungarian algorithm, while using DBSCAN clustering algorithm to distinguish the foreground points and background points of box. • The distinction of object dynamic attributes. Based on the YOLOv5 object detection and geometric constraints, the object motion attributes are divided into high dynamics and low dynamics, which are provided to the subsequent met
+
+### Continuous-Time Vs. Discrete-Time Vision-Based SLAM: A Comparative Study
+- `2022_Continuous-Time_Vs__Discrete-Time_Vision-Based_SLAM__A_C` · GNSS融合
+- **自述差异**：1) An in-depth study on the comparison of discrete- and continuous-time trajectory representations in vision-based SLAM. 2) Extensive experimental evaluation in hardware-in-the-loop simulation and on real-world data collected from flying and ground robots. 3) A modular, efficient software architecture including stateof-the-art algorithms to solve the SLAM problem in the discrete and continuous time.
+
+### DEVO: Depth-Event Camera Visual Odometry in Challenging Conditions
+- `2022_DEVO` · 特征法 / 事件相机 / 嵌入式实时
+- **自述差异**：as follows:
+
+• We present DEVO, a novel visual odometry framework for a hybrid stereo setup of a depth and an event camera. • The approach relies on thresholded time-surface maps for edge detection and semi-dense depth map extraction. • Our method handles 6-DoF motion estimation, and we demonstrate high efficiency and successful operation in all conditions.
+
+### Direct LiDAR Odometry: Fast Localization With Dense Point Clouds
+- `2022_DLO` · 激光里程计 / 嵌入式实时
+- **自述差异**：a custom speed-first pipeline which accurately resolves robot egomotion in real-time using minimally-preprocessed LiDAR scans and an optional IMU on consumer-grade processors. A key insight of our work is the link between algorithmic speed and accuracy, and our approach is comprised of three core innovations. First, an adaptive keyframing system which efficiently captures significant environmental information through
+
+### DM-VIO: Delayed Marginalization Visual-Inertial Odometry
+- `2022_DM-VIO` · 优化后端 / 视觉-惯性耦合 · 数据集: EuRoC, TUM
+- **自述差异**：\- Delayed marginalization compensates drawbacks of marginalization while retaining the advantages. \- Pose graph bundle adjustment (PGBA) combines the efficiency of pose graph optimization with the full uncertainty of bundle adjustment. \- A state-of-the-art visual-inertial odometry system with a novel multi-stage IMU initializer and dynamically weighted photometric factors.
+
+### DiSCo-SLAM: Distributed Scan Context-Enabled Multi-Robot LiDAR SLAM With Two-Stage Global-Local Graph Optimization
+- `2022_DiSCo-SLAM` · 回环检测 / 多机协同 / 嵌入式实时
+- **自述差异**：IMULTANEOUS localization and mapping (SLAM) is a fundamental capability in robot navigation, in which a mobile robot maps an unknown environment, while using relative measurements of that environment as the basis for localizing itself. Although many successful single-robot SLAM solutions have been proposed, fast and accurate scene reconstruction with a robot team remains an open problem. In multi-robot SLAM, a group 
+
+### DynaVINS: A Visual-Inertial SLAM for Dynamic Environments
+- `2022_DynaVINS__A_Visual-Inertial_SLAM_for_Dynamic_Environment` · 优化后端 / IMU预积分 / 视觉-惯性耦合 / 回环检测 / 动态环境 / GNSS融合
+- **自述差异**：summarized as follows:
+
+\- The robust VI-SLAM approach is proposed to handle dominant, undefined dynamic objects that cannot be solved solely by learning-based or vision-only methods. \- A novel bundle adjustment (BA) pipeline is proposed for simultaneously estimating camera poses and discarding the features from the dynamic objects that deviate significantly from the motion prior. \- A robust global optimization wit
+
+### EKF-LOAM: An Adaptive Fusion of LiDAR SLAM With Wheel Odometry and Inertial Data for Confined Spaces With Few Geometric Features
+- `2022_EKF-LOAM__An_Adaptive_Fusion_of_LiDAR_SLAM_With_Wheel_Od` · 滤波后端 / 激光里程计 / GNSS融合 / 嵌入式实时
+- **自述差异**：common in the last decades. An example is the exploration of confined environments, where autonomous agents mitigate the exposure of human operators to risks associated with such spaces. In this context, a mobile robot must be able to estimate its location, map the surrounding environment, and plan paths to the desired goal, employing navigation and control strategies to avoid obstacles and other possible causes of d
+
+### Edge Robotics: Edge-Computing-Accelerated Multirobot Simultaneous Localization and Mapping
+- `2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim` · 深度学习前端 / 多机协同 / 嵌入式实时
+- **自述差异**：S A KEY-ENABLING technology in robotics, simultaneous localization and mapping (SLAM) is a
+
+Manuscript received 1 October 2021; revised 24 December 2021; accepted 19 January 2022. Date of publication 26 January 2022; date of current version 25 July 2022. This work was supported in part by the National Science Foundation of China under Grant U20A20159 and Grant 61972432; in part by the Program for Guangdong Introducin
+
+### Efficient and Accurate Tightly-Coupled Visual-Lidar SLAM
+- `2022_Efficient_and_Accurate_Tightly-Coupled_Visual-Lidar_SLAM` · 特征法 / 优化后端 / 视觉-惯性耦合 / 基础模型 · 数据集: KITTI
+- **自述差异**：## A. SLAM System Diagram
+
+Figure 1 illustrates the proposed vision-lidar SLAM system. The input is a pair of a lidar point cloud and stereo camera images, and the output is the camera poses, a bunch of 3d visual map points, and the accumulated lidar maps.
+
+### Elasticity Meets Continuous-Time: Map-Centric Dense 3D LiDAR SLAM
+- `2022_Elasticity_Meets_Continuous-Time__Map-Centric_Dense_3D_L` · 特征法 / 点云地图结构 / 视觉-惯性耦合 / 回环检测 / 稠密重建
+- **自述差异**：as follows. 1) We introduce a new constraint for local CT trajectory optimization to operate like a map-centric approach. 2) We detail the realization of a new CT trajectory optimization approach which is dedicated to the map-centric approach, improving local trajectory estimation accuracy.
+
+### Event-Based Line SLAM in Real-Time
+- `2022_Event-Based_Line_SLAM_in_Real-Time` · 滤波后端 / 优化后端 / 事件相机 / 嵌入式实时
+- **自述差异**：Our method follows the PTAM philosophy of [5] and is aimed at human-made scenarios where straight geometrical shapes are prominent. It has two modules running in parallel at significantly different speeds and sharing information through the ROS environment. The tracking module (Fig.
+
+### Event-Based Vision: A Survey
+- `2022_EventSurvey` · 事件相机
+- **自述差异**：Guillermo Gallego , SeniorMember, IEEE, Tobi Delbruck€ , Fellow, IEEE, Garrick Orchard Chiara Bartolozzi , Member, IEEE, Brian Taba, Andrea Censi, Stefan Leutenegger Andrew J. Davison, Jorg Conradt€ , SeniorMember, IEEE, Kostas Daniilidis , Fellow, IEEE, and Davide Scaramuzza , SeniorMember, IEEE
+
+Abstract—Event cameras are bio-inspired sensors that differ from conventional frame cameras: Instead of capturing images 
+
+### Exploring Event Camera-Based Odometry for Planetary Robots
+- `2022_Exploring_Event_Camera-Based_Odometry_for_Planetary_Robo` · 滤波后端 / 优化后端 / 视觉-惯性耦合 / 事件相机
+- **自述差异**：We introduce EKLT-VIO, an event-based VIO method that combines an accurate state-of-the-art event-based feature tracker EKLT with an EKF backend. It outperforms stateof-the-art event- and frame-based methods, reducing the overall tracking error by 32%. We show accurate and robust tracking even in rotationonly sequences, which are closest to the hover-like scenarios experienced by Mars helicopters, outperforming optim
+
+### FAST-LIO2: Fast Direct LiDAR-Inertial Odometry
+- `2022_FAST-LIO2` · 滤波后端 / 点云地图结构 / LiDAR-惯性耦合 / 基础模型 / 嵌入式实时
+- **自述差异**：as follows. 1) We develop an incremental k-d tree data structure, incremental k-d tree (ikd-Tree), to represent a large dense point cloud map efficiently. Besides efficient nearest neighbor search, the new data structure supports incremental map update (i.e., point insertion, on-tree downsampling, and points delete) and dynamic rebalancing at minimal computation cost.
+
+### FAST-LIVO: Fast and Tightly-coupled Sparse-Direct LiDAR-Inertial-Visual Odometry
+- `2022_FAST-LIVO` · 特征法 / 直接法 / 滤波后端 / 激光里程计 / LiDAR-惯性耦合 / 视觉-惯性耦合 / LiDAR-视觉融合 / 嵌入式实时
+- **自述差异**：listed as below:
+
+1) A compact LiDAR-inertial-visual odometry framework, which builds on two direct and tightly-coupled odometry systems: a LIO subsystem and a VIO subsystem. These two subsystems estimates the system state jointly by fusing their respective LiDAR or visual data with IMUs. 2) A direct and efficient VIO subsystem that maximally re-use the point cloud map built in LIO subsystem.
+
+### Fast and Robust Registration of Partially Overlapping Point Clouds
+- `2022_Fast_and_Robust_Registration_of_Partially_Overlapping_Po` · 深度学习前端 / 基础模型 / 多机协同 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：summarised as:
+
+\- A computationally efficient point-wise feature encoder that allows identifying correspondences between point clouds;
+
+\- A graph neural network that provides self- and crossattention between point clouds and improves the quality of correspondences;
+
+\- A novel registration method for point clouds that is robust to partially-overlapping point clouds and capable of operating in real-time;
+
+\- A new s
+
+### Faster-LIO: Lightweight Tightly Coupled Lidar-Inertial Odometry Using Parallel Sparse Incremental Voxels
+- `2022_Faster-LIO` · 激光里程计 / 点云地图结构 / LiDAR-惯性耦合 / LiDAR-视觉融合 / 基础模型 / 嵌入式实时
+- **自述差异**：IGH-SPEED point cloud registration and threemany manufactured products-from high-definition maps (HD maps) [1]–[3] to autonomous vehicles [4], [5]. The most common real-time lidar tracking methods like LOAM [6], LeGO-LOAM [7] and BALM [8] require about 100 milliseconds per iteration to process a lidar scan. Most of the conventional spinning lidars provide multiple lines scans at this speed.
+
+### Flexible and Resource-Efficient Multi-Robot Collaborative Visual-Inertial-Range Localization
+- `2022_Flexible_and_Resource-Efficient_Multi-Robot_Collaborativ` · 优化后端 / 视觉-惯性耦合 / 回环检测 / 多机协同 / 嵌入式实时
+- **自述差异**：\- a two-stage framework for accurate multi-robot relative and global localization, which loosely fuses the UWB and odometry data to correct the relative transformation in the long term while tightly fuses all onboard sensors for accurate short-term odometry;
+
+\- a relative estimation method based on [6] improved with a spatially calibrated model of UWB measurement and a motion-compensated weighting scheme;
+
+\- a so-
+
+### FusionPortable: A Multi-Sensor Campus-Scene Dataset for Evaluation of Localization and Mapping Accuracy on Diverse Platforms
+- `2022_FusionPortable__A_Multi-Sensor_Campus-Scene_Dataset_for_` · 基础模型 / 事件相机 / GNSS融合 / 嵌入式实时
+- **自述差异**：presented threefold. First, a portable and versatile multi-sensor device is elaborately manufactured. Two RGB frame cameras are mounted on the left and right side, one high-frequency and high-precision IMU is mounted internally, and one RTK-GPS is installed on the top position.
+
+### GVINS: Tightly Coupled GNSS–Visual–Inertial Fusion for Smooth and Consistent State Estimation
+- `2022_GVINS` · 特征法 / 优化后端 / 视觉-惯性耦合 / GNSS融合 / 嵌入式实时
+- **自述差异**：The structure of our proposed system is illustrated in Fig. 5. The estimator takes raw GNSS, IMU, and camera measurements as input and applies necessary preprocessing on each type of measurement afterwards.
+
+### In<sub>s</sub>t<sub>a</sub>nt N<sub>eu</sub>r<sub>a</sub>l Gr<sub>ap</sub>hi<sub>cs</sub> Primitiv<sub>es</sub> with <sub>a</sub> M<sub>u</sub>ltir<sub>eso</sub>l<sub>u</sub>ti<sub>o</sub>n H<sub>as</sub>h En<sub>co</sub>din<sub>g</sub>
+- `2022_InstantNGP` · 特征法 / 神经隐式场 / 深度学习前端 / 基础模型 / 稠密重建 / 嵌入式实时
+- **自述差异**：THOMAS MÜLLER<sub>,</sub> NVIDIA<sub>,</sub> S<sub>w</sub>i<sub>tzer</sub>l<sub>an</sub>d ALEX EVANS<sub>,</sub> NVIDIA<sub>,</sub> U<sub>n</sub>it<sub>e</sub>d Ki<sub>ng</sub>d<sub>om</sub> CHRISTOPH SCHIED<sub>,</sub> NVIDIA<sub>,</sub> USA ALEXANDER KELLER<sub>,</sub> NVIDIA<sub>,</sub> G<sub>ermany</sub>
+
+T<sub>ra</sub>i<sub>ne</sub>d f<sub>or</sub> 1 <sub>secon</sub>d 
+15 <sub>secon</sub>d<sub>s</sub> 
+1 <sub>se
+
+### Kimera-Multi: Robust, Distributed, Dense Metric-Semantic SLAM for Multi-Robot Systems
+- `2022_Kimera-Multi` · 优化后端 / 视觉-惯性耦合 / 回环检测 / 语义建图 / 多机协同 / 稠密重建 / 全局一致性 / 嵌入式实时
+- **自述差异**：Kimera-Multi, a fully distributed system for multi-robot dense metric-semantic SLAM. Our system enables a team of robots to collaboratively estimate a semantically annotated 3-D mesh model of the environment in real time. Each robot runs Kimera [16] to process onboard visual-inertial sensor data and obtain local trajectory and 3-D mesh estimates.
+
+### LAMP 2.0: A Robust Multi-Robot SLAM System for Operation in Challenging Large-Scale Underground Environments
+- `2022_LAMP2` · 优化后端 / 视觉-惯性耦合 / 回环检测 / 深度学习前端 / 多机协同 / 嵌入式实时
+- **自述差异**：1) A computationally efficient and outlier-resilient centralized multi-robot SLAM system that is adaptable to different input odometry sources, developed in the context ofthe DARPA Subterranean Challenge for operation in largescale underground environments. The system includes the following improved modules:
+
+a) A robust and scalable loop closure detection module that is able to handle and prioritize a rapidly growin
+
+### LCDNet: Deep Loop Closure Detection and Point Cloud Registration for LiDAR SLAM
+- `2022_LCDNet` · 视觉-惯性耦合 / 回环检测 / 深度学习前端 / 基础模型 / GNSS融合 / 嵌入式实时
+- **自述差异**：follows. 1) We propose LCDNet, a novel approach for loop closure detection that effectively detects reverse loops. 2) We propose an end-to-end trainable relative pose regression network based on the UOT theory that can register two point clouds that only partially overlap and with an arbitrary initial misalignment.
+
+### Large-Scale Autonomous Flight With Real-Time Semantic SLAM Under Dense Forest Canopy
+- `2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL` · 语义建图 / GNSS融合 / 嵌入式实时
+- **自述差异**：In this section, we will introduce the individual modules in our system. The system diagram is shown in Fig. 3.
+
+### Lidar-based Simultaneous Localization and Mapping in Dynamic Environments
+- `2022_LiDAR-SLAM-Survey` · 特征法 / 优化后端 / 激光里程计 / 回环检测 / 动态环境 · 数据集: KITTI
+- **自述差异**：Simultaneous localization and mapping is an important feature of autonomous vehicles [1], and it is a prerequisite for path planning and control of the vehicles. In recent years, many SLAM methods based on vision [2] and Lidar [3] have been proposed in the literature. Compared with cameras, Lidar can provide more accurate depth information and is insensitive to lighting conditions.
+
+### The Revisiting Problem in Simultaneous Localization and Mapping: A Survey on Visual Loop Closure Detection
+- `2022_LoopClosure-Survey` · 视觉-惯性耦合 / 回环检测 / 动态环境
+- **自述差异**：OOP closure detection, which has long been acknowlneous localization and mapping (SLAM) system, historically represents a relevant and challenging task for the robotic community. Originally being introduced as “the revisiting problem,” it concerns the robot’s ability to recognize whether the sensory data just captured matches with any already collected, i.e., a previously visited area, aiming for SLAM to revise its p
+
+### M2DGR: A Multi-Sensor and Multi-Scenario SLAM Dataset for Ground Robots
+- `2022_M2DGR` · 视觉-惯性耦合 / LiDAR-视觉融合 / 事件相机 / GNSS融合 / 嵌入式实时 · 数据集: M2DGR
+- **自述差异**：NTELLIGENT ground robots have been emerging in a wide range of applications such as logistics, security, warehouses, cleaning, and food delivery [1]. In those applications, the robots need to work reliably in indoor or a mixture of indoor and outdoor scenes. SLAM (Simultaneous Localization and Mapping) is the critical enabling technology that allows those robots to navigate in those complex scenes, which can construc
+
+### MR-TopoMap: Multi-Robot Exploration Based on Topological Map in Communication Restricted Environment
+- `2022_MR-TopoMap__Multi-Robot_Exploration_Based_on_Topological` · 多机协同 / 嵌入式实时
+- **自述差异**：This work proposes a multi-robot exploration system utilizing a topological map. The system’s overview is illustrated in Fig. 1.
+
+### 2022 Motion planning and control for mobile robot navigation 
+- `2022_Motion_planning_and_control_for_mobile_robot_navigation_` · 深度学习前端 / 基础模型
+- **自述差异**：Moving in complex environments is an essential capability of intelligent mobile robots. Decades of research and engineering have been dedicated to developing sophisticated navigation systems to move mobile robots from one point to another. Despite their overall success, a recently emerging research thrust is devoted to developing machine learning techniques to address the same problem, based in large part on the succ
+
+### NDT-LOAM: A Real-Time Lidar Odometry and Mapping With Weighted NDT and LFA
+- `2022_NDT-LOAM__A_Real-Time_Lidar_Odometry_and_Mapping_With_We` · 特征法 / 激光里程计 / 多机协同 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：A complete SLAM generally includes two parts: frontend odometry and back-end optimization. The paper focuses on the front-end, and presents an efficient Lidar odometry (NDT-LOAM). The system architecture is presented in Fig.
+
+### NICE-SLAM: Neural Implicit Scalable Encoding for SLAM
+- `2022_NICE-SLAM`
+- **自述差异**：Neural implicit representations have recently shown encouraging results in various domains, including promising progress in simultaneous localization and mapping (SLAM). Nevertheless, existing methods produce oversmoothed scene reconstructions and have difficulty scaling up to large scenes. These limitations are mainly due to their simple fully-connected network architecture that does not incorporate local informatio
+
+### OverlapTransformer: An Efficient and Yaw-Angle-Invariant Transformer Network for LiDAR-Based Place Recognition
+- `2022_OverlapTransformer` · 回环检测 / 深度学习前端 / 基础模型 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：a lightweight transformer neural network that exploits only depth information of range images to achieve place recognition. Our approach is very fast to execute and at the same time yields very good recognition results. Based on the attention mechanism of the Transformer [17] and the NetVLAD head [1], our proposed OverlapTransformer compresses LiDAR range images into global descriptors.
+
+### P<sup>3</sup>-VINS: Tightly-Coupled PPP/INS/Visual SLAM Based on Optimization Approach
+- `2022_P___3__-VINS__Tightly-Coupled_PPP_INS_Visual_SLAM_Based_` · 优化后端 / 视觉-惯性耦合 / GNSS融合
+- **自述差异**：In this section, the coordinate frames and notations of our paper are presented first. Next, we introduce the overview of $\mathrm { P ^ { 3 } - V I N S }$ including its states and factor graph. At last, we focus on describing three factors of $\mathrm { P ^ { 3 } - V I N S }$ , which are pseudorange factor, carrier phase factor, and phase ambiguity factor.
+
+### Plenoxels: Radiance Fields without Neural Networks
+- `2022_Plenoxels` · 点云地图结构 / 神经隐式场 / 深度学习前端
+- **自述差异**：We introduce Plenoxels (plenoptic voxels), a system for photorealistic view synthesis. Plenoxels represent a scene as a sparse 3D grid with spherical harmonics. This representation can be optimized from calibrated images via gradient methods and regularization without any neural components.
+
+### R<sup>3</sup>LIVE: A Robust, Real-time, RGB-colored, LiDAR-Inertial-Visual tightly-coupled state Estimation and mapping package
+- `2022_R3LIVE` · 直接法 / 激光里程计 / LiDAR-惯性耦合 / 视觉-惯性耦合 / LiDAR-视觉融合 / 稠密重建 / 嵌入式实时
+- **自述差异**：‚ We propose a real-time simultaneous localization, mapping, and colorization framework. The presented framework consists of a LiDAR-inertial odometry (LIO) for reconstructing geometry structure and a visual-inertial odometry (VIO) for texture rendering. The overall system is able to reconstruct a dense, 3D, RGB-colored point cloud of the environment in real-time (Fig.
+
+### RDC-SLAM: A Real-Time Distributed Cooperative SLAM System Based on 3D LiDAR
+- `2022_RDC-SLAM__A_Real-Time_Distributed_Cooperative_SLAM_Syste` · 回环检测 / 多机协同 / 全局一致性 / 嵌入式实时
+- **自述差异**：as follows:
+
+1) A real-time distributed cooperative SLAM system based on 3D LiDAR is proposed and open-sourced.<sup>1</sup>
+
+2) A well-designed and easy-to-deploy communication protocol for the data-efficient distributed SLAM system is generated. 3) The proposed system is tested and verified by real-world experiments. The organization of this paper is as follows.
+
+### RGB-D Inertial Odometry for a Resource-Restricted Robot in Dynamic Environments
+- `2022_RGB-D_Inertial_Odometry_for_a_Resource-Restricted_Robot_` · 特征法 / 优化后端 / IMU预积分 / 视觉-惯性耦合 / 深度学习前端 / 语义建图 / 动态环境 / 嵌入式实时
+- **自述差异**：as follows:
+
+1) An efficient optimization-based RGB-D inertial odometry is proposed to provide real-time state estimation results for resource-restricted robots in dynamic and complex environments. 2) Lightweight feature detection and tracking are proposed to cut the computing burden. In addition, dynamic feature recognition modules combining object detection and depth information are proposed to provide robust dynam
+
+### RGB-D SLAM in Dynamic Environments Using Point Correlations
+- `2022_RGB-D_SLAM_in_Dynamic_Environments_Using_Point_Correlati` · 动态环境
+- **自述差异**：as follows:
+
+A segmentation method using point correlations is proposed to separate static and dynamic points. It can exploit temporal information from multiple frames to extend the captured view and is not limited to RGB-D sensors as long as the sensor can provide point-correlation measurements. A SLAM method using RGB-D sensors is proposed to improve the robustness and accuracy of motion estimation in dynamic envir
+
+### Robust Odometry and Mapping for Multi-LiDAR Systems With Online Extrinsic Calibration
+- `2022_Robust_Odometry_and_Mapping_for_Multi-LiDAR_Systems_With` · 优化后端 / 激光里程计 / 嵌入式实时
+- **自述差异**：We make following three assumptions to simplify the system design. 1) LiDARs are synchronized, meaning that the temporal latency among different LiDARs is almost zero. 2) The platform undergoes sufficient rotational and translational motion in the period of calibration initialization.
+
+### Robust Real-time LiDAR-inertial Initialization
+- `2022_Robust_Real-time_LiDAR-inertial_Initialization` · LiDAR-惯性耦合 / 嵌入式实时
+- **自述差异**：highlighted as follows:
+
+• We propose an efficient, accurate, hardware-free temporal calibration method based on cross-correlation and a unified temporal-spatial optimization, to estimate unknown but constant LiDAR-inertial temporal offset. • We propose a novel optimization formulation to perform spatial initialization and a method to assess the degree of excitation in data. By further aligning states estimated from 
+
+### SO-SLAM: Semantic Object SLAM With Scale Proportional and Symmetrical Texture Constraints
+- `2022_SO-SLAM__Semantic_Object_SLAM_With_Scale_Proportional_an` · 语义建图
+- **自述差异**：OR decades, robotic researchers have been exploring the environments autonomously in an open world. Imagine a long-term service robot working in an indoor human-robot coexisting scenarios-homes, museums, offices, etc. To respond to human instructions and carry out tasks, it needs the abilities of robust mapping and localization, understanding environments semantically, and detecting environmental changes for lifelong
+
+### Scan Context++: Structural Place Recognition Robust to Rotation and Lateral Variations in Urban Environments
+- `2022_Scan_Context____Structural_Place_Recognition_Robust_to_R` · 激光里程计 / 视觉-惯性耦合 / 回环检测
+- **自述差异**：the following. 1) Robustness to Lateral/Rotational Changes: Missing lateral invariance may be a critical issue in an urban environment where lane-level change is inevitable. To resolve this limitation, we generalized the previous descriptor to include both lateral and rotational robustness simultaneously.
+
+### UV-SLAM: Unconstrained Line-Based SLAM Using Vanishing Points for Structural Mapping
+- `2022_UV-SLAM__Unconstrained_Line-Based_SLAM_Using_Vanishing_P` · 特征法 / 优化后端 / IMU预积分
+- **自述差异**：as follows:
+
+\- To the best of our knowledge, the proposed UV-SLAM is the first optimization-based monocular SLAM using vanishing point measurements for structural mapping without any restriction such as camera motion and environment. In particular, our algorithm does not use the Manhattan world assumption in the process ofextracting the vanishing points and using them as measurements. \- We define a novel residual t
+
+### Unsupervised Estimation of Monocular Depth and VO in Dynamic Environments via Hybrid Masks
+- `2022_Unsupervised_Estimation_of_Monocular_Depth_and_VO_in_Dyn` · 深度学习前端 / 基础模型 / 动态环境 / 全局一致性 · 数据集: KITTI
+- **自述差异**：ception [1]–[4]. As we know, a reliable sensing method is necessary as it builds a solid foundation for the following accurate control and smart decision-making [5]–[10]. Prior visualbased works estimate depth through geometrical clues, and thus they are sensitive to changing environments [11], [12].
+
+### VECtor: A Versatile Event-Centric Benchmark for Multi-Sensor SLAM
+- `2022_VECtor__A_Versatile_Event-Centric_Benchmark_for_Multi-Se` · 事件相机
+- **自述差异**：the first complete set of benchmark datasets captured with a multi-sensor setup containing an event-based stereo camera, a regular stereo camera, multiple depth sensors, and an inertial measurement unit. The setup is fully hardware-synchronized and underwent accurate extrinsic calibration. All sequences come with ground truth data captured by highly accurate external reference devices such as a motion capture system.
+
+### Vox-Fusion: Dense Tracking and Mapping with Voxel-based Neural Implicit Representation
+- `2022_Vox-Fusion` · 特征法 / 点云地图结构 / 视觉-惯性耦合 / 神经隐式场 / 稠密重建 / 嵌入式实时
+- **自述差异**：1. We propose a novel fusion system for real-time implicit tracking and mapping. Our Vox-Fusion combines voxel embeddings indexed by an explicit octree and a neural implicit network to achieve scalable implicit scene reconstruction with sufficient details.
+
+### WF-SLAM: A Robust VSLAM for Dynamic Scenarios via Weighted Features
+- `2022_WF-SLAM__A_Robust_VSLAM_for_Dynamic_Scenarios_via_Weight` · 特征法 / 语义建图 / 动态环境 · 数据集: TUM
+- **自述差异**：follows:
+
+• We design and implement a dynamic target detection framework that combines the advantages of epipolar constraints [11] and semantic segmentation. It tightly couples semantic and geometric information, embeds the result of semantic segmentation into the calculation process of geometric segmentation, and enables accurate detection of dynamic targets. • We integrate the detection algorithm into the ORB-SLAM2
+
+### Wildcat: Online Continuous-Time 3D Lidar-Inertial SLAM
+- `2022_Wildcat` · LiDAR-惯性耦合 / 视觉-惯性耦合 / 多机协同 / GNSS融合 / 嵌入式实时
+- **自述差异**：the following:
+
+• We present Wildcat, a highly robust and versatile state-ofthe-art lidar-inertial SLAM system. This paper provides a detailed technical description of Wildcat beyond the broad non-technical overview previously presented in [6]. • We demonstrate the robustness and versatility of Wildcat through carefully designed experiments.
+
+### 2022 YOLO-SLAM  A semantic SLAM system towards dynamic enviro
+- `2022_YOLO-SLAM__A_semantic_SLAM_system_towards_dynamic_enviro` · 特征法 / 深度学习前端 / 基础模型 / 语义建图 / 动态环境 / 嵌入式实时 · 数据集: TUM
+- **自述差异**：summarized as follows:
+
+1. A lightweight Darknet19-YOLOv3 object detection network is designed and constructed into the SLAM system, which is able to generate essential semantic information for locating dynamic objects. 2.
+
+
+---
+
+## 2023 年
+
+### 3D G<sub>auss</sub>i<sub>a</sub>n S<sub>p</sub>l<sub>a</sub>tin<sub>g</sub> f<sub>o</sub>r R<sub>ea</sub>l-Tim<sub>e</sub> R<sub>a</sub>di<sub>a</sub>n<sub>ce</sub> Fi<sub>e</sub>ld R<sub>e</sub>nd<sub>e</sub>rin<sub>g</sub>
+- `2023_3DGS` · 视觉-惯性耦合 / 嵌入式实时
+- **自述差异**：BERNHARD KERBL<sup>∗</sup><sub>,</sub> I<sub>nr</sub>i<sub>a,</sub> U<sub>n</sub>i<sub>vers</sub>ité Côt<sub>e</sub> d’A<sub>zur,</sub> F<sub>rance</sub> GEORGIOS KOPANAS<sup>∗</sup><sub>,</sub> I<sub>nr</sub>i<sub>a,</sub> U<sub>n</sub>i<sub>vers</sub>ité Côt<sub>e</sub> d’A<sub>zur,</sub> F<sub>rance</sub> THOMAS LEIMKÜHLER<sub>,</sub> M<sub>ax-</sub>Pl<sub>anc</sub>k<sub>-</sub>I<sub>nst</sub>i<sub>tut</sub> f<sub
+
+### 2023 3D Object Detection for Autonomous Driving  A Comprehens
+- `2023_3D_Object_Detection_for_Autonomous_Driving__A_Comprehens` · 深度学习前端
+- **自述差异**：follows:
+
+– We provide a comprehensive review of the 3D object detection methods from different perspectives, including detection from different sensory inputs (LiDAR-based, camera-based, and multi-modal detection), detection from temporal sequences, label-efficient detection, as well as the applications of 3D object detection in driving systems. – We summarize 3D object detection approaches structurally and hierarch
+
+### 4DRadarSLAM: A 4D Imaging Radar SLAM System for Large-scale Environments based on Pose Graph Optimization
+- `2023_4DRadarSLAM__A_4D_Imaging_Radar_SLAM_System_for_Large-sc` · 优化后端 / 激光里程计 / 回环检测 / GNSS融合 / 嵌入式实时
+- **自述差异**：• A full SLAM system is proposed for 4D imaging Radar. We open-source the code to promote related research. • We take the point measurement probability distribution into account in GICP for the front end (APDGICP).
+
+### 4D Radar-Based Pose Graph SLAM With Ego-Velocity Pre-Integration Factor
+- `2023_4D_Radar-Based_Pose_Graph_SLAM_With_Ego-Velocity_Pre-Int` · 优化后端 / IMU预积分
+- **自述差异**：The proposed 4DRaSLAM system is shown in Fig. 2. It consists of three modules: 4D radar filter, ego-velocity estimation, and pose graph optimization.
+
+### AirVO: An Illumination-Robust Point-Line Visual Odometry
+- `2023_AirVO__An_Illumination-Robust_Point-Line_Visual_Odometry` · 特征法 / 滤波后端 / 优化后端 / 深度学习前端 / 嵌入式实时
+- **自述差异**：as follows:
+
+• The key contribution in this paper is that we propose a novel hybrid VO system that can effectively handle varying illumination conditions. Our proposed system combines the efficiency of traditional optimization techniques with the robustness of learning-based methods. To our best knowledge, AirVO is the first visual odometry that employs both learning-based feature detection and matching algorithms an
+
+### An Object SLAM Framework for Association, Mapping, and High-Level Tasks
+- `2023_An_Object_SLAM_Framework_for_Association__Mapping__and_H` · 特征法 / 回环检测 / 语义建图 / 嵌入式实时
+- **自述差异**：summarized as follows. 1) We propose an ensemble data association strategy that can effectively aggregate different measurements of the objects to improve association accuracy. 2) We propose an object pose estimation framework based on the iForest and line alignment, which is robust to outliers and can accurately estimate the pose and size of objects.
+
+### BEVPlace: Learning LiDAR-based Place Recognition using Bird’s Eye View Images
+- `2023_BEVPlace__Learning_LiDAR-based_Place_Recognition_using_B` · 回环检测
+- **自述差异**：Place recognition is a key module for long-term SLAM systems. Current LiDAR-based place recognition methods usually use representations ofpoint clouds such as unordered points or range images. These methods achieve high recall rates ofretrieval, but their performance may degrade in the case ofview variation or scene changes.
+
+### BoW3D: Bag of Words for Real-Time Loop Closing in 3D LiDAR SLAM
+- `2023_BoW3D__Bag_of_Words_for_Real-Time_Loop_Closing_in_3D_LiD` · 优化后端 / 激光里程计 / 回环检测 / 全局一致性 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：as follows:
+
+ 
+Fig. 1. The workflow of our system mainly consists of three modules: (i) Feature Extraction; (ii) Odometry and Mapping of A-LOAM; (iii) Loop Closing.
+
+### 2023 Co-SLAM
+- `2023_Co-SLAM` · 特征法 / 优化后端 / 点云地图结构 / 基础模型 / 嵌入式实时 · 数据集: ScanNet, TUM, Replica
+- **自述差异**：to design a joint coordinate and sparse grid encoding for input points that brings together the benefits of both worlds to the real-time SLAM framework. On the one hand, the smoothness and coherence priors provided by coordinate encodings (we use one-blob [16] encoding), and on the other hand the optimization speed and local details of sparse feature encodings (we use hash grid [15]), resulting in more robust camera 
+
+### 2023 Co-SLAM  Joint Coordinate and Sparse Parametric Encoding
+- `2023_Co-SLAM__Joint_Coordinate_and_Sparse_Parametric_Encoding` · 特征法 / 优化后端 / 点云地图结构 / 基础模型 / 嵌入式实时 · 数据集: ScanNet, TUM, Replica
+- **自述差异**：to design a joint coordinate and sparse grid encoding for input points that brings together the benefits of both worlds to the real-time SLAM framework. On the one hand, the smoothness and coherence priors provided by coordinate encodings (we use one-blob [16] encoding), and on the other hand the optimization speed and local details of sparse feature encodings (we use hash grid [15]), resulting in more robust camera 
+
+### Continuous-Time Fixed-Lag Smoothing for LiDAR-Inertial-Camera SLAM
+- `2023_Continuous-Time_Fixed-Lag_Smoothing_for_LiDAR-Inertial-C` · 优化后端 / LiDAR-惯性耦合 / GNSS融合 / 嵌入式实时
+- **自述差异**：follows. 1) We adopt continuous-time fixed-lag smoothing method for multisensor fusion in a factor-graph optimization framework. Specifically, we estimate B-spline-based continuous-time trajectory within a constant size of sliding window by fusing asynchronous heterogeneous sensor measurements published at various frequencies and different time instants.
+
+### D-LIOM: Tightly-Coupled Direct LiDAR-Inertial Odometry and Mapping
+- `2023_D-LIOM__Tightly-Coupled_Direct_LiDAR-Inertial_Odometry_a` · 特征法 / 优化后端 / IMU预积分 / LiDAR-惯性耦合 / 嵌入式实时
+- **自述差异**：follows:
+
+1) At the front-end, we propose a tightly-coupled direct LiDAR-Inertial odometry, which registers scans to probabilistic submaps in a direct manner instead of employing feature extraction and matching, combines the IMU pre-integration, the LiDAR odometry, and the estimated gravity priori into a local factor graph and jointly estimates the associated states with low drifts in real time. 2) At the back-end, w
+
+### DGM-VINS: Visual–Inertial SLAM for Complex Dynamic Environments With Joint Geometry Feature Extraction and Multiple Object Tracking
+- `2023_DGM-VINS__Visual_Inertial_SLAM_for_Complex_Dynamic_Envir` · 特征法 / IMU预积分 / 语义建图 / 动态环境
+- **自述差异**：summarized as follows. 1) To overcome the limitations of geometric constraints in complex scenes and camera motion, we propose a joint geometric dynamic feature extraction module (JGDFE), which leverages the consistency of geometric constraints among static feature points between two frames. The proposed JGDFE takes full advantage of vector consistency and epipolar constraints by using density-based spatial clusterin
+
+### DINOv2: Learning Robust Visual Features without Supervision
+- `2023_DINOv2` · 深度学习前端 / 基础模型
+- **自述差异**：tailored toward stabilizing and accelerating discriminative self-supervised learning when scaling in model and data sizes. These improvements make our approach around 2× faster and require 3× less memory than similar discriminative self-supervised methods, allowing us to leverage longer training with larger batch sizes. Regarding pretraining data, we have built an automatic pipeline to filter and rebalance datasets f
+
+### Deep Patch Visual Odometry
+- `2023_DPVO` · 优化后端 / 视觉-惯性耦合 / 深度学习前端
+- **自述差异**：We propose Deep Patch Visual Odometry (DPVO), a new deep learning systemfor monocular Visual Odometry (VO). DPVO uses a novel recurrent network architecture designed for tracking image patches across time. Recent approaches to VO have significantly improved the state-of-the-art accuracy by using deep networks to predict dense flow between video frames.
+
+### 2023 Direct LiDAR-Inertial Odometry  Lightweight LIO with Con
+- `2023_Direct_LiDAR-Inertial_Odometry__Lightweight_LIO_with_Con` · 激光里程计 / LiDAR-惯性耦合 / 嵌入式实时
+- **自述差异**：## A. System Overview
+
+DLIO is a lightweight LIO algorithm that generates robot state estimates and geometric maps through a unique architecture that contains two main components with three innovations (Fig. 2).
+
+### Dynam-SLAM: An Accurate, Robust Stereo Visual-Inertial SLAM Method in Dynamic Environments
+- `2023_Dynam-SLAM` · 优化后端 / 视觉-惯性耦合 / 回环检测 / 基础模型 / 动态环境 / 事件相机 / GNSS融合 · 数据集: EuRoC
+- **自述差异**：N THE past few decades, the vision-based simultaneous localization and mapping (SLAM) technique has been widely investigated [1], [2]. Vision sensors, such as monocular, binocular, RGB-D, and event cameras, are superior to lidar in terms of size, power, and cost. At the same time, the vision-centric multisensor (e.g., inertial measurement unit (IMU), GPS, and wheel odometer) fusion SLAM has also been rapidly develope
+
+### Dynamic SLAM: A Visual SLAM in Outdoor Dynamic Scenes
+- `2023_Dynamic_SLAM__A_Visual_SLAM_in_Outdoor_Dynamic_Scenes` · 特征法 / 深度学习前端 / 语义建图 / 动态环境 · 数据集: KITTI
+- **自述差异**：First, the framework of the article is introduced in Section III-A. Section III-B introduces the semantic segmentation method. In Section III-C, the geometric method is introduced; and finally, the fusion method is introduced.
+
+### DytanVO: Joint Refinement of Visual Odometry and Motion Segmentation in Dynamic Environments
+- `2023_DytanVO__Joint_Refinement_of_Visual_Odometry_and_Motion_` · 深度学习前端 / 语义建图 / 动态环境 / 嵌入式实时
+- **自述差异**：threefold:
+
+• A novel learning-based VO is introduced to leverage the interdependence among camera ego-motion, optical flow and motion segmentation. • We introduce an iterative framework where both egomotion estimation and motion segmentation can converge quickly within time constraints for real-time applications. • Among learning-based VO solutions, our method achieves state-of-the-art performance in real-world dyna
+
+### EPLF-VINS: Real-Time Monocular Visual-Inertial SLAM With Efficient Point-Line Flow Features
+- `2023_EPLF-VINS__Real-Time_Monocular_Visual-Inertial_SLAM_With` · 视觉-惯性耦合 / 深度学习前端 / 嵌入式实时
+- **自述差异**：IMULTANEOUS localization and mapping (SLAM) tech-S nology is crucial in autonomous driving, unmanned aerial vehicles, robotics, and augmented reality. The inherent characteristics between different sensors make the multiple-sensor fusion SLAM technique with complementary advantages a dominant research direction. Visual-inertial SLAM navigation systems (VINS), which are low-cost and lightweight compared with other mul
+
+### ESLAM: Efficient Dense SLAM System Based on Hybrid Representation of Signed Distance Fields
+- `2023_ESLAM` · 神经隐式场 / 稠密重建 · 数据集: Replica, ScanNet, TUM RGB-D
+- **自述差异**：We present ESLAM, an efficient implicit neural representation methodfor Simultaneous Localization and Mapping (SLAM). ESLAM reads RGB-D frames with unknown camera poses in a sequential manner and incrementally reconstructs the scene representation while estimating the current camera position in the scene. We incorporate the latest advances in Neural Radiance Fields (NeRF) into a SLAM system, resulting in an efficient
+
+### ESVIO: Event-Based Stereo Visual Inertial Odometry
+- `2023_ESVIO` · 优化后端 / 视觉-惯性耦合 / 事件相机 / 嵌入式实时
+- **自述差异**：summarized as follows:
+
+1) In order to achieve robust state estimation under aggressive motion and low-light scenarios, we propose the first purely event-based stereo inertial odometry (ESIO) pipeline with sliding windows graph-based optimization, and further extend it with image-aided (ESVIO) which tightly integrates stereo event streams, stereo image frames, and IMU together. 2) To tackle the problem of event-based
+
+### Efficient and Consistent Bundle Adjustment on Lidar Point Clouds
+- `2023_Efficient_and_Consistent_Bundle_Adjustment_on_Lidar_Poin` · 优化后端 / 基础模型 / 嵌入式实时
+- **自述差异**：IGHT detection and ranging (lidar) has become an essenof autonomy [1], [2]. Enabled by the direct, dense, active and accurate (DDAA) depth measurements, lidar sensors have the ability to build a dense and accurate 3-D map of the environment in real-time and at a relatively low computational cost. These unique advantages have made lidar sensors essential to a variety of applications that require real-time, dense, and 
+
+### GO-SLAM: Global Optimization for Consistent 3D Instant Reconstruction
+- `2023_GO-SLAM` · 特征法 / 优化后端 / 全局一致性 / 嵌入式实时
+- **自述差异**：Neural implicit representations have recently demonstrated compelling results on dense Simultaneous Localization And Mapping (SLAM) but suffer from the accumulation of errors in camera tracking and distortion in the reconstruction. Purposely, we present GO-SLAM, a deeplearning-based dense visual SLAM framework globally optimizing poses and 3D reconstruction in real-time. Robust pose estimation is at its core, support
+
+### Hilti-Oxford Dataset: A Millimeter-Accurate Benchmark for Simultaneous Localization and Mapping
+- `2023_Hilti-Oxford` · 特征法 · 数据集: Hilti, TUM, EuRoC, KITTI
+- **自述差异**：LAM research has made impressive progress, allowing the S transition from lab demonstrations to real-world deployment. Open-source datasets play a key role in this transition, as researchers can progressively improve and compare different SLAM solutions. The TUM [1], EuRoC [2], and KITTI [3] datasets have been a pillar in the robotics community, and their leaderboards are still motivating new and improved algorithms.
+
+### Hybrid CNN-Transformer Features for Visual Place Recognition
+- `2023_Hybrid_CNN-Transformer_Features_for_Visual_Place_Recogni` · 回环检测 / 深度学习前端 / 语义建图
+- **自述差异**：To improve feature robustness in scenes with appearance and viewpoint changes, we propose a Transformer-based place recognition architecture for feature embedding, which integrates local details, spatial relationships, and semantic information. Fig. 1 shows the overall flowchart of our method.
+
+### KISS-ICP: In Defense of Point-to-Point ICP – Simple, Accurate, and Robust Registration If Done the Right Way
+- `2023_KISS-ICP` · 激光里程计 / 基础模型
+- **自述差异**：a simple yet highly effective approach for building LiDAR odometry systems that can accurately compute a robot’s pose online while navigating through an environment. We identify the core components and properly evaluate the impact of different modules on such systems. We show that with the proper use of ICP that builds on basic reasoning about the system’s physics and the sensor data’s nature, we obtain competitive o
+
+### LightGlue: Local Feature Matching at Light Speed
+- `2023_LightGlue` · 深度学习前端
+- **自述差异**：We introduce LightGlue, a deep neural network that learns to match local features across images. We revisit multiple design decisions ofSuperGlue, the state ofthe art in sparse matching, and derive simple but effective improvements. Cumulatively, they make LightGlue more efficient – in terms ofboth memory and computation, more accurate, and much easier to train.
+
+### NeRF-LOAM: Neural Implicit Representation for Large-Scale Incremental LiDAR Odometry and Mapping
+- `2023_NeRF-LOAM` · 激光里程计 / 点云地图结构 / 神经隐式场 / 稠密重建
+- **自述差异**：Simultaneously odometry and mapping using LiDAR data is an important task for mobile systems to achieve full autonomy in large-scale environments. However, most existing LiDAR-based methods prioritize tracking quality over reconstruction quality. Although the recently developed neural radiance fields (NeRF) have shown promising advances in implicit reconstruction for indoor environments, the problem of simultaneous o
+
+### 2023 NeRF-SLAM
+- `2023_NeRF-SLAM` · 神经隐式场 / 稠密重建 / 嵌入式实时
+- **自述差异**：The main idea of our approach is to supervise a neural radiance field using the output from dense monocular SLAM. Dense monocular SLAM can estimate dense depth maps and camera poses, while also providing uncertainty estimates for both depths and poses. With this information, we can train a radiance field with a dense depth loss weighted by the depths’ marginal covariances.
+
+### 2023 NeRF-SLAM  Real-Time Dense Monocular SLAM with Neural Ra
+- `2023_NeRF-SLAM__Real-Time_Dense_Monocular_SLAM_with_Neural_Ra` · 神经隐式场 / 稠密重建 / 嵌入式实时
+- **自述差异**：The main idea of our approach is to supervise a neural radiance field using the output from dense monocular SLAM. Dense monocular SLAM can estimate dense depth maps and camera poses, while also providing uncertainty estimates for both depths and poses. With this information, we can train a radiance field with a dense depth loss weighted by the depths’ marginal covariances.
+
+### NeurAR: Neural Uncertainty for Autonomous 3D Reconstruction With Implicit Neural Representations
+- `2023_NeurAR__Neural_Uncertainty_for_Autonomous_3D_Reconstruct` · 神经隐式场 / 深度学习前端 / 稠密重建
+- **自述差异**：chosen as NBV. The process is repeated until a maximum length is reached. To move a robot to NBV, various path planning methods can be applied to navigate the robot.
+
+### OVD-SLAM: An Online Visual SLAM for Dynamic Environments
+- `2023_OVD-SLAM__An_Online_Visual_SLAM_for_Dynamic_Environments` · 特征法 / 深度学习前端 / 语义建图 / 动态环境 / 稠密重建 · 数据集: TUM RGB-D
+- **自述差异**：summarized as follows. 1) To reserve the background points in boxes, we propose a statistics-based segmentation algorithm to distinguish foreground points and background points. The method fully uses depth information from the RGB-D camera and priori information from YOLOv5.
+
+### Orbeez-SLAM: A Real-time Monocular Visual SLAM with ORB Features and NeRF-realized Mapping
+- `2023_Orbeez-SLAM__A_Real-time_Monocular_Visual_SLAM_with_ORB_` · 特征法 / 视觉-惯性耦合 / 神经隐式场 / 嵌入式实时
+- **自述差异**：threefold:
+
+• We propose Orbeez-SLAM, the first real-time monocular visual SLAM that is pre-training-free and provides dense maps, tailored for spatial AI applications. • By combining visual odometry and a fast NeRF framework, our method reaches real-time inference and produces dense maps. • We extensively validate Orbeez-SLAM with state-ofthe-art (SOTA) baselines on challenging benchmarks, showing superior quantitat
+
+### 2023 Point-LIO
+- `2023_Point-LIO` · LiDAR-惯性耦合 / 基础模型
+- **自述差异**：as follows: 1) We propose a point-wise LiDAR-inertial odometry (LIO) framework, which fuses a LiDAR point at its actual sampling time without accumulating into a frame. The elimination of points accumulation removes the in-frame motion distortion and allows high odometry output and mapping update at nearly the point sampling rate, which further enables the system to track very fast motions; 2) To further advance the 
+
+### Point-SLAM: Dense Neural Point Cloud-based SLAM
+- `2023_Point-SLAM` · 基础模型 / 嵌入式实时 · 数据集: Replica, TUM
+- **自述差异**：• We present Point-SLAM, a real-time capable dense RGBD SLAM approach which anchors neural features in a point cloud that grows iteratively in a data-driven manner during scene exploration. We demonstrate that the proposed neural point-based scene representation can be effectively used for both mapping and tracking. • We propose a dynamic point density strategy which allows for computational and memory efficiency gai
+
+### 2023 RETRACTED ARTICLE  Regional feature fusion for on-road d
+- `2023_RETRACTED_ARTICLE__Regional_feature_fusion_for_on-road_d` · 视觉-惯性耦合 / 深度学习前端 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：Autonomous vehicles require accurate, and fast decision-making perception systems to know the driving environment. The 2D object detection is critical in allowing the perception system to know the environment. However, 2D object detection lacks depth information, which are crucial for understanding the driving environment.
+
+### RING++: Roto-Translation Invariant Gram for Global Localization on a Sparse Scan Map
+- `2023_RING____Roto-Translation_Invariant_Gram_for_Global_Local` · 优化后端 / LiDAR-惯性耦合 / 回环检测 / 基础模型 / 多机协同 / 嵌入式实时
+- **自述差异**：As a lightweight framework, we implement the proposed RING++ into a stand-alone module without any prior information. We integrate a real-time back-end manager with the pose graph optimizer implemented by GTSAM [66]. With the optimization results acquired, we rearrange the keyframes to generate a global map.
+
+### SG-SLAM: A Real-Time RGB-D Visual SLAM Toward Dynamic Scenes With Semantic and Geometric Information
+- `2023_SG-SLAM__A_Real-Time_RGB-D_Visual_SLAM_Toward_Dynamic_Sc` · 特征法 / 深度学习前端 / 语义建图 / 动态环境 / 嵌入式实时 · 数据集: TUM, OpenLORIS
+- **自述差异**：the following. 1) A complete real-time RGB-D visual SLAM system called SG-SLAM is proposed using ORB-SLAM2 as a framework. Compared to ORB-SLAM2, it has higher accuracy and robustness in dynamic scenes and can publish a semantic metric map through the robot operating system (ROS) system [13].
+
+### SLICT: Multi-Input Multi-Scale Surfel-Based Lidar-Inertial Continuous-Time Odometry and Mapping
+- `2023_SLICT__Multi-Input_Multi-Scale_Surfel-Based_Lidar-Inerti` · 特征法 / 优化后端 / IMU预积分 / 点云地图结构 / LiDAR-惯性耦合 / 回环检测 / 稠密重建
+- **自述差异**：Fig. 3 provides an overview of our system. In the next subsections we describe in details each numbered block.
+
+### Segment Anything
+- `2023_SegmentAnything` · LiDAR-惯性耦合 / 基础模型
+- **自述差异**：a new task (promptable segmentation), model (SAM), and dataset (SA-1B) that make this leap possible. Whether SAM achieves the status of a foundation model remains to be seen by how it is used in the community, but regardless we expect the perspective of this work, the release of over 1B masks, and our promptable segmentation model will help pave the path ahead.
+
+### SeqOT: A Spatial–Temporal Transformer Network for Place Recognition Using Sequential LiDAR Data
+- `2023_SeqOT__A_Spatial_Temporal_Transformer_Network_for_Place_` · 回环检测 / 深度学习前端 / 嵌入式实时 · 数据集: NCLT
+- **自述差异**：an end-to-end network that exploits sequential LiDAR range images to achieve reliable long-term place recognition performance, which is illustrated in Fig. 1. Benefiting from the proposed yaw-rotation-invariant architecture, SeqOT is robust to the viewpoint change and the order of input scans, thus achieving reliable place recognition even when the car drives in opposite directions.
+
+### SiLK: Simple Learned Keypoints
+- `2023_SiLK__Simple_Learned_Keypoints` · 特征法 / 嵌入式实时 · 数据集: ScanNet
+- **自述差异**：simplicity and flexibility. Our solution is built on the traditional approach of identifying distinctive pixels via robust local descriptors. We use modern but established techniques to learn to localize and describe keypoints given an arbitrary source of unlabeled images.
+
+### Visual SLAM Integration With Semantic Segmentation and Deep Learning: A Review
+- `2023_Visual_SLAM_Integration_With_Semantic_Segmentation_and_D` · 神经隐式场 / 深度学习前端 / 语义建图 / 动态环境
+- **自述差异**：as follows. 1) Evaluated the contribution of deep learning to visual SLAM. 2) Systematically collated, compared, and described the status and future directions of the existing research on deep learning applied to the front-end and back-end of visual SLAM.
+
+### Wild-Places: A Large-Scale Dataset for Lidar Place Recognition in Unstructured Natural Environments
+- `2023_Wild-Places__A_Large-Scale_Dataset_for_Lidar_Place_Recog` · 回环检测 / 深度学习前端 · 数据集: KITTI
+- **自述差异**：as follows:
+
+• We introduce the first large-scale lidar dataset, collected with a handheld sensor payload, for long-term place recognition in unstructured, natural environments. • We show that our dataset is suitable for intra-sequence and inter-sequence place recognition tasks, and establish training and testing splits for benchmarking. • We benchmark several state-of-the-art place recognition methods to demonstrate
+
+### R<sup>2</sup>Former: Unified Retrieval and Reranking Transformer for Place Recognition
+- `2023__R__2___Former__Unified_Retrieval_and_Reranking_Transfor` · 回环检测 / 深度学习前端 / 基础模型
+- **自述差异**：Visual Place Recognition (VPR) estimates the location of query images by matching them with images in a reference database. Conventional methods generally adopt aggregated CNN features for global retrieval and RANSAC-based geometric verification for reranking. However, RANSAC only employs geometric information but ignores other possible information that could be usefulfor reranking, e.g.
+
+
+---
+
+## 2024 年
+
+### 2024 A Survey on Global LiDAR Localization  Challenges  Advan
+- `2024_A_Survey_on_Global_LiDAR_Localization__Challenges__Advan` · 回环检测 / 多机协同
+- **自述差异**：Knowledge about the own pose is key for all mobile robot applications. Thus pose estimation is part of the core functionalities of mobile robots. Over the last two decades, LiDAR scanners have become the standard sensor for robot localization and mapping.
+
+### Animatable Gaussians: Learning Pose-dependent Gaussian Maps for High-fidelity Human Avatar Modeling
+- `2024_Animatable_Gaussians__Learning_Pose-Dependent_Gaussian_M` · 神经隐式场 / 3D高斯 / 深度学习前端
+- **自述差异**：• Animatable Gaussians, a new avatar representation that introduces explicit 3D Gaussian splatting into avatar modeling to employ powerful 2D CNNs for creating lifelike avatars with high-fidelity pose-dependent dynamics. • Template-guided parameterization that learns a characterspecific template for general clothes like dresses, and parameterizes 3D Gaussians onto front & back Gaussian maps for compatibility with 2D 
+
+### CMax-SLAM: Event-Based Rotational-Motion Bundle Adjustment and SLAM System Using Contrast Maximization
+- `2024_CMax-SLAM__Event-Based_Rotational-Motion_Bundle_Adjustme` · 优化后端 / 视觉-惯性耦合 / 事件相机
+- **自述差异**：as follows:
+
+1) We theoretically compare and experimentally benchmark several event-based rotational motion estimation methods under unified criteria, in terms of accuracy and efficiency (see Sections II and IV). 2) We propose the first event-based rotation-only BA method to refine the continuous-time trajectory of an event camera while reconstructing a sharp panoramic map of scene edges (see Section III-B). 3) We pr
+
+### COIN-LIO: Complementary Intensity-Augmented LiDAR Inertial Odometry
+- `2024_COIN-LIO__Complementary_Intensity-Augmented_LiDAR_Inerti` · 直接法 / 滤波后端 / 激光里程计 / LiDAR-惯性耦合 / 多机协同
+- **自述差异**：below a threshold. We refer the reader to [11] for more details. We analyze the translational components and denote the set of uninformative directions V .
+
+### CricaVPR: Cross-image Correlation-aware Representation Learning for Visual Place Recognition
+- `2024_CricaVPR__Cross-Image_Correlation-Aware_Representation_L` · 回环检测 / 深度学习前端 / 基础模型
+- **自述差异**：Over the past decade, most methods in visual place recognition (VPR) have used neural networks to produce feature representations. These networks typically produce a global representation of a place image using only this image itself and neglect the cross-image variations (e.g. viewpoint and illumination), which limits their robustness in challenging scenes.
+
+### Present and Future of SLAM in Extreme Environments: The DARPA SubT Challenge
+- `2024_DARPA-SubT` · 视觉-惯性耦合 / 深度学习前端 / 基础模型 · 数据集: SubT
+- **自述差异**：IMULTANEOUS localization and mapping (SLAM) remains at the center stage of robotics research, after more than 30 years since its inception. SLAM is, without a doubt, a mature field of research, and the advances over the last three decades keep steadily transitioning into industrial applications, from domestic robotics [1], [2], [3] to self-driving cars [4] and virtual and augmented reality goggles [5], [6]. At the sa
+
+### 2024 DCL-SLAM  A Distributed Collaborative LiDAR SLAM Framewo
+- `2024_DCL-SLAM__A_Distributed_Collaborative_LiDAR_SLAM_Framewo` · 优化后端 / 回环检测 / 多机协同 / GNSS融合 / 嵌入式实时
+- **自述差异**：as follows. 1) A front-end agnostic, fully distributed collaborative LiDAR SLAM framework for the robotic swarm is presented, which supports rapid migration to different LiDAR sensors, platforms, and scenarios. 2) A highly integrated data-efficient inter-robot loop closure detection approach is proposed to achieve high accuracy and robustness with a three-stage communication pipeline.
+
+### Deep Learning for Visual Localization and Mapping: A Survey
+- `2024_DL-VisualLoc-Survey` · LiDAR-视觉融合 / 回环检测 / 深度学习前端 / 嵌入式实时
+- **自述差异**：OCALIZATION and mapping serve as essential requiremotivating example, humans possess the remarkable ability to perceive their own motion and the surrounding environment through multisensory perception. They heavily rely on this awareness to determine their location and navigate through intricate 3-D spaces. In a similar vein, mobile agents, encompassing a diverse range of robots such as self-driving vehicles, deliver
+
+### DN-SLAM: A Visual SLAM With ORB Features and NeRF Mapping in Dynamic Environments
+- `2024_DN-SLAM__A_Visual_SLAM_With_ORB_Features_and_NeRF_Mappin` · 特征法 / 神经隐式场 / 基础模型 / 语义建图 / 动态环境 · 数据集: TUM
+- **自述差异**：An overview of our system, which utilizes ORB-SLAM3 as its foundation, using it to provide the initial camera position, is presented in Fig. 1. The system accepts image data from the RGB-D sensor, the system’s tracking thread processes the dynamic scene, and the dynamic information is extracted by two segmentation networks: coarse segmentation $( S _ { c } )$ and fine segmentation $( S _ { f } )$ .
+
+### DPL-SLAM: Enhancing Dynamic Point-Line SLAM Through Dense Semantic Methods
+- `2024_DPL-SLAM__Enhancing_Dynamic_Point-Line_SLAM_Through_Dens` · 特征法 / 视觉-惯性耦合 / 语义建图 / 动态环境 / 嵌入式实时 · 数据集: TUM RGB-D, KITTI, TUM
+- **自述差异**：summarized as follows. 1) We introduce DPL-SLAM, a real-time, dynamic semantic SLAM system suitable for indoor and outdoor environments. Real-world experiments show the system’s capacity for sparse point-and-line reconstruction of static backgrounds, and the experiments on the TUM and KITTI datasets show our good localization performance in various dynamic environments.
+
+### DUSt3R: Geometric 3D Vision Made Easy
+- `2024_DUSt3R` · 深度学习前端 / 基础模型
+- **自述差异**：fourfold. First, we present the first holistic end-to-end 3D reconstruction pipeline from un-calibrated and un-posed images, that unifies monocular and binocular 3D reconstruction. Second, we introduce the pointmap representation for MVS applications, that enables the network to predict the 3D shape in a canonical frame, while preserving the implicit relationship between pixels and the scene.
+
+### Fast and Accurate Deep Loop Closing and Relocalization for Reliable LiDAR SLAM
+- `2024_DeepLoopClosing` · 视觉-惯性耦合 / 回环检测 / 深度学习前端 / GNSS融合
+- **自述差异**：a novel LiDAR SLAM system with the capability ofdeep learning-based loop closing and relocalization (Section V). We build a full LiDAR SLAM system based on our proposed deep loop closing and relocalization method. The system effectively tackles the local pose tracking, loop closing, and relocalization in parallel.
+
+### 2024 DeepSLAM-Survey
+- `2024_DeepSLAM-Survey` · 深度学习前端 / 基础模型 / 多机协同
+- **自述差异**：listed below:
+
+• We propose a novel taxonomy for deep learning techniques applied to VSLAM;
+
+• We present a comprehensive review of the most important deep learning methods applied to VSLAM;
+
+• We explore deep learning-based VSLAM from a holistic standpoint rather than focusing on individual VSLAM components;
+
+• We discuss the strengths and weaknesses of the different deep learning-based approaches to VSLAM;
+
+• We di
+
+### Deep Learning for Inertial Positioning: A Survey
+- `2024_Deep_Learning_for_Inertial_Positioning__A_Survey` · 深度学习前端
+- **自述差异**：provided in Table II. In deep learning-based inertial positioning approaches, a user’s absolute velocity can be inferred from a sequence of IMU data using a deep neural network. This velocity information can then be used as a key constraint to reduce the drifts in IMU double integration.
+
+### A Survey of Visual SLAM in Dynamic Environment: The Evolution From Geometric to Semantic Approaches
+- `2024_DynamicSLAM-Survey` · 特征法 / 深度学习前端 / 语义建图 / 动态环境 / 嵌入式实时
+- **自述差异**：ISUAL simultaneous localization and mapping (SLAM) remains a pivotal technology in robotics and computer vision, laying the foundation for autonomous navigation in varied environments. It’s applications span across autonomous driving, augmented reality (AR), virtual reality (VR), robotic automation, smart agriculture, and more. Traditional visual SLAM methodologies, exemplified by the ORB-SLAM family [1], [2], [3] an
+
+### GPS-Gaussian: Generalizable Pixel-wise 3D Gaussian Splatting for Real-time Human Novel View Synthesis
+- `2024_GPS-Gaussian__Generalizable_Pixel-Wise_3D_Gaussian_Splat` · 3D高斯 / GNSS融合 / 嵌入式实时
+- **自述差异**：follows:
+
+• We introduce a generalizable 3D Gaussian Splatting methodology that employs pixel-wise Gaussian parameter maps defined on 2D source image planes to formulate 3D Gaussians in a feed-forward manner. • We propose a fully differentiable framework composed of an iterative depth estimation module and a Gaussian parameter regression module. The intermediate predicted depth map bridges the two components and allo
+
+### GS-IR: 3D Gaussian Splatting for Inverse Rendering
+- `2024_GS-IR__3D_Gaussian_Splatting_for_Inverse_Rendering` · 特征法 / 视觉-惯性耦合 / 神经隐式场 / 3D高斯 / 嵌入式实时
+- **自述差异**：summarized as follows:
+
+• We present GS-IR that models a scene as a set of 3D Gaussians to achieve physically-based rendering and state-ofthe-art decomposition results for both objects and scenes;
+
+• We propose an efficient optimization scheme with regularization to concentrate depth gradient around 3DGS and produce reliable normals for GS-IR;
+
+• We develop a baking-based method embedded in GS-IR to handle the occlus
+
+### GS-SLAM: Dense Visual SLAM with 3D Gaussian Splatting
+- `2024_GS-SLAM` · 视觉-惯性耦合 / 3D高斯 / 嵌入式实时 · 数据集: Replica, TUM
+- **自述差异**：• We propose GS-SLAM, the first 3D Gaussian Splatting(3DGS)-based dense RGB-D SLAM approach, which takes advantage of the fast splatting rendering technique to boost the mapping optimizing and pose tracking, achieving real-time and photo-realistic reconstruction performance. • We present an adaptive 3D Gaussian expansion strategy to efficiently reconstruct new observed scene geometry and develop a coarse-to-fine tech
+
+### GaussianGrasper: 3D Language Gaussian Splatting for Open-Vocabulary Robotic Grasping
+- `2024_GaussianGrasper__3D_Language_Gaussian_Splatting_for_Open` · 神经隐式场 / 3D高斯 / 基础模型 / 语义建图 / 嵌入式实时
+- **自述差异**：as follows:
+
+\- We introduce GaussianGrasper, a robot manipulation system implemented by a 3D Gaussian field endowed with consistent open-vocabulary semantics and accurate geometry to support open-world manipulation tasks guided by language instructions. \- We propose EFD that leverages contrastive learning to efficiently distill CLIP features and augment feature fields with SAM segmentation prior, addressing computa
+
+### 2024 GridFormer  Residual Dense Transformer with Grid Structu
+- `2024_GridFormer__Residual_Dense_Transformer_with_Grid_Structu` · 深度学习前端 / 基础模型
+- **自述差异**：three-fold:
+
+– Unified Framework: We propose a novel and unified framework called GridFormer, which is tailored specifically for image restoration under adverse weather conditions. This innovative framework seamlessly integrates residual dense transformer blocks (RDTBs) with a grid structure, creating a comprehensive architecture. Notably, incorporating RDTBs within a grid structure enables GridFormer to capture hier
+
+### HUGS: Holistic Urban 3D Scene Understanding via Gaussian Splatting
+- `2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian` · 3D高斯 / 语义建图 / 动态环境 / 嵌入式实时 · 数据集: KITTI
+- **自述差异**：as follows: 1) Our method addresses the task of dynamic 3D urban scene understanding by extending Gaussian Splatting to model additional modalities, including semantic, flow, and camera exposure, as well as dynamic objects. 2) We achieve the decomposition of static and multiple dynamic objects from sparse urban images and noisy labels by incorporating physical constraints, omitting the requirement of ground truth 3D 
+
+### LIV-GaussMap: LiDAR-Inertial-Visual Fusion for Real-Time 3D Radiance Field Map Rendering
+- `2024_LIV-GaussMap` · 特征法 / 点云地图结构 / LiDAR-惯性耦合 / 视觉-惯性耦合 / LiDAR-视觉融合 / 3D高斯 / 嵌入式实时
+- **自述差异**：follows:
+
+We propose constructing a dense and precise map of the scene by utilizing the Gaussians measurement from the LiDAR-inertial system. This measurement allows us to accurately represent the characteristics of the scene’s surface and create a detailed map. We propose building up the LiDAR-visual map with differentiable Gaussians with spherical harmonic coefficients, which implies the visual measurement informat
+
+### LOG-LIO: A LiDAR-Inertial Odometry With Efficient Local Geometric Information Estimation
+- `2024_LOG-LIO` · 特征法 / 滤波后端 / 激光里程计 / 点云地图结构 / LiDAR-惯性耦合 / 稠密重建 / 嵌入式实时
+- **自述差异**：as follows:
+
+\- Ring FALS, modified from FALS, a normal estimator that utilizes the structural information of LiDAR scan can meet the real-time requirements of the LIO system. \- A robust and accurate hierarchical data association scheme considering the distribution of points within map voxels where point-to-surfel is prioritized over point-to-plane and large-scale surfel over small-scale surfel. \- Extensive experim
+
+### 2024 LangSplat  3D Language Gaussian Splatting
+- `2024_LangSplat__3D_Language_Gaussian_Splatting` · 视觉-惯性耦合 / LiDAR-视觉融合 / 神经隐式场 / 3D高斯 / 深度学习前端 / 基础模型 / 语义建图
+- **自述差异**：Humans live in a 3D world and commonly use natural language to interact with a 3D scene. Modeling a 3D language field to support open-ended language queries in 3D has gained increasing attention recently. This paper introduces LangSplat, which constructs a 3D language field that enables precise and efficient open-vocabulary querying within 3D spaces.
+
+### 2024 LiDAR odometry survey  recent advancements and remaining
+- `2024_LiDAR_odometry_survey__recent_advancements_and_remaining` · 深度学习前端
+- **自述差异**：as follows:
+
+Our paper offers a comprehensive review of LiDAR odometry following the progression of the technology. We categorize the review into the following sections: LiDAR preliminary, LiDAR-only odometry, LiDARinertial odometry, multiple LiDARs, and fusion with other sensors. Our paper explores unresolved challenges in LiDAR odometry, offering insights and directions for future research.
+
+### LinK3D: Linear Keypoints Representation for 3D LiDAR Point Cloud
+- `2024_LinK3D__Linear_Keypoints_Representation_for_3D_LiDAR_Poi` · 特征法 / 嵌入式实时
+- **自述差异**：as follows:
+
+\- Strong matching performance: The proposed LinK3D feature considers the characteristics of LiDAR point clouds, and achieves significant progress in matching performance for sparse LiDAR point clouds. \- Real-time performance on CPU: The proposed LinK3D shows impressive efficiency, which makes it more suitable for the 3D applications of mobile robots with limited computing resources. \- Good scalability
+
+### Loopy-SLAM: Dense Neural SLAM with Loop Closures
+- `2024_Loopy-SLAM` · 优化后端 / 视觉-惯性耦合 / 回环检测 · 数据集: Replica, TUM
+- **自述差异**：• We propose Loopy-SLAM, a dense RGBD SLAM approach which anchors neural features in point cloud submaps that grow iteratively in a data-driven manner during scene exploration. We dynamically create submaps depending on the camera motion and progressively build a pose graph between the submap keyframes. Global place recognition is used to detect loop closures online and to globally align the trajectory and the submap
+
+### Metric3D v2: A Versatile Monocular Geometric Foundation Model for Zero-Shot Metric Depth and Surface Normal Estimation
+- `2024_Metric3D_v2__A_Versatile_Monocular_Geometric_Foundation_` · 特征法 / LiDAR-惯性耦合 / 基础模型
+- **自述差异**：Fig. 2. Surface normal (N) and monocular depth (D) comparisons on diverse web images.
+
+### Gaussian Splatting SLAM
+- `2024_MonoGS` · LiDAR-视觉融合 / 3D高斯 / 稠密重建 / 嵌入式实时
+- **自述差异**：as follows:
+
+• The first near real-time SLAM system which works with a 3DGS as the only underlying scene representation, which can handle monocular only inputs. • Novel techniques within the SLAM framework, including the analytic Jacobian on Lie group for direct camera pose estimation, isotropic regularisation of the Gaussian shape, and geometric verification.
+
+### NICER-SLAM: Neural Implicit Scene Encoding for RGB SLAM
+- `2024_NICER-SLAM__Neural_Implicit_Scene_Encoding_for_RGB_SLAM` · 神经隐式场 / 稠密重建
+- **自述差异**：Neural implicit representations have recently become popular in simultaneous localization and mapping (SLAM), especially in dense visual SLAM. However, existing works either rely on RGB-D sensors or require a separate monocular SLAM approach for camera tracking, and fail to produce high-fidelity 3D dense reconstructions. To address these shortcomings, we present NICER-SLAM, a dense RGB SLAM system that simultaneously
+
+### Optimal Transport Aggregation for Visual Place Recognition
+- `2024_Optimal_Transport_Aggregation_for_Visual_Place_Recogniti` · 回环检测 / 基础模型
+- **自述差异**：The task of Visual Place Recognition (VPR) aims to match a query image against references from an extensive database of images from different places, relying solely on visual cues. State-of-the-art pipelines focus on the aggregation offeatures extractedfrom a deep backbone, in order to form a global descriptor for each image. In this context, we introduce SALAD (Sinkhorn Algorithm for Locally Aggregated Descriptors),
+
+### PIN-SLAM: LiDAR SLAM Using a Point-Based Implicit Neural Representation for Achieving Global Map Consistency
+- `2024_PIN-SLAM` · 特征法 / 点云地图结构 / 回环检测 / 神经隐式场 / 深度学习前端 / 稠密重建 / 全局一致性
+- **自述差异**：a novel neural SLAM system, called point-based implicit neural (PIN)-SLAM, based on a PIN map representation that supports building largescale globally consistent maps online, as shown in Fig. 1. To the best of the authors’ knowledge, PIN-SLAM is the first full-fledged implicit neural SLAM system including odometry, loop closure detection, and globally consistent implicit mapping.
+
+### PL-EVIO: Robust Monocular Event-Based Visual Inertial Odometry With Point and Line Features
+- `2024_PL-EVIO__Robust_Monocular_Event-Based_Visual_Inertial_Od` · IMU预积分 / 视觉-惯性耦合 / 回环检测 / 事件相机 / 嵌入式实时
+- **自述差异**：summarized as follows:
+
+1) In order to handle the HDR situations and aggressive motion, especially the onboard aggressive motion, we propose the PL-EVIO pipeline, which tightly fuses the event-corner features, line-based event features, and point-based image features together, to provide robust and reliable state estimation. 2) To address the performance degradation when only using point-based features in human-made 
+
+### PLGSLAM: Progressive Neural Scene Represenation with Local to Global Bundle Adjustment
+- `2024_PLGSLAM__Progressive_Neural_Scene_Represenation_with_Loc` · 特征法 / 优化后端 / 激光里程计 / 神经隐式场 / 深度学习前端 / 嵌入式实时
+- **自述差异**：shown as follows:
+
+• A progressive scene representation method is proposed which dynamically initiate local scene representation trained with frames within a local window. This enables scalability to extensive indoor scenes and long videos sequences, substantially improving robustness. • In local scene representation, We design a joint parametric-coordinate encoding method.
+
+### Photo-SLAM: Real-time Simultaneous Localization and Photorealistic Mapping for Monocular, Stereo, and RGB-D Cameras
+- `2024_Photo-SLAM` · 嵌入式实时 · 数据集: Replica
+- **自述差异**：• We developed the first simultaneous localization and photorealistic mapping system based on hyper primitives map. The novel framework supports monocular, stereo, and RGB-D cameras in indoor and outdoor environments. • We proposed Gaussian-Pyramid-based learning allowing the model to efficiently and effectively learn multi-level features realizing high-fidelity mapping.
+
+### RD-VIO: Robust Visual-Inertial Odometry for Mobile Augmented Reality in Dynamic Environments
+- `2024_RD-VIO__Robust_Visual-Inertial_Odometry_for_Mobile_Augme` · 特征法 / 优化后端 / 视觉-惯性耦合 / 动态环境
+- **自述差异**：as follows:
+
+\- A novel IMU-PARSAC algorithm is proposed to detect and remove moving ourliers in dynamic scenes, which can obviously improve the tracking robustness. \- A novel subframes strategy in the sliding window is proposed to efficiently reduce drift under pure rotational motion. Fig.
+
+### RLD-SLAM: A Robust Lightweight VI-SLAM for Dynamic Environments Leveraging Semantics and Motion Information
+- `2024_RLD-SLAM__A_Robust_Lightweight_VI-SLAM_for_Dynamic_Envir` · 特征法 / 视觉-惯性耦合 / 回环检测 / 语义建图 / 动态环境 / 嵌入式实时
+- **自述差异**：summarized as follows. 1) We propose a novel approach that combines object detection and Bayesian filtering to rapidly acquire static feature points in the dynamic environment. 2) We propose an efficient method that utilizes the information from the IMU to track dynamic objects and enhance the robustness ofSLAM in highly dynamic environments.
+
+### R<sup>3</sup>LIVE++: A Robust, Real-Time, Radiance Reconstruction Package With a Tightly-Coupled LiDAR-Inertial-Visual State Estimator
+- `2024_R___3__3LIVE____A_Robust__Real-Time__Radiance_Reconstruc` · LiDAR-惯性耦合 / 视觉-惯性耦合 / LiDAR-视觉融合 / 嵌入式实时
+- **自述差异**：IMULTANEOUS localization and mapping (SLAM) is a technology that utilizes a sequence of sensor (e.g., camera, LiDAR, IMU, etc.) data to estimate the sensor poses and simultaneously reconstruct the 3D map of surrounding environments. Since SLAM can estimate poses in real-time, it has been widely applied in localization and feedback control for autonomous robots (e.g., unmanned aerial vehicles [1], [2], automated groun
+
+### 2024 Recent advances in 3D Gaussian splatting
+- `2024_Recent_advances_in_3D_Gaussian_splatting` · 神经隐式场 / 3D高斯 / 深度学习前端
+- **自述差异**：Review Article
+
+# Recent advances in 3D Gaussian splatting
+
+Tong Wu<sup>1</sup>, Yu-Jie Yuan<sup>1</sup>, Ling-Xiao Zhang<sup>1</sup>, Jie Yang<sup>1</sup>, Yan-Pei Cao<sup>2,3</sup>, Ling-Qi Yan<sup>4</sup>, and Lin Gao<sup>1</sup> ( )
+
+c The Author(s) 2024. Abstract The emergence of 3D Gaussian splatting (3DGS) has greatly accelerated rendering in novel view synthesis. Unlike neural implicit representations like ne
+
+### Reducing the Memory Footprint of 3D Gaussian Splating
+- `2024_Reducing_the_Memory_Footprint_of_3D_Gaussian_Splatting` · 3D高斯 / 基础模型
+- **自述差异**：PANAGIOTIS PAPANTONAKIS, Inria, Université Côte d’Azur, France GEORGIOS KOPANAS, Inria, Université Côte d’Azur, France BERNHARD KERBL, Inria, Université Côte d’Azur, France and TU Wien, Austria ALEXANDRE LANVIN, Inria, Université Côte d’Azur, France GEORGE DRETTAKIS, Inria, Université Côte d’Azur, France
+
+ 
+Fig. 1. Left: screenshot from a phone running a modified gsplat.js for the bicycle scene.
+
+### RoDyn-SLAM: Robust Dynamic Dense RGB-D SLAM With Neural Radiance Fields
+- `2024_RoDyn-SLAM__Robust_Dynamic_Dense_RGB-D_SLAM_With_Neural_` · 神经隐式场 / 深度学习前端 / 基础模型 / 语义建图 / 动态环境 / 稠密重建
+- **自述差异**：summarized as follows:
+
+1) To the best of our knowledge, this is the first dynamic neural RGB-D SLAM with joint robust pose estimation and dense reconstruction. 2) In response to the issue of inaccurate semantic priors, we propose a motion mask generation strategy fusing spatial-temporal consistent optical flow masks to improve the robustness of camera pose estimation and quality of static scene reconstruction. 3) In
+
+### SLAM3R: Real-Time Dense Scene Reconstruction from Monocular RGB Videos
+- `2024_SLAM3R` · 优化后端 / 激光里程计 / 深度学习前端 / 基础模型 / 全局一致性 / 嵌入式实时
+- **自述差异**：summarized below:
+
+• We present a novel real-time end-to-end dense 3D reconstruction system that uses RGB videos to directly predict 3D pointmaps in a unified coordinate system through feed-forward neural networks. • Through careful design, our Image-to-Points module can process an arbitrary number of images simultaneously, effectively extending DUSt3R to handle multiple views and produce higher-quality predictions. 
+
+### SNI-SLAM: Semantic Neural Implicit SLAM
+- `2024_SNI-SLAM` · 特征法 / 神经隐式场 / 深度学习前端 / 语义建图 / 稠密重建 / 嵌入式实时 · 数据集: Replica, ScanNet
+- **自述差异**：We propose SNI-SLAM, a semantic SLAM system utilizing neural implicit representation, that simultaneously performs accurate semantic mapping, high-quality surface reconstruction, and robust camera tracking. In this system, we introduce hierarchical semantic representation to allow multi-level semantic comprehension for top-down structured semantic mapping of the scene. In addition, to fully utilize the correlation be
+
+### SplaTAM: Splat, Track & Map 3D Gaussians for Dense RGB-D SLAM
+- `2024_SplaTAM` · 视觉-惯性耦合 / 3D高斯 / 稠密重建
+- **自述差异**：Dense simultaneous localization and mapping (SLAM) is crucial for robotics and augmented reality applications. However, current methods are often hampered by the nonvolumetric or implicit way they represent a scene. This work introduces SplaTAM, an approach that, for the first time, leverages explicit volumetric representations, i.e., 3D Gaussians, to enable high-fidelity reconstruction from a single unposed RGB-D ca
+
+### StopThePop: Sorted Gaussian Splating for View-Consistent Real-time Rendering
+- `2024_StopThePop__Sorted_Gaussian_Splatting_for_View-Consisten` · 3D高斯 / 嵌入式实时
+- **自述差异**：LUKAS RADL<sup>∗</sup> and MICHAEL STEINER<sup>∗</sup>, Graz University of Technology, Austria
+
+MATHIAS PARGER, Huawei Technologies, Austria
+
+ALEXANDER WEINRAUCH, Graz University of Technology, Austria
+
+BERNHARD KERBL, TU Wien, Austria
+
+MARKUS STEINBERGER, Graz University of Technology, Austria and Huawei Technologies, Austria
+
+3D Gaussian Splatting
+
+Ours 
+3D Gaussian Splatting 
+Ours 
+ 
+Fig. 1. 3D Gaussian Splating [
+
+### 2024 SuGaR  Surface-Aligned Gaussian Splatting for Efficient 
+- `2024_SuGaR__Surface-Aligned_Gaussian_Splatting_for_Efficient_` · 特征法 / LiDAR-惯性耦合 / 神经隐式场 / 3D高斯 / 稠密重建
+- **自述差异**：a regularization term that encourages the Gaussians to align well with the surface of the scene. We then introduce a method that exploits this alignment to extract a mesh from the Gaussians using Poisson reconstruction, which is fast, scalable, and preserves details, in contrast to the Marching Cubes algorithm usually applied to extract meshesfrom Neural SDFs. Finally, we introduce an optional refinement strategy tha
+
+### Swarm-SLAM: Sparse Decentralized Collaborative Simultaneous Localization and Mapping Framework for Multi-Robot Systems
+- `2024_Swarm-SLAM` · 回环检测 / 多机协同 / GNSS融合 / 嵌入式实时
+- **自述差异**：As described in Fig. 1, Swarm-SLAM is composed of three modules. First, to enable decentralization, the neighbor management module continuously tracks which robots are in communication range (i.e., neighbors that can be reached reliably) and what data has been exchanged.
+
+### Switch-SLAM: Switching-Based LiDAR-Inertial-Visual SLAM for Degenerate Environments
+- `2024_Switch-SLAM__Switching-Based_LiDAR-Inertial-Visual_SLAM_` · LiDAR-惯性耦合 / 基础模型
+- **自述差异**：N RECENT years, significant progress has been made in 3D simultaneous localization and mapping (SLAM), leading to notable advancements in the capabilities of mobile robots. These developments have enhanced the capabilities of mobile robots in terms of understanding their surroundings, precisely determining their positions, and creating detailed maps of their environments. However, SLAM is subject to several limitatio
+
+### 2024 Visual Place Recognition  A Tutorial  Tutorial 
+- `2024_Visual_Place_Recognition__A_Tutorial__Tutorial_` · 视觉-惯性耦合 / 回环检测
+- **自述差异**：# Visual Place Recognition
+
+A Tutorial
+
+By Stefan Schubert , Peer Neubert , Sourav Garg , Michael Milford , and Tobias Fischer
+
+Localization is an essential capability for mobile robots, enabling them to build a comprehensive representation of their environment and interact with the environment effectively toward a goal. A rapidly growing field of research in this area is visual place recognition (VPR), which is the 
+
+### D<sup>2</sup>SLAM: Decentralized and Distributed Collaborative Visual-Inertial SLAM System for Aerial Swarm
+- `2024__D__2__SLAM__Decentralized_and_Distributed_Collaborative` · 视觉-惯性耦合 / 回环检测 / 多机协同 / 全局一致性
+- **自述差异**：as follows. 1) Introduction of $D ^ { 2 } \mathrm { S L A M }$ , a novel decentralized and distributed SLAM system, capable of achieving highaccuracy ego-motion and relative state estimation for nearby UAVs, as well as globally consistent trajectory estimation for distant or nonvisible UAVs. 2) We introduce $D ^ { 2 } \mathrm { V I N S } ,$ a distributed visual-inertial state estimator for multirobot systems utilizin
+
+### iG-LIO: An Incremental GICP-Based Tightly-Coupled LiDAR-Inertial Odometry
+- `2024_iG-LIO` · 特征法 / 激光里程计 / 点云地图结构 / LiDAR-惯性耦合 / GNSS融合
+- **自述差异**：summarized as follows. \- The GICP constraints are tightly-coupled with inertial measurement unit (IMU) constraints in a Maximum A Posteriori (MAP) estimation. The source code has been open-source on GitHub to benefit the community.
+
+
+---
+
+## 2025 年
+
+### 3D Gaussian Splatting as a New Era: A Survey
+- `2025_3DGS-Survey` · 特征法 / 3D高斯 / 深度学习前端
+- **自述差异**：listed below. Unified framework with systematic taxonomy: We introduce a unified & practical framework for categorizing existing works in 3D Gaussians. This framework divides the field into six main aspects.
+
+### AirSLAM: An Efficient and Illumination-Robust Point-Line Visual SLAM System
+- `2025_AirSLAM__An_Efficient_and_Illumination-Robust_Point-Line` · 特征法 / 回环检测 / 深度学习前端 / 嵌入式实时
+- **自述差异**：as follows. 1) We propose a novel point line-based vSLAM system that combines the efficiency of traditional optimization techniques with the robustness of learning-based methods. Our system is resilient to both short-term and long-term illumination challenges while remaining efficient enough for deployment on embedded platforms.
+
+### FAST-LIVO2: Fast, Direct LiDAR–Inertial–Visual Odometry
+- `2025_FAST-LIVO2` · 直接法 / 滤波后端 / 激光里程计 / 点云地图结构 / LiDAR-惯性耦合 / LiDAR-视觉融合 / 基础模型 / 嵌入式实时 · 数据集: Hilti
+- **自述差异**：evaluated in comprehensive ablation studies to verify their effectiveness. We implement the proposed system as practical open software, meticulously optimized for real-time operation on both Intel and ARM processors. The system is versatile, supporting multiline spinning LiDARs, emerging solid-state LiDARs with unconventional scanning patterns, as well as both pinhole cameras and various fisheye cameras.
+
+### MASt3R-SLAM: Real-Time Dense SLAM with 3D Reconstruction Priors
+- `2025_MASt3R-SLAM` · 回环检测 / 基础模型 / 全局一致性 / 嵌入式实时
+- **自述差异**：• The first real-time SLAM system using the two-view 3D reconstruction prior MASt3R [21] as a foundation. • Efficient techniques for pointmap matching, tracking and local fusion, graph construction and loop closure, and second-order global optimisation. • A state-of-the-art dense SLAM system capable of handling generic, time-varying camera models.
+
+### Motion-Aware 3D Gaussian Splatting for Efficient Dynamic Scene Reconstruction
+- `2025_Motion-Aware_3D_Gaussian_Splatting_for_Efficient_Dynamic` · 3D高斯
+- **自述差异**：follows:
+
+• We systematically explore the effective exploitation of flow prior in 3DGS-based dynamic scene reconstruction. • We propose elaborate strategies, including uncertaintyaware flow augmentation and transient-aware deformation auxiliary, in order to develop an effective framework for enhancing different paradigms of dynamic 3DGS.
+
+### Splat-SLAM: Globally Optimized RGB-only SLAM with 3D Gaussians
+- `2025_Splat-SLAM` · 优化后端 / 3D高斯 · 数据集: Replica, TUM, ScanNet
+- **自述差异**：3D Gaussian Splatting offers a compact, efficient approach to RGB-only dense SLAM by providing high-quality map rendering with a dense, optimized 3D Gaussian map. Existing methods, however, often underperform in reconstruction quality compared to alternatives like neural point clouds, primarily due to limited map and pose optimization or reliance on monocular depth. We introduce thefirst RGB-only SLAM system with glo
+
+### WildGS-SLAM: Monocular Gaussian Splatting SLAM in Dynamic Environments
+- `2025_WildGS-SLAM` · 优化后端 / 3D高斯 / 语义建图 / 动态环境
+- **自述差异**：as follows:
+
+• A monocular SLAM framework, namely WildGS-SLAM, utilizing a 3D Gaussian representation that operates robustly in highly dynamic environments, outperforming existing dynamic SLAM methods on a variety of dynamic datasets and on both indoor and outdoor scenarios. • An uncertainty-aware tracking and mapping pipeline that enables the accurate removal of dynamic distractors without depth or explicit semantic

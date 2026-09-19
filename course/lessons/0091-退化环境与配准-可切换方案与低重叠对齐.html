@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>退化环境与配准：可切换方案与低重叠对齐 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0091</div>
+      <h1>退化环境与配准：可切换方案与低重叠对齐</h1>
+      <p class="subtitle">上一篇讲的是「几何不够用时去翻强度」，这一篇讲的是「几何彻底不管用时，换谁来带路」🚦</p>
+      <div class="hero-meta">
+        <span>🎯 主题：退化检测 · 初值切换 · 部分重叠配准 · 图注意力</span>
+        <span>👥 作者：Switch-SLAM（Lee、Komatsu、Shinozaki、Kitajima、Asama、An、Yamashita）；Partially Overlapping（Arnold、Mozaffari、Dianati）</span>
+        <span>📅 2022–2024 · <i>Switch-SLAM: Switching-Based LiDAR-Inertial-Visual SLAM for Degenerate Environments（RA-L 2024）· Fast and Robust Registration of Partially Overlapping Point Clouds（RA-L 2022）</i></span>
+      </div>
+      <div class="toc">
+        <a href="#relation">两篇的关系</a>
+        <a href="#degen">退化到底是什么</a>
+        <a href="#switch">Switch-SLAM：切的是初值</a>
+        <a href="#detect">非启发式的检测</a>
+        <a href="#partial">低重叠为什么难</a>
+        <a href="#method">它的方法：学习 + 注意力</a>
+        <a href="#result">数字、短板与位置</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="relation">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：解释「退化」在激光和视觉里分别指什么、为什么它通常只打掉少数几个自由度；说清 Switch-SLAM 的「切换」到底切了什么（<b>这是一个很容易被讲错的点</b>）；说清「非启发式的退化检测」为什么比人工设阈值可靠；并且能解释低重叠点云配准为什么难到值得专门写一篇论文。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>退化的定义要回链第 <b>0076</b> 课（NDT 与 EKF 那两条变体路线，那里第一次正面讲了 EKF-LOAM 对退化的处理），也要接第一季 <b>0006</b> 课（第一次把退化列进激光 SLAM 的困难清单）与 <b>0009</b> 课（DARPA 地下挑战赛里那些真实的退化失败）。低重叠配准这一篇则要接第一季 <b>0014</b> 课——那节课立下的<b>假阳性铁律</b>，正是这一篇存在的理由；而<b>下一节 0092 课讲的回环本身</b>，就站在本节这块地基上。此外固态那一篇（0090 课）面对的也是退化，只是那一课从「补一路信息」的角度切入，这一节从「换一个带路的」切入。</p>
+        </div>
+      </div>
+
+      <h2>1. 两篇的关系：用谁，以及找回来之后怎么对上</h2>
+
+      <p>把两篇摆在一起，它们的关系其实是一句话：</p>
+
+      <div class="callout">
+        <h4>本节框架</h4>
+        <p><b>Switch-SLAM 解决「退化的时候用谁」</b>——它是完整的 SLAM 系统，同时带着激光、IMU 和相机。<br>
+        <b>Partially Overlapping 解决「找回来之后怎么对齐」</b>——它是一篇<b>成对点云配准</b>的方法论文，<b>本身不是里程计</b>，也不是 SLAM 系统。<br>
+        一个是「决策」，一个是「工具」。<b>决策决定了要不要去对齐，工具决定了能不能对齐上。</b></p>
+      </div>
+
+      <p>这个「工具」具体用在哪儿？答案在<b>回环检测</b>和<b>多机器人建图</b>上。设想两台车在地图里跑了一圈又碰面，各自攒了一大团点云，现在要把它们拼到一起——可这两团点云<b>只有一小部分是重叠的</b>（两台车看的是同一处路口的不同角落）。这就是「部分重叠（partial overlap）」，也是本课第五节要展开的难点。</p>
+
+      <div class="callout">
+        <h4>★ 为什么这件事这么要紧：第一季 0014 课的铁律</h4>
+        <p>第一季 <b>0014</b> 课讲回环检测时留下过一条铁律：<b>假阳性（把不是回环的地方认成回环）的代价极大</b>——它会往位姿图里塞进一条完全错误的约束，把整张地图拧歪，而且很难被发现。<br>
+        所以回环这件事<b>必须拆成两问</b>：第一问是「这两个地方像不像」（检索），第二问是「把它俩精确对上之后，到底像不像」（验证）。<b>Partially Overlapping 这篇做的正是第二问里的对齐引擎。</b>它的精度直接决定了验证这一关能不能把假阳性挡在门外。<br>
+        <b>预告：下一节 0092 课就是「第一问」——回环检测本身。</b></p>
+      </div>
+    </main>
+
+    <section class="section-card" id="degen">
+      <h2>2. 退化到底是什么</h2>
+
+      <p>「退化」这个词在前面的课里出现过好几次，这一节把它讲透。</p>
+
+      <p>先说直觉。更新一下上一节课的那个例子：<b>在一条长走廊里，沿走廊方向的墙是平行的两片。</b>你沿着走廊往前走一米，激光扫到的图案几乎<b>没有任何变化</b>——还是那两片墙、还是同样的间距。可你手里那些算法要回答的问题是「我往前走了多少」，而数据里根本找不到能回答这个问题的线索。<b>不是算法不行，是数据里没有这个信息。</b></p>
+
+      <div class="callout">
+        <h4>从数学上看：那个方向上的信息量掉到了零</h4>
+        <p>配准最终要解一个最小二乘问题，它的「信息量」可以用一个矩阵（海森矩阵，或它的近似）来表示。<b>海森矩阵的每个特征值代表一个方向上有多少信息。</b><br>
+        在长走廊里，沿走廊方向的那个特征值会变得<b>极小</b>——不是「小一点」，而是接近零。这时候解出来的位移量就会被噪声主导，飘得离谱。<b>反过来说，只要这个特征值还足够大，那个方向就是「良定」的（well-conditioned）。</b></p>
+      </div>
+
+      <p>第一季 <b>0006</b> 课把退化列进了激光 SLAM 的困难清单；第 <b>0076</b> 课（EKF-LOAM 那一篇）第一次正面讲了怎么处理它。本课这一篇 Switch-SLAM 对退化的描述有一个值得记住的要点：</p>
+
+      <div class="callout">
+        <h4>★ 退化通常不会打掉全部六个自由度</h4>
+        <p>原文说得很清楚：<b>只要有平面特征或边缘特征存在，退化通常不会超过 3 个自由度</b>——六个自由度里只有某几个变得不可观，其余的还是能估的。<br>
+        常见的退化结构有三类：<b>大片单独的平面</b>（比如正对一面墙）、<b>长走廊</b>、<b>隧道</b>。视觉这一侧的退化则是另一套原因：<b>激进的旋转、光照剧烈变化、纹理缺失</b>。</p>
+      </div>
+
+      <p>这一点解释了为什么「切换」这个想法是可行的：如果退化把所有信息都打没了，换谁来带路也没用；<b>正是因为通常只丢掉两三个自由度，用另一路传感器的信息把它补上就成了可能。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Switch-SLAM__Switching-Based_LiDAR-Inertial-Visual_SLAM_/e8a15cd63bf4a2e7d8f8c5e919d1991d95ee723a1cb7bf1603a70a52e3a5fbe9.jpg" alt="Switch-SLAM Fig.3 degenerate structures and well-conditioned or degenerate DOFs">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Representative examples of LiDAR odometry degenerate structures and their corresponding well-conditioned/degenerate DOFs. Green arrows denote well-conditioned DOFs. Red arrows denote degenerate DOFs. Orange patches denote planar features. Blue lines denote edge features.<br>
+          （中译：激光里程计退化结构的典型例子以及各自对应的良定／退化自由度。绿色箭头表示良定的自由度，红色箭头表示退化的自由度，橙色片表示平面特征，蓝色线表示边缘特征。）<br>
+          <b>怎么看这张图：</b>① 这张图就是「退化」两个字的<b>图解</b>——请按颜色分类去看：<b>绿色箭头是「能估的方向」，红色箭头是「估不了的方向」</b>，橙色片是平面、蓝色线是边；② 逐格对照你就能看懂为什么长走廊只丢一两个自由度、而正对天花板更麻烦；③ 记住这六格，它同时也是下一节自绘图里那个「开关」的判据来源——<b>退化检测器做的就是「数一数红箭头有几个」这件事</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="switch">
+      <h2>3. Switch-SLAM：切的是初值，不是整套系统</h2>
+
+      <p>这是本节最容易被讲错的一处，我们把话说死：</p>
+
+      <div class="callout">
+        <h4>★ 它切换的是「scan-to-map 的初值来源」</h4>
+        <p>Switch-SLAM <b>不是</b>「激光失效了就整个换成视觉 SLAM」。恰恰相反，它是<b>同时并行地跑着激光里程计（LO）与视觉里程计（VO）两套</b>，然后由一个切换节点来决定：<b>接下来这次 scan-to-map，用谁的传播结果当初值。</b><br>
+        · 位姿正常时：用<b>激光里程计</b>传播出来的位姿当初值；<br>
+        · 检测到激光退化时：<b>把初值来源扳到视觉里程计</b>那一侧。<br>
+        <b>两边的点云数据始终都在用</b>——被切换的是「从哪里开始找」，而不是「用不用激光」。</p>
+      </div>
+
+      <p>为什么「只切初值」这个设计是聪明的？因为 scan-to-map 是一个<b>迭代求解过程，它需要一个起点</b>。起点好的时候，迭代几步就能收敛到正确解；起点被一个退化的方向带偏了，迭代就会朝着错的方向跑，甚至跑飞。而<b>在退化的那几个自由度上，视觉里程计恰好还保有信息</b>——它能看到纹理、能看到特征点，于是它传播出来的初值在这几个方向上是可信的。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">切换的是初值，不是整套系统</text>
+
+          <rect x="40" y="86" width="820" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="60" y="112" font-size="12" fill="#5a4a42">长走廊：沿走廊轴几乎没有几何约束</text>
+          <rect x="70" y="130" width="760" height="8" fill="#cfd8dc"/>
+          <rect x="70" y="302" width="760" height="8" fill="#cfd8dc"/>
+
+          <polyline points="100,278 190,272 280,262 370,246 460,224 550,196 640,166 730,142 820,128"
+                    fill="none" stroke="#cc785c" stroke-width="2.4"/>
+          <g fill="#cc785c">
+            <circle cx="100" cy="278" r="3.5"/><circle cx="280" cy="262" r="3.5"/>
+            <circle cx="460" cy="224" r="3.5"/><circle cx="640" cy="166" r="3.5"/>
+            <circle cx="820" cy="128" r="3.5"/>
+          </g>
+          <polyline points="100,278 190,280 280,279 370,277 460,275 550,274 640,273 730,272 820,272"
+                    fill="none" stroke="#2c5f8a" stroke-width="2.2"/>
+          <g fill="#2c5f8a">
+            <circle cx="190" cy="280" r="3.5"/><circle cx="370" cy="277" r="3.5"/>
+            <circle cx="550" cy="274" r="3.5"/><circle cx="730" cy="272" r="3.5"/>
+          </g>
+          <circle cx="100" cy="278" r="5" fill="#455a64"/>
+          <text x="86" y="282" text-anchor="end" font-size="10" fill="#455a64">起点</text>
+
+          <text x="808" y="118" text-anchor="end" font-size="11" fill="#a8563a">激光里程计：越走越偏</text>
+          <text x="808" y="290" text-anchor="end" font-size="11" fill="#2c5f8a">视觉里程计：稳在走廊里</text>
+
+          <text x="450" y="352" text-anchor="middle" font-size="12" font-weight="700" fill="#455a64">退化检测器</text>
+
+          <rect x="60" y="366" width="250" height="52" rx="8" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="185" y="397" text-anchor="middle" font-size="11.5" fill="#a8563a">激光里程计传播</text>
+          <rect x="590" y="366" width="250" height="52" rx="8" fill="#eef4fa" stroke="#b6cde0" stroke-width="1.4"/>
+          <text x="715" y="397" text-anchor="middle" font-size="11.5" fill="#2c5f8a">视觉里程计传播</text>
+
+          <line x1="312" y1="392" x2="364" y2="392" stroke="#b0c0cc" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="588" y1="392" x2="536" y2="392" stroke="#b0c0cc" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <circle cx="370" cy="392" r="5" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+          <circle cx="530" cy="392" r="5" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+
+          <line x1="450" y1="392" x2="376" y2="392" stroke="#455a64" stroke-width="3.5"/>
+          <line x1="450" y1="392" x2="524" y2="392" stroke="#90a4ae" stroke-width="2" stroke-dasharray="5 4"/>
+          <circle cx="450" cy="392" r="6" fill="#455a64"/>
+
+          <line x1="450" y1="398" x2="450" y2="474" stroke="#2f6d51" stroke-width="2.5"/>
+          <path d="M450 484 L443 470 L457 470 Z" fill="#2f6d51"/>
+          <text x="450" y="512" text-anchor="middle" font-size="12" fill="#2f6d51">给 scan-to-map 的初值</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条长走廊里两套里程计各自的传播结果，以及一个按退化检测结论来扳动的开关。<br>
+          <b>怎么看这张图：</b>① 走廊里那两条线是<b>同一个起点的两种传播</b>：橙色那条（激光里程计）在退化的方向上越走越偏，蓝色那条（视觉里程计）大致稳住了；② 下方的两个盒子是<b>两种初值来源</b>，中间的杠杆就是那个开关——实线那一头表示<b>当前选中激光</b>，虚线那一头表示<b>可以扳过去的那一边</b>；③ 最下面的箭头指向 scan-to-map，<b>提醒你被切换的只是「迭代从哪里开始」</b>，而不是换了套系统。<br>
+          <b>要记住的一句话：</b>切的是初值，不是整套系统——<b>两边的点云数据始终都在用</b>。（图中轨迹的偏移幅度为了看得清做了夸张处理，真实系统里它可能只是慢慢偏出去。）
+        </figcaption>
+      </figure>
+
+      <p>还有几件它做的事值得知道：</p>
+
+      <ul>
+        <li><b>切换不是硬切，有缓冲。</b>它用一个状态缓冲（status buffer）来做平滑过渡，避免在退化边界上来回抖动。原文还给了一段在起止退化时的插值公式，把两路里程计的差分按一个权重混合起来。</li>
+        <li><b>退化真的发生时，它会再做一层紧耦合。</b>原文的表述是：如果激光退化而视觉还没失败，就在 scan-to-map 这一步<b>把激光残差和视觉残差联合起来优化</b>；如果视觉也失败了，就去掉退化掉的那几个自由度，只靠剩下的良定方向。</li>
+        <li><b>所以它的耦合方式是混合的。</b>里程计那一层，激光与视觉各自独立跑（松耦合）；只有在退化时，scan-to-map 这一步才把两边残差紧耦合在一起。<b>这种结构的本质，是「不让失败的信息传播出去」</b>。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Switch-SLAM__Switching-Based_LiDAR-Inertial-Visual_SLAM_/ef8f0e3919e437cc59a6825857b4ccba015ef48d65d0bd61367c6b8481750e07.jpg" alt="Switch-SLAM Fig.2 system structure">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System structure of Switch-SLAM.<br>
+          （中译：Switch-SLAM 的系统结构。）<br>
+          <b>怎么看这张图：</b>① 请在这张结构图里找出<b>三个组成部分</b>：视觉里程计、激光里程计、以及那个切换节点；② 最关键的一处观察是：<b>从激光里程计到 scan-to-map 的那条线上，插着一个可以被切换节点改写的东西</b>——那就是「初值」；③ 对照上一节自绘图你会发现它们是同一件事的两种画法：一个是示意，一个是工程结构。<br>
+          <b>读这张图时请顺带看一眼作者的原话：</b>原文承认激光里程计这一边<b>用的仍然是 LOAM 式的特征提取</b>（不是直接法），所以它对「特征本身就缺失」的环境是有本质局限的——这一点在第七节还会提到。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Switch-SLAM__Switching-Based_LiDAR-Inertial-Visual_SLAM_/33f8ddc18b71d5debcd81385f608d58ca4003096c08f57176e7f9702b460087e.jpg" alt="Switch-SLAM Fig.5 simulated environments with degeneration regions">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Simulated environments. The red region indicates the region of LiDAR SLAM degeneration. The blue region indicates the region of visual SLAM degeneration.<br>
+          （中译：仿真环境。红色区域表示激光 SLAM 发生退化的区域，蓝色区域表示视觉 SLAM 发生退化的区域。）<br>
+          <b>怎么看这张图：</b>① 这张图回答一个很实际的问题——<b>「两种退化会不会同时出现」</b>。图上红蓝两块区域说明答案是<b>会</b>，而且它们可能挨得很近；② 想一想：如果红蓝两块严重重叠（同一个地方激光也不行、视觉也不行），这套方法还剩什么招？这正是原文写进局限里的那一条；③ 这也是为什么它需要「退化检测器 + 状态缓冲」这样一套机制——<b>真实场景里退化不是长期稳定的一种状态，而是进进出出的一段段区间</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="detect">
+      <h2>4. 「非启发式」的退化检测是什么意思</h2>
+
+      <p>先解释「启发式」这个词在这里的贬义：<b>启发式就是「拍脑袋定的阈值」</b>——比如「只要最小特征值小于 0.3 就算退化」。这种阈值的问题是，<b>它凭什么等于 0.3？</b>换个传感器、换个场景，可能就完全不对了；而且它没有任何统计意义，你没法说它「有多可信」。</p>
+
+      <p>Switch-SLAM 的做法是把它交给<b>统计检验</b>：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>检测什么</b>
+          <p>取激光里程计海森矩阵的<b>最小的三个特征值</b>——因为它们对应最没信息的三个方向，也就是最容易退化的地方。</p>
+        </div>
+        <div class="mini-card">
+          <b>怎么判</b>
+          <p>对每个特征值做<b>卡方检验</b>（chi-squared test）。原文用「两自由度、95% 置信」这个条件推出一组下界，最后落到三个具体数上：<b>0.12 / 0.27 / 0.48</b>。任意一个特征值低于它对应的阈值，就判定退化、准备切换。</p>
+        </div>
+      </div>
+
+      <p>为什么这叫「非启发」？因为这三个数<b>不是试出来的，是从一个统计假设（观测噪声服从某个分布）推出来的</b>。原文强调的好处是：<b>不需要再对阈值做调参</b>。这和第 <b>0088</b> 课 KISS-ICP 的「自适应阈值」是同一种审美——<b>能让数据自己告诉你阈值该是多少，就别手工去拍。</b></p>
+
+      <p>检测效果：原文给出的精度是 <b>0.96</b>、召回是 <b>0.99</b>。作为对照，两个当时最好的方法分别是 0.91／0.91 与 0.96／0.96。召回 0.99 意味着<b>几乎不漏</b>——这在退化检测里是关键，因为漏检一次（该切没切）就会让整段轨迹被污染。</p>
+
+      <div class="callout">
+        <h4>一个诚实的附注</h4>
+        <p>激光这一侧的检测是「非启发式」的，但原文也承认：<b>视觉那一侧的失败检测（特征数够不够、偏置是否异常、位姿是否跳变）用的仍然是经验阈值。</b>所以严格说，这套系统只有半边做到了「免调参」。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Switch-SLAM 检测到激光里程计退化之后，它切换到的东西是——</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。激光与视觉两套里程计是并行跑着的，切换节点改变的是「这一次 scan-to-map 的初值从哪一路的传播结果来」，点云本身一直参与配准。" onclick="lessonKit.answer(this,'q0091a')">把初值来源扳到视觉</button>
+          <button data-correct="no" data-explanation="这是最常见的误读。它并没有把激光那一套关掉——原文说的是退化时还要在 scan-to-map 里把激光残差和视觉残差联合优化，激光数据一直在用。" onclick="lessonKit.answer(this,'q0091a')">把整套系统换成视觉</button>
+          <button data-correct="no" data-explanation="地图表示在这篇里没有换。它仍然是 LOAM 式的平面与边缘特征地图；换地图表示是另一个故事，比如前几课的 ikd-Tree、iVox。" onclick="lessonKit.answer(this,'q0091a')">把地图表示整体换掉</button>
+        </div>
+        <div class="quiz-feedback" id="q0091a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="partial">
+      <h2>5. Partially Overlapping：低重叠配准难在哪</h2>
+
+      <p>接下来换到第二篇。它要解决的问题听起来很朴素，但做起来极难。</p>
+
+      <p><b>场景是这样的：</b>在协同感知或多机器人 SLAM 里，两帧点云常常来自<b>不同的车、相距很远</b>——原文说相对平移可以大到 <b>30 米</b>。这时候两台车看到的重叠部分很小，可能只是同一个路口的一角。</p>
+
+      <p>而传统的 ICP 类方法有个隐含前提：<b>两片点云大部分是重叠的，而且你已经有一个不错的初值</b>。低重叠场景把这两个前提同时打破了。</p>
+
+      <div class="callout">
+        <h4>★ 原文对「低重叠时 ICP 会怎样」的论述</h4>
+        <p>原文的说法是：<b>随着两片点云之间相对平移的增大，可以被识别出来的对应关系会越来越少。</b><br>
+        它还给了一组实测数字，非常直白：ICP 在重叠率大于 0.6 时召回还有 <b>0.67</b>；可一旦把范围放宽到「重叠率大于 0」——也就是承认存在极低重叠的情况——召回就<b>掉到 0.07</b>，并且旋转误差高达 <b>74.84°</b>，等于完全失败。<br>
+        <b>换句话说：重叠率一旦低下去，ICP 基本就不可用了。</b>不是「精度差一点」，是「根本对不上」。</p>
+      </div>
+
+      <p>为什么对不上？因为配准的核心是「找到对应点对」。重叠部分本来就少，再加上点云是稀疏的，同一处物理表面两次扫描几乎不可能打中同一个点——<b>能对应的点少得可怜，而外点（只在一张图里出现的点）占了大多数</b>。在这种「内点远少于外点」的局面里，任何靠「平均所有对应关系」的方法都会把答案往错的方向拉。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">低重叠配准：大半的点找不到对应</text>
+
+          <!-- 左格 -->
+          <rect x="18" y="48" width="414" height="330" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="225" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">点云 A：完整的十字</text>
+
+          <rect x="70" y="190" width="310" height="18" fill="#2c5f8a" fill-opacity="0.85"/>
+          <rect x="216" y="100" width="18" height="200" fill="#2c5f8a" fill-opacity="0.85"/>
+          <g fill="#2c5f8a">
+            <circle cx="330" cy="250" r="4"/><circle cx="356" cy="272" r="4"/>
+            <circle cx="300" cy="268" r="4"/><circle cx="352" cy="242" r="4"/>
+            <circle cx="318" cy="286" r="4"/>
+          </g>
+          <circle cx="318" cy="258" r="52" fill="none" stroke="#c0392b" stroke-width="2.5" stroke-dasharray="6 4"/>
+          <text x="225" y="336" text-anchor="middle" font-size="11.5" fill="#c0392b">红圈里没有对应，是外点</text>
+
+          <!-- 右格 -->
+          <rect x="468" y="48" width="414" height="330" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="675" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">点云 B：只有 60% 的十字</text>
+
+          <rect x="520" y="190" width="210" height="18" fill="#b28704" fill-opacity="0.85"/>
+          <rect x="666" y="100" width="18" height="120" fill="#b28704" fill-opacity="0.85"/>
+          <g fill="#b28704">
+            <circle cx="560" cy="268" r="4"/><circle cx="592" cy="286" r="4"/><circle cx="620" cy="300" r="4"/>
+          </g>
+          <text x="675" y="336" text-anchor="middle" font-size="11.5" fill="#b28704">只看到一部分，其余是空的</text>
+
+          <!-- 对应线 -->
+          <g stroke="#7a8a99" stroke-width="1.2" stroke-dasharray="4 4">
+            <line x1="225" y1="110" x2="675" y2="110"/>
+            <line x1="80" y1="199" x2="530" y2="199"/>
+            <line x1="225" y1="199" x2="675" y2="199"/>
+          </g>
+
+          <text x="450" y="418" text-anchor="middle" font-size="11.5" fill="#5a4a42">细虚线是能对上的点对；红圈是只在一张点云里出现的部分</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两片只重叠了一部分的点云，以及它们之间到底有多少对能对上的点。<br>
+          <b>怎么看这张图：</b>① 左边是 A 看到的完整十字（蓝色），右边是 B 看到的同一个十字——但<b>只覆盖了大约 60%</b>（黄色）；② 中间那几条细虚线是<b>能对上号的点对</b>，注意它们<b>全都落在重叠的那一小块里</b>；③ 红圈圈住的是 A 里有、B 里没有的那部分（十字的右下角，以及两台车各自看到的不同杂物）——<b>这些点在配准里都是外点，找不到任何对应</b>。<br>
+          <b>要记住的一句话：</b>重叠率低的时候，<b>大半的点都找不到对应</b>——这就是为什么这件事难到值得专门做一篇论文。原文的实测更残酷：重叠率放宽到「大于 0」时，传统 ICP 的召回只剩 <b>0.07</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Fast_and_Robust_Registration_of_Partially_Overlapping_Po/8d7dc67e064a847ece4180cef37a1821369284c6d52f24ccab5dd70c31e6e9be.jpg" alt="Partially Overlapping Fig.1 qualitative results on CODD">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Qualitative results of the proposed method. Each row represents a different sample from the CODD test set and the vertical label indicates the relative translation between point clouds in meters, where $t^g$ indicates the ground-truth relative translation vector.<br>
+          （中译：本文方法的定性结果。每一行代表 CODD 测试集中的一个不同样本，纵向的标注给出了两片点云之间的相对平移（米），其中 $t^g$ 表示真值的相对平移向量。）<br>
+          <b>怎么看这张图：</b>① 逐行看下去，<b>每一行的两片点云都只重叠一小部分</b>——这正是「部分重叠」的定义；② 请留意纵向标注的那个数值：它是两片点云之间的相对平移，也就是<b>两台车离得有多远</b>，原文说最大能到 30 米；③ 每一行的点云颜色不同，代表它们来自不同的观测；<b>你要盯的是「算法估出来的相对位姿」和「真值」差多少</b>，而不是点云本身好不好看。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="method">
+      <h2>6. 它怎么做到的：学习特征 + 图注意力 + RANSAC</h2>
+
+      <p>这里先做一处<b>纠正</b>，因为这个方法很容易被猜错：</p>
+
+      <div class="callout">
+        <h4>★ 它用的不是 GNC，也不是 TEASER</h4>
+        <p>面对「外点占大多数」的局面，有一类做法是<b>渐进非凸性（GNC）</b>或<b>截断最小二乘（TEASER）</b>——用很猛的鲁棒核或截断策略去把外点压掉。但<b>这一篇走的不是那条路</b>。<br>
+        它的方法是：<b>学习出来的点级特征 + 图注意力网络 + RANSAC</b>。而 GNC 与 TEASER 在这篇论文里<b>只是作为对比基线出现的</b>，不是它的方法。请按这个记。</p>
+      </div>
+
+      <p>它的流程一共四步，对应原文那张流水线图：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>① 编码：把点变成「有含义的特征」</b>
+          <p>用一个点级特征编码器（PointNet++ 那一族的 SA 加 FP 结构）来处理任意数量的输入点，最后稳定输出 <b>512 个关键点</b>与每个关键点 <b>128 维</b>的特征向量。这一步把「一个三维坐标」变成「一个能表达局部形状的向量」。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 精修：用图注意力看上下文</b>
+          <p>把关键点当成图的节点，用 k 近邻（原文 k = 32）连边，然后做<b>自注意力</b>（在同一片点云内部）与<b>跨注意力</b>（在两片点云之间）。原文的说法是：这样能利用几何上下文提高低重叠下对应的质量。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 找对应</b>
+          <p>把两片点云的特征做一个相似度矩阵，按行取最大，就得到一组候选的对应关系。这一步出来的对应里，一定混着大量错误。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ RANSAC 定案</b>
+          <p>用 RANSAC 从这堆带噪的对应里找出一个<b>一致集</b>：每次随机取最少的 3 对点算出一个变换，数一数有多少对落在阈值内（原文的内点阈值是 <b>0.5 米</b>），重复多轮取一致集最大的那个。<b>最终的旋转与平移由这个一致集用闭式解（正交 Procrustes，用 SVD）算出来。</b></p>
+        </div>
+      </div>
+
+      <p>这里有两点值得特别说明：</p>
+
+      <ul>
+        <li><b>它的鲁棒性来自「样本共识」，不是来自鲁棒核。</b>RANSAC 的逻辑是：如果正确的对应是少数，那就<b>随机抽一小撮、看谁支持的人多</b>——只要抽中一撮全是内点，就能一次算对。这和外点占多数时「用鲁棒核慢慢往下压」是完全不同的思路。</li>
+        <li><b>它是学习式的，需要训练。</b>训练的目标是让「真值对应」的匹配概率尽可能高、其它对应的概率尽可能低（原文用一个对比式的损失函数来写）。这是它性能好的来源，同时也是它局限的来源——下一节会讲。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Fast_and_Robust_Registration_of_Partially_Overlapping_Po/c08ce10d3d2d63c3679867207efa30ca4fc4a53c1e9fa5ac1186a57995890a5f.jpg" alt="Partially Overlapping Fig.2 pipeline and data flow">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Pipeline and data flow of the proposed point cloud registration method.<br>
+          （中译：本文点云配准方法的流水线与数据流。）<br>
+          <b>怎么看这张图：</b>① 请顺着数据流一路读过去，对着上面那四步数一遍：<b>编码 → 图注意力精修 → 求对应 → RANSAC</b>；② 注意图里有<b>两片点云从左右两侧同时进入</b>——这正是「成对配准」这个定位的直接体现，它不同于里程计那种「当前帧对地图」的结构；③ 请在图里找一找有没有「鲁棒核」「截断」这一类字眼，<b>没有</b>——它的鲁棒性是在最后那一步用样本共识达成的。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>面对「内点远远少于外点」的两片部分重叠点云，这一篇靠什么把正确的位姿找出来？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。先用学习出来的点特征和图注意力求出高质量的候选对应，再用 RANSAC 靠样本共识从这堆带噪对应里挑出一致集，最后由一致集闭式算出旋转与平移。原文的内点阈值是 0.5 米、最少 3 对点。" onclick="lessonKit.answer(this,'q0091b')">学习特征再做图注意力</button>
+          <button data-correct="no" data-explanation="GNC 与 TEASER 在这篇论文里只是作为基线被比下去的，不是它的方法。别把「对比方法」当成「本文方法」——这是读论文表格时最常见的坑之一。" onclick="lessonKit.answer(this,'q0091b')">渐进非凸再截断最小二乘</button>
+          <button data-correct="no" data-explanation="手工设计的特征在低重叠下恰恰是靠不住的——两片点云的密度、视角都不一样，靠距离阈值筛出来的对应里外点占大多数。这篇的可学习部分正是为了替换掉这一步。" onclick="lessonKit.answer(this,'q0091b')">手工特征再配距离阈值</button>
+        </div>
+        <div class="quiz-feedback" id="q0091b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>7. 数字、短板与它在回环链上的位置</h2>
+
+      <p>先给两篇各一张数字小表。</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>Switch-SLAM 的数字</b>
+          <p>· 数据集：仿真的 Fast Rotate／Plane／Farm 三段，加真实的 Handheld／Multi Floor／Long Corridor／ANYmal 1–4 等段，其中部分序列<b>人为把视场限制到 180°</b> 来制造退化。<br>
+          · 精度：在 Farm、Multi Floor、Long Corridor、ANYmal 1–3 上最优；在结构良好的 Fast Rotate 上与 LIO-SAM 持平（<b>此时纯激光就够了，切换没有额外收益</b>）。<br>
+          · 退化检测：精度 <b>0.96</b>、召回 <b>0.99</b>，且不需要调阈值。<br>
+          · 平台 i7-1165G7，可实时运行。</p>
+        </div>
+        <div class="mini-card">
+          <b>Partially Overlapping 的数字</b>
+          <p>· KITTI：本文 26.1 cm、0.41 秒；<b>本文加 ICP 精炼</b> 8.2 cm、3.68 秒，<b>比最快的基线还快 5 倍以上</b>。<br>
+          · CODD：重叠率大于 0 时，本文召回 <b>0.94</b>、耗时 320 毫秒；本文加 ICP 召回 <b>0.97</b>、1.28 秒，<b>比 DGR／FCGF 快 35 倍</b>；在重叠率大于 0.4 的区间里，平均平移误差 <b>0.22 m</b>，优于全部基线。<br>
+          · 平台 Xeon 加 Quadro M4000，输入帧率下可达 <b>3 Hz</b> 实时。</p>
+        </div>
+      </div>
+
+      <p>两篇的短板也逐条列出来，都照原文写：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">篇</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">原文承认短板</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Switch-SLAM</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">① 激光里程计<b>仍然用 LOAM 式的特征提取</b>，对「特征本身就缺失」的环境有本质局限；② 只切换<b>初值</b>，重度退化时还是要靠紧耦合那一步兜底；③ <b>实验里没有启用 GNSS 与回环</b>（作者说这是为了单独考察里程计部分）；④ 视觉那一侧的失败检测仍用经验阈值</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Partially Overlapping</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">① 它是<b>学习式</b>的，需要训练数据，而且依赖 CARLA 合成的 CODD 数据集——<b>真实分布的偏移是个隐患</b>；② 不加 ICP 精炼时，KITTI 上的平均平移误差<b>略高于 DGR</b>；③ 编码器的超参是针对室外驾驶场景调出来的，换到室内要重新调</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>★ 把两篇放回整条回环链上</h3>
+
+      <p>最后把本节和整个第四季的后半段串起来。回环这件事，完整地看是三步：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 260" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">回环的三步：本节站在第 ② 步</text>
+
+          <rect x="60" y="76" width="200" height="94" rx="8" fill="#eef4fa" stroke="#b6cde0" stroke-width="1.4"/>
+          <text x="160" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">① 找候选</text>
+          <text x="160" y="136" text-anchor="middle" font-size="11" fill="#5a7a99">下一节 0092 讲</text>
+
+          <rect x="350" y="76" width="200" height="94" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="450" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 配准对齐</text>
+          <text x="450" y="136" text-anchor="middle" font-size="11" fill="#5f8a72">本节：低重叠配准</text>
+
+          <rect x="640" y="76" width="200" height="94" rx="8" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="740" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">③ 图优化</text>
+          <text x="740" y="136" text-anchor="middle" font-size="11" fill="#a8846f">把回环因子加进图</text>
+
+          <line x1="262" y1="123" x2="336" y2="123" stroke="#90a4ae" stroke-width="2"/>
+          <path d="M348 123 L336 117 M348 123 L336 129" stroke="#90a4ae" stroke-width="2" fill="none"/>
+          <line x1="552" y1="123" x2="626" y2="123" stroke="#90a4ae" stroke-width="2"/>
+          <path d="M638 123 L626 117 M638 123 L626 129" stroke="#90a4ae" stroke-width="2" fill="none"/>
+
+          <text x="450" y="222" text-anchor="middle" font-size="12" fill="#5a4a42">假阳性（找错了回环）的代价极大 —— 第一季 0014 课的铁律</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>回环检测这件事被拆成三步之后，本节这一篇站在哪一格。<br>
+          <b>怎么看这张图：</b>① 第 ① 步「找候选」是检索问题——<b>下一节 0092 课讲的就是它</b>；② 第 ② 步「配准对齐」是本节 Partially Overlapping 做的事——<b>把两片可能只重叠一点点的点云精确对上，并顺便判断「到底像不像」</b>；③ 第 ③ 步「图优化」是把这对约束当成一条边加进位姿图，也就是第二季 <b>0020／0021</b> 课讲过的因子图与求解。<br>
+          <b>要记住的一句话：</b>第一季 0014 课那条假阳性铁律之所以能守住，靠的正是第 ② 步——<b>检索负责「像」，对齐负责「真的像」</b>。
+        </figcaption>
+      </figure>
+
+      <h3>★ 我们的判断（注意：这是判断，不是原文自评）</h3>
+
+      <div class="callout">
+        <h4>请把下面这段当作读者视角</h4>
+        <p><b>Switch-SLAM 最有价值的地方，不是「用了视觉」，而是它的那套判断。</b>「非启发式的退化检测」这一件事——从统计假设推出阈值、把检测做到 0.99 的召回、并且明确宣称不需要调参——比「多加一路传感器」要难得多，也可复用得多。<b>而且它对「切换」这个动作的克制值得学</b>：只切初值，不切系统；只有在退化真正发生时，才把两路残差紧耦合起来。这是一种「尽量不破坏已经对的东西」的工程直觉。<br>
+        它最明显的软肋也写在原文里：<b>激光那一侧用的还是 LOAM 式的特征提取。</b>这意味着它只能应对「特征被削弱」的退化，而不能应对「特征压根不存在」的退化。如果换成前面几课那种直接法（FAST-LIO2、KISS-ICP 这一族）作为激光侧，它的适用面应该会更宽——<b>但这只是我的推测，原文没有做这个实验。</b><br>
+        <b>Partially Overlapping 则是一篇定位非常清楚的工具论文。</b>它不解决「该不该对齐」（那是回环检测的事），只解决「给我两片低重叠点云，怎么又快又准地对上」。它的 35 倍加速和 0.94 召回都是实打实的，而且在重叠率大于 0.4 的区间里做到了优于所有基线——这个区间恰好就是实际回环验证最常遇到的区间。<br>
+        <b>它的最大隐患是训练数据的来源</b>：整个训练依赖 CARLA 合成的 CODD 数据集。合成数据与真实点云在噪声特性、密度分布上总有差距，这一点原文自己也承认了。<b>「低重叠能不能上真车」，取决于这个域差距有多大。</b><br>
+        <b>一句话总结本节：</b>Switch-SLAM 决定「退化时听谁的」，Partially Overlapping 决定「两片只重叠一点点的点云能不能被信」。<b>一个管决策，一个管证据。</b></p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请解释「退化」是什么意思，并说明为什么原文强调「退化通常不超过 3 个自由度」这件事对 Switch-SLAM 的可行性很关键。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>退化是什么：</b>在某些环境里，机器人在某个方向上的运动<b>不会让传感器数据产生可辨认的变化</b>，于是那个方向的运动量估不出来。用最小二乘的语言说，就是信息矩阵（海森矩阵）在那个方向上的特征值接近零——那个方向是「不可观」的。</p>
+              <p><b>典型例子：</b>长走廊里，沿走廊方向的墙是平行的两片。你往前走一米，看到的图案几乎没变，所以「走了多少」这件事没有线索。其它常见的退化结构还有大片单独的平面、隧道；视觉侧的退化则是激进旋转、光照剧变、纹理缺失。</p>
+              <p><b>为什么「不超过 3 个自由度」很关键：</b>六自由度的位姿里，如果一次退化就把六个方向全部打掉，那么任何「换一路传感器来补」的想法都没有意义——因为没有哪个方向还剩信息可以被利用。而原文说得很清楚：<b>只要有平面特征或边缘特征存在，退化通常不会超过 3 个自由度</b>，也就是六个方向里只丢掉两三个，其余的还是良定的。</p>
+              <p>正因为只丢掉一部分，另外一路传感器（比如视觉）在<b>那几个被丢掉的方向上恰好保有信息</b>，Switch-SLAM 才有活干——它只需要把初值在这几个方向上换成可信的来源，其余方向继续用激光。如果反过来，退化是全方位的，那么「切换初值」也就无从谈起了。</p>
+            </div></details>
+          </li>
+          <li>Switch-SLAM 的「切换」到底切的是什么？请把它<b>不是</b>什么也说清楚，并解释为什么这个设计比「换一整套系统」更稳妥。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>它切的是「scan-to-map 的初值来源」。</b>原文的结构是：激光里程计（LO）与视觉里程计（VO）<b>并行地跑着</b>，由一个切换节点决定这一次的 scan-to-map 用谁的传播结果当初值。位姿正常时用激光的传播，检测到激光退化时扳到视觉的传播。<b>两边的点云数据始终都在用。</b></p>
+              <p><b>它不是：</b>① 不是「激光失效了就整个换成视觉 SLAM」——激光那一侧没有被关掉，退化时它还会在 scan-to-map 里把自己的残差交出来联合优化；② 不是换地图表示——地图仍然是 LOAM 式的平面与边缘特征地图；③ 也不是单一的紧耦合融合系统——里程计那一层两边各自独立跑（松耦合），只有在退化发生时，scan-to-map 这一步才把两边残差紧耦合在一起。</p>
+              <p><b>为什么更稳妥：</b>① scan-to-map 是一个<b>迭代求解</b>过程，它需要一个起点。起点好的时候几步就收敛；起点被退化方向带偏了就会跑飞。切换的正是这个「起点」，改动小、见效直接。② 如果整个换成另一套系统，就会丢掉激光在<b>那些还良定的方向上</b>的信息——而那部分信息本来是好用的。③ 只切初值意味着<b>失败的信息不会被传播出去</b>：退化的方向由视觉来带路，良定的方向还是激光说了算，两边各用所长。④ 它还配了状态缓冲做平滑过渡，避免在退化边界上来回抖动。原文还写了一段起止退化时把两路差分按权重混合的插值公式，正是为了避免硬切。</p>
+            </div></details>
+          </li>
+          <li>低重叠点云配准为什么这么难？请用「对应关系的数量」这个角度解释，并说明本篇是用什么办法绕过这个困难的。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>难点在于「内点远远少于外点」。</b>配准的核心是找到对应点对。在部分重叠的场景里（原文说两片点云的相对平移可达 30 米），两片点云只有一小块是重叠的，剩下的部分各自看到的是不同的东西——<b>在重叠区之外，一个点根本找不到对应</b>。再叠加激光点云的稀疏性，同一处物理表面两次扫描几乎不可能打中同一个点，于是真正能对上的点少得可怜。</p>
+              <p>原文的实测把这件事说得很直白：ICP 在重叠率大于 0.6 时召回还有 0.67；一旦放宽到「重叠率大于 0」，召回掉到 <b>0.07</b>，旋转误差高达 <b>74.84°</b>——等于完全失败。原因是这类方法隐含地假设「大部分点都是重叠的、而且初值不差」，低重叠把两个前提同时打破了。</p>
+              <p><b>本篇的办法：学习特征 + 图注意力 + RANSAC。</b>① 先用点级特征编码器把点变成 512 个关键点、每个 128 维的特征（利用局部形状，而不是单纯的三维坐标）；② 用图注意力（k 近邻 32）在同一点云内部做自注意力、在两片点云之间做跨注意力，<b>用几何上下文把模糊的对应变明确</b>；③ 求相似度得到候选对应；④ 最后用 <b>RANSAC</b> 靠样本共识从这堆带噪对应里挑出一致集，内点阈值 0.5 米、最少 3 对点，再由一致集闭式算出旋转与平移。</p>
+              <p><b>要注意的是：它的鲁棒性来自「样本共识」，不是来自鲁棒核。</b>GNC 与 TEASER 在这篇论文里只是作为基线出现的。RANSAC 的逻辑是：既然正确的对应是少数，那就随机抽一小撮、看谁支持的人多——只要抽中一撮全是内点，就能一次算对。这和「用鲁棒核慢慢往下压外点」是完全不同的两条路。</p>
+            </div></details>
+          </li>
+          <li>本节两篇共同的现实约束是什么？请分别说出它们的短板，并说明这些短板各自会怎样限制它们的适用范围。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>Switch-SLAM 的约束是「它的激光那一侧本身不够强」。</b>原文承认激光里程计用的仍然是 <b>LOAM 式的特征提取</b>。这意味着它只能应对「特征被削弱」的退化（长走廊、开阔地），而不能应对「特征压根不存在」的退化——因为特征法是靠提取角点、平面点吃饭的，环境里没有这些，它自己就先失效了。所以它的适用范围是<b>「结构还在、只是不够」的退化环境</b>，而不是「完全无结构」的环境。此外它还有三条自认的边界：只切初值（重度退化仍需紧耦合兜底）、实验里没有启用 GNSS 与回环（所以论文展示的能力只覆盖里程计部分）、视觉侧的失败检测仍在用经验阈值。</p>
+              <p><b>Partially Overlapping 的约束是「它是学习式的」。</b>它需要训练数据，而且训练依赖的是 CARLA 合成的 CODD 数据集。合成点云和真实点云在噪声特性、点密度分布、遮挡模式上总会有差距，所以<b>「在合成数据上学到的能力，能不能迁移到真实传感器上」是一个真实的隐患</b>——原文自己把这一条写进了局限。它还有两条次要的边界：不加 ICP 精炼时，KITTI 上的平均平移误差略高于 DGR；编码器的超参是针对室外驾驶场景调的，换到室内要重新调。</p>
+              <p><b>两条约束的性质不一样：</b>Switch-SLAM 的限制来自<b>方法本身的假设</b>（特征法对无特征环境无能为力），属于「换个前提就会失效」；Partially Overlapping 的限制来自<b>训练数据的来源</b>，属于「换个域就可能掉性能」。<b>读论文时把这两种性质的限制分开看，会更容易判断一篇方法能不能搬到你的场景里。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0090-强度与鲁棒-反射率这条额外通道.html">← 强度与鲁棒：反射率这条额外通道</a>
+        <a class="next" href="0092-激光回环上-几何路线与词袋路线.html">激光回环（上）：几何路线与词袋路线 →</a>
+      </div>
+      <p class="foot-note">退化的应对有一整套谱系：补一路信息、换一个带路的、或者干脆把对齐这件事本身做扎实 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

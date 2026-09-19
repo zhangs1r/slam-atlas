@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跨出版商论文 PDF 下载能力实测报告</title>
+<style>
+  :root{
+    --bg:#0d1117;--bg2:#161b22;--bg3:#1c2129;--line:#30363d;
+    --fg:#e6edf3;--fg2:#9aa4b2;--fg3:#6e7681;
+    --ok:#3fb950;--warn:#d29922;--bad:#f85149;--info:#58a6ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);line-height:1.7;padding:36px 20px 80px;
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",-apple-system,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:27px;font-weight:650;border-bottom:1px solid var(--line);padding-bottom:20px}
+  h1 span{color:var(--info)}
+  .sub{color:var(--fg2);font-size:13.5px;margin-top:9px}
+  h2{font-size:18px;margin:38px 0 14px;padding-left:11px;border-left:3px solid var(--info)}
+  .answer{background:linear-gradient(135deg,#161b22,#1a2332);border:1px solid #2d4a6b;
+    border-radius:11px;padding:18px 20px;margin:22px 0}
+  .answer b{color:var(--ok)}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--fg2);font-weight:600;font-size:12px;background:var(--bg2)}
+  tr:hover td{background:#12171e}
+  td.c{white-space:nowrap}
+  .tag{display:inline-block;font-size:11px;padding:1.5px 8px;border-radius:20px;border:1px solid}
+  .t-ok{color:var(--ok);border-color:#23622f;background:#0f2417}
+  .t-warn{color:var(--warn);border-color:#5c4708;background:#211a06}
+  .t-bad{color:var(--bad);border-color:#6b2020;background:#250f0f}
+  .box{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:16px 19px;margin:14px 0}
+  .box h3{font-size:14px;margin-bottom:10px}
+  ul{list-style:none;margin:0}
+  li{font-size:12.8px;color:var(--fg2);padding:5px 0 5px 18px;position:relative}
+  li:before{content:"";position:absolute;left:4px;top:11px;width:5px;height:5px;border-radius:50%;background:var(--fg3)}
+  li b{color:var(--fg)}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:11.5px;color:#ffa657}
+  .num{color:var(--ok);font-weight:650}
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>跨出版商论文 PDF 下载能力 <span>实测报告</span></h1>
+<div class="sub">测试时间 2026-09-16 · 环境：Windows + 校园网 VPN（机构 IP 认证已生效）· 方法：统一浏览器请求头 + curl · DOI 经 OpenAlex 解析，不靠猜测</div>
+
+<div class="answer">
+  <b>核心结论：这套技术的"内核"确实通用，但不存在万能脚本。</b><br>
+  12 家主流出版商里 <b>9 家可以直接用同一套方法跑通</b>。真正决定成败的不是出版商，而是它背后用的是<b>哪一档风控产品</b>——
+  只要补齐浏览器指纹头就能过的那类，脚本完全够用；而用了强反爬体系的，脚本路线基本走不通，得回到浏览器自动化。
+</div>
+
+<h2>先回答第一个问题：靠脚本还是浏览器？</h2>
+<div class="box">
+  <ul>
+    <li><b>最终跑通 58 篇靠的是脚本（curl），不是浏览器自动化。</b></li>
+    <li>浏览器那套（<code>opencli browser</code> + CDP 驱动的独立 Chrome）在<b>侦察阶段</b>功不可没：探明检索接口、确认机构权限、验证 PDF 可访问。</li>
+    <li>但真到批量下载时它处处碰壁：往本地端口回传数据被 Chrome 的<b>本地网络访问权限</b>拦住、账号登录态在无痕窗口里丢失、调试目标被导航打断。</li>
+    <li>而 curl 一旦摸对写法（浏览器头 + 两步走预热），又快又稳——58 篇 285 MB 全量下载零失败。</li>
+  </ul>
+</div>
+
+<h2>实测结果：三档分类</h2>
+
+<h3 style="font-size:15px;margin:20px 0 8px;color:var(--ok)">🟢 第一档 · 直接可用（换 URL 就行，同一套脚本）</h3>
+<table>
+  <tr><th>站点</th><th>可用 URL 模式</th><th class="c">实测</th></tr>
+  <tr><td>arXiv</td><td><code>/pdf/&lt;id&gt;</code></td><td class="c"><span class="tag t-ok">200 · PDF</span></td></tr>
+  <tr><td>Nature</td><td><code>/articles/&lt;doi后缀&gt;.pdf</code></td><td class="c"><span class="tag t-ok">2.93 MB</span></td></tr>
+  <tr><td>Springer Link</td><td><code>/content/pdf/&lt;doi&gt;.pdf</code></td><td class="c"><span class="tag t-ok">200 · PDF</span></td></tr>
+  <tr><td>Science.org (AAAS)</td><td><code>/doi/pdf/&lt;doi&gt;</code></td><td class="c"><span class="tag t-ok">200 · PDF</span></td></tr>
+  <tr><td>IOPscience</td><td><code>/article/&lt;doi&gt;/pdf</code></td><td class="c"><span class="tag t-ok">200 · PDF</span></td></tr>
+  <tr><td>Frontiers</td><td><code>/journals/&lt;刊名&gt;/articles/&lt;doi&gt;/pdf</code> ⚠️ 新版路径</td><td class="c"><span class="tag t-ok">3.26 MB</span></td></tr>
+  <tr><td>Wiley</td><td><code>/doi/pdfdirect/&lt;doi&gt;</code> + 两步走</td><td class="c"><span class="tag t-ok">0.56 MB</span></td></tr>
+  <tr><td>ACM Digital Library</td><td><code>/doi/pdf/&lt;doi&gt;</code> + 两步走</td><td class="c"><span class="tag t-ok">0.45 MB</span></td></tr>
+  <tr><td>IEEE Xplore</td><td><code>/stampPDF/getPDF.jsp?arnumber=&lt;id&gt;</code> + 两步走 + 跟随 <code>&amp;tag=1</code></td><td class="c"><span class="tag t-ok">58 篇已验证</span></td></tr>
+</table>
+
+<h3 style="font-size:15px;margin:24px 0 8px;color:var(--warn)">🟡 第二档 · 站点可达，但要额外解析</h3>
+<table>
+  <tr><th>站点</th><th>障碍</th><th class="c">实测</th></tr>
+  <tr><td>MDPI</td><td>PDF 地址不是 DOI 派生的，是 <code>/&lt;issn&gt;/&lt;卷&gt;/&lt;期&gt;/&lt;页&gt;/pdf</code>，必须从落地页解析</td><td class="c"><span class="tag t-warn">404 · 站点正常</span></td></tr>
+  <tr><td>Taylor &amp; Francis</td><td>PDF 端点返回 HTML，真实链接要从落地页里解析</td><td class="c"><span class="tag t-warn">200 · HTML</span></td></tr>
+</table>
+
+<h3 style="font-size:15px;margin:24px 0 8px;color:var(--bad)">🔴 第三档 · 脚本路线基本走不通</h3>
+<table>
+  <tr><th>站点</th><th>障碍</th><th class="c">实测</th></tr>
+  <tr><td>Elsevier / ScienceDirect</td><td>强风控体系，且无通用 PDF URL 模式（PII 无法从 DOI 推导）</td><td class="c"><span class="tag t-bad">403</span></td></tr>
+  <tr><td>Oxford Academic</td><td>403 风控拦截</td><td class="c"><span class="tag t-bad">403</span></td></tr>
+  <tr><td>SAGE</td><td>连接层面就不通（443 端口 21 秒超时），疑似网络路由或 IP 段被拒</td><td class="c"><span class="tag t-bad">连接失败</span></td></tr>
+</table>
+
+<h2>决定成败的是什么？</h2>
+<div class="box">
+  <h3>不是出版商，是风控产品</h3>
+  <ul>
+    <li><b>只要补齐指纹就能过</b>（Incapsula、Cloudflare 基础档）→ 关键就是带全套 <code>Sec-Fetch-Dest/Mode/Site/User</code>、完整 <code>Accept</code>、<code>Upgrade-Insecure-Requests</code>。IEEE、Wiley、ACM 都属这类。</li>
+    <li><b>两步走预热</b>是解锁关键：先访问落地页拿 cookie，再带 <code>Referer</code> 请求 PDF。Wiley 和 ACM 在一轮测试里返回网页，加了这一步就都成功了。</li>
+    <li><b>强反爬体系</b>（ScienceDirect、Oxford）会做行为分析，脚本即使带全头也会被识别，这时只能上浏览器自动化或手动。</li>
+  </ul>
+</div>
+
+<div class="box">
+  <h3>三条通用铁律（跨站都适用）</h3>
+  <ul>
+    <li><b>必须校验 <code>%PDF-</code> 魔数，不能只看 HTTP 状态码。</b>风控挑战页会返回 200 + text/html 或 202，看着像成功其实不是 PDF——我第一次批量下载 40 篇全军覆没就是这个原因。</li>
+    <li><b>优先走机构 IP 认证，别依赖账号登录态。</b>校园网 VPN 连上后 curl 直接就能用；账号登录在无痕窗口里一关就全丢。</li>
+    <li><b>顺序是先查开放获取，再查订阅。</b>OpenAlex 的 <code>best_oa_location</code> 能直接给出合法的开放 PDF，命中率很高，能省掉大量权限麻烦。</li>
+  </ul>
+</div>
+
+<h2>实用建议</h2>
+<div class="box">
+  <ul>
+    <li><b>做综述/调研时优先用 arXiv + 开放获取。</b>SLAM、CV、机器人领域的顶会论文绝大多数有 arXiv 预印本，脚本直连零阻力。</li>
+    <li><b>Elsevier / Oxford 的论文，先找替代版本。</b>通常 arXiv 上有预印本，或作者主页、机构仓库、PMC 有合法副本。</li>
+    <li><b>真要下强风控站点的订阅内容</b>，建议手动下载后放进目录——批量自动化的工程量不划算。</li>
+    <li>这套能力本质上是<b>把你本来就有的合法访问权自动化了</b>（开放获取内容 + 你所在机构的订阅范围），下载后请遵守各出版商的使用条款，仅供个人研读。</li>
+  </ul>
+</div>
+
+<footer>
+  测试脚本：<code>tools/site_probe.py</code>（第一轮：DOI 解析 + 直链探测）、<code>tools/site_probe2.py</code>（第二轮：两步走验证）<br>
+  原始结果：<code>meta/site_probe_result.json</code>、<code>meta/site_probe2_result.json</code>、<code>meta/site_probe*.log</code>
+</footer>
+
+</div>
+</body>
+</html>

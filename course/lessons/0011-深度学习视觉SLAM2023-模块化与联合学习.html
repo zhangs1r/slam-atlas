@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>深度学习视觉 SLAM（2023）：模块化与联合学习 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">深度学习专题 · Lesson 0011</div>
+      <h1>深度学习视觉 SLAM（2023）：模块化与联合学习</h1>
+      <p class="subtitle">换一副眼镜看同一片天地：按"学习范围"切四刀，看清深度学习到底吃下了 SLAM 的哪几块 🧠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：深度学习 VSLAM 四分类法（模块化 / 联合 / 置信度 / 主动学习）、匹配为何先被攻陷、六大未成熟环节</span>
+        <span>👥 作者：Saad Mokssit, Daniel Bonilla Licea, Bassma Guermah, Mounir Ghogho</span>
+        <span>📅 2023（IEEE Access） · <i>Deep Learning Techniques for Visual SLAM: A Survey</i></span>
+      </div>
+      <div class="toc">
+        <a href="#year">先说年份</a>
+        <a href="#pipeline">经典管线与四分类法</a>
+        <a href="#modular">模块化学习</a>
+        <a href="#evidence">匹配为何先被攻陷</a>
+        <a href="#joint">联合学习</a>
+        <a href="#confidence">置信度学习</a>
+        <a href="#active">主动学习</a>
+        <a href="#open">六大未成熟环节</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="year">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>上一课（Chen et al. 2024）按"功能模块"切分领域；这一课的综述换了个切法——按"<b>学习范围</b>"（网络是一次只学一个模块，还是联合学多个模块，管不管不确定性，管不管主动探索）切四刀。两条分类轴交叉着看，你对这个领域的理解就立体了。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>上一课结尾说"混合路线是赢家"。这一课会从另一个角度佐证它：模块化学习"融合要额外成本、整体最多与单模块持平"，联合学习"整体更好但训练代价大"——两篇综述从不同方向摸到了同一头象。</p></div>
+      </div>
+
+      <h2>0. 开课先校准一件小事：年份</h2>
+      <p><b>⚠️ 我们的文件名叫 <code>2024_DeepSLAM-Survey.md</code>，但正文是 2023 年的工作</b>：md 第一行明确写着 "Received 5 February 2023, accepted 17 February 2023, date of publication 27 February 2023"，DOI 是 10.1109/ACCESS.2023.3249661，发表在 IEEE Access，标题 <i>Deep Learning Techniques for Visual SLAM: A Survey</i>，作者 Saad Mokssit、Daniel Bonilla Licea、Bassma Guermah、Mounir Ghogho。<b>本课一律按正文的 2023 年来称呼它</b>，文件名里的 2024 只是素材库命名习惯，两处不一致请知悉。</p>
+    </main>
+
+    <section class="section-card" id="pipeline">
+      <h2>1. 一张图讲完：经典管线 + 深度学习的切入点</h2>
+      <p>先复习经典 VSLAM 管线（原文 Sec. III）：图像序列 → 特征提取（SIFT/ORB 这类手工特征）→ 视觉里程计（内部又含特征匹配、外点剔除、光流估计、深度估计，最后合成相对位姿）→ 局部建图 → 局部优化 → 全局优化；旁边还有一条"去过的地点数据库 → 回环检测"支路。原文的 Fig. 1 画的就是它，而紧贴其下的 Fig. 2 是本文自建的四分类树。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepSLAM-Survey/a984a87875859941199411198ab5ca466a050d833d40d8701793801be01360cf.jpg" alt="Figure 1 Visual SLAM pipeline 与 Figure 2 深度学习 VSLAM 分类树（合扫描件）">
+        <figcaption>
+          <p><b>原图注（FIGURE 1 &amp; FIGURE 2）：</b>注意——<b>这一张 jpg 其实含两张图</b>：上半部分是 FIGURE 1 "Visual SLAM pipeline"（视觉 SLAM 管线：图像序列 → 特征提取 → 视觉里程计估计［内含特征匹配 / 外点剔除 / 光流估计 / 深度估计 → 相对位姿估计］+ 局部建图 → 局部优化 → 全局优化，以及"Previously visited places database → Loop closure Detection"支路）；下半部分是 FIGURE 2 "Deep learning-based VSLAM taxonomy"（深度学习 VSLAM 分类树：Modular / Joint / Confidence / Active 四大类，分别对应正文 Section 5 / 6 / 7 / 8）。</p>
+          <p><b>怎么看这张图：</b>先看上半：红色框圈出的"视觉里程计估计"内部有四个小模块（匹配、剔外点、光流、深度），它们是后面深度学习最先下手的部位；左侧数据库支路说明回环检测是独立于主流程的一路。再看下半的分类树：树枝上明确标着 Section 5–8——<b>模块化学习</b>（Sec.5，逐个学管线里的单模块：深度、光流、VO、建图、回环）、<b>联合学习</b>（Sec.6，深度+光流+自运动一起学，或端到端）、<b>置信度学习</b>（Sec.7，估计或降低不确定性）、<b>主动学习</b>（Sec.8，主动控制运动与传感）。这张分类轴的切法是"<b>学习范围</b>"，和上一课按功能切分的分类轴互补——建议把两张树画在一起对照。</p>
+        </figcaption>
+      </figure>
+
+      <p>原文对这四类各有一句"定调"，先记下来，后面逐类展开：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① Modular Learning 模块化</h4><p>在经典管线内<b>孤立地</b>学单个模块。原文原话（务必体会）："their efficient fusion within the system requires additional effort, and, usually, the overall VSLAM performance may be as high as that of the individual modules"——各模块各自性能再高，<b>融合进系统还要额外下功夫，整体性能通常也就到单个模块的水平（最多持平）</b>。</p></div>
+        <div class="mini-card"><h4>② Joint Learning 联合</h4><p>联合优化多个模块或学整条管线。原文："exhibit better overall performance, but require significant effort in the training phase"——<b>整体更好，但训练代价大</b>。</p></div>
+        <div class="mini-card"><h4>③ Confidence Learning 置信度</h4><p>对全过程的不确定性要么<b>估计</b>它、要么<b>降低</b>它，借概率推理让 VSLAM 更抗风险。</p></div>
+        <div class="mini-card"><h4>④ Active Learning 主动</h4><p>新兴方向：<b>主动控制机器人运动与传感器</b>去获取信息、改进系统性能（Active SLAM）。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="modular">
+      <h2>2. 模块化学习：逐个模块点名</h2>
+      <h3>2.1 学习深度</h3>
+      <p>立体视觉时代的经典做法把深度估计写成能量最小化（原文公式 (1)）：</p>
+      <div class="formula-box">
+$$E(D)=\sum_{x}C(x,d_x)+\sum_{x}\sum_{y\in N_x}E_s(d_x,d_y)\tag{1}$$
+        <p>$x,y$ 是像素，$N_x$ 是 $x$ 周围局部邻域的像素集合，$d_x$ 是像素 $x$ 的视差（深度的倒数），$D$ 是要优化的视差图；$C(x,d_x)$ 度量左图像素 $x$ 与右图像素 $y=(i,j-d_x)$ 的相似代价，$E_s(d_x,d_y)$ 是平滑性 / 左右一致性的正则项。经典方法条件好时很准，但<b>迭代精修的计算负担太重</b>；深度学习把优化全挪到训练期，推理只要一次前向，又快又省。</p>
+      </div>
+      <p>监督路线：从"块匹配 CNN + 决策网络"的层级设计，发展到端到端直接回归视差（免显式匹配但要海量数据）、双网络"粗（全连接看全图）+ 精（卷积看局部）"架构、尺度不变损失（用像素对相对距离当监督，绕开尺度歧义）、SID 策略（远处允许更大误差，把深度估计重述为序数回归）、给网络加相机模型以适配不同相机。自监督路线：视频帧间几何约束——把后续帧像素投回前一帧，用重建差异当监督信号（搭配 explainability mask 给"模型自认要失败的区域"降权），以及左右目已知基线的立体自监督。</p>
+
+      <h3>2.2 学习光流</h3>
+      <p><b>光流</b>（optical flow）= 逐像素在 2-D 图像平面上的位移矢量场。先看一张示意图建立直觉：</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepSLAM-Survey/304ce0a8f57d3e71fba4654add4ed109c1052e4f0b4c22a167fdccd65fa38659.jpg" alt="Figure 3 相邻帧之间的光流">
+        <figcaption>
+          <p><b>原图注（FIGURE 3）：</b>Optical flow between consecutive frames（相邻帧之间的光流）。上排是 Frame-1/2/3 三帧（红色像素是被追踪的那个点），下排是 Optical flow 1→2 与 2→3 的位移矢量场。</p>
+          <p><b>怎么看这张图：</b>上排盯住红色像素：它在三帧里逐格移动；下排把每帧间"每个像素去哪了"画成箭头场——这就是光流。红色箭头对应红色像素自己的位移。经典方法依赖两条硬假设：① 像素移动时<b>亮度不变</b>（亮度恒常假设）；② 位移是<b>局部小平移</b>。原文点破其缺陷：这两条隐含地<b>把光流限制在小位移上</b>——位移一大，亮度必然明显变化，假设就崩了。深度学习不设这些硬约束，因此能吃下大位移和复杂运动。</p>
+        </figcaption>
+      </figure>
+      <p>监督路线的关键人物是 FlowNet：<b>FlowNetSimple</b> 把两帧直接堆叠过 CNN；<b>FlowNetCorr</b> 双分支分别提特征，再用<b> correlation layer（相关层）</b>合并——原文 Sec. V-B 的关键论断是：纯前馈 CNN "只能从输入中提取有意义的模式，<b>缺少学习'追踪这些特征如何移动'的机制</b>"，所以必须加相关层来补上"追踪"这一环。后续：<b>FlowNet2</b>（迭代精修 + 小位移专用子网络 + 混合损失，先 FlyingChairs 后 FlyingThings3D 的课程式训练带来约 30% 提升，代价是超过 1.6 亿参数，难以部署在嵌入式设备）、<b>SPyNet</b>（金字塔由粗到细，比 FlowNet 小 96% 但打不过 FlowNet2）、<b>PWC-Net</b>（先提特征金字塔再用代价体积，不学习 warp 和代价体积操作，比 FlowNet2 小 17 倍还更准）、<b>RAFT</b>（维护单张高分辨率光流，多尺度 4-D 相关体积 + 循环单元迭代更新，横扫所有公开基准）。自监督路线：warp 重建帧 + 光度差当损失、遮挡掩码、全局对极约束（把光流化归为估计基础矩阵）、亮度对齐处理光照变化。</p>
+
+      <h3>2.3 学习视觉里程计</h3>
+      <p>监督路线：早期工作只学管线的局部（关键点提取、描述子、特征匹配），但误差逐模块累积、得不偿失；Konda et al. 把 VO 当分类问题（离散化带来误差累积）；early fusion（第一层就融合时序信息）与 slow fusion（逐层缓慢融合）两种时空特征架构；真正的里程碑仍是 <b>DeepVO</b>——CNN（FlowNet 结构）提空间特征 + RNN 追踪时序变化，在 KITTI 上与最先进单目 VO 打平，成为端到端 VO 的基线。原文的评价很到位：<b>"空间特征交给 CNN、时间依赖交给 RNN"的解耦</b>是其成功关键；且监督式 VO 天然输出带全局尺度的单目位姿（网络从海量图像隐式编码了尺度）。原文 Sec. V-C 还有一句大实话："与传统方法相比，深度学习 VO <b>不需要特征提取、特征匹配或复杂的几何运算</b>"（does not require feature extraction, feature matching, or complex geometric operations）——这句话是"深度学习为什么先吃下匹配类任务"证据链的第一环（下一节展开）。自监督路线：SfmLearner 式 DepthNet+PoseNet 新视角合成；立体训练 + 单目测试恢复尺度；3-D 几何损失保证深度尺度一致。原文 Table 4 对各路线的优劣有逐项总结（见下文表格裁剪件）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepSLAM-Survey/855128d47c7498c8e58826b41b4ae78e97b95ca94c7c7c876aebb9d9eb41b155.jpg" alt="TABLE 4 视觉里程计方法总结（原表格扫描裁剪件）">
+        <figcaption>
+          <p><b>原图注（TABLE 4. Visual Odometry estimation summary）：</b>视觉里程计方法总结表。<b>诚实说明：这是原论文表格的扫描裁剪件，不是插图</b>——正文 HTML 表格重排后它未出现在 md 的图片引用里，但文件真实存在，此处直接用作课程插图。表内四行：Synchrony detection［80］（监督，双目，计算高效但回归差）；Examine relative changes［82］= DeepVO（CNN+RNN，泛化好、隐式编码全局尺度，但不如经典几何方法准）；Novel view synthesis［52］= SfmLearner（深度 CNN+位姿 CNN，几何分析一致，但尺度歧义、依赖亮度恒常、假设静态无遮挡）；Scale aware estimation［84][85］（恢复全局尺度、保证几何一致性，但不纠正漂移累积）。</p>
+          <p><b>怎么看这张表：</b>横着读每一行都是一种"监督信号选择"的代价清单：要尺度就得引入双目或几何一致性约束；要免标签就得忍受亮度恒常假设。竖着对比"Drawbacks"一列，你会发现"漂移累积"没有任何一行能解决——这正是后面需要回环检测与后端优化的原因。</p>
+        </figcaption>
+      </figure>
+
+      <h3>2.4 学习建图（Learn to Map）</h3>
+      <p>原文把地图表示分三族：</p>
+      <ul>
+        <li><b>Space-free maps（自由空间地图）</b>：回答"哪里能走"。栅格地图准但时空复杂度高；拓扑地图（节点=地点，边=可通行路径）紧凑但环境变大后维护成本上升。实践常两者耦合：栅格先定障碍、拓扑后做规划。</li>
+        <li><b>Geometric maps（几何地图）</b>：depth map、point cloud、mesh、volumetric voxel 四种。原文的明确结论（原话）："most visual SLAM systems prefer using <b>depth and point cloud</b> representations"——mesh 和体素表达力强，但维护成本太高，实践中大多数视觉 SLAM 系统还是偏爱深度图和点云。</li>
+        <li><b>Semantic maps（语义地图）</b>：<b>SemanticFusion</b> 是第一个给 VSLAM 地图贴语义标签的深度架构（借 ElasticFusion 的帧间稠密对应，概率化融合 CNN 逐帧预测；依赖 RGB-D 只能室内、分不出同类的不同实例、只认见过的类、假设静态）。几何线索能识别实例级物体——先按几何分出独立物体、再在概率框架里维护候选类别置信度，分割精度大涨，但仍假设静态环境。动态环境两派：<b>动态区域剔除</b>（只拿静态部分定位建图，动态当外点——只适合低动态场景）vs <b>静态背景修补</b>（把最近帧的静态部分投到当前帧被遮挡处——能应对更高动态）。</li>
+      </ul>
+
+      <h3>2.5 学习回环检测</h3>
+      <p>先记两个失败模式：<b>感知混叠</b>（perceptual aliasing，假阳性：不同的地方长得像）与<b>感知变异</b>（perceptual variability，假阴性：同一地方因物体挪动而变样）。监督路线：预训练 CNN 特征 + <b>时空滤波</b>（每层特征生成混淆矩阵，候选闭环取极小值处，再用空间滤波验证空间邻近、时间滤波验证时间接近，精度 100%、召回提升 75%）；评估预训练 CNN <b>中间层特征</b>做回环（强光照变化下胜过当时最优，提特征还快）；<b>PCANet / AlexNet / CaffeNet / GoogLeNet 末层特征 + SVM 分类器</b>对比 BoW 与 GIST 两个手工基线——深度方法在精度和处理时间上大胜。自监督路线：堆叠<b>去噪自编码器</b>（故意加像素 dropout 再恢复，编码器当图像描述子）；<b>自编码器 + 随机投影变换 + HOG</b>（随机投影模拟视角变化练出视角不变性，改重建 HOG 特征获得光照鲁棒性）。</p>
+    </section>
+
+    <section class="section-card" id="evidence">
+      <h2>3. 本届最重要的教学点：深度学习为什么先吃下"匹配和检索"？</h2>
+      <p>把散在三个小节的三条证据串成一条链，你会看到一个清晰的规律——<b>深度学习最先攻陷的是"特征/匹配类"环节，因为这类能力最容易从分类任务的预训练里白嫖过来</b>：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>证据 ①（Sec. V-C）</h4><p>深度学习 VO "<b>does not require feature extraction, feature matching, or complex geometric operations</b>"——不需要特征提取、匹配和复杂几何运算。学习式方案直接从像素到位姿，绕开了手工特征这一整层。</p></div>
+        <div class="mini-card"><h4>证据 ②（Sec. V-E）</h4><p>文献 [114] 在描述子匹配基准上比较 CNN 各层特征与 SIFT："deep features from different layers were shown to <b>consistently outperform SIFT</b>. More intriguingly, the CNN network was <b>trained on a classification challenge rather than a descriptor matching task</b>."——各层深度特征全面碾压 SIFT，而且这个 CNN 是<b>拿图像分类任务训练的</b>！说明"匹配所需的能力"可以由分类预训练免费迁移过来。</p></div>
+        <div class="mini-card"><h4>证据 ③（Sec. V-B）</h4><p>但纯前馈 CNN "only able to extract meaningful patterns from the inputs, <b>lacking a mechanism to learn to track the movement of those features</b>"——只会"认"不会"追"，所以 FlowNetCorr 必须加 correlation layer 补上追踪机制。认（特征提取）易、追（对应关系）难，界限分明。</p></div>
+      </div>
+      <p>用大白话总结：CNN 在 ImageNet 式分类任务上预训练后，顺手就获得了比 SIFT 更能打的匹配特征（证据②），这解释了回环检测、重定位、描述子学习这些"匹配类"任务为何最先被深度学习攻陷（证据①）；而"追踪特征怎么动"是另一种能力，需要专门的结构（相关层、RNN）或监督信号（光流真值）来补（证据③）。这个视角同时解释了上一课的现象：为什么 PoseNet 式直接回归反而水土不服——回归位姿既不是"认"也不是现成的"追"，是最难学的那一档。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>文献 [114] 的发现里，最让当年研究者"surprised"的点是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="这只是结论的一半。真正令人意外的是这个 CNN 的训练任务和匹配毫不相干。" onclick="lessonKit.answer(this,'q0011a')">CNN 特征在某些层上勉强追平了 SIFT</button>
+          <button data-correct="yes" data-explanation="正确！原文用 'More intriguingly' 强调：这个在分类挑战上训练的 CNN，其各层特征在描述子匹配基准上 consistently outperform SIFT——匹配能力竟可以从分类预训练里免费迁移。" onclick="lessonKit.answer(this,'q0011a')">一个为图像分类挑战训练的网络，其特征在匹配任务上全面超过了 SIFT</button>
+          <button data-correct="no" data-explanation="方向反了：发现是深度特征更强，而非手工特征更强。" onclick="lessonKit.answer(this,'q0011a')">SIFT 在所有层上仍然不可战胜</button>
+        </div>
+        <div class="quiz-feedback" id="q0011a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="joint">
+      <h2>4. 联合学习：只有三样东西真正被联合优化过</h2>
+      <p>先记一条硬事实（原文 Sec. VI 原话）："To the best of our knowledge, <b>only depth, optical flow, and ego-motion have been jointly optimized</b>"——就作者所知，在深度学习框架里被真正联合优化过的<b>只有深度、光流、自运动这三样</b>，因为它们之间的几何约束最成熟。为什么联合？因为各模块被几何约束绑在一起，联合建模能学到模块间的相互依赖；代价是架构更复杂、训练更费劲。</p>
+
+      <h3>4.1 深度 + 光流 + 自运动</h3>
+      <p><b>Sfm-Net</b> 是第一个把三者统一进一个框架的：两个自编码器分别估结构与运动，给相机和运动物体各分一个运动通道，用物体掩码把像素分配到通道，再用光流 warp 校验一致性。局限：需要<b>先验知道</b>场景里有几个运动物体（实验里只考虑 3 个）。<b>Geo-Net</b> 改用两阶段方案，把"物体自己的运动"从"相机运动"里剥出来——它用四步公式算出<b>刚性流</b>（rigid flow，纯由相机运动造成的那部分像素位移），原文公式 (2)–(5)：</p>
+      <div class="formula-box">
+$$P_s=D_s(p_s)K^{-1}p_s,\quad P_t=T_{s\to t}P_s,\quad p_t=KP_t,\quad f^{rig}_{s\to t}=p_t-p_s\tag{2–5}$$
+        <p>四步连读：① 用预测深度 $D_s(p_s)$ 把源帧像素 $p_s$ 投到 3-D 得 $P_s$；② 用相机相对运动 $T_{s\to t}$ 把 3-D 点搬到目标帧；③ 投回图像平面得 $p_t$；④ 位移差 $p_t-p_s$ 就是纯相机运动造成的<b>刚性流</b>。之后用 ResNet 迭代精修，补上每个动态物体的额外运动。<b>⚠️ OCR 修正</b>：md 里三处下标都是 <code>T_{s t}</code>、<code>f^{rig}_{s t}</code>，箭头被 OCR 吃掉了；结合正文语义（相对运动、从源到目标）必须补回 $s\to t$。</p>
+      </div>
+      <p>原文点出 Geo-Net 的妙处：它显式分离了"所有场景共有的相机内在运动"与"每个场景特有的动态物体运动"，学到<b>解耦表示</b>，对新环境泛化更好。再往前一步，[129][130] 干脆给每个检测到的运动物体单独估一个 3-D 刚体变换，把动态运动<b>显式叠加</b>进像素对应——原文公式 (6)：</p>
+      <div class="formula-box">
+$$p_t=K\,T_{s\to t}\,\hat{T}^{obj}\,D_s(p_s)K^{-1}p_s\tag{6}$$
+        <p>$\hat{T}^{obj}$ 是物体自身的刚体运动。<b>对比 (2–5) 和 (6)：静态与动态场景唯一的差别就是中间多了这一个 $\hat{T}^{obj}$</b>——静态场景里物体的"自身运动"是恒等变换，动态场景里才需要显式补上。<b>⚠️ OCR 修正</b>：md 正文中一会儿写 $\tilde{T}^{obj}$（波浪号）、一会儿写 $\hat{T}^{obj}$（尖帽号），公式 (6) 本体是 hat，我们统一按 $\hat{T}^{obj}$ 理解。</p>
+      </div>
+      <p>还有个有趣方向 [131]：把深度、自运动、光流、运动分割 casts 成一个<b>博弈问题</b>——各网络模块是玩家：先"对抗"（静态/动态重建网络各自只优化自己辖区、运动分割网络划界），再"协作"（达成共识改进分割），换来更稳的分割与结构运动估计。</p>
+
+      <h3>4.2 端到端学习</h3>
+      <p>直接优化整条管线，模块间依赖必须全程可微才能反向传播。<b>可微粒子滤波</b> [132] 的出现打通了这条路：<b>DMN</b>（可微建图网络，用可微粒子滤波学一张专为视觉定位优化的视角嵌入地图——但地图太抽象，除定位外不能干别的）；<b>DeepSLAM</b>（端到端无监督联合学位姿和 3-D 地图：自编码器建图网络回归深度 + RCNN 跟踪网络估 6-DoF 位姿 + 预训练回环检测器 + 图优化保全局一致；训练时联合最小化立体 warp 损失与时序 warp 损失等多个监督信号；测试只用 RGB、室内外通吃；缺点：不确定性处理只做了外点剔除，没有追踪真实置信度）；<b>SLAM-net</b>（FastSLAM 的可微实现，学转移与观测模型，按概率一致的框架做建图定位；但假设机器人平面运动，复杂地形歇菜）。</p>
+      <p>现在把本课那句"关键论断"完整放进对照表里：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>模块化学习</h4><p>单模块性能高、开发灵活、可以即插即用；但原文提醒融合需要额外努力，"整体 VSLAM 性能通常<b>最多达到</b>单个模块的水平"（may be as high as that of the individual modules）——1+1 往往不大于 2。</p></div>
+        <div class="mini-card"><h4>联合学习</h4><p>"整体性能更好，但<b>训练阶段需要巨大投入</b>"（require significant effort in the training phase）——架构复杂、依赖可微化、训练贵。和上一课"混合路线是当下赢家"对照：两篇综述都不看好纯端到端的性价比。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="confidence">
+      <h2>5. 置信度学习：估计不确定性，或降低不确定性</h2>
+      <p>SLAM 本质是状态估计问题，不确定性天生存在；每一步预测都是下一步的输入，小误差会滚雪球成大不一致。原文把应对之道分两派（Sec. VII）：</p>
+      <h3>5.1 不确定性降低（Uncertainty Reduction）</h3>
+      <ul>
+        <li><b>explainability mask</b>：让网络输出"我预计哪里会失败"的逐像素软掩码，在训练损失里给高不确定区域降权——但原文犀利指出它只是个<b>过滤器</b>：训练期没见过的伪影照样能骗过模型。</li>
+        <li><b>DPC-Net</b>：专门做<b>位姿修正</b>的网络，叠加到现成位姿估计器上融合小幅修正；用李代数参数化修正量以考虑平移/旋转误差的相关性，镜头畸变标定不好时也能提升精度。</li>
+        <li><b>堆叠 LSTM 修正器</b>：吃进传统语义 SLAM 输出的轨迹，识别并修正各种不确定性下的位姿误差（测量误差、传感器故障、数据处理错误）。</li>
+        <li><b>信息论特征选择</b>：挑能带来最大 <b>Shannon 熵</b>削减的关键点，得到远距离也能可靠检测的稀疏地图，利于长期定位。<b>（⚠️ OCR 修正：md 里写成 "Shanon entropy"，正确拼写是 Shannon。）</b></li>
+      </ul>
+      <h3>5.2 不确定性估计（Uncertainty Estimation）</h3>
+      <ul>
+        <li><b>Bayesian NN / Bayesian CNN</b>：[145] 用贝叶斯 CNN 直接从 RGB 回归 6-DoF 相机位姿并给出重定位误差估计（户外 2m/6°、室内 0.5m/10° 精度）；[146] 用卷积贝叶斯网络把太阳带来的全局朝向先验并进 VO。</li>
+        <li><b>光度不确定性</b>：无监督单目深度网络建模逐像素光度不确定性，先对齐左右目亮度再建模，对非朗伯表面、无纹理区、运动障碍都更稳，KITTI/EuRoC 上达到当时最优。</li>
+        <li><b>概率建图</b>：<b>CMP</b>——概率化建图与规划器，增量更新对自由/占用空间的信念（belief）：用自运动 warp 旧信念预测地图变化、再与当前观测对齐，端到端训练以服务高层规划；是第一个在经典 SLAM 原则（贝叶斯信念更新）下成功的深度视觉 SLAM 系统，但只管建图（自运动假定已知）且假设静态场景。相关 work 还有注意力 + LSTM 的动态<b>占用栅格地图</b>（预测高速路上车辆轨迹）。</li>
+        <li>局限与前沿：上述方法都把不确定性当<b>单模态</b>估计，无视模块间不确定性的联动；最新的 SLAM-net（可微 FastSLAM）才在概率一致的框架里同时追踪建图与定位的多路不确定性。</li>
+      </ul>
+    </section>
+
+    <section class="section-card" id="active">
+      <h2>6. 主动学习：让机器人自己决定"去哪看、怎么看"</h2>
+      <p>Active SLAM 分两个视角（Sec. VIII）：<b>主动探索</b>（Active Exploration，控制运动来降低位姿与地图的不确定性）和<b>主动感知</b>（Active Perception，巧妙控制传感器来降低感知误差）。</p>
+      <ul>
+        <li><b>主动探索</b>：反复绕同一个圈浪费时间，不是所有视角信息量都一样，有的地方（差光照、杂物堆）甚至会误导估计——所以需要探索策略。深度强化学习是主力：[159] 设计<b>内在奖励</b>（每步奖励"地图覆盖增量"），配模仿学习预训练克服稀疏奖励；[160] 指出端到端学低层动作样本效率太低，改用<b>分层 neural SLAM</b> 三模块——neural SLAM 模块（监督学地图与位姿）→ Global policy（强化学习出长期目标，鼓励高覆盖）→ Local policy（模仿学习把短期目标翻译成动作），对未见环境泛化更好。还有两条信息论路子：专挑<b>难以预测的区域</b>去探索 [161]、<b>最大化环境熵减</b> [162]——都显式地压低环境不确定性。</li>
+        <li><b>主动感知</b>：部分可观测下智能采集数据的决策过程——机器人自己决定"怎么感知世界"。理论上要看遍所有视角才有完全确定性，但很多任务不必如此（认一个物体不需要看遍每个面）。早期做主动识别（选动作消除物体歧义：RNN 学运动策略改进内部表示、条件于驾驶输入预测"下一个最佳视角"）；在 VSLAM 语境下更关注压低估计不确定性，如 [166] 用强化学习选动作减少对环境未观测部分的不确定性，极少视角就能懂 3-D 形状。</li>
+      </ul>
+    </section>
+
+    <section class="section-card" id="open">
+      <h2>7. 原文点名的六大"仍不成熟"环节（Sec. IX）</h2>
+      <p>这一节是本综述的良心所在，六条逐条讲：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>A. 高层语义地图</h4><p>现在的语义大多只做"分割出实体类别"，远不到"理解"——不懂发生了什么、每个实体在干什么、地方安不安全、元素间怎么交互。<b>跨帧语义一致性没做</b>：多数工作只处理当前帧的语义，不把前后帧发现的语义链接起来（同一物体在相邻帧里的实例不该位置乱跳）。需要研究语义的时空一致性评估。</p></div>
+        <div class="mini-card"><h4>B. 效率</h4><p>"很少关注<b>计算与能耗</b>"（little effort to improve the computation and energy consumption）——这对实时任务与长期自主至关重要。多数方案只在受控室内、少动态元素下测试；海洋探索、搜救、太空这类应用要长时间跑在大尺度动态环境里，内存与算力根本扛不住。压缩表示（学习地图嵌入）只在静态简单光照下测过。</p></div>
+        <div class="mini-card"><h4>C. 可解释性</h4><p>模型是<b>黑箱</b>。CNN 高层滤波器可能同时混合多种模式（认猫时同时看头和腿），表征纠缠难解释。事后解释（Network Dissection、分析 3D CNN/Conv-LSTM 关注的帧与空间特征）只能解释"恰好可解释"的表征；在训练阶段强约束网络关注可解释特征的尝试还很少。</p></div>
+        <div class="mini-card"><h4>D. 泛化</h4><p>没有数据集能覆盖真实部署的全部情形（暴雨大雪、动物横穿、临时施工、道路损坏、异常驾驶……），数据还偏向常见样本（如直行）。更深一层：对抗样本能在输入上做人眼不可见的微扰就完全骗过模型——所以 "<b>merely testing on unseen dataset is not sufficient</b>"（仅在未见数据集上测试是不够的），需要证明泛化性的新方法（如压力测试）。</p></div>
+        <div class="mini-card"><h4>E. 概率化 3-D VSLAM</h4><p>多数架构输出确定性的地图与位姿，无视问题的概率本质，通常次优。已有不确定性感知方法（可微概率框架）"only applied to <b>simple 2D static environments</b>"——只 applied 到简单的 2-D 静态环境，扩展到 3-D 动态环境是明摆着的方向。</p></div>
+        <div class="mini-card"><h4>F. 真实部署</h4><p>精度是唯一金标准，其他都 neglected：<b>几乎没人研究失败情形分析</b>（测量不准、硬件故障、错误预测，单级误差还会累积连锁）；评估数据集环境特性一成不变，长期部署遇到剧变怎么办没答案；对不平地形、碰撞推挤、雨雪雾光照不足的鲁棒性研究也很缺。</p></div>
+      </div>
+      <p>两课对照收尾：上一课的 Chen et al. 说"混合模型是当下赢家、全局优化 underexplored"；这一课的 Mokssit et al. 说"模块化融合有摩擦、联合优化只覆盖了三样东西、概率化/效率/泛化/部署全都欠账"。两份 2023–2024 年的综述在同一个判断上会师：<b>深度学习改造 SLAM 的故事讲到一半，地基（概率化、可解释、能落地）还没打完。</b>下一课我们看动态环境这个具体战场。</p>
+
+      <section class="exercise-box"><h3>课后练习</h3><ol>
+        <li>默写本文的四分类法，并说明每一类"学习范围"的差别。<details class="exercise-answer"><summary>展开查看答案</summary><div>按学习范围切四类（对应原文 Sec. V–VIII）：① <b>模块化学习</b>——在经典管线内孤立地学单个模块（深度、光流、VO、建图、回环检测），融合需额外成本、整体通常最多与单模块持平；② <b>联合学习</b>——联合优化多个模块或端到端学整条管线，整体更好但训练代价大；③ <b>置信度学习</b>——估计（贝叶斯网络、光度不确定性、概率建图）或降低（掩码降权、位姿修正网络、信息论特征选择）不确定性；④ <b>主动学习</b>——主动控制机器人运动（主动探索）与传感器（主动感知）来获取信息改进系统。</div></details></li>
+        <li>对比 Geo-Net 的公式 (2)–(5) 与叠加动态物体的公式 (6)，指出唯一新增项及其含义。<details class="exercise-answer"><summary>展开查看答案</summary><div>唯一新增项是 $\hat{T}^{obj}$——物体自身的刚体运动变换。公式 (6) $p_t=K\,T_{s\to t}\,\hat{T}^{obj}\,D_s(p_s)K^{-1}p_s$ 在相机运动 $T_{s\to t}$ 之外插入物体运动，表示"该像素属于一个自身在动的物体"的情形。静态场景中 $\hat{T}^{obj}$ 为恒等变换，(6) 退化为刚性流的计算链。<b>（附 OCR 修正：md 中 hat/tilde 符号混用，按公式本体统一为 $\hat{T}^{obj}$；三处 $T_{s t}$ 均丢失箭头，应为 $T_{s\to t}$。）</b></div></details></li>
+        <li>"深度学习先吃下匹配和检索"的三条证据分别是什么？请按逻辑链复述。<details class="exercise-answer"><summary>展开查看答案</summary><div>① Sec. V-C：深度学习 VO 不需要特征提取、特征匹配或复杂几何运算——从架构上绕开了手工特征层；② Sec. V-E：文献 [114] 发现 CNN 各层深度特征在匹配基准上 consistently outperform SIFT，且该网络只在<b>分类挑战</b>上训练过——匹配能力可由分类预训练免费迁移，这解释了匹配/检索类任务为何最先被攻陷；③ Sec. V-B：纯前馈 CNN 缺少"追踪特征移动"的机制，所以需要 FlowNetCorr 的 correlation layer——"认"易"追"难，追踪能力要专门结构来补。三合一：分类预训练白送"认"的能力（②），让绕开手工特征的方案（①）立即有收益；但"追"需要额外机制（③），所以纯前馈网络做不了光流。</div></details></li>
+        <li>原文说模块化学习的整体性能 "may be as high as that of the individual modules"，联合学习 "exhibit better overall performance, but require significant effort in the training phase"。既然联合更好，为什么模块化学习依然大量存在？<details class="exercise-answer"><summary>展开查看答案</summary><div>参考要点（开放题）：联合学习要求模块间依赖全部可微、架构复杂、训练数据与算力投入巨大（"significant effort in the training phase"）；而模块化学习可以复用成熟单模块、即插即用、单独调试替换。在端到端可微化尚未成熟（原文指出可微粒子滤波等才刚出现）、且许多模块（如回环检测）单独性能已经很好的现阶段，模块化是工程性价比最高的选择。这也与上一课"混合模型是当下赢家"的结论呼应：先验+局部学习，比全线端到端更现实。</div></details></li>
+        <li>六大未成熟环节中，哪一条直接否定了"在 held-out 数据上测一下就算验证泛化"的做法？原文给了什么理由？<details class="exercise-answer"><summary>展开查看答案</summary><div>是 D（泛化）。理由：没有任何数据集能覆盖真实部署的全部情形（恶劣天气、意外事件、数据偏差），且文献 [174] 证明对抗扰动能在人眼不可察觉的情况下完全误导原本分类正确的输入——所以 "merely testing on unseen dataset is not sufficient"，需要设计证明泛化能力的新方法，例如在压力条件下评估。</div></details></li>
+      </ol></section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0010-深度学习视觉定位与建图2024.html">← 深度学习视觉定位与建图（2024）</a>
+        <a class="next" href="0012-动态环境视觉SLAM综述2024-从几何到语义.html">动态环境视觉 SLAM 综述（2024）→</a>
+      </div>
+      <p class="foot-note">看清"已经解决的"和"还没解决的"，你就比一半的从业者更懂这个领域 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

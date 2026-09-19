@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuMa++（2019）：面片地图与语义 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0082</div>
+      <h1>SuMa++（2019）：面片地图与语义</h1>
+      <p class="subtitle">地图不再是一堆点，而是一片片自带朝向、还贴着标签的「瓷砖」——它们能告诉我们：哪些东西不该信 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：面片（surfel）地图 · 语义分割 · 动态物体剔除</span>
+        <span>👥 作者：Jens Behley、Martin Garbade、Andres Milioto、Cyrill Stachniss（波恩大学）</span>
+        <span>📅 2019 · <i>SuMa++: Efficient LiDAR-based Semantic SLAM</i>（IROS）</span>
+      </div>
+      <div class="toc">
+        <a href="#name">先把名字说清楚</a>
+        <a href="#surfel">面片地图是什么</a>
+        <a href="#semantic">语义怎么进来</a>
+        <a href="#dynamic">语义怎么剔动态</a>
+        <a href="#exp">实验数字</a>
+        <a href="#limit">原文承认的局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="name">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能说清：面片（surfel）地图里每个面片到底存了哪些东西；语义标签是怎么从一张「激光距离图像」流到地图上的；以及<b>一套 SLAM 系统怎么用语义把「会动的东西」剔掉或降权</b>。最后你会看到一张「地图表示的四条路」的对照表。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>第二季 <b>0033</b> 课（KinectFusion 的 TSDF）与 <b>0034</b> 课（Voxel Hashing 的体素块）是「体素」这一路的代表；第三季 <b>0062</b> 课（Kimera）是「网格」这一路；第三季 <b>0071</b> 课是「神经隐式」这一路——本篇补上<b>第四路：面片</b>。而它的动态剔除思路，正是第三季 <b>0068</b> 课那套「判定 / 处理 / 代价」三层框架的<b>激光侧落地</b>。</p>
+        </div>
+      </div>
+
+      <h2>1. 先把名字说清楚：它是 SuMa++，不是 SuMa</h2>
+
+      <p>这一节开门见山要纠正一件事，因为它在文件层面就已经把人带偏了。</p>
+
+      <div class="callout">
+        <h4>★ 本篇的真实标题是 SuMa++</h4>
+        <p>论文正文第一行的标题是 <b>「SuMa++: Efficient LiDAR-based Semantic SLAM」</b>（IROS 2019）。<br>
+        但本项目的本地文件名是 <code>2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM.md</code>——<b>里面的 <code>++</code> 被替换成了下划线</b>，于是看起来像「SuMa」。<b>这是文件名的转换失误，正文本身没有错。</b></p>
+      </div>
+
+      <p>判定依据有三条，都很硬：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>依据一：正文标题行</b>
+          <p>论文正文开头明确的标题是 SuMa++，不是 SuMa。</p>
+        </div>
+        <div class="mini-card">
+          <b>依据二：正文自述「我们是 SuMa 的扩展」</b>
+          <p>正文第三节首句写：「<b>The foundation of our semantic SLAM approach is our Surfel-based Mapping (SuMa) [2] pipeline, which we extend</b>」——大意是：本文方法的基础是 SuMa [2] 那条面片建图流水线，<b>我们在它之上做了扩展</b>。摘要在引言里也反复称自己是对一篇新近发表的、基于面片的建图方法的「extension（扩展）」。</p>
+        </div>
+        <div class="mini-card">
+          <b>依据三：外部交叉引用</b>
+          <p>本项目精读材料指出，SuMa++ 被后续两篇论文的参考文献表分别引作「SuMa++，IROS 2019」与「SuMa++，IROS 2019」——<b>引用名都带 <code>++</code>，没有一处写成 SuMa</b>。</p>
+        </div>
+      </div>
+
+      <p>那 SuMa 和 SuMa++ 的关系到底是什么？简单说：</p>
+
+      <ul>
+        <li><b>SuMa</b>（Behley &amp; Stachniss）是基础版——纯几何的面片建图，只看形状，不看「这是什么东西」；</li>
+        <li><b>SuMa++</b>（本篇）在它上面加了两样东西：① 给面片<b>打上语义标签</b>；② 用这些标签<b>过滤掉移动的物体</b>、并给配准加上语义约束。</li>
+      </ul>
+
+      <p>所以本篇不是「另起炉灶」，而是一次<b>叠加升级</b>。它的目标场景也很具体：<b>车辆密集的道路场景</b>。原文说得很直白——现实环境里到处都是车和人，纯几何的 SLAM 假设世界是静止的，一遇到持续移动的车队就失效。而 SuMa++ 想做到的，不是「把会动的东西全删掉」，而是<b>「想办法只在它真的在动的时候不信它」</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM/71aada3c346e4b72acdcf55fbd0319e248fa0813047e19511f87988e7afc640a.jpg" alt="SuMa++ pipeline overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Pipeline overview of our proposed approach. We integrate semantic predictions into the SuMa pipeline in a compact way: (1) The input is only the LiDAR scan P. (2) Before processing the raw point clouds, we first use a semantic segmentation from RangeNet++ to predict the semantic label for each point and generate a raw semantic mask. (3) Given the raw mask, we generate a refined semantic map in the preprocessing module using multi-class flood-fill. (4) During the map updating process, we add a dynamic detection and removal module which checks the semantic consistency between the new observation and the world model and remove the outliers. (5) Meanwhile, we add extra semantic constraints into the ICP process to make it more robust to outliers.<br>
+          （中译：所提方法的总览流水线。我们把语义预测紧凑地集成进 SuMa 流水线：(1) 输入<b>只有激光扫描</b>；(2) 在处理原始点云之前，先用 <b>RangeNet++</b> 做语义分割，为每个点预测语义标签，生成一张原始语义掩码；(3) 有了原始掩码，在预处理模块中用<b>多类 flood-fill</b> 生成精修后的语义图；(4) 在地图更新过程中，加入动态检测与移除模块，检查新观测与世界模型之间的语义一致性并移除离群点；(5) 与此同时，在 ICP 过程中加入额外的语义约束，使其对离群点更鲁棒。）<br>
+          <b>怎么看这张图：</b>这是本篇的<b>主图</b>，请按编号 (1)→(5) 依次看。① 注意 (1) 那一步：<b>输入只有 LiDAR</b>——整个系统<b>不用相机</b>，语义是「从激光数据里推出来的」，这一点是本篇最大的卖点之一；② (2)→(3) 是「语义从哪来、怎么修干净」，对应本课第 3 节；③ (4) 是「怎么剔掉动态物体」，对应第 4 节；④ (5) 是「语义怎么反过来帮配准」，也就是 Semantic ICP，同样在第 4 节。<br>
+          <b>要记住的一句话：</b>整条链路上，语义标签只在<b>两个地方</b>发挥作用——<b>建图时剔掉不可信的观测</b>，<b>配准时压低不可信的对应</b>。除此之外，几何该怎么做还是怎么做。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="surfel">
+      <h2>2. ★ 面片（surfel）地图是什么</h2>
+
+      <p>先讲一个最根本的问题：<b>地图到底用什么来「记东西」？</b></p>
+
+      <p>最朴素的做法是「点云地图」——把扫到的每个点都存下来，形成一大片点。它的好处是简单，坏处是：<b>点与点之间没有任何关系</b>。你看着一片点，说不出「这一片是平的墙」「这一片是竖直的杆」——每个点只是一颗孤立的珠子。</p>
+
+      <p>SuMa++ 用的叫<b>面片（surfel，surface element，直译是「表面元」）</b>。你可以把它想成<b>一块小瓷砖</b>：它不是一颗珠子，而是「一小片方向确定的表面」。原文对面片的定义写得很清楚，每个面片存这些字段：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.93rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">字段</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">记的是什么</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">为什么需要它</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>位置 $v_s$</b></td><td style="border:1px solid #cbd3dc;padding:8px">面片中心在三维空间里的坐标</td><td style="border:1px solid #cbd3dc;padding:8px">回答「它在哪里」</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px"><b>法向 $n_s$</b></td><td style="border:1px solid #cbd3dc;padding:8px">这块面朝哪个方向</td><td style="border:1px solid #cbd3dc;padding:8px">回答「它是什么朝向」——点云没有这个信息</td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>半径 $r_s$</b></td><td style="border:1px solid #cbd3dc;padding:8px">这块面有多大</td><td style="border:1px solid #cbd3dc;padding:8px">回答「它铺开多大」——不要用点去近似一个面</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px"><b>创建时间戳 $t_c$</b></td><td style="border:1px solid #cbd3dc;padding:8px">这个面片是第几次扫描时第一次出现的</td><td style="border:1px solid #cbd3dc;padding:8px">记录它的来历</td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>最后更新时间戳 $t_u$</b></td><td style="border:1px solid #cbd3dc;padding:8px">最近一次被测量更新是什么时候</td><td style="border:1px solid #cbd3dc;padding:8px">判断它是不是「过期了、没人再看到」</td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px"><b>稳定性对数几率 $l_s$</b></td><td style="border:1px solid #cbd3dc;padding:8px">用二元贝叶斯滤波维护的一个「这东西稳不稳」的分数</td><td style="border:1px solid #cbd3dc;padding:8px"><b>动态剔除就靠它</b>（见第 4 节）</td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>语义标签 $y$ 及其概率</b></td><td style="border:1px solid #cbd3dc;padding:8px">这是什么东西（车 / 人 / 路 / 建筑……）以及有多大把握</td><td style="border:1px solid #cbd3dc;padding:8px">本篇新增的字段，是全部语义功能的入口</td></tr>
+        </tbody>
+      </table>
+
+      <p>请注意最后一行：<b>语义标签是「加到已有面片上的一个新字段」</b>，不是另建一套地图。原文的说法是「we add for each surfel the inferred semantic label $y$ and the corresponding probability of that label」——给每个面片附上推断出的语义标签和对应的概率。这也解释了为什么这篇论文叫 SuMa「++」：它是一次字段级的扩建。</p>
+
+      <p>原文还提了一句关于面片地图之外的事：<b>SuMa 本身也做回环检测并做位姿图优化</b>，以得到全局一致的地图。也就是说这篇论文的基线不只是一个前端。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">面片地图：一堆「小瓷砖」，不是一堆「珠子」</text>
+
+          <!-- 建筑立面 -->
+          <rect x="60" y="70" width="410" height="170" fill="#dfe4ea" stroke="#9aa3ad" stroke-width="1.6"/>
+          <ellipse cx="130" cy="120" rx="34" ry="15" fill="#b9c6d2" stroke="#7f93a6" stroke-width="1.1"/>
+          <ellipse cx="240" cy="152" rx="34" ry="15" fill="#a9b8c6" stroke="#7f93a6" stroke-width="1.1"/>
+          <ellipse cx="350" cy="112" rx="34" ry="15" fill="#c2cdd8" stroke="#7f93a6" stroke-width="1.1"/>
+          <ellipse cx="168" cy="200" rx="34" ry="15" fill="#a9b8c6" stroke="#7f93a6" stroke-width="1.1"/>
+          <ellipse cx="286" cy="206" rx="34" ry="15" fill="#b9c6d2" stroke="#7f93a6" stroke-width="1.1"/>
+          <ellipse cx="400" cy="164" rx="34" ry="15" fill="#c2cdd8" stroke="#7f93a6" stroke-width="1.1"/>
+          <text x="90" y="262" font-size="12" fill="#5b6571">建筑立面：一片片竖直的面片</text>
+
+          <!-- 人行道 -->
+          <rect x="60" y="240" width="560" height="60" fill="#eef1f4"/>
+
+          <!-- 路面 -->
+          <rect x="60" y="300" width="560" height="80" fill="#e8f1ea" stroke="#9ecaa8" stroke-width="1.6"/>
+          <ellipse cx="140" cy="335" rx="40" ry="13" fill="#b6dcc4" stroke="#6fa683" stroke-width="1.1"/>
+          <ellipse cx="260" cy="342" rx="40" ry="13" fill="#a6d3b6" stroke="#6fa683" stroke-width="1.1"/>
+          <ellipse cx="380" cy="332" rx="40" ry="13" fill="#c2e3cd" stroke="#6fa683" stroke-width="1.1"/>
+          <ellipse cx="480" cy="346" rx="40" ry="13" fill="#b6dcc4" stroke="#6fa683" stroke-width="1.1"/>
+          <text x="90" y="406" font-size="12" fill="#2e7d4f">路面：法向朝上，椭圆被压扁</text>
+
+          <!-- 树 -->
+          <rect x="533" y="230" width="14" height="70" fill="#a9825b" stroke="#7d5f3f" stroke-width="1.1"/>
+          <circle cx="540" cy="180" r="58" fill="#cfe6d4" stroke="#7fae8c" stroke-width="1.4"/>
+          <ellipse cx="516" cy="152" rx="16" ry="16" fill="#9cc4a8" stroke="#6a9a7c" stroke-width="1"/>
+          <ellipse cx="566" cy="176" rx="20" ry="12" fill="#87b596" stroke="#6a9a7c" stroke-width="1"/>
+          <ellipse cx="540" cy="206" rx="13" ry="18" fill="#b3d3bd" stroke="#6a9a7c" stroke-width="1"/>
+          <ellipse cx="572" cy="146" rx="11" ry="17" fill="#9cc4a8" stroke="#6a9a7c" stroke-width="1"/>
+          <text x="498" y="106" font-size="12" fill="#3f7a55">树冠：朝向杂乱</text>
+
+          <!-- 图例 -->
+          <rect x="640" y="70" width="230" height="150" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.2"/>
+          <text x="658" y="96" font-size="12.5" font-weight="700" fill="#3b4a5e">面片 = 位置 + 朝向 + 大小</text>
+          <ellipse cx="676" cy="122" rx="18" ry="8" fill="#a9b8c6" stroke="#7f93a6" stroke-width="1.1"/>
+          <text x="706" y="126" font-size="11" fill="#5b6571">朝向不同，深浅不同</text>
+          <text x="658" y="152" font-size="11" fill="#5b6571">一个椭圆，就是一小片面</text>
+          <text x="658" y="174" font-size="11" fill="#5b6571">它不是一颗孤立的珠子</text>
+          <text x="658" y="196" font-size="11" fill="#5b6571">自带朝向，也自带大小</text>
+
+          <!-- 融合 -->
+          <rect x="640" y="250" width="230" height="130" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.2"/>
+          <text x="658" y="274" font-size="12" font-weight="700" fill="#a8563a">同一面墙，前后两次</text>
+          <text x="658" y="292" font-size="12" font-weight="700" fill="#a8563a">扫描被融合成一片</text>
+          <ellipse cx="700" cy="326" rx="28" ry="12" fill="none" stroke="#8fa6bb" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <ellipse cx="716" cy="330" rx="28" ry="12" fill="#a9b8c6" opacity="0.5" stroke="#5b7ea3" stroke-width="1.2"/>
+          <text x="756" y="352" font-size="11" fill="#a8563a">合成一片</text>
+
+          <text x="450" y="436" text-anchor="middle" font-size="12.5" fill="#5a4a42">一个面片自带位置 + 朝向 + 大小，比一个孤立的点信息多得多</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个真实街角，路面、建筑立面、树冠上的点云各自聚成一片片椭圆形的面片。<b>椭圆的形状代表面片的朝向和大小</b>，深浅代表朝向不同。<br>
+          <b>怎么看这张图：</b>① <b>墙上的椭圆是「竖着摊开」的</b>——因为墙面竖直，面片主要沿竖直方向铺开；<b>路面上的椭圆是「压扁的」</b>——因为地面水平，面片沿着路面铺开、在竖直方向几乎没有厚度；<b>树冠上的椭圆形方向乱七八糟</b>——因为树叶朝哪儿的都有。② 右边上半的小框解释了「一个椭圆 = 一片小面，它自带朝向和大小」；③ 右边下半那个小框画的是「融合」：<b>同一面墙在前后两次扫描里被观测到，会被融合成一个面片</b>，而不是留下两个重叠的斑点（虚线椭圆 = 上一次观测，实心椭圆 = 融合后的结果）。<br>
+          <b>要记住的一句话：</b>面片最大的价值，不是「更省内存」，而是<b>它比点知道得多</b>——一个点只能说「我在这里」，一片面片能说「我在这里、朝那边、有这么宽」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM/3605b8476657ef29653b773aff09e9c11465e667bc44c0cf97c9d221222e4c6b.jpg" alt="semantic map of KITTI represented by labeled surfels">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Semantic map of the KITTI dataset generated with our approach using only LiDAR scans. The map is represented by surfels that have a class label indicated by the respective color. Overall, our semantic SLAM pipeline is able to provide high-quality semantic maps with higher metric accuracy than its non-semantic counterpart.<br>
+          （中译：用我们的方法在 KITTI 数据集上生成的语义地图，<b>只使用激光扫描</b>。地图由面片表示，每个面片带有一个类别标签，用相应颜色标出。总体上，我们的语义 SLAM 流水线能够提供高质量的语义地图，其度量精度也高于不含语义的对照版本。）<br>
+          <b>怎么看这张图：</b>这是「面片地图真实长什么样」的标准图。① 先注意<b>颜色不是激光反射强度，而是语义类别</b>——同一种颜色的片，属于同一类物体（路、车、建筑……）；② 再注意它<b>不是一片散点，而是一片片贴上去的小面</b>，这就是面片地图和点云地图最直观的区别；③ 最后请回到图注里那句 <b>using only LiDAR scans</b>——整张图<b>没有用任何相机数据</b>，语义是纯从激光推出的。<br>
+          <b>要记住的一句话：</b>地图表示从「点」升级到「面片」，再给面片贴上标签——这二十来个字，就是 SuMa 到 SuMa++ 的全部跨度。
+        </figcaption>
+      </figure>
+
+      <h3>地图表示的四条路：把前面的课摆到一起</h3>
+
+      <p>这是还债的时刻。前面三季里，我们其实已经见过好几种「地图怎么记」的方案，只是它们分散在不同的课里。现在把它们摆成一张表，你就能看出本篇的位置：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">路线</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">代表课程</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">每个「单元」存什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">这条路的特点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>点云地图</b>（最朴素，作为对照）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">—</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">一个三维坐标</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">极简、无拓扑；但点与点之间没有关系，说不出「这里是一片平面」</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>① 体素 / TSDF</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">第二季 <b>0033</b> KinectFusion；第二季 <b>0034</b> Voxel Hashing（稀疏体素块 + 哈希索引）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">每个体素里存一个截断符号距离（沿视线方向，表面在体素中心的哪一侧、差多远）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">能表达「表面在哪里」；代价是内存随空间体积增长，所以要靠哈希把空区域省掉</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>② 面片（surfel）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>本篇 SuMa++（2019）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">位置 + 法向 + 半径（外加时间戳、稳定性、语义标签）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>只贴在真实表面上</b>，紧致、自带朝向与大小；代价是要显式维护「融合与淘汰」</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>③ 网格（mesh）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">第三季 <b>0062</b> Kimera</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">三角面片的顶点与连接关系</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">拓扑明确、便于渲染与规划；代价是维护一整套网格连接关系较重</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>④ 神经隐式</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">第三季 <b>0071</b>（神经隐式建图的两种组合方式）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">存在神经网络的权重里，用网络去「查询」某个位置是不是表面</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">连续、可以插值到任意分辨率；代价是需要训练与推理算力</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>把这张表和前面三季连起来看，会发现一条很清楚的线索：<b>「地图表示」这条线，一直在回答同一个问题——怎么用最少的存储，把「表面」这件事记准。</b>0033 用规则体素去逼近它，0034 用哈希把空的地方省掉，0062 用三角网格去显式表示它，0071 干脆用一个网络去隐式记住它，而本篇用一片片贴在表面上的小瓷砖去描述它。<b>SuMa++ 的位置很特别：它是最省的一路之一，而且它是唯一在这一步就带上了语义的一路。</b></p>
+    </section>
+
+    <section class="section-card" id="semantic">
+      <h2>3. ★ 语义怎么进到地图里</h2>
+
+      <p>现在解决第二个问题：<b>「这是车」「这是路」这种判断，是从哪儿来的？</b></p>
+
+      <p>最要紧的一句话先说：<b>本篇不用相机。</b>输入<b>只有激光扫描</b>。它把激光点云先「折成一张图」，再拿一个专门做语义分割的神经网络去认这张图——这就绕开了「要不要加相机、要不要做相机与激光的标定与同步」一大堆麻烦。</p>
+
+      <p>具体分四步走：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        ① <b>球面投影</b>：把一圈激光点云摊成一张二维的「距离图像」（横轴是方位角、纵轴是俯仰角）<br>
+        ↓<br>
+        ② <b>RangeNet++ 语义分割</b>：对这张图逐像素预测类别，得到一张原始语义掩码<br>
+        ↓<br>
+        ③ <b>反投影 + flood-fill 精修</b>：把标签投回三维点云，并用「腐蚀 + 按深度填充」修掉伪影<br>
+        ↓<br>
+        ④ <b>写进地图</b>：把标签和置信概率附到对应的面片上
+      </div>
+
+      <h3>第 ② 步：网络是谁、拿什么训的</h3>
+
+      <p>原文用的分割网络叫 <b>RangeNet++</b>（Milioto 等人提出）。原文对它的描述是：它对一个由激光扫描做<b>球面投影</b>生成的<b>距离图像（range image）</b>做语义分割；网络结构基于 SqueezeSeg，主干网络用的是 <b>DarkNet53</b>，用更多参数来提升效果，同时保持实时能力。训练用的数据集原文也写明了——<b>SemanticKITTI</b>。原文还专门说明：模型明显学到了东西，不是靠死记。</p>
+
+      <h3>第 ③ 步：为什么必须「精修」，怎么修</h3>
+
+      <p>这一步很容易被跳过，但它解决了本篇里一个很实际的问题，值得讲清。</p>
+
+      <p>问题出在「反投影」上：网络是在那张二维图上做判断的，而网络内部有下采样，所以输出的标签是<b>一块一块的（原文用 blob-like 形容，团块状）</b>。把这种块状标签投回三维以后，就会在物体边界上产生错误——最典型的例子是<b>把建筑的标签涂到路面上去，或者把墙上的标签涂错一小块</b>。</p>
+
+      <p>原文的对策叫<b>多类 flood-fill（多类泛洪填充）</b>，它分两步：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>第一步：腐蚀（erosion）</b>
+          <p>在一个大小为 $d$ 的核里，只要某个像素的邻居里出现了<b>不一样的标签</b>，就把这个像素的标签<b>擦成空（置 0）</b>。这等于把所有「边界上的可疑像素」全部清掉——宁可空着，也不留错的。</p>
+        </div>
+        <div class="mini-card">
+          <b>第二步：按深度填充（depth-based flood-fill）</b>
+          <p>擦出来的空洞，用邻居的标签填回去，但<b>要满足一个条件</b>：两个像素对应的三维点之间的距离足够近——原文是小于阈值 $\theta$ 与像素坐标的乘积关系。这一步用的是「顶点图」（每个像素对应的三维点坐标）提供的深度信息。</p>
+        </div>
+      </div>
+
+      <p>原文的理由是：<b>物体边界处的预测不确定性比物体中心高。</b>所以先把边界清掉、再用「同类 + 深度一致」的邻居填回来，就能得到一张更一致的语义图。原文的结论是：精修后的语义图相比原始预测，伪影明显更少——<b>建筑墙上那些错标签，大部分都被纠正了。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM/86c991275ac11f76297855e64ffb949d327eaae1819dc784d13deb5354ff400e.jpg" alt="flood-fill processing steps">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Visualization of the processing steps of the proposed floodfill algorithm. Given the (a) raw semantic map, we first use an erosion to remove boundary labels and small areas of wrong labels resulting in (b) the eroded mask. (c) We then finally fill-in eroded labels with neighboring labels to get a more consistent result. Black points represent empty pixels with label 0. (d) Shows the depth and (e) the details inside the areas with the dashed borders.<br>
+          （中译：所提 flood-fill 算法的处理步骤可视化。给定 (a) 原始语义图，我们先用腐蚀操作去掉边界标签与小片错误标签，得到 (b) 腐蚀后的掩码。(c) 随后用邻居标签填补被腐蚀掉的标签，得到更一致的结果。黑色点表示标签为 0 的空像素。(d) 显示深度，(e) 显示虚线框内的细节。）<br>
+          <b>怎么看这张图：</b>这是本课第 3 节「第 ③ 步」的过程图，按 (a)→(b)→(c) 的顺序看。① (a) 是网络直接吐出的原始语义图：注意里面那些<b>成块的颜色</b>和<b>边界上的毛刺</b>，那就是下采样造成的伪影；② (b) 是腐蚀之后：所有边界上的像素都被擦成黑色（原文特意说明<b>黑色 = 标签 0 的空像素</b>），你会看到颜色块之间出现了明显的黑边；③ (c) 是填充之后：黑边被邻居的标签补回去了，色块之间变得干净利落；④ (d)、(e) 是辅助信息——(d) 是配套的深度图，(e) 是虚线框内的放大细节。<br>
+          <b>要记住的一句话：</b>网络给出的是「一团一团」的答案，直接投回三维就会在边界上出错。<b>「先擦掉可疑的，再用同类且深度一致的邻居填回来」</b>——这两步之后，语义图才算能用。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="dynamic">
+      <h2>4. ★ 用语义剔掉会动的东西</h2>
+
+      <p>前面都是铺垫，这一节才是本篇的核心目的：<b>怎么把「会动的东西」从地图和配准里剔掉或降权。</b></p>
+
+      <p>先说清楚这个问题的严重性。原文说：绝大多数现有 SLAM 系统都假设环境基本是静止的，用几何信息来做观测与地图的关联。但现实世界是动的——尤其在驾驶场景里。运动的物体会造成<b>观测与地图之间的错误关联</b>，进而拖歪位姿估计、污染地图。原文举了一个非常具体的现象：<b>车流持续朝一个方向移动时，帧到模型的 ICP 会「锁死」在这些移动的车上</b>，于是地图出现明显的不一致。</p>
+
+      <h3>判定：语义标签一致吗</h3>
+
+      <p>SuMa++ 的判据非常干脆。原文说：在<b>更新地图的时候</b>，检查新观测的语义图 $S_D$ 与<b>世界模型</b>的语义图 $S_M$ 之间的一致性。<b>如果标签不一致，就认为这些面片属于在两次扫描之间移动过的物体。</b></p>
+
+      <p>为什么这个判据管用？举个例子：地图上某个位置记录的是「路面」（因为那里一直能扫到地面），而这一帧在同一个位置扫出了「车」的标签——<b>同一个地方，前后说法不一样</b>，那只能说明有东西移动过。这个推理完全不依赖「预测这辆车在往哪儿走」，只需要比较标签。</p>
+
+      <h3>处理一：给面片的稳定性加分项变减分项</h3>
+
+      <p>判定为动态之后，原文不是立刻删掉它，而是在<b>递归贝叶斯滤波的稳定性项上施加一个惩罚</b>。每个面片的稳定性用对数几率 $l_s$ 维护，更新式是（原文式 1）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$l_s^{(t)}=l_s^{(t-1)}+\operatorname{odds}\!\left(p_{\text{stable}}\,e^{-\alpha^{2}/\sigma_{\alpha}^{2}}\,e^{-d^{2}/\sigma_{d}^{2}}\right)-\operatorname{odds}(p_{\text{prior}})-\operatorname{odds}(p_{\text{penalty}})$$</div>
+      </div>
+
+      <p>这个式子看着复杂，其实只有三段。别怕，逐段拆开：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">项</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">含义</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">$l_s^{(t-1)}$</td>
+            <td style="border:1px solid #cbd3dc;padding:8px">上一时刻这个面片的稳定性分数，<b>递归地带着走</b></td>
+          </tr>
+          <tr style="background:#f7fafc">
+            <td style="border:1px solid #cbd3dc;padding:8px">$+\operatorname{odds}\!\left(p_{\text{stable}}\,e^{-\alpha^{2}/\sigma_{\alpha}^{2}}\,e^{-d^{2}/\sigma_{d}^{2}}\right)$</td>
+            <td style="border:1px solid #cbd3dc;padding:8px"><b>加分项</b>。$\operatorname{odds}(p)=\log\frac{p}{1-p}$ 是把概率换成「几率」的对数形式；两个指数项是「测量噪声折扣」——$\alpha$ 是面片法向与本次测量法向的夹角，$d$ 是测量到该面片的距离，<b>角度偏得越多、距离越远，这一票就越不值钱</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #cbd3dc;padding:8px">$-\operatorname{odds}(p_{\text{prior}})$</td>
+            <td style="border:1px solid #cbd3dc;padding:8px"><b>先验扣分</b>。每次更新都要扣掉先验项，防止分数无脑上涨</td>
+          </tr>
+          <tr style="background:#f7fafc">
+            <td style="border:1px solid #cbd3dc;padding:8px">$-\operatorname{odds}(p_{\text{penalty}})$</td>
+            <td style="border:1px solid #cbd3dc;padding:8px"><b>动态惩罚</b>。<b>就是这一项在起作用</b>——当语义标签不一致时，给这个面片扣一票。原文说：经过若干次观测之后，这些不稳定的面片就会被移除</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>为什么要「攒几次才删」而不是「一次就删」？因为这正呼应了第三季 <b>0068</b> 课讲过的那套框架：<b>动态判定永远可能误判，所以处理上要给「反复确认」留余地。</b>一帧里标签不一致，可能是分割网络的噪声；连续多帧都不一致，那才是真在动。</p>
+
+      <h3>处理二：配准时压低不可信的对应关系</h3>
+
+      <p>光是建图时不加进去还不够——<b>当前的这一帧扫描里那些移动物体的点，也不能让它们去左右位姿估计</b>。所以 SuMa++ 还在 ICP 里加了一层语义约束。它的目标函数是（原文式 2）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$E=\sum_{\mathbf{u}\in\mathcal{V}_D} w_{\mathbf{u}}\,\mathbf{n}_{\mathbf{u}}^{\top}\!\left(\mathbf{T}\,\mathbf{u}-\mathbf{v}_{\mathbf{u}}\right)^{2}$$</div>
+      </div>
+
+      <p>这是标准的<b>点到面 ICP</b>：当前帧的一个点 $\mathbf{u}$ 投到地图上对应的点 $\mathbf{v}_{\mathbf{u}}$ 与它的法向 $\mathbf{n}_{\mathbf{u}}$ 所定义的那个面上，量垂直距离的平方，整个式子最小化它。（这和第二季 <b>0022</b> 课的点到面残差、<b>0080</b> 课 MULLS 的第二项是同一个东西。）</p>
+
+      <p>关键在每一项前面的那个权重 $w_{\mathbf{u}}$。原文把它拆成了三个因子相乘（式 6）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$w_{\mathbf{u}}^{(k)}=\rho_{\text{Huber}}\!\left(r_{\mathbf{u}}^{(k)}\right)\cdot C_{\text{semantic}}\!\left(S_D(\mathbf{u}),S_M(\mathbf{u})\right)\cdot\mathbb{I}\!\left\{l_s^{(k)}\ge l_{\text{stable}}\right\}$$</div>
+      </div>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>因子一：Huber 鲁棒核</b>
+          <p>$\rho_{\text{Huber}}$ 是几何上的经典做法：残差大的对应自动降权。这是第二季 <b>0019</b> 课讲鲁棒核时那条线，SuMa 本来就有。</p>
+        </div>
+        <div class="mini-card">
+          <b>因子二：语义兼容项</b>
+          <p>这是本篇新增的。它比较<b>观测的标签</b>和<b>地图的标签</b>是否一致，然后给出一个权重（原文式 8）：<br>
+          <b>一致</b>时取 $P(y_{\mathbf{u}}\mid\mathbf{u})$，也就是「网络对这个标签有多自信」；<br>
+          <b>不一致</b>时取 $1-P(y_{\mathbf{u}}\mid\mathbf{u})$，也就是「不置信度」——网络越确信这是车、而地图上却是路，这个权重就越小。</p>
+        </div>
+        <div class="mini-card">
+          <b>因子三：稳定性门槛</b>
+          <p>$\mathbb{I}\{\cdot\}$ 是示性函数（条件成立取 1、否则取 0）。只有稳定性分数 $l_s$ 达到门槛 $l_{\text{stable}}$ 的面片，才有资格参与配准。</p>
+        </div>
+      </div>
+
+      <p>把这三件事合起来看，你会发现一个很漂亮的对称：<b>建图时被惩罚掉的面片，在配准时也没有投票权。</b>同一条语义一致性判据，同时管住了「地图里放不放」和「位姿估计里算不算」。</p>
+
+      <h3>把它装进第三季 0068 课的三层框架</h3>
+
+      <p>第三季 <b>0068</b> 课（动态环境五篇）给过一个非常好用的分析框架：<b>判定 / 处理 / 代价</b>。用这个框架看 SuMa++，一切都很清楚：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">层次</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">SuMa++ 的做法</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>判定</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>语义标签的一致性</b>——新观测与世界模型在同一位置的语义标签是否相同。注意：<b>不看几何、不做运动预测</b>，只看「说法变没变」</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>处理</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">两条并行：① <b>稳定性惩罚</b>（式 1 的最后一项），攒够若干次观测后把不稳定面片从地图里移除；② <b>Semantic ICP 降权</b>（式 6 的语义兼容项），让不一致的对应在配准中几乎没有发言权</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>代价</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">① <b>首帧无法滤动态</b>（没有先验可比较）；② <b>只罚「可动物体类」</b>，植被这类语义静态物不处理；③ <b>分割误判会误删静态面片</b>；④ <b>激进删除会丢特征</b>——停靠的车本身是很好的特征，删掉反而让配准失败</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>其中第 ④ 条代价特别值得记住，因为它就是原文专门做实验去验证的。原文对比了三种做法：<b>SuMa</b>（纯几何、不管语义）、<b>SuMa nomovable</b>（无脑删掉所有「可移动」类别的面片，包括车、公交、卡车、自行车、摩托、其他车辆、行人、骑行者、骑摩托的人）、<b>SuMa++</b>（本篇，只在语义不一致时惩罚）。结论是：<b>无脑删看着省事，但它会把停靠的车也一起删掉——而停靠的车恰恰是很有区分度的好特征，删了之后扫描对不上，配准就失败。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">语义的作用：不是看懂场景，是知道哪些东西不该信</text>
+
+          <!-- 面板 1 -->
+          <rect x="40" y="58" width="390" height="242" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="235" y="46" text-anchor="middle" font-size="13.5" font-weight="700" fill="#3b4a5e">① 这一帧的原始点云</text>
+          <rect x="60" y="76" width="350" height="100" fill="#dfe4ea" stroke="#9aa3ad" stroke-width="1.4"/>
+          <rect x="60" y="176" width="350" height="104" fill="#e8f1ea" stroke="#9ecaa8" stroke-width="1.4"/>
+
+          <rect x="138" y="190" width="88" height="50" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <rect x="150" y="200" width="64" height="30" rx="6" fill="#e07b39" stroke="#a8563a" stroke-width="1.4"/>
+          <circle cx="164" cy="232" r="4" fill="#5b4a3f"/>
+          <circle cx="202" cy="232" r="4" fill="#5b4a3f"/>
+          <text x="182" y="256" text-anchor="middle" font-size="11" fill="#a8563a">车：会动</text>
+
+          <rect x="283" y="180" width="76" height="52" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <circle cx="300" cy="190" r="6" fill="#c0392b"/>
+          <rect x="295" y="198" width="10" height="26" rx="3" fill="#c0392b"/>
+          <circle cx="336" cy="194" r="6" fill="#c0392b"/>
+          <rect x="331" y="202" width="10" height="26" rx="3" fill="#c0392b"/>
+          <text x="318" y="256" text-anchor="middle" font-size="11" fill="#c0392b">行人：也会动</text>
+
+          <!-- 面板 2 -->
+          <rect x="470" y="58" width="390" height="242" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="665" y="46" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2f6d51">② 建图后：剔掉或降权</text>
+          <rect x="490" y="76" width="350" height="100" fill="#dfe4ea" stroke="#9aa3ad" stroke-width="1.4"/>
+          <rect x="490" y="176" width="350" height="104" fill="#e8f1ea" stroke="#9ecaa8" stroke-width="1.4"/>
+
+          <rect x="580" y="200" width="64" height="30" rx="6" fill="none" stroke="#b0b8c0" stroke-width="1.6" stroke-dasharray="4 3"/>
+          <line x1="584" y1="204" x2="640" y2="226" stroke="#c0392b" stroke-width="2"/>
+          <line x1="640" y1="204" x2="584" y2="226" stroke="#c0392b" stroke-width="2"/>
+          <text x="612" y="256" text-anchor="middle" font-size="11" fill="#7a8a99">划掉</text>
+
+          <circle cx="722" cy="210" r="16" fill="none" stroke="#b0b8c0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="712" y1="200" x2="732" y2="220" stroke="#c0392b" stroke-width="2"/>
+          <line x1="732" y1="200" x2="712" y2="220" stroke="#c0392b" stroke-width="2"/>
+          <circle cx="766" cy="210" r="16" fill="none" stroke="#b0b8c0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="756" y1="200" x2="776" y2="220" stroke="#c0392b" stroke-width="2"/>
+          <line x1="776" y1="200" x2="756" y2="220" stroke="#c0392b" stroke-width="2"/>
+          <text x="744" y="256" text-anchor="middle" font-size="11" fill="#7a8a99">划掉</text>
+
+          <text x="665" y="284" text-anchor="middle" font-size="11" fill="#2f6d51">只留静止的路面与建筑</text>
+
+          <text x="450" y="380" text-anchor="middle" font-size="12.5" fill="#5a4a42">语义的作用不是「看懂场景」，而是「知道哪些东西不该信」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一段街道画两次。左边是这一帧扫到的原始点云，其中<b>一辆车和两个行人</b>被红框高亮；右边是配准与建图之后的结果，那些点被<b>划掉</b>了，只留下静止的路面和建筑。<br>
+          <b>怎么看这张图：</b>① 左格里请先找到三样东西：红色的车、两个红色的行人小人、以及它们外面那圈<b>红色虚线框</b>——这个框代表「这几个东西是会被语义标签标出来的」；② 右格里，车和行人的位置只剩<b>灰色的虚框和一个红叉</b>，意思是「这里曾经有观测，但被剔掉或降权了」；③ 注意右边那些<b>没被划掉的部分</b>：建筑立面和路面完好无损——这就是「不是看懂场景，而是不信该不信的东西」。<br>
+          <b>要记住的一句话：</b>语义在这里不是用来做「场景理解」的，它是一个<b>可信度开关</b>：同一位置前后说法不一致的，就别让它参与地图和位姿。（这幅图为示意画法，原文的剔除效果见下方 Fig. 4 与 Fig. 5。）
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM/0f471b83b7fd0d581834045763b1ed1a7474a42e697c2b4e8d86799d925777cd.jpg" alt="SuMa++ filtered surfels result subfigure b">
+        <figcaption>
+          <b>原图注（Fig. 4，b 子图）：</b>Effect of the proposed filtering of dynamics. For all figures, we show the color of the corresponding label, but note that SuMa does not use the semantic information. (a) Surfels generated by SuMa; (b) our method; (c) remove all potentially moving objects.<br>
+          （中译：所提动态滤波的效果。所有图中我们都用对应标签的颜色来着色，但请注意 SuMa 本身并不使用语义信息。(a) SuMa 生成的面片；(b) 我们的方法；(c) 直接移除所有可能移动的物体。）<br>
+          <b>怎么看这张图：</b>这里展示的是 <b>(b) 子图，也就是本文方法的结果</b>（按原文子图顺序推断：(a) 是 SuMa、(b) 是本文、(c) 是无脑删）。要理解它，最好的办法是把三个子图并排对比：<b>(a)</b> 是纯几何的 SuMa，它不知道什么是车、什么是墙，于是移动车队的面片会在地图里留下重影；<b>(c)</b> 是无脑删掉所有可动类，地图确实干净了，但<b>连停靠的车辆面片也一起没了</b>；<b>(b)</b> 是本文的做法——既清掉了真正在动的那些，又<b>保住了停靠车辆这类有价值的静止特征</b>。（本课只取出 (b) 一张作为代表，另两张可在原论文中对照查看。）<br>
+          <b>要记住的一句话：</b>这张图三格连起来看，就是本篇最重要的一个论点——<b>真正难的不是「删掉会动的东西」，而是「别把没动的东西也删了」。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_SuMa____Efficient_LiDAR-based_Semantic_SLAM/cb8e5e1b66cd6e6cbe4c299ecc4d10e87037aa87eec66b9299384311de2e6066.jpg" alt="Semantic ICP weight map subfigure c">
+        <figcaption>
+          <b>原图注（Fig. 5，c 子图）：</b>Visualization of Semantic ICP: (a) semantic map $S_D$ for the current laser scan, (b) corresponding semantic map $S_M$ rendered from the model, (c) the weight map during the ICP. The darker the pixel, the lower is the weight of the corresponding pixel.<br>
+          （中译：Semantic ICP 的可视化：(a) 当前激光扫描的语义图 $S_D$；(b) 由模型渲染出的对应语义图 $S_M$；(c) ICP 过程中的权重图。<b>像素越暗，对应像素的权重越低</b>。）<br>
+          <b>怎么看这张图：</b>这里展示的是 <b>(c) 权重图</b>（按原文子图顺序推断：(a) 是当前观测的语义图、(b) 是模型渲染出的语义图、(c) 是权重图）。原文配套的例子是一条高速公路上的场景，扫描里有两辆移动的车：① (a) 里有这两辆车，(b) 里它们已经被动态滤波从地图中移除了；② 于是在 (c) 里，<b>车所在的位置出现了明显发暗的区域</b>——原文说「由于观测与地图的类别不一致，我们可以看到对应位置的低权重」；③ 而路面、护栏这些一致的部分则保持较亮，也就是正常参与配准。<br>
+          <b>要记住的一句话：</b>这张图是式 6 里那个 $C_{\text{semantic}}$ 因子的<b>可视化证据</b>——语义不一致的对应关系，在配准里被自动压暗了。这就是「判定」之后的第二层「处理」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SuMa++ 是靠什么判断「这堆点是会动的」？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文 III-E 节：更新地图时检查新观测语义图 S_D 与世界模型语义图 S_M 的一致性，标签不一致就认为这些面片属于在两次扫描之间移动过的物体，于是在递归贝叶斯滤波的稳定性项上加惩罚。整个过程不做运动预测、不看几何形状。" onclick="lessonKit.answer(this,'q0082a')">比语义标签一致吗</button>
+          <button data-correct="no" data-explanation="不是。原文的判据是两个「说法」是否一致：同一个位置，地图说它是路面、这一帧说它是车，前后矛盾——所以它动过。至于形状像不像，那是纯几何方法的路子，本篇的一整个卖点就是不走那条路。" onclick="lessonKit.answer(this,'q0082a')">比点云形状像不像</button>
+        </div>
+        <div class="quiz-feedback" id="q0082a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>5. 实验数字：在动态场景里差多少</h2>
+
+      <p>先说平台与耗时。传感器是 KITTI 数据集里的 <b>Velodyne HDL-64E S2，10 Hz</b>；计算平台是 Intel Xeon W-2123（8 核 @3.60 GHz）+ 16 GB 内存 + Nvidia Quadro P4000（8 GB）。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>RangeNet++ 语义分割</b>
+          <p>平均 <b>75 ms/帧</b>——注意，这是整个系统里最贵的一块。</p>
+        </div>
+        <div class="mini-card">
+          <b>面片建图（surfel-mapping）</b>
+          <p>平均 <b>48 ms/帧</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>回环整合</b>
+          <p>最坏情况 <b>190 ms</b>（原文指出这是训练集 seq. 00 上的情况，那段有多个回环）。</p>
+        </div>
+      </div>
+
+      <h3>KITTI Road 数据集（动态最多的一段）</h3>
+
+      <p>这是本篇最看重的一段数据——原文说这些序列（尤其高速段）对 SLAM 方法特别难，因为<b>路上大部分东西是移动的车</b>，而路侧只有稀疏的路牌、杆子这类特征，没有建筑拐角可以依靠。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">方法</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">平均相对旋转误差（°/100 m）</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">平均相对平移误差（%）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">SuMa（纯几何）</td><td style="border:1px solid #cbd3dc;padding:8px">1.35</td><td style="border:1px solid #cbd3dc;padding:8px"><b>6.13</b></td></tr>
+          <tr style="background:#f7fafc"><td style="border:1px solid #cbd3dc;padding:8px">SuMa nomovable（无脑删）</td><td style="border:1px solid #cbd3dc;padding:8px">1.17</td><td style="border:1px solid #cbd3dc;padding:8px">1.46</td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>SuMa++（本文）</b></td><td style="border:1px solid #cbd3dc;padding:8px"><b>1.04</b></td><td style="border:1px solid #cbd3dc;padding:8px"><b>1.46</b></td></tr>
+        </tbody>
+      </table>
+
+      <p>这张表里最值得盯住的是 SuMa 那一列的平移误差 <b>6.13%</b>——它是另外两个方法的四倍多。原因原文说得很明确：<b>持续移动的车把 ICP 锁死了。</b>几个具体的序列更能说明问题：</p>
+
+      <ul>
+        <li><b>seq. 35</b>：SuMa 是 5.11 / <b>26.8</b>，SuMa++ 是 2.90 / <b>1.11</b>；</li>
+        <li><b>seq. 40</b>：SuMa 是 1.09 / <b>18.0</b>，SuMa++ 是 0.75 / <b>1.95</b>；</li>
+        <li><b>seq. 41</b>：SuMa 是 1.24 / <b>15.6</b>，SuMa++ 是 1.14 / <b>1.67</b>。</li>
+      </ul>
+
+      <p>还有一列容易被忽略但非常重要的观察：<b>SuMa nomovable（无脑删）在这段数据上和 SuMa++ 表现很接近。</b>原文对此的解读是：这恰好证明了 SuMa 表现差的主因就是「真正在移动的物体」造成的不一致。不过原文紧接着补了一句——<b>下一组实验会显示，无脑删所有潜在可动物体，在城市环境里反而会拖坏位姿估计。</b></p>
+
+      <h3>KITTI Odometry 数据集（打脸「无脑删」的一段）</h3>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#eef2f7">
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">方法</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">平均相对旋转（°/100 m）</th>
+            <th style="border:1px solid #cbd3dc;padding:8px;text-align:left">平均相对平移（%）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px">SuMa</td><td style="border:1px solid #cbd3dc;padding:8px">0.36</td><td style="border:1px solid #cbd3dc;padding:8px">0.83</td></tr>
+          <tr style="background:#fdf6f3"><td style="border:1px solid #cbd3dc;padding:8px">SuMa nomovable</td><td style="border:1px solid #cbd3dc;padding:8px"><b>23.3</b></td><td style="border:1px solid #cbd3dc;padding:8px"><b>9.24</b></td></tr>
+          <tr><td style="border:1px solid #cbd3dc;padding:8px"><b>SuMa++（本文）</b></td><td style="border:1px solid #cbd3dc;padding:8px"><b>0.29</b></td><td style="border:1px solid #cbd3dc;padding:8px"><b>0.70</b></td></tr>
+        </tbody>
+      </table>
+
+      <p>这张表就是前面那句预告的兑现。<b>SuMa nomovable 在城市序列上直接发散了</b>：seq. 00 是 22.0 / <b>58.0</b>、seq. 02 是 25.0 / <b>63.0</b>——平移误差百分之五六十，等于彻底失效。而 SuMa++ 不但没崩，还是三个里最好的。</p>
+
+      <p>原文对此的分析有两条，都说得很实在：① <b>语义分割本身会有错判</b>，把本来是静态的面片（其实是好东西）删掉了；② <b>停靠的车被删掉了</b>——而它们是很出色的、有区分度的配准特征。原文还加了一句更狠的：在城市里，<b>停靠的车有时是唯一可靠的区分性特征</b>。所以「简单删掉某几个类别，至少在我们这个场景下是次优的，会导致更差的性能」。</p>
+
+      <h3>测试集（服务器端评测）</h3>
+
+      <p>原文把结果提交到 KITTI 测试集做服务端评测（这样就不可能在测试集上调参）。结果是：<b>SuMa++ 平均旋转误差 0.0032 °/m、平均平移误差 1.06%</b>，对比原始 SuMa 的 <b>0.0032 °/m、1.39%</b>——旋转持平，<b>平移误差明显改善</b>。</p>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>6. 原文承认的局限（逐条）</h2>
+
+      <p>这一节全部照抄原文的 Discussion 与 Conclusion，一条不落。</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>① 第一帧无法滤掉动态物体</b>
+          <p>原文的原话是：<b>有一个明显的局限——我们无法在第一次观测时就滤掉动态物体。</b>如果第一帧里就有大量移动物体，方法会失败，<b>因为它没法估出一个合理的初始速度或位姿。</b>原文给的缓解办法是：<b>在初始化阶段把所有「可能可动」的物体类别全部删掉。</b>但它也承认，更鲁棒的做法应该是「回头追溯这些移动状态带来的变化，从而回溯地更新地图」。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 只惩罚「可动物体类」</b>
+          <p>建图更新时，<b>只对「可动」类别的面片施加动态惩罚</b>，也就是<b>不惩罚语义上是静态的物体，比如植被</b>——尽管树叶确实会变化、而且它的外观会随视角变化（因为激光只在某些视角下才被反射回来）。原文给出的理由是：这些也可以当很好的地标（树干是静止的、是好的位姿特征），而且原本那套基于几何的外点剔除机制（用 Huber 范数）通常也已经把这类部分降权了。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 语义分割误判会误删静态面片</b>
+          <p>原文在解释「为什么城市里无脑删表现差」时列出的第一条原因就是：<b>尽管我们努力改进语义分割的结果，但仍然存在错误预测，导致地图中本来静态的面片被移除。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>④ 无脑删可动类会丢掉关键特征</b>
+          <p>这是原文反复强调的一条：<b>停靠的车是配准中有价值的、有区分度的特征，简单删掉会导致扫描配准因缺少对应关系而失败。</b>在城市里，这些停靠车辆有时是唯一可靠的区分性特征。删得越干净，地图越稀疏，反而越容易配不上。</p>
+        </div>
+      </div>
+
+      <p>原文在结论里还留了两条未来方向，也值得记下来：<b>① 把语义用于回环检测；② 做更细粒度的语义，比如车道结构、路面类型。</b>这说明在作者看来，语义这块「只用来剔动态」还远没有榨干。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>原文的实验里，「无脑删掉所有可能移动的物体类别」（SuMa nomovable）在城市序列上出现了什么后果？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。KITTI Odometry 平均 23.3 / 9.24，其中 seq. 00 是 22.0 / 58.0、seq. 02 是 25.0 / 63.0——等于发散。原文给了两条原因：一是分割误判把静态面片也删了，二是停靠的车被删掉，而它们恰是有区分度的好特征，删了之后扫描缺少对应关系，配准就失败。" onclick="lessonKit.answer(this,'q0082b')">停靠的车被误删了</button>
+          <button data-correct="no" data-explanation="恰恰相反：动态的车被删掉正是它在高速段表现不错的原因（KITTI Road 上它和 SuMa++ 很接近）。问题出在「删过头」——它连停靠的车、静止的卡车一起删了，而这些静态物体是配准中有价值的特征。" onclick="lessonKit.answer(this,'q0082b')">动态的车没删干净</button>
+        </div>
+        <div class="quiz-feedback" id="q0082b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>一个面片（surfel）里存了哪些字段？其中哪一个是 SuMa++ 相对 SuMa 新增的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文的定义是：每个面片由<b>位置 $v_s\in\mathbb{R}^3$、法向 $n_s\in\mathbb{R}^3$、半径 $r_s\in\mathbb{R}$</b> 定义；另外还携带<b>两个时间戳</b>——创建时间戳 $t_c$ 与最后一次被测量更新的时间戳 $t_u$；并且用一个<b>二元贝叶斯滤波</b>维护一个<b>稳定性对数几率 $l_s$</b>，用来判断这个面片算稳定还是不稳定。</p>
+              <p><b>SuMa++ 新增的字段是「语义标签 $y$ 及其对应的概率」</b>——原文的说法是「we add for each surfel the inferred semantic label $y$ and the corresponding probability of that label from the semantic segmentation」。注意这是<b>给已有面片加一个字段</b>，不是另建一套地图。</p>
+              <p>另外可以顺带一提：原文还说明 SuMa 本身也做回环检测与后续的位姿图优化。</p>
+            </div></details>
+          </li>
+          <li>请把面片地图与前面三季见过的三种地图表示对比一下，各自「记的是什么」？SuMa++ 的面片地图有什么独到之处？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>① 体素 / TSDF（第二季 0033 KinectFusion）</b>：每个体素里存一个<b>截断符号距离</b>——沿视线方向，表面在体素中心的哪一侧、离多远。第二季 <b>0034 的 Voxel Hashing</b> 是它的工程化变体：用<b>稀疏体素块 + 哈希索引</b>，把空区域的存储省掉。</p>
+              <p><b>② 网格 mesh（第三季 0062 Kimera）</b>：存<b>三角面片的顶点与连接关系</b>，拓扑明确。</p>
+              <p><b>③ 神经隐式（第三季 0071）</b>：把地图<b>存在神经网络权重里</b>，用网络去查询某个位置是不是表面。</p>
+              <p><b>面片地图（本篇）</b>：每个面片存<b>位置 + 法向 + 半径</b>，外加时间戳、稳定性、语义标签。它和 TSDF 的区别在于：TSDF 是「把空间切成格子、在格子里描述表面」，面片是「<b>只在表面上贴元素</b>」——所以更紧致；它和网格的区别在于：网格要维护一套连接关系，面片是彼此独立的小面，维护更轻。</p>
+              <p><b>独到之处有两点：</b>一是它自带<b>朝向和大小</b>，比点云信息多；二是它是<b>四种表示里唯一在表示层就带语义标签的</b>——正因为标签贴在面片上，后面的动态剔除与 Semantic ICP 才有地方下手。</p>
+            </div></details>
+          </li>
+          <li>SuMa++ 是怎么「判定」一个面片是动态的？它做了哪两层「处理」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>判定：</b>在<b>更新地图</b>时，检查新观测的语义图 $S_D$ 与世界模型 $S_M$ 的语义一致性。<b>标签不一致</b>，就认为这些面片属于在两次扫描之间移动过的物体。注意这个判据<b>不做运动预测、不看几何形状</b>。</p>
+              <p><b>处理一：稳定性惩罚。</b>在递归贝叶斯滤波的稳定性对数几率更新式（式 1）里加一个惩罚项 $-\operatorname{odds}(p_{\text{penalty}})$。式 1 的另外几项分别是：递推下来的旧分数、加分项（带两个指数折扣，$\alpha$ 是法向夹角、$d$ 是测量到面片的距离）、以及先验扣分项。经过若干次观测，不稳定的面片会被移除。</p>
+              <p><b>处理二：Semantic ICP 降权。</b>在点到面 ICP 目标（式 2）里，每个残差的权重 $w_{\mathbf u}$ 由三个因子相乘（式 6）：Huber 鲁棒核 $\rho$、语义兼容项 $C_{\text{semantic}}$、以及稳定性示性函数 $\mathbb{I}\{l_s\ge l_{\text{stable}}\}$。其中语义兼容项在观测与地图标签<b>一致</b>时取 $P(y_{\mathbf u}\mid\mathbf u)$（标签置信度），<b>不一致</b>时取 $1-P(y_{\mathbf u}\mid\mathbf u)$（不置信度），从而自动降权。</p>
+              <p>这两层是对称的：<b>建图时不放进去，配准时也不让它投票。</b></p>
+            </div></details>
+          </li>
+          <li>为什么「无脑删掉所有可动物体类别」在高速场景看起来还行，到了城市场景却会发散？请举出原文的证据。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>在高速场景（KITTI Road）看起来还行</b>，是因为那里的难点确实就是「持续移动的车」——把可动类删干净，等于把主要的害处去掉了。所以 SuMa nomovable 在 KITTI Road 上平均 1.17 / 1.46，与 SuMa++ 的 1.04 / 1.46 很接近。原文说，这恰好<b>证明了 SuMa 表现差的主因就是真正移动的物体造成的不一致</b>。</p>
+              <p><b>到城市场景（KITTI Odometry）就崩了</b>：平均 23.3 / 9.24，其中 seq. 00 达到 22.0 / 58.0、seq. 02 达到 25.0 / 63.0——平移误差百分之五六十，是发散量级。相比之下 SuMa 是 0.36 / 0.83，SuMa++ 是 0.29 / 0.70。</p>
+              <p>原文给的两条原因：① <b>语义分割有误判</b>，导致地图里本来是静态的面片被移除；② <b>停靠的车被删掉了</b>——而它们是出色的、有区分度的配准特征。<b>在城市里，停靠车辆有时是唯一可靠的区分性特征</b>，删掉之后扫描配准会因为缺少对应关系而失败。原文的结论是：「简单地移除某几个类别，至少在我们的场景下是次优的，会导致更差的性能。」</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0081-DLO2022-速度优先的直接法.html">← DLO（2022）：速度优先的直接法</a>
+        <a class="next" href="0083-FAST-LIO2021-迭代卡尔曼与新增益公式.html">FAST-LIO（2021）：迭代卡尔曼与新增益公式 →</a>
+      </div>
+      <p class="foot-note">这一节我们把「地图」从一堆点换成了带标签的面片。下一节回到滤波器派，看看 FAST-LIO 怎么把「反复重线性化」塞进卡尔曼的框架里 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

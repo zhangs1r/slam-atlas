@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三条务实路线：激光辅助与受限平台 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0072</div>
+      <h1>三条务实路线：激光辅助与受限平台</h1>
+      <p class="subtitle">不追新范式，拿手边的东西把 SLAM 跑起来 🔧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多传感器 / 无监督 / 受限平台三条工程路线</span>
+        <span>👥 作者：LAMV-SLAM（Feng 等）/ Hybrid Masks（Chen 等）/ Dynamic-VINS（Liu 等）</span>
+        <span>📅 2022 · <i>LAMV-SLAM</i>（IEEE TIM，推断）/ <i>Hybrid Masks</i>（IEEE 期刊，推断）/ <i>Dynamic-VINS</i>（IEEE RA-L/IROS，推断）</span>
+      </div>
+      <div class="toc">
+        <a href="#intro">1. 三条路线与前面课程</a>
+        <a href="#lidar">2. 路线一：加一种传感器</a>
+        <a href="#fusion">3. 激光怎么补尺度</a>
+        <a href="#mask">4. 路线二：换一种监督</a>
+        <a href="#hybrid">5. 混合掩码与尺度一致</a>
+        <a href="#dvins">6. 路线三：压到能跑</a>
+        <a href="#timing">7. 耦合与耗时数字</a>
+        <a href="#common">8. 三条路线的共同点</a>
+        <a href="#end">9. 第三季收尾</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="intro">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能说清三条「不够漂亮但很管用」的路线各付了什么代价：多加一种传感器（激光）、换个监督方式（无监督掩码）、把算法砍到能在受限平台上实时跑。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>第二季 <b>0035</b> Voxblox 讲机载算力约束（Intel i7 单线程、ESDF 4 Hz、250 ms 预算）→ 本節路线三是同一约束的「视觉侧」版本；第一季 <b>0009</b> DARPA 地下挑战赛讲真实环境失败 → 三条路线正是对那类失败的现实回答；第二季 <b>0022</b> 讲 NEES 一致性 → 受限平台没余量做复杂估计。</p></div>
+      </div>
+
+      <h2>1. 三条务实路线：不够漂亮但很管用</h2>
+      <p>前面本季大多在讲「更优雅的范式」——特征法、直接法、学习式稠密、神经隐式。这最后一节换个口味：<b>真实世界的系统往往不是靠新范式，而是靠「把问题绕过或压小」做出来。</b>三篇论文的共同点是——它们都不追求刷新论文指标，而是回答「在真实约束下怎么把 SLAM 跑起来」。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>路线一：多一种传感器</h4><p>LAMV-SLAM：单目视觉为主，稀疏激光只补尺度与深度。<b>代价</b>：离不开激光。</p></div>
+        <div class="mini-card"><h4>路线二：换一种监督</h4><p>Hybrid Masks：无监督掩码自己学出动态物体。<b>代价</b>：要调权重、迁移性有限。</p></div>
+        <div class="mini-card"><h4>路线三：砍到能跑</h4><p>Dynamic-VINS：受限平台上的实时 RGB-D 惯性里程计。<b>代价</b>：只能处理已知动态类、简化了模型。</p></div>
+      </div>
+      <p>下面对应接上前面的课：<b>0035</b> 的 Voxblox 在无人机上只有 Intel i7 2.1 GHz、单线程、ESDF 只能 4 Hz、每帧 250 ms 预算——那是「算力受限」的激光侧；本节路线三是在<b>视觉侧</b>面对同一类约束。<b>0009</b> 的 DARPA 地下挑战赛里，真实环境的光照、动态、退化让很多优雅方法当场翻车；这三条路线就是对被那种失败「补洞」。<b>0022</b> 讲 NEES 一致性检验需要足够估计余量，而受限平台上根本没余量做复杂估计——路线三正是「余量为零」下的取舍。</p>
+    </main>
+
+    <section class="section-card" id="lidar">
+      <h2>2. 路线一：加一种传感器（LAMV-SLAM）</h2>
+      <p>LAMV-SLAM（<i>A Novel Lidar-Assisted Monocular Visual SLAM Framework for Mobile Robots in Outdoor Environments</i>）的思路是：<b>单目视觉是主体，3-D 激光是辅助</b>。它要解决的是单目 VSLAM 在室外大尺度下的两个老毛病——尺度不可观（不知道远近距离的绝对值）、光照剧变/光流过大时容易失效。</p>
+      <p>作者原话点得很清楚：激光点云「only provide real-scale depth estimates for visual features」（只为视觉特征提供真实尺度深度）。所以它是<b>半直接（semidirect）</b>的 SLAM，不是纯直接、也不是纯间接；并且明确是「激光辅助视觉」，和第一季 <b>0006</b> 激光雷达里程计综述里「激光当主角」的紧耦合 SLAM 是<b>主/辅反向</b>的关系——那里激光是主角，这里激光是配角。</p>
+      <p>系统叫 LAMV-SLAM，有四个并行线程：光度标定（橙）、跟踪（蓝）、建图（绿）、回环（红）。硬件上用的是 OUSTER OS1-32（32 线激光）+ Point Grey Chameleon3 单目相机 + XSENS mti-30 IMU + NPOS320 GNSS/INS，在室外大尺度跑。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Novel_Lidar-Assisted_Monocular_Visual_SLAM_Framework_f/59b6c7247b5a54bc73b01c4c274f07287094294806f3f697eabbfbd315510c34.jpg" alt="LAMV-SLAM depth fusion pipeline">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>左块是原图与激光扫描；中块是 RGB-D 图与有序深度图（有序深度图的高=激光环数，宽=每环激光点数）；右块中红框是图像特征，圆点是投影到图像的激光点（蓝圈=离该特征最近的激光邻点）。<br>
+          <b>怎么看这张图：</b>① 左图看到激光扫描（散点）叠在照片上；② 中图把激光点按「环数×每环点数」重排成一张有序深度图；③ 右图标出「图像特征」旁边最近的激光点——这正是「稀疏激光怎么补到图像特征上」的核心。注意原文未给具体激光点数，仅给出硬件为 32 线激光。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="fusion">
+      <h2>3. 激光怎么给单目补尺度：深度融合 + 两阶段</h2>
+      <p>它有两个独特招式，都是「用稀疏激光把单目的不确定钉死」：</p>
+      <ul>
+        <li><b>深度融合（Depth Fusion）：</b>把激光点投影到图像上建出 RGB-D 图，再按「激光环数 × 每环点数」重排成有序深度图；对每个视觉特征，先在 RGB-D 图找最近邻，再在有序图邻域取若干邻点，用 PCA 拟合一个小平面，与相机视线求交得到深度。复杂度与激光点数无关。</li>
+        <li><b>两阶段运动估计：</b>Stage I 用直接法对齐（含由上一帧激光生成的临时地图点 TMPC），给出带真实尺度的初值；Stage II 只用这些带真实尺度的临时点做间接几何精修。因为用的都是「带尺度」的点，尺度漂移被显著抑制。</li>
+        <li><b>在线光度标定：</b>建模渐晕、曝光、响应函数，用 FEW（固定雅可比）+ 边缘化窗口优化，让直接法在强度突变时更稳（关掉后强度突变时 &gt;70% 特征会丢失）。</li>
+      </ul>
+      <p>实验数字：在 KITTI 里程计 11 个序列上，开回环平均平移漂移 <b>0.81%</b>（关回环 0.87%），优于 DEMO 1.16%、DVL-SLAM 0.98% 等；旋转误差 0.0028°/m；速度 <b>32.73 Hz</b>（Intel i7-8700 3.20 GHz / 16G），比对照方法（i7-2600 仅 5 Hz）快很多。逐线程耗时（Table V）：光度 16.1 ms、跟踪 29 ms（其中深度融合 0.26 / TMPC 3.22 / 两阶段 5.03 / 局部 BA 18.28）、建图 9 ms、回环 18 ms。原文也诚实承认：<b>当前不处理动态物体，未来要加语义模块</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#1f2937">稀疏激光点打在图像上</text>
+          <rect x="40" y="60" width="400" height="300" rx="8" fill="#bfdbfe"/>
+          <rect x="70" y="120" width="90" height="120" fill="#94a3b8"/>
+          <rect x="180" y="100" width="110" height="150" fill="#94a3b8"/>
+          <rect x="320" y="140" width="80" height="110" fill="#94a3b8"/>
+          <polygon points="80,360 420,360 360,250 140,250" fill="#475569"/>
+          <rect x="250" y="300" width="90" height="48" rx="6" fill="#dc2626"/>
+          <circle cx="270" cy="320" r="9" fill="#16a34a"/>
+          <circle cx="300" cy="324" r="9" fill="#16a34a"/>
+          <circle cx="330" cy="312" r="9" fill="#22d3ee"/>
+          <circle cx="200" cy="300" r="9" fill="#22d3ee"/>
+          <circle cx="150" cy="290" r="9" fill="#facc15"/>
+          <circle cx="350" cy="180" r="9" fill="#facc15"/>
+          <circle cx="220" cy="150" r="9" fill="#22d3ee"/>
+          <circle cx="120" cy="170" r="9" fill="#facc15"/>
+          <circle cx="290" cy="270" r="9" fill="#16a34a"/>
+          <circle cx="180" cy="280" r="9" fill="#22d3ee"/>
+          <circle cx="380" cy="300" r="9" fill="#facc15"/>
+          <circle cx="100" cy="320" r="9" fill="#16a34a"/>
+          <text x="240" y="386" text-anchor="middle" font-size="13" fill="#0f172a">左：街景 + 稀疏激光点（彩色圆）</text>
+          <text x="240" y="406" text-anchor="middle" font-size="12" fill="#0f172a">激光直接给出这些点的距离</text>
+
+          <rect x="490" y="60" width="370" height="140" rx="8" fill="#e2e8f0"/>
+          <polygon points="540,180 800,180 760,110 570,110" fill="#cbd5e1"/>
+          <text x="675" y="100" text-anchor="middle" font-size="13" fill="#334155">纯视觉：只知方向</text>
+          <text x="675" y="150" text-anchor="middle" font-size="13" fill="#334155">不知远近，要很久才估出深度</text>
+          <text x="675" y="178" text-anchor="middle" font-size="20" fill="#64748b">「深度？」</text>
+
+          <rect x="490" y="220" width="370" height="140" rx="8" fill="#dcfce7"/>
+          <polygon points="540,340 800,340 760,270 570,270" fill="#86efac"/>
+          <circle cx="620" cy="300" r="9" fill="#16a34a"/>
+          <circle cx="700" cy="305" r="9" fill="#22d3ee"/>
+          <circle cx="660" cy="290" r="9" fill="#facc15"/>
+          <text x="675" y="262" text-anchor="middle" font-size="13" fill="#166534">激光辅助：一点就给</text>
+          <text x="675" y="312" text-anchor="middle" font-size="13" fill="#166534">真实距离（如 3.2 m）直接拿到</text>
+
+          <text x="450" y="448" text-anchor="middle" font-size="13" fill="#374151">稀疏激光点投影到图像上：纯视觉要很久才估出的深度，激光一点就给了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是一个具象的室外街景（楼、路、车），上面撒了稀疏的彩色圆点，代表把激光点投影到图像后的位置；原文 Fig.3 就是这种「原图 + 激光扫描」的叠加。右上是「纯视觉」——单目相机只知射线方向、不知远近；右下是「激光辅助」——同样的位置激光直接给出真实距离。<br>
+          <b>怎么看这张图：</b>① 彩色圆点是空间中被激光直接测距的稀疏位置；② 纯视觉情况下这些点的距离要靠多帧几何慢慢「 triangulate（三角化）」出来，慢且易漂；③ 激光一点就给真实尺度，等于把单目的「无限远猜测」钉成实测值。<br>
+          <b>要记住的一句话：</b>激光在这里不是主角，只是给视觉特征「贴刻度」的配角。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="mask">
+      <h2>4. 路线二：换一种监督（Hybrid Masks）</h2>
+      <p>Hybrid Masks（<i>Unsupervised Estimation of Monocular Depth and VO in Dynamic Environments via Hybrid Masks</i>）走的是「无监督」路线。它联合训练单目深度和视觉里程计（VO），但<span style="font-weight:700">不靠语义分割标签</span>，而是从<b>重投影残差 / 光度一致性</b>自己学出「哪些是动态物体」的掩码。</p>
+      <p>它想解决两个痛点：无监督单目框架在动态环境会失败；而且因为训练样本是短片段、各片段尺度不同，会导致<b>全局尺度不一致</b>。前人的掩码往往只救「视角重建」，忽略了动态对 VO（位姿估计）本身的破坏。</p>
+      <p>本文提 <b>hybrid masks（混合掩码）</b>，由两块组成：</p>
+      <ul>
+        <li><b>Filter Mask $M_f$：</b>逐像素比较「光度一致性损失」和全图均值，若某像素的 $L_{pc} > \beta\cdot\bar{L}_{pc}$（$\beta=1.5$）就判为离群，令 $M_f=0$（二值）。它既当重建损失的像素权重，又去监督下面的 CoverNet。</li>
+        <li><b>Cover Mask $M_c$：</b>一个 CoverNet（U-Net）以「目标帧—源帧」对为输入，输出连续的 $[0,1]$ 掩码，把动态区覆盖（$I'=M_c\cdot I$）后再送进 PoseNet；用 BCE 损失对照 $M_f$ 来训练。</li>
+      </ul>
+      <p>一句话：它靠「预测光流 / 重投影对不上」来判定动态，<b>不需要任何语义标签</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Unsupervised_Estimation_of_Monocular_Depth_and_VO_in_Dyn/5f406a520e135f15a97ee97b200633db68a0dcee1ef61c3f7046ee587d08f00f.jpg" alt="Hybrid Masks framework">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>框架示意。混合掩码由 filter mask $M_f$ 与 cover mask $M_c$ 组成（图中高亮）。整个流程含三个子网：DepthNet、PoseNet、CoverNet。DepthNet 吃单张图输出深度图；CoverNet 吃目标—源帧对估计 cover mask。<br>
+          <b>怎么看这张图：</b>① DepthNet 出深度、PoseNet 出位姿、CoverNet 出覆盖掩码，三者共享编码器；② 红/高亮处就是混合掩码的作用位置——$M_c$ 在进 PoseNet 前盖住动态区，$M_f$ 在重建损失里滤掉离群。盯着这两个掩码「一个救 VO、一个救重建」的分工。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="hybrid">
+      <h2>5. 混合掩码与全局尺度一致</h2>
+      <p>联合训练里总损失是：$L_{total}=\sum(L_{pc}+\lambda_m L_m+\lambda_d L_{dpc}+\lambda_{sm} L_{sm})$。其中光度损失 $L_{pc}$ 用 SSIM + L1 加最小重投影和自掩码；平滑损失 $L_{sm}$ 保边缘。关键在于它引入的<b>深度—位姿一致性</b>：</p>
+      <div class="formula-box"><div class="flow-formula">$$L_{poc}=T_{t-1,t}\cdot T_{t,t+1}-T_{t-1,t+1}$$</div></div>
+      <p>意思是：相邻三帧的相对位姿应当可逆一致——「前→中」乘「中→后」必须等于「前→后」。这像两段尺子拼起来必须等于整段，<b>强迫各训练片段的尺度彼此对齐</b>，从而消除跨片段的全局尺度不一致。</p>
+      <p>实验：在 KITTI Eigen 上深度达到 SOTA 级别；VO 在 Seq09 为 $t_{err}=7.14\%,\,r_{err}=2.32°/m$，Seq10 为 $7.72\%/2.27°/m$，优于 ORB-SLAM（15.30/3.68）、SfM-Learner、GeoNet 等，<b>甚至超过立体方法 Zhan</b>；在 Make3D 上迁移 Abs Rel 0.334，无监督中领先。平台是 RTX 8000，约 25 小时 / 20 epoch。原文承认的局限：Make3D 域偏移仍大；未用 IMU / 时序 RNN。和路线三（几何+检测）、路线一（语义+NeRF）对照，它这条是「无监督学习」支线。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>Hybrid Masks 是怎么发现「动态物体」的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="它不靠语义标签，而是用重投影残差/光度一致性（预测光流对不上）自己学出掩码。" onclick="lessonKit.answer(this,'q0072a')">靠重投影残差学</button>
+          <button data-correct="no" data-explanation="语义分割是直接标类别（人/车），而 Hybrid Masks 明确不用语义标签，靠无监督残差。" onclick="lessonKit.answer(this,'q0072a')">靠语义分割标签</button>
+        </div>
+        <div class="quiz-feedback" id="q0072a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="dvins">
+      <h2>6. 路线三：把算法压到能跑（Dynamic-VINS）</h2>
+      <p>Dynamic-VINS（<i>RGB-D Inertial Odometry for a Resource-Restricted Robot in Dynamic Environments</i>）面向<b>算力受限机器人 + 动态环境</b>的实时 RGB-D 惯性里程计。它的逻辑是：现有动态 SLAM 多靠语义分割，算力大、难实时；受限平台（SWaP，尺寸/重量/功耗受限）跑不稳。于是它用<b>轻量网格 FAST 检测 + IMU 预测光流</b>降负担，再用<b>目标检测（YOLOv3）+ 深度</b>做高效的「类语义」动态特征识别——性能媲美语义分割但更省。</p>
+      <p>三个并行线程：目标检测线程、特征跟踪线程、状态优化线程。动态特征在「优化线程」被剔除。平台是 HUAWEI Atlas200 DK（8 核 A55 1.6 GHz / 8G / 2 核 NPU）和 NVIDIA Jetson AGX Xavier（8 核 ARM 2.25 GHz / 16G / 512 核 Volta）；检测跑在 NPU / GPU 上，不占 CPU。传感器是 RealSense D455（RGB-D，30 Hz 彩色 + 对齐深度）+ ADIS16470 IMU（200 Hz）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_RGB-D_Inertial_Odometry_for_a_Resource-Restricted_Robot_/17ab127b21987edcea1daf55bb7645648f80c869dae7b5b25cd55d4399a8183a.jpg" alt="Dynamic-VINS framework">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Dynamic-VINS 框架。关键模块用不同颜色的虚线框高亮。三个主线程并行运行：特征跟踪线程里跟踪并检测特征；目标检测线程每帧实时检测动态物体；状态优化线程汇总特征信息与目标信息。<br>
+          <b>怎么看这张图：</b>① 三个并排的线程框是「检测 / 跟踪 / 优化」；② 检测线程输出的动态 mask 会流进优化线程，把动态特征剔除；③ 底层是 VINS-Mono 式的滑窗因子图（IMU 预积分 + 视觉重投影）。盯着那条「动态 mask → 优化」的链路，它就是实时性的关键。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="timing">
+      <h2>7. 紧耦合方式、动态处理与耗时数字</h2>
+      <p><b>RGB-D + IMU 是紧耦合还是松耦合？</b>原文的根据是：系统基于 VINS-Mono 与 VINS-RGBD，继承了它们的滑窗因子图（IMU 预积分 + 视觉重投影）作为<b>紧耦合 VIO 后端</b>；而 RGB-D 的<b>深度只用于动态特征识别，不参与位姿因子图</b>。所以准确说法是：<b>紧耦合的 VIO + 用深度做动态掩码</b>——深度是「前端判别动态的工具」，不是「后端位姿约束」。</p>
+      <p><b>动态怎么处理：</b>YOLOv3 检人/车 → 用边界框四角的深度求「最大背景深度 $d_{\max}$」，再与中心深度定阈值 $\bar{d}$，特征深度 $&lt; \bar{d}$ 就判为动态；类语义 mask 比「直接删整框」能保住更多静态约束。漏检时按像素速度预测框运动来补偿；运动一致性检查（MCC）用 IMU 预测位姿 + 滑窗重投影残差 $r_k$ 抓「未知运动物体」。</p>
+      <p>本节最有价值的就是<b>耗时数字</b>（Table III，OpenLORIS market 数据集）。下面这张「预算条」用的就是原文给出的各线程单帧平均耗时——注意这些是<b>真实表格数字，不是我编的</b>；且线程并行，单帧总延迟不等于各线程耗时之和（检测还在 NPU 上与优化并行，不占主线程）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#1f2937">各线程单帧平均耗时（Atlas200 DK, OpenLORIS market, Table III）</text>
+          <text x="200" y="62" text-anchor="end" font-size="13" fill="#334155">Opt Thread</text>
+          <rect x="210" y="48" width="600" height="26" rx="4" fill="#dc2626"/>
+          <text x="820" y="66" font-size="13" fill="#334155">82.49 ms</text>
+          <text x="200" y="106" text-anchor="end" font-size="13" fill="#334155">State Opt</text>
+          <rect x="210" y="94" width="545" height="26" rx="4" fill="#ea580c"/>
+          <text x="765" y="112" font-size="13" fill="#334155">74.95 ms</text>
+          <text x="200" y="150" text-anchor="end" font-size="13" fill="#334155">Tracking</text>
+          <rect x="210" y="138" width="145" height="26" rx="4" fill="#0ea5e9"/>
+          <text x="365" y="156" font-size="13" fill="#334155">19.90 ms</text>
+          <text x="200" y="194" text-anchor="end" font-size="13" fill="#334155">Obj Detect</text>
+          <rect x="210" y="182" width="128" height="26" rx="4" fill="#0ea5e9"/>
+          <text x="348" y="200" font-size="13" fill="#334155">17.59 ms</text>
+          <text x="200" y="238" text-anchor="end" font-size="13" fill="#334155">Feat Detect</text>
+          <rect x="210" y="226" width="13" height="26" rx="4" fill="#22c55e"/>
+          <text x="233" y="244" font-size="13" fill="#334155">1.76 ms</text>
+          <text x="200" y="282" text-anchor="end" font-size="13" fill="#334155">Dyn Feat Recog</text>
+          <rect x="210" y="270" width="10" height="26" rx="4" fill="#22c55e"/>
+          <text x="230" y="288" font-size="13" fill="#334155">1.34 ms</text>
+          <text x="450" y="408" text-anchor="middle" font-size="12" fill="#374151">线程并行：检测跑 NPU 不占 CPU；单帧总延迟 ≠ 各线程耗时之和（原文仅给各模块均值，Table III）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把 Dynamic-VINS 在 Atlas200 DK 上各线程的单帧平均耗时画成横条（数据来自原文 Table III，非编造）。红色两块（Opt Thread 82.49 ms、State Opt 74.95 ms）是主线程大头，蓝/绿是轻量模块。<br>
+          <b>怎么看这张图：</b>① 状态优化占主导，所以实时性的瓶颈在优化线程；② 特征检测因「网格 + 线程池」仅约 1 ms，极省；③ 目标检测 17.59 ms 但跑在 NPU 上与优化并行，不进主线程延迟。<br>
+          <b>要记住的一句话：</b>这些是实数，但线程并行意味着「总延迟 ≈ 最慢那条线程」，不是把六个数加起来；Jetson AGX Xavier 上对应为 47.54 / 43.04 / 5.54 / 21.92 / 0.94 / 0.47 ms。
+        </figcaption>
+      </figure>
+
+      <p>实验：在 OpenLORIS-Scene 上鲁棒性最佳；TUM fr3_walking 的 ATE 为 0.0486 / 0.0077 / 0.0629 / 0.0608（四个子序列，米），而 ORB-SLAM2 为 0.75 / 0.39 / 0.87 / 0.49、DS-SLAM 为 0.0247 / 0.0081 / 0.4442 / 0.0303。局限：依赖目标检测（只认已知动态类），未知运动靠 MCC 但召回/误删有折中；室外深度相机受阳光/距离限制时 mask 会变大。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>Dynamic-VINS 里 RGB-D 的深度信息，进入了位姿因子图吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="深度只用于动态特征识别（门槛判断），位姿后端是 VINS-Mono 式紧耦合 VIO（IMU 预积分+视觉重投影），深度不参与因子图。" onclick="lessonKit.answer(this,'q0072b')">只用于动态识别</button>
+          <button data-correct="no" data-explanation="深度是被当成判别动态的工具，并非作为深度误差项塞进位姿优化；那是另一种 RGB-D SLAM 做法。" onclick="lessonKit.answer(this,'q0072b')">参与位姿因子图</button>
+        </div>
+        <div class="quiz-feedback" id="q0072b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="common">
+      <h2>8. 三条路线的共同点：在真实约束下把 SLAM 跑起来</h2>
+      <p>把三条路放回一起看，它们回答的是同一个问题——<b>「在真实约束下怎么把 SLAM 跑起来」，而不是「怎么把论文指标刷高」</b>。具体手法分别是：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>多一种传感器</h4><p>激光补尺度的代价：系统离不开激光，且依赖外参标定与足够密的激光环。</p></div>
+        <div class="mini-card"><h4>换一种监督</h4><p>无监督掩码的代价：要调多任务权重，迁移性/域偏移仍有限，没用 IMU。</p></div>
+        <div class="mini-card"><h4>砍到能跑</h4><p>受限平台的代价：只能处理已知动态类，模型被简化，室外深度受限时 mask 变大。</p></div>
+      </div>
+      <p>它们都不是「新范式」，而是<b>用现成零件把问题绕过或压小</b>：LAMV 用激光绕过尺度不可观，Hybrid Masks 用无监督绕过动态标签，Dynamic-VINS 用轻量模块把算力压进受限平台。这也正好呼应本节开头接的课：<b>0035</b> 的机载算力约束在视觉侧由路线三兑现，<b>0009</b> 的真实失败由三条路共同补洞，<b>0022</b> 的一致性检验提醒我们——受限平台上没有余量做复杂估计，所以只能「砍」。</p>
+    </section>
+
+    <section class="section-card" id="end">
+      <h2>9. 第三季收尾：阶段 C 视觉主干到此结束</h2>
+      <p>从本季开头的「特征法 vs 直接法」来回摆动（偿还第一季 0011 的悬念④），到 RGB-D 稠密、学习式稠密、VIO 主干，再到动态环境的三条务实路线与通往阶段 F 的神经隐式桥——<b>阶段 C（视觉主干）就讲到这里</b>。你现在已经握有「视觉侧」从经典到前沿的大部分武器：知道什么时候该用特征、什么时候该用直接法、动态怎么治、算力不够怎么砍。</p>
+      <p>下一步进入<b>阶段 D（激光主干）</b>：把第一季 <b>0005/0006/0007/0008</b> 埋下的激光 SLAM 线索正式展开——特征法/直接法激光、固态雷达、退化与横评，以及 ikd-Tree 等高效结构（第一季未还的悬念③）。视觉与激光两条主干汇合，才是完整 SLAM 版图。</p>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>LAMV-SLAM 是「视觉为主」还是「激光为主」？请用原文原话支持你的判断。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>是「视觉为主、激光为辅」。原文原话：激光点云「only provide real-scale depth estimates for visual features」，即激光只给视觉特征提供真实尺度深度；系统是半直接的，激光是配角（与 0006 激光当主角的紧耦合 SLAM 是主/辅反向）。注意原文未给具体激光点数，仅给出硬件为 32 线 OS1-32。</div></details>
+        </li>
+        <li>LAMV-SLAM 的「两阶段运动估计」为什么能抑制尺度漂移？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>Stage I 直接法对齐时用「上一帧激光生成的临时地图点 TMPC」（都带激光真实深度）给带尺度的初值；Stage II 只精修这些带真实尺度的临时点，避免用会累积误差的老地图点，从而把尺度漂移压住（KITTI 每秒尺度比≈1）。</div></details>
+        </li>
+        <li>Hybrid Masks 的 Filter Mask $M_f$ 判定动态的依据是什么？它和语义分割的根本区别在哪？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>依据是逐像素光度一致性损失：若 $L_{pc} > \beta\cdot\bar{L}_{pc}$（$\beta=1.5$）就判离群、$M_f=0$。根本区别是它不依赖任何语义标签，而是从「重投影/光流对不上」的无监督残差里学出动态，而语义分割需要人标好「人/车」等类别。</div></details>
+        </li>
+        <li>Dynamic-VINS 的 RGB-D 深度参与了位姿估计吗？它和 VINS-Mono 是什么关系？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>深度不参与位姿因子图，只用于「动态特征识别」（用深度门槛判断特征是否在动态物体上）。它继承 VINS-Mono / VINS-RGBD 的滑窗因子图（IMU 预积分 + 视觉重投影）作为紧耦合 VIO 后端，所以叫「紧耦合 VIO + 深度做动态掩码」。</div></details>
+        </li>
+        <li>为什么说 Dynamic-VINS 的「单帧总延迟」不能把 Table III 里六个线程耗时直接相加？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为三个线程（检测/跟踪/优化）并行运行，且目标检测跑在 NPU/GPU 上、与 CPU 上的优化并行，不占主线程延迟。所以总延迟约等于「最慢那条线程」（约 82.49 ms 的 Opt Thread），而不是 19.90+1.76+1.34+74.95+82.49+17.59 的求和。原文也只给了各模块均值，未给单帧总延迟。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0071-神经隐式建图2024-两种组合方式.html">← 上一课：神经隐式建图2024</a>
+        <a class="next" href="../index.html">第三季完 · 返回课程馆 →</a>
+      </div>
+      <p class="foot-note">第三季（阶段 C 视觉主干）到此结束，下一步进入阶段 D 激光主干。把现成零件用顺，比追新范式更常救场 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

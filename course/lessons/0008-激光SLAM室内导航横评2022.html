@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>激光 SLAM 室内导航横评（2022）— SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0008</div>
+      <h1>激光 SLAM 室内导航横评：把 7 种方法拉到同一个擂台</h1>
+      <p class="subtitle">视觉 SLAM 在“四壁白墙的仓库”里会瞎，所以工业 AGV 更信 LiDAR。但哪种 LiDAR SLAM 更好？这篇论文用同一套实验设置把方法们挨个打了一遍 🤖</p>
+      <div class="hero-meta">
+        <span>🎯 主题：LiDAR SLAM 室内导航对比实验</span>
+        <span>👥 作者：Qin Zou, Qin Sun, Long Chen, Bu Nie, Qingquan Li</span>
+        <span>📅 2022 · <i>A Comparative Analysis of LiDAR SLAM-Based Indoor Navigation for Autonomous Vehicles</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 动机与两条贡献</a>
+        <a href="#b">2. 核心概念：scan-to-scan / scan-to-map 与回环</a>
+        <a href="#c">3. 七种方法与实验擂台</a>
+        <a href="#d">4. 小结与和前面课程的衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清“为什么工业界爱用 LiDAR SLAM 胜过视觉 SLAM”；复述本文的两条贡献；看懂 SLAM 定位就是“预测 + 更新”两步（Fig. 1）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>第 0005 讲动态环境下的激光 SLAM，第 0006 按“松/紧耦合、直接法/特征法”给 LiDAR 里程计分类。本节课是它们的<strong>实验落地版</strong>：把第 0006 提到的 LOAM、Cartographer 等真正放到车上跑，看谁行谁不行。</p></div>
+      </div>
+
+      <h2>1. 动机：视觉 SLAM 在“白墙仓库”里会瞎</h2>
+      <p>论文摘要第一句就点明问题：SLAM 是室内自主车/机器人导航的基础模块。过去几年视觉 SLAM 进步很大，但<strong>在缺纹理环境里跟踪特征点很脆弱</strong>——作者举的例子正是 “a warehouse with blank white walls（四壁白墙的仓库）”。相比之下，LiDAR 直接用点云的三维空间信息，<strong>不受光照和纹理影响，室内更稳</strong>，所以工业界（AGV 自动导引车）更常用 LiDAR SLAM。</p>
+      <p>但作者话锋一转：各种 LiDAR SLAM 方法“<strong>优缺点不清楚</strong>”，而且<strong>缺乏在相同评测设置下的对比研究</strong>（原文：a lack of comparison study … with the same evaluation settings）。这正好就是本文要补的洞。</p>
+
+      <h3>两条贡献（contributions）</h3>
+      <div class="grid-2">
+        <div class="mini-card"><h4>贡献①：系统梳理 7 种方法</h4><p>系统分析了 7 种代表性 LiDAR SLAM 方法的优缺点，帮研究者快速、全面地理解它们的核心思想和贡献。这 7 种是：Gmapping、CoreSLAM、KartoSLAM、HectorSLAM、LagoSLAM、LOAM、Cartographer。（注：OCR 把 “Gmapping” 误写成 “Gampping”，文中已修正。）</p></div>
+        <div class="mini-card"><h4>贡献②：大量真实实验</h4><p>用<strong>不同车型、不同场地</strong>做大量真实实验来评测已有方法，分析总结结果，帮工程师按自己的环境选合适的 LiDAR SLAM 方案。</p></div>
+      </div>
+
+      <p>先建立一个直觉：SLAM 定位在每一步都在做“<strong>预测</strong> + <strong>更新</strong>”两件事。图 1 把这个循环画得很清楚。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Comparative_Analysis_of_LiDAR_SLAM-Based_Indoor_Naviga/30ee8dac4d79e60eb3035ccb6f45952d43ecf4769a4789294e439b64134b6591.jpg" alt="Figure 1 SLAM 定位过程">
+        <figcaption>
+          <strong>原图注（Fig. 1）：</strong> An illustration of the localization process of the SLAM system. Only the x<sub>t+1</sub> marked with green background will be updated in the current step.（SLAM 系统定位过程示意，只有绿色高亮的 x<sub>t+1</sub> 在当前步被更新。）<br>
+          <strong>怎么看这张图：</strong> 这就是贝叶斯滤波的“预测→更新”循环：<em>预测步</em>根据控制量 u<sub>t</sub> 从上一个状态 x<sub>t−1</sub> 推出 x<sub>t</sub>，但机器人控制不完美，所以这一步<strong>不确定性会变大</strong>；<em>更新步</em>拿传感器观测 z<sub>t</sub> 去纠正，<strong>不确定性被压小</strong>。记住这个“先发散、再收敛”的形状，后面讲误差累积全靠它。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 核心概念：scan-to-scan、scan-to-map 与回环难题</h2>
+      <p>这一节是全文最该啃下的理论骨节。LiDAR 的“扫描匹配（scan-matching）”按对齐对象分成两派，原文（第 19 行）把它们的优缺点讲得很干净——<strong>我尽量原文照搬，不替你演绎</strong>。</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>scan-to-scan（帧对帧）</h4>
+          <p>把前后两帧激光扫描<strong>互相</strong>对齐来算相对位姿。原文：<em>“it is easy to understand and implement this system, but the error accumulates quickly with time going on.”</em>（易实现，但<strong>误差随时间快速累积</strong>。）</p>
+        </div>
+        <div class="mini-card">
+          <h4>scan-to-map（帧对地图）</h4>
+          <p>把当前扫描和<strong>全局一致地图</strong>对齐。原文：<em>“more efficient and robust than scan-to-scan … though this system is more complicated.”</em>（更高效鲁棒但更复杂）；然而 <em>“the error still exists because the building map cannot keep consistent perfectly.”</em>（<strong>误差仍存在，因为地图无法完美一致</strong>。）</p>
+        </div>
+      </div>
+
+      <div class="callout" style="border-left-color:#c0392b;">
+        <h4>⚠ 由此引出经典问题：loop-closure problem（回环问题）</h4>
+        <p>原文紧接着说：因为地图不完美一致，<strong>“when a robot arrives a place where it has visited, the estimated trajectory of the robot is not closed in most cases”</strong>——机器人回到去过的地方时，估计轨迹<strong>往往不闭合</strong>。这就是著名的回环问题。</p>
+      </div>
+
+      <h3>为什么 BoW（词袋）那套只对视觉有效</h3>
+      <p>视觉 SLAM 里回环检测常用 <strong>bag-of-words（BoW，词袋）</strong>：把图像描述子聚成“视觉单词”，靠单词共现判断“我是不是来过这儿”，再用位姿图优化消除累积误差。但原文（第 21 行）一句戳破：<em>“these methods can only be effective for visual SLAMs.”</em>（这些方法<strong>只对视觉 SLAM 有效</strong>。）</p>
+      <p>原因很朴素：BoW 依赖的是<strong>可重复的图像特征单词</strong>；而 LiDAR 点云没有这种“视觉单词”式的稳定离散特征。所以 LiDAR SLAM 的回环靠两条别的路子：</p>
+      <div class="formula-box" style="border:none;background:transparent;padding-left:0;">
+        $$ \text{LiDAR 回环} \;\longrightarrow\; \begin{cases} \text{点云地图匹配（point-cloud-based map matching）} \\ \text{学习式特征比较（learning-based feature comparison）} \end{cases} $$
+      </div>
+
+      <h3>三类后端策略：决定“误差怎么被管住”</h3>
+      <p>第 II 节把 SLAM 后端按估计“信念”的方式分三类（和我们前面课程呼应）：① <strong>高斯滤波</strong>（Kalman / EKF）；② <strong>粒子滤波</strong>（RBPF，Gmapping 属此类）；③ <strong>图优化</strong>（Cartographer、LOAM 属此类）。图优化最直观——把位姿和路标都画成图，靠“边”当约束一起优化。下面这张图就是图优化的标准示意图。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Comparative_Analysis_of_LiDAR_SLAM-Based_Indoor_Naviga/68ec5d7daaa0a31e6aacbac3be027d6e0f9bd170e26874b036a9cf0cfb23c2df.jpg" alt="Figure 4 图优化 SLAM 总览">
+        <figcaption>
+          <strong>原图注（Fig. 4）：</strong> An overview of the graph optimization-based SLAM algorithm. The triangles represent the poses of the robot, and the stars represent the landmarks that the robot observes. The triangles and stars are set as nodes in the graph. The solid lines are set as edges … the blue solid line denotes the measurement and the orange solid line denotes the control.（图优化 SLAM 总览：三角形=机器人位姿，星形=观测到的路标，二者都是图的节点；实线=边（约束），蓝线=观测约束，橙线=控制约束。）<br>
+          <strong>怎么看这张图：</strong> 把“位姿”和“路标”画成节点，把“我看到了什么”“我走了多少”画成边。图优化的厉害之处是<strong>一次优化整条轨迹</strong>：当前观测能反过来修正很久以前的位姿（这正是回环能“把轨迹拽闭合”的数学载体）。对照第 0006 课——LOAM/Cartographer 都是图优化或带图优化后端，原因就在这张图里。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么 Bag-of-Words（BoW）回环检测在 LiDAR SLAM 上基本无效？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确！BoW 依赖可重复的“视觉单词”式图像特征，而 LiDAR 点云没有这种稳定离散特征，所以 LiDAR 回环改走点云地图匹配或学习式特征比较。对。" onclick="lessonKit.answer(this,'q0008')">点云里没有稳定可重复的“视觉单词”特征</button>
+          <button data-correct="no" data-explanation="贵不贵和回环算法是否有效无关。错。" onclick="lessonKit.answer(this,'q0008')">因为 LiDAR 传感器太贵</button>
+          <button data-correct="no" data-explanation="BoW 是否用 GPU 不是它在 LiDAR 上失效的原因；本质是特征表示不匹配。错。" onclick="lessonKit.answer(this,'q0008')">因为 BoW 只能在 GPU 上跑</button>
+        </div>
+        <div class="quiz-feedback" id="q0008"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 七种方法与实验擂台：参数抄得一字不差</h2>
+      <p>第 III 节简要介绍了 7 种方法（Gmapping / CoreSLAM / KartoSLAM / HectorSLAM / LagoSLAM / LOAM / Cartographer，都跑在 ROS 上）。第 IV 节是重头戏：作者用<strong>自家的三台车</strong>在真实环境采集数据，离线跑不同 SLAM 对比。下面这些硬件参数原文给得非常具体，我<strong>逐字抄准</strong>（并修正了 OCR 把垂直视场角的负号吞掉的严重错误）。</p>
+
+      <div class="callout" style="border-left-color:#e0a23c;">
+        <h4>🛠 助教批注：这篇 OCR 的几处关键错，已修正</h4>
+        <p>① 垂直视场角原文被 OCR 成 “15.0° to 15.0°”，<strong>漏掉了负号</strong>，已补回 <strong>−15.0° ~ +15.0°</strong>（任务书也特别强调了这点）；② “horizonal” → <strong>horizontal（水平）</strong>；③ “Gampping” → <strong>Gmapping</strong>；④ “occupancied” → <strong>occupied（占用）</strong>；⑤ “popular used” → <strong>popularly used</strong>；⑥ “conducing” → <strong>conducting</strong>；⑦ “perspectively” → <strong>respectively（分别）</strong>；⑧ “Lidar” → <strong>LiDAR</strong>。</p>
+      </div>
+
+      <h3>3.1 实验平台（System Configuration）</h3>
+      <div class="mini-card" style="margin-bottom:1rem;">
+        <h4>传感器与计算平台（原文第 316–319 行）</h4>
+        <ul style="margin:.4rem 0 0;line-height:1.9;">
+          <li><strong>激光雷达：</strong>16 线 Velodyne 机械旋转雷达；测距 <strong>100 m</strong>，精度 <strong>3 cm</strong>；垂直视场 <strong>−15.0° ~ +15.0°</strong>、角分辨率 <strong>2.0°</strong>；水平视场 <strong>360°</strong>、角分辨率 <strong>0.1°~0.4°</strong>；转速 <strong>5~20 Hz</strong>。实验中取水平角分辨率 <strong>0.4°</strong>、转速 <strong>10 Hz</strong>。</li>
+          <li><strong>IMU：</strong>型号 <strong>IMU380ZA-200</strong>，采样率 <strong>200 Hz</strong>（精度高、实验短，可忽略 bias）。</li>
+          <li><strong>轮式编码器：</strong>每轮一个编码器测转速，频率 <strong>30 Hz</strong>。</li>
+          <li><strong>计算平台：</strong><strong>2.5 GHz CPU + 6 GB RAM</strong>，Ubuntu 14.04，ROS Indigo，<strong>不使用 GPU 并行计算</strong>。</li>
+          <li><strong>场地：</strong>约 <strong>100 m × 60 m</strong> 的仓库（见图 6 语境，但本课选更有教学价值的 4 张图，仓库场景以文字描述）。</li>
+        </ul>
+      </div>
+
+      <h3>3.2 LOAM 到底建出了什么：点云地图</h3>
+      <p>本文实验重点评了 Gmapping、Cartographer、LOAM 三种（外加轮式里程计和 AMCL）。LOAM 作为“特征法”代表，输出的是一张点云地图——下面这张图就是它生成的。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Comparative_Analysis_of_LiDAR_SLAM-Based_Indoor_Naviga/5e39bb8ab60b9bf091d6e8625e7b0f00341054cbab91686ce8e73282056c18b1.jpg" alt="Figure 5 LOAM 点云地图">
+        <figcaption>
+          <strong>原图注（Fig. 5）：</strong> The point cloud map generated by LOAM Algorithm. Each white point is a feature point extracted by the relative feature point extraction algorithm, and the colored lines are the place where LiDAR scans hit the objects at current time.（LOAM 生成的点云地图：每个白点是特征点提取算法提出的特征点，彩色线是当前时刻激光打中物体的位置。）<br>
+          <strong>怎么看这张图：</strong> 这正是第 0006 课讲的“<strong>特征法</strong>”的直观产物——LOAM 不保留全部点，只提取边缘/平面等“特征点”（白点）来做配准，彩色线是实时扫描命中的位置。它说明为什么 LOAM 在算力弱（无 GPU）的平台上仍能跑：<strong>数据被压得很稀疏</strong>。对照 Cartographer 的“submap + scan-to-map”，二者思路差异一目了然。
+        </figcaption>
+      </figure>
+
+      <h3>3.3 一个巧妙实验：原地转六圈测“朝向”</h3>
+      <p>作者做了个很聪明的朝向精度实验：把车<strong>原地自转 n 圈</strong>，Ground Truth = n×360°，再比较各方法的估计值。下面这张图就是“原地转六圈”的结果（Fig. 9）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_A_Comparative_Analysis_of_LiDAR_SLAM-Based_Indoor_Naviga/48aa0ec208517bf530cefc347a79c0e7df86427e3e9a68a6490c0054f8cfd6b9.jpg" alt="Figure 9 原地六圈朝向估计">
+        <figcaption>
+          <strong>原图注（Fig. 9）：</strong> Orientation estimation results obtained by four different methods. The autonomous vehicle has been driven to rotate itself six rounds in situ.（四种方法的朝向估计结果；该车被操控原地自转六圈。）<br>
+          <strong>怎么看这张图：</strong> 横轴是“方法”，纵轴是估计出的总朝向角，真值是 6×360°=2160°。四种方法里：Wheel Odometry 误差最大（<strong>20.585°</strong>，误差率 0.952%）；EKF（融合 IMU+轮速）<strong>−1.023°</strong>（0.047%）；LOAM（纯 LiDAR）<strong>−0.676°</strong>（0.031%）；AMCL <strong>−3.693°</strong>（0.171%）。结论：<strong>光靠轮子积分朝向会飘，上了 IMU 或 LiDAR 立刻好一个数量级</strong>。这张图也顺带验证了图 1 那个“纯预测会发散”的论断。
+        </figcaption>
+      </figure>
+
+      <h3>3.4 读图方法论：看轨迹对比图要看“误差分布”</h3>
+      <p>论文有大量“估计轨迹 vs 真值”的对比图（如 Fig. 10/12/13/14）。作者提醒了一个读图要点，非常值得你记牢：</p>
+      <div class="callout">
+        <p><strong>看轨迹误差，要分辨它是“均匀分布”还是“集中在某几段”。</strong>如果误差是均匀的小抖动，说明方法整体稳定；如果误差<strong>集中在少数转弯/高速段</strong>（比如 Cartographer 在高速直线段 Table IX 里一度跑到 33% 误差），那才是算法在特定工况“掉链子”的信号。别只盯平均误差率——<strong>看分布比看均值更能定位问题</strong>。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 小结，以及和前面课程的衔接</h2>
+      <p>一句话总结本文：它不发明新算法，而是用<strong>同一套公平设置</strong>把主流 LiDAR SLAM 拉出来比武，结论对工程选型很有用——比如 LOAM/Cartographer/Gmapping 在规则轨迹上误差率都 &lt;1%；但 <strong>Cartographer 在高速（≈0.8 m/s）下会崩</strong>（Table IX 误差率飙到 17%~33%），LOAM 则全程 &lt;10 cm，说明 LOAM 对快平台更鲁棒。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>接第 0005（动态环境）</h4><p>0005 关心动态物体怎么干扰激光 SLAM。本文场景是室内静态的，但它也暴露了 LiDAR 的软肋：<strong>玻璃走廊（Experiment II）</strong>、<strong>高速运动</strong>会让某些方法失效——动态/退化场景的坑，两篇是同一主题的两面。</p></div>
+        <div class="mini-card"><h4>接第 0006（LiDAR 里程计综述）</h4><p>0006 按“松/紧耦合、直接法/特征法”给里程计分类。本文的 <strong>LOAM 就是特征法代表</strong>（Fig. 5 点云即证据），<strong>Cartographer 用 submap 做 scan-to-map + SPA 回环</strong>（正是第 2 节讲的 scan-to-map 与 loop-closure）。读本文，等于把 0006 的分类“跑”了一遍。</p></div>
+        <div class="mini-card"><h4>接第 0007（硬件）</h4><p>0007 说机械旋转有 reliability/size/cost 三宗罪，本文恰恰用了<strong>16 线机械旋转 Velodyne</strong> 当传感器——说明 2022 年固态尚未完全普及。硬件在进化，算法也得跟着变（非重复扫描、FMCW 测速等，见 0007 第 5 节）。</p></div>
+      </div>
+      <p>下一步建议：如果你想动手，优先复现 LOAM 与 Cartographer 在同一数据集上的轨迹误差分布对比——这比背公式更能让你“看懂”一篇横评论文。</p>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0007-固态激光雷达与纳米光子学2022-硬件演进.html">← 固态激光雷达与纳米光子学（2022）</a>
+        <a class="next" href="../index.html">📚 返回课程馆</a>
+      </div>
+      <p class="foot-note">横评论文的价值不在“谁第一”，而在“什么工况下谁会翻车”。带着分布的角度看图，你就超过了大多数人 🧭</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+
+  <section class="exercise-box">
+    <h3>课后练习</h3>
+    <ol>
+      <li>scan-to-scan 与 scan-to-map 的区别是什么？各自的缺点原文怎么说的？
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>scan-to-scan：前后两帧激光互相配准求相对位姿，<strong>易实现但误差随时间快速累积</strong>。scan-to-map：当前扫描与全局一致地图配准，<strong>更高效鲁棒但更复杂</strong>，且因“地图无法完美一致”<strong>误差仍存在</strong>。机器人回到去过的地方轨迹不闭合，即 loop-closure problem。</div></details>
+      </li>
+      <li>为什么 Bag-of-Words 回环检测对 LiDAR SLAM 基本无效？LiDAR 靠什么做回环？
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>BoW 依赖可重复的“视觉单词”式图像特征，点云没有这种稳定离散特征，所以只对视觉 SLAM 有效。LiDAR 回环靠 <strong>点云地图匹配（point-cloud-based map matching）</strong> 或 <strong>学习式特征比较（learning-based feature comparison）</strong>。</div></details>
+      </li>
+      <li>本文实验平台的关键参数（至少说出 5 个）？
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>16 线 Velodyne（100 m / 3 cm / 垂直 −15.0°~+15.0° / 水平 360° / 转速取 10 Hz）；IMU380ZA-200（200 Hz）；轮式编码器 30 Hz；2.5 GHz CPU + 6 GB RAM；Ubuntu 14.04 + ROS Indigo，<strong>无 GPU 并行</strong>；场地约 100 m × 60 m；原地转六圈测朝向。</div></details>
+      </li>
+      <li>看“估计轨迹 vs 真值”对比图时，应该重点看什么？
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>要看误差是<strong>均匀分布</strong>还是<strong>集中在某几段</strong>（如转弯、高速段）。集中式的大误差才是算法在特定工况“掉链子”的信号；别只盯平均误差率，分布比均值更能定位问题。</div></details>
+      </li>
+    </ol>
+  </section>
+</body>
+</html>

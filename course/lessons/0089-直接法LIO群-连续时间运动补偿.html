@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>直接法 LIO 群：连续时间运动补偿 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0089</div>
+      <h1>直接法 LIO 群：连续时间运动补偿</h1>
+      <p class="subtitle">上一课把系统砍到了七个参数，这一课我们把「直接」这一支拉成一条光谱，看它在两端各长什么样 🔭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：直接配准 · 连续时间轨迹 · 概率子图 · 多尺度面片</span>
+        <span>👥 作者：D-LIOM（Wang、Zhang、Shen、Zhou）；Direct LIO（Chen、Nemiroff、Lopez）；SLICT（Nguyen、Duberg、Jensfelt、Yuan、Xie）</span>
+        <span>📅 2022–2023 · <i>D-LIOM（TMM 2022）· Direct LiDAR-Inertial Odometry（ICRA 2023）· SLICT（RA-L 2023）</i></span>
+      </div>
+      <div class="toc">
+        <a href="#spectrum">「直接」是一条光谱</a>
+        <a href="#ct">连续时间 vs 逐帧离散</a>
+        <a href="#dlio">Direct LIO：解析多项式</a>
+        <a href="#dliom">D-LIOM：概率子图与因子图</a>
+        <a href="#slict">SLICT：多尺度面片</a>
+        <a href="#table">三篇并排看</a>
+        <a href="#result">数字、边界与判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="spectrum">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「直接法」到底指的是什么、为什么它不是一种方法而是一条光谱；解释「连续时间运动补偿」和 LOAM 那种逐帧离散补偿差在哪；分别说出 D-LIOM、Direct LIO、SLICT 三篇各自的「一句话招式」；并且能回答三个具体问题——<b>为什么 SLICT 跑不到实时</b>、<b>多尺度面片是怎么省事的</b>、<b>这三篇里的连续时间其实都不是 B 样条</b>。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本篇是「不提特征」这条主线的第三站。直接接上一课 <b>0088</b>（KISS-ICP 把点对点 ICP 砍到极致）；接 <b>0074</b>（LOAM 的匀速模型线性插值，本篇正要拿它当反面参照）；接 <b>0083／0084</b>（FAST-LIO 系列的紧耦合直接法）；接 <b>0081</b>（DLO 这一支直接法里程计）。<b>★ 重点回链第二季 0031／0032</b>——那两课讲的「连续时间」用的是 B 样条，本篇三篇里有两篇也叫连续时间，但用的<b>不是 B 样条</b>，这一点下面会专门澄清。面片地图那一节还要回链上一课 <b>0082</b>（SuMa++ 的面片）与第二季 <b>0033–0035</b>（TSDF 系）。</p>
+        </div>
+      </div>
+
+      <h2>1. 「直接」不是一种方法，而是一条光谱</h2>
+
+      <p>先把「直接法」这个词说清楚。第一季 <b>0006</b> 课第一次把它和「特征法」摆在一起讲：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>特征法</b>
+          <p>先从点云里<b>挑出一些点</b>——角点、平面点、边缘点——只拿这一小撮点去配准。好处是快、省；坏处是<b>挑法要手工设计</b>，换个雷达型号、换个场景就可能挑不出东西。LOAM 系是代表。</p>
+        </div>
+        <div class="mini-card">
+          <b>直接法</b>
+          <p><b>不挑</b>。把原始点（或者降采样后的原始点）直接拿去和地图配准。好处是通用、对传感器不挑食；坏处是点多了算得慢，需要好的地图表示和好的初值。</p>
+        </div>
+      </div>
+
+      <p>但「直接」这两个字背后其实藏着一个更大的问题，而且这个问题在<b>三篇论文里被用三种完全不同的方式回答了</b>：</p>
+
+      <div class="callout">
+        <h4>三篇共同的问题意识</h4>
+        <p><b>既然你不提特征、直接拿原始点去配准，那么一帧扫描里那些「运动中被采到的点」怎么办？</b><br>
+        一帧扫描要 0.1 秒，这 0.1 秒里车/无人机一直在动。同一个点，采到它的那一刻你人在哪？如果你答不上来，这帧点云就是一团「时空被揉在一起」的东西，拿去配准一定要出问题。</p>
+      </div>
+
+      <p>LOAM（<b>0074</b> 课）对这个问题的回答是「假设这 0.1 秒里匀速，按时间比例插值」。三篇新论文觉得这个答案不够，各自给了升级版。<b>而它们升级的力度差别极大</b>——这正是我说「直接是一条光谱」的意思：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">光谱上的位置</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">代表</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">它有多少「系统」</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">极简端</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>KISS-ICP</b>（0088 课）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">纯激光、不用 IMU、常速模型去畸变，七个参数</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">轻量中段</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Direct LIO</b>（本节）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">激光 + IMU，连续时间补偿，但架构做减法</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">完整系统端</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>D-LIOM</b>（本节）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">概率子图 + 因子图紧耦合 + 重力因子 + 回环 + 多雷达 + 建图</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">精度优先端</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>SLICT</b>（本节）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">多尺度面片全局地图 + 多雷达输入，代价是跑不到实时</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>注意这张表里<b>顺序不是「谁更好」</b>，而是「谁在哪个方向上加了东西」。KISS 减到了骨头，D-LIOM 加到了完整 SLAM，SLICT 为了精度主动牺牲了实时性。<b>它们全都是「不提取特征」的</b>——这一点把它们和 LOAM 系、和后面的回环课区分开了。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_D-LIOM__Tightly-Coupled_Direct_LiDAR-Inertial_Odometry_a/d0cd12c4d115f7723c72daa9fbad30a000b57f476c4e4fcce6135ec3c9b8aeb9.jpg" alt="D-LIOM Fig.1 framework overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Framework overview of D-LIOM. In “Measurement Preprocessing,” the inputs from multiple LiDARs and an IMU are synchronized to the timestamp of the primary LiDAR, and the IMU pre-integration is used to predict the initial value of the relative motion between two scans. In “System Initialization,” all the starting states are roughly estimated and the system is aligned with the world frame.<br>
+          （中译：D-LIOM 的框架总览。在「测量预处理」中，来自多个激光雷达与一个 IMU 的输入被同步到主雷达的时间戳上，IMU 预积分用于预测两次扫描之间相对运动的初值。在「系统初始化」中，所有起始状态被粗略估计，并把系统对齐到世界坐标系。）<br>
+          <b>怎么看这张图：</b>① 这是三篇里<b>结构最完整</b>的一篇，所以先看它。从左往右读：输入 → 预处理 → 初始化 → 前端 → 后端；② 找「多雷达」三个字在哪进来的——它在最左侧的输入处就被合并了，说明「多雷达支持」是这篇从架构层面就设计好的，不是事后补的；③ 注意<b>前端是一条因子图</b>（下一节会讲它放了哪三种因子），<b>后端是子图对子图的回环</b>。这是它和 FAST-LIO2 那种「一个迭代卡尔曼滤波走到底」的结构性差别。<br>
+          <b>顺带一个诚实说明：</b>这篇论文的文件名里写着 2023，但正文的 DOI 是 10.1109/TMM.2022.3168423，出版年为 <b>2022</b>，发表在 <i>IEEE Transactions on Multimedia</i>（TMM），文件名里的 2023 是「当前版本年」。本课一律按 <b>TMM 2022</b> 处理。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="ct">
+      <h2>2. 连续时间运动补偿：和逐帧离散差在哪</h2>
+
+      <p>这一节是全课的概念地基，值得慢读。</p>
+
+      <p>先把 <b>0074</b> 课的答案复习一遍：LOAM 假设「一帧 0.1 秒内匀速」，然后用线性插值给每个点算一个位姿。这个做法的关键是——<b>它只用了这一帧两端的两个姿态</b>，中间全靠「匀速」这个词脑补出来。也就是说，它眼里的「这段时间里车怎么动的」是<b>一条直线</b>。</p>
+
+      <p>这就是所谓的<b>逐帧离散补偿</b>：轨迹在你眼里只有「一个个采样点」（帧端点的位姿），帧内是一刀切平的。</p>
+
+      <p>那什么叫<b>连续时间</b>？说白了就是把这个问题反过来问：</p>
+
+      <div class="callout">
+        <h4>两种提法的区别</h4>
+        <p><b>离散提法：</b>「我在第 $k$ 帧端点和第 $k+1$ 帧端点分别在哪？」——位姿是<b>一串离散的数</b>，帧内靠假设去凑。<br>
+        <b>连续提法：</b>「我在任意时刻 $t$ 的位置写成什么？」——位姿是<b>一个关于时间的函数</b>，任何 $t$ 代进去都能算出一个位姿。</p>
+      </div>
+
+      <p>一旦把轨迹写成函数，那个「帧内怎么动」的脑补就不需要了——<b>每个点带着自己的时间戳 $t$，直接代进函数里拿一个专属于它的位姿。</b>这比「整帧共用一个」要精确得多，尤其是在无人机急转、手持设备乱晃这种场合。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">离散补偿 vs 连续时间补偿</text>
+
+          <!-- 左格 -->
+          <rect x="18" y="48" width="414" height="350" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="225" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 离散：整帧只认一个位姿</text>
+          <text x="225" y="94" text-anchor="middle" font-size="11" fill="#a8846f">帧内所有点被当成同一时刻</text>
+
+          <rect x="52" y="140" width="344" height="8" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <rect x="52" y="290" width="344" height="8" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+
+          <polyline points="64,140 104,148 144,158 184,170 224,182 264,190 304,195 344,197 384,196"
+                    fill="none" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="5 4"/>
+          <g fill="#c0392b">
+            <circle cx="64" cy="140" r="3"/><circle cx="104" cy="148" r="3"/><circle cx="144" cy="158" r="3"/>
+            <circle cx="184" cy="170" r="3"/><circle cx="224" cy="182" r="3"/><circle cx="264" cy="190" r="3"/>
+            <circle cx="304" cy="195" r="3"/><circle cx="344" cy="197" r="3"/><circle cx="384" cy="196" r="3"/>
+          </g>
+          <polyline points="64,290 104,282 144,272 184,260 224,250 264,244 304,241 344,240 384,241"
+                    fill="none" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="5 4"/>
+          <g fill="#c0392b">
+            <circle cx="64" cy="290" r="3"/><circle cx="104" cy="282" r="3"/><circle cx="144" cy="272" r="3"/>
+            <circle cx="184" cy="260" r="3"/><circle cx="224" cy="250" r="3"/><circle cx="264" cy="244" r="3"/>
+            <circle cx="304" cy="241" r="3"/><circle cx="344" cy="240" r="3"/><circle cx="384" cy="241" r="3"/>
+          </g>
+
+          <rect x="86" y="196" width="34" height="17" rx="4" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.3"/>
+          <circle cx="98" cy="215" r="3.5" fill="#37474f"/><circle cx="110" cy="215" r="3.5" fill="#37474f"/>
+          <path d="M124 204 L186 204" stroke="#2c5f8a" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <path d="M190 204 L180 199 L180 209 Z" fill="#2c5f8a"/>
+          <text x="155" y="222" text-anchor="middle" font-size="10" fill="#2c5f8a">边走边转</text>
+
+          <text x="225" y="336" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">墙被拉弯了</text>
+          <text x="225" y="368" text-anchor="middle" font-size="12" fill="#a8563a">帧内畸变</text>
+
+          <!-- 右格 -->
+          <rect x="468" y="48" width="414" height="350" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="675" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 连续时间：每个点各有时刻</text>
+          <text x="675" y="94" text-anchor="middle" font-size="11" fill="#5f8a72">点落到一条连续轨迹上</text>
+
+          <rect x="502" y="140" width="344" height="8" fill="#4a9c76"/>
+          <rect x="502" y="290" width="344" height="8" fill="#4a9c76"/>
+
+          <polyline points="530,262 570,242 610,224 650,210 690,202 730,202 770,210 810,226 845,246"
+                    fill="none" stroke="#2c5f8a" stroke-width="2.4"/>
+          <g fill="#2c5f8a">
+            <circle cx="530" cy="262" r="4.5"/><circle cx="570" cy="242" r="4.5"/><circle cx="610" cy="224" r="4.5"/>
+            <circle cx="650" cy="210" r="4.5"/><circle cx="690" cy="202" r="4.5"/><circle cx="730" cy="202" r="4.5"/>
+            <circle cx="770" cy="210" r="4.5"/><circle cx="810" cy="226" r="4.5"/><circle cx="845" cy="246" r="4.5"/>
+          </g>
+          <text x="690" y="178" text-anchor="middle" font-size="11" fill="#2c5f8a">每个时刻都有一个位姿</text>
+
+          <text x="675" y="336" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">墙还是直的</text>
+          <text x="675" y="368" text-anchor="middle" font-size="12" fill="#2f6d51">每个点按自己的时间戳落位</text>
+
+          <text x="450" y="440" text-anchor="middle" font-size="12" fill="#5a4a42">区别在于：轨迹是一条函数，还是几个采样点</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一条走廊、同一帧点云，在「整帧只认一个位姿」与「每点各按自己的时刻」两种做法下分别长什么样。<br>
+          <b>怎么看这张图：</b>① 左格是<b>离散</b>——灰色直条代表真实的墙，红色虚线是处理之后的结果：<b>直线被拉弯成了一条弧</b>，这就是帧内畸变；② 右格是<b>连续时间</b>——蓝色曲线是传感器在这段时间里的连续轨迹，上面的每个小圆点代表一个时刻的位姿；绿色的墙恢复了笔直，因为每个点都被送到了「它被采到的那一刻」该去的地方；③ 两格最根本的差别不在画面好看不好看，而在于：<b>左格的墙只能靠两个端点脑补，右格的墙有一个函数可以对每个时刻求值</b>。<br>
+          <b>要记住的一句话：</b>离散补偿是在「采样点之间插值」，连续时间补偿是「直接写一个函数」——<b>前者只有几个数，后者可以无限求值</b>。
+        </figcaption>
+      </figure>
+
+      <p>好，接下来是最需要小心的一处<b>澄清</b>，因为这里很容易被带偏。</p>
+
+      <div class="callout">
+        <h4>★ 第二季 0031／0032 讲的是 B 样条，但本节两篇不是</h4>
+        <p>第二季 <b>0031／0032</b> 课讲「连续时间轨迹」时，用的例子是 <b>B 样条</b>：把轨迹写成若干控制点加权求和，权重由基函数给出，然后<b>把控制点当成待优化的参数去解</b>。<br>
+        本节这两篇——Direct LIO 与 SLICT——<b>都不是 B 样条</b>：<br>
+        · <b>Direct LIO</b> 用的是<b>解析多项式</b>（后面的粗到细两步，位置写成时间的三次式、姿态写成二次式，系数来自 IMU 积分，是闭式求解不是优化拟合）；<br>
+        · <b>SLICT</b> 用的是<b>滑窗里两个相邻状态之间的线性插值</b>。<br>
+        它们都属于「连续时间」这个大类，但实现路径完全不同。<b>请按本节如实记，别写成 B 样条。</b></p>
+      </div>
+
+      <p>三种做法的区别可以列成一张小表：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">做法</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">轨迹写成什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">参数从哪来</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">在哪篇里</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">匀速线性插值</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">两个端点姿态之间的直线</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">帧端点位姿 + 匀速假设</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">LOAM（0074）、KISS-ICP（0088）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>解析多项式</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">时间的闭式多项式（三次位置、二次姿态）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">IMU 数值积分给出的加加速度与角加速度</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Direct LIO</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>滑窗线性插值</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">滑窗内相邻两个状态之间插值</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">优化中待求的滑窗状态</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>SLICT</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">B 样条</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">控制点加权求和</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">把控制点当参数去优化</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">第二季 0031／0032 的例子（本节两篇<b>都不是</b>）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>把一帧扫描里的点，<b>从「整帧共用一个位姿」改成「每个点按自己的时间戳各算一个位姿」</b>，最本质的收益是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="算得更快是另一码事。恰恰相反，逐点算位姿在实现上是更重的——Direct LIO 之所以能保持轻量，靠的是走的是闭式方程、可以并行算，而不是这条路本身便宜。" onclick="lessonKit.answer(this,'q0089a')">算得更快、更省算力</button>
+          <button data-correct="yes" data-explanation="对。帧内运动越是剧烈，匀速假设错得越离谱，被迫共用一个位姿的那批点就被摆得越歪。逐点给位姿相当于把这层假设去掉了——Direct LIO 在旋转达 3.5 rad/s 的序列上，误差从 0.1959 降到 0.0612 m，正是这个道理。" onclick="lessonKit.answer(this,'q0089a')">去掉了帧内匀速假设</button>
+          <button data-correct="no" data-explanation="回环是后端的事，和运动补偿没有关系。Direct LIO 原文把「加回环」明确写进了未来工作，本节三篇里只有 D-LIOM 有回环。" onclick="lessonKit.answer(this,'q0089a')">自动获得了回环能力</button>
+        </div>
+        <div class="quiz-feedback" id="q0089a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="dlio">
+      <h2>3. Direct LIO：把轨迹写成解析多项式</h2>
+
+      <p>先给它一句话招式：<b>粗到细两步，用解析多项式给每个点算一个专属位姿，同时把架构做减法。</b></p>
+
+      <h3>两步：粗轨迹 + 闭式细算</h3>
+
+      <p>它想解决的问题很直接：旋转和不规则地形会让运动畸变变严重（原文说这种畸变会破坏配准）；而现有做法要么太简（常速假设）、要么在离散时间上反向传播会累积误差、要么连续时间用样条拟合太贵。所以它走中间路线：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>第一步：粗轨迹</b>
+          <p>对两次扫描之间的 IMU 测量做<b>数值积分</b>，得到一条粗略的轨迹。原文给出的积分式里，位置的一阶项是速度、二阶项是加速度，<b>还带着一个六分之一的时间三次项（加加速度项）</b>；四元数那边同样带着一个四分之一的时间二次项（角加速度项）。</p>
+        </div>
+        <div class="mini-card">
+          <b>第二步：闭式精算</b>
+          <p>在最近的前后两个 IMU 测量之间，解一组<b>只依赖时间 $t$ 的闭式连续时间方程</b>——位置是时间的三次式、四元数是时间的二次式。对帧里的<b>每个点代一次 $t$</b>，就得到它专属的变换。</p>
+        </div>
+      </div>
+
+      <p>原文在这里有一句很关键的自我定位：它说的是<b>「解一组解析方程，而不是解一个优化问题（比如样条拟合）」</b>。它明确把自己和 Wildcat、CT-ICP 那种「用 B 样条拟合轨迹」的做法区分开。这也是为什么本课要反复强调：<b>本篇的连续时间是解析多项式，不是 B 样条。</b></p>
+
+      <p>解析形式还有一个实际好处：<b>可并行</b>。每个点各算各的，互不依赖，这对想跑在资源受限平台上的系统很重要。</p>
+
+      <h3>轻量体现在哪</h3>
+
+      <p>摘要里说它比当时的 SOTA<b>计算效率高约 20%、精度高约 12%</b>。这个「轻」是从两个地方省出来的：</p>
+
+      <ul>
+        <li><b>把「运动补偿」和「GICP 先验构造」合并成一步</b>——两件事本来要来回跑，现在合成一道；</li>
+        <li><b>直接 scan-to-map，省掉 scan-to-scan</b>——不必先和上一帧对一遍再去对地图。</li>
+      </ul>
+
+      <p>要特别说清的是：<b>它省的并不是 IMU</b>。它照用 IMU——一个<b>非线性几何观测器</b>负责给出位姿、速度与偏置，原文强调这个观测器有全局收敛的性质。它省的也不包括「不提特征」这件事之外的预处理：只做了一个 1 m × 3 m 的盒子滤波（用来滤掉打到自身车体/机体的点）和轻量体素降采样，<b>不提角点、也不提平面点</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Direct_LiDAR-Inertial_Odometry__Lightweight_LIO_with_Con/a7ea3ee6e5d72298e71701d18bbf69c1f863a5df5a64a27c28b1c34aa2951981.jpg" alt="Direct LIO Fig.2 system architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System Architecture. DLIO's lightweight architecture combines motion correction and prior construction into a single step, in addition to removing the scan-to-scan module previously required for LiDAR-based odometry. Point-wise continuous-time integration in W ensures maximum fidelity of the corrected cloud and is registered onto the robot's map by a custom GICP-based scan-matcher.<br>
+          （中译：系统架构。DLIO 的轻量架构把运动补偿与先验构造合并成一步，同时去掉了以往激光里程计必需的 scan-to-scan 模块。在世界坐标系下的逐点连续时间积分保证了矫正点云的最高保真度，并由一个定制的 GICP 扫描匹配器把它配准到机器人的地图上。）<br>
+          <b>怎么看这张图：</b>① 这张图就是「轻量」两个字的<b>施工图</b>——请对准图注里的两个动作去找：<b>运动补偿与先验构造合成了一块</b>、<b>scan-to-scan 那条线不见了</b>；② 顺着箭头找「逐点连续时间积分」在哪一步发生，它在点云进入配准之前；③ 右边那个 GICP 扫描匹配器是它和 FAST-LIO2 的分岔点之一：一个用迭代卡尔曼，一个用 GICP 直接把点云对到地图上。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Direct_LiDAR-Inertial_Odometry__Lightweight_LIO_with_Con/3dbc25b401b55207feb5e823efee4217334a2b6982ed19ec50df9cbbb8c76007.jpg" alt="Direct LIO Fig.4 continuous-time motion correction">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Continuous-Time Motion Correction. For each point in a cloud, a unique transform is computed by solving a set of closed-form motion equations initialized at the closest preceeding IMU measurement. This provides accurate and parallelizable continuous-time motion correction.<br>
+          （中译：连续时间运动补偿。对点云中的每个点，通过求解一组闭式运动方程来计算一个唯一的变换，这组方程以最近的前一个 IMU 测量为初值。这提供了精确且可并行的连续时间运动补偿。）<br>
+          <b>怎么看这张图：</b>① 请在这张图上找<b>「每个点一个变换」</b>这件事是怎么画的——这是它与「整帧共用一个位姿」最直观的差别；② 注意「以最近的 IMU 测量为初值」这句：它说明这套闭式方程不是凭空来的，而是<b>被 IMU 数据一段一段锚住的</b>；③ 图注最后那个词 parallelizable（可并行）是工程上的重点——逐点算听着很贵，但只要能并行，代价就摊平了。<br>
+          <b>按原文顺序推断：</b>Fig. 3 是「粗到细去畸变」的两步示意，这张 Fig. 4 是紧接着它对「逐点唯一变换」的展开。
+        </figcaption>
+      </figure>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>精度</b>
+          <p>在 Newer College 与 UCLA 自采数据上，全连续版本在 5 个序列上都拿到了<b>最低的 RMSE 与最低的平均单帧耗时</b>。在最考验运动补偿的那段（旋转达到 <b>3.5 rad/s</b>），误差从「不做补偿」的 <b>0.1959 m</b> 降到 <b>0.0612 m</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>速度</b>
+          <p>单帧耗时（原文表里的一组对比）：DLO 48.10 ms、CT-ICP <b>412.27 ms</b>、LIO-SAM 179.33 ms、FAST-LIO2 42.86 ms、DLIO-None 34.88 ms——<b>DLIO 的连续时间版本是其中最低的</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>便宜 IMU 也扛得住</b>
+          <p>UCLA 自采那段用的是一个约 <b>10 美元级的消费级 MPU-6050</b>，结果仍是最优。这一点值得记住：它说明这套方法吃的不是「高精度 IMU」，而是「把 IMU 用对」。</p>
+        </div>
+        <div class="mini-card">
+          <b>原文承认的短板</b>
+          <p>① <b>当前没有回环</b>（写进了未来工作）；② 依赖几何观测器收敛，需要扫描匹配先给出一个像样的解；③ 只评了 Newer College 与 UCLA 自采，<b>没有测极端退化场景</b>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="dliom">
+      <h2>4. D-LIOM：把「直接」做成完整系统</h2>
+
+      <p>一句话招式：<b>扫描直接配准到概率子图，再把激光、IMU、重力三种因子塞进同一个因子图，配上子图回环与多雷达输入。</b></p>
+
+      <h3>「直接」在这里指的是什么</h3>
+
+      <p>它不提取线特征、也不提取面特征，而是把扫描<b>直接配准到一个占据体素图</b>上。这个地图的每个体素存的是一个概率值（用 log-odds 表示，「这里被占据的可能性有多大」）。配准的残差就写成「让每个点落到概率高（被占据）的地方去」：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm{Res}(\xi)=\sum_i\left[1-M\big(T_i(\xi)\big)\right]^2$$</div>
+      </div>
+
+      <p>其中 $M$ 就是那张概率图，$T_i(\xi)$ 是把第 $i$ 个点用位姿 $\xi$ 变换过去。含义很好懂：<b>点落在「空」的地方（$M$ 小）就罚得重，落在「有东西」的地方（$M$ 接近 1）就几乎不罚。</b>然后用高斯-牛顿在这片概率场上滑到最匹配的位置。</p>
+
+      <p>这和 FAST-LIO2 的「直接」同源——都不提特征——但地图表示不一样：FAST-LIO2 用 iKD-Tree 存点、算点到面距离；D-LIOM 用一张概率场。<b>这也解释了它在小场景单雷达上略逊 LIO-SAM 的原因</b>：概率子图是有分辨率的，细节会被糊掉一点。</p>
+
+      <h3>紧耦合：三种因子进同一张图</h3>
+
+      <p>它的前端不是滤波器，而是一张<b>局部因子图</b>，里面放三类因子：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>激光里程计因子</b>
+          <p>来自刚才那一步概率场配准。</p>
+        </div>
+        <div class="mini-card">
+          <b>IMU 预积分因子</b>
+          <p>把两帧之间的 IMU 测量压成一个约束——这一套在第二季 <b>0029／0030</b> 课里推过。它让系统能<b>在线估 IMU 偏置</b>，这是「紧耦合」相对「松耦合」最实在的收益。</p>
+        </div>
+        <div class="mini-card">
+          <b>重力先验因子</b>
+          <p>约束滚转与俯仰，抑制这两个方向上的漂移。原文的消融实验里，<b>把重力因子拿掉之后，两个序列的误差分别退化到 7.14 m 与 11.45 m</b>——这个因子不是装饰。</p>
+        </div>
+      </div>
+
+      <p>除了前端，它还有几样「完整系统」才有的东西：<b>子图对子图的回环</b>（把 3D 子图按重力方向投影成 2D 图，在 2D 图上找 SURF 特征匹配，估一个 3 自由度的变换）、<b>多雷达输入</b>（多路激光同步到主雷达时间戳）、以及<b>动态初始化</b>（六轴 IMU，静止或运动中都能起）。原文拿一张表把 LOAM、LIOM、Carto3D、LIO-SAM 在「偏置估计／动态初始化／多雷达／回环」四项上打了勾叉，<b>只有 D-LIOM 四项全勾</b>。</p>
+
+      <p>原文还用一张三行的重建对比图说明了这个系统的价值：<b>最上一行是采集轨迹、中间一行是 LIO-SAM 的结果、最下一行是本文的结果</b>。在快速旋转的序列上，把中间和最后一行里同一处建筑轮廓放在一起比，<b>D-LIOM 恢复出的结构要锐利得多</b>——旋转快的时候，运动补偿做得对不对，会直接写在重建的清晰度上。这一点和上一节讲的连续时间补偿是同一个道理，只是 D-LIOM 用的是 IMU 预积分去畸变这条路。</p>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>精度</b>
+          <p>VIRAL 数据集上的绝对定位误差：本文（水平+垂直双雷达）<b>0.10 m</b>，LIO-SAM 0.15 m，LIOM 1.82 m。TONGJI 自采的<b>重访误差 0.58–0.81 m</b>，而 LIO-SAM 是 1.08–40.21 m，LOAM 直接失败。回环的精度／召回为 <b>90.94% / 95.45%</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>速度（这才是它的亮点）</b>
+          <p>16 线时里程计 <b>27.5 ms</b>、建图 <b>33.5 ms</b>（LIO-SAM 是 25.9 ms ／ <b>124.1 ms</b>）；64 线时 54.5 ms ／ 60.1 ms。也就是说里程计和 LIO-SAM 差不多，但<b>建图快了将近四倍</b>——这正是「直接配准到概率场」省下来的。</p>
+        </div>
+      </div>
+
+      <p>原文承认的短板有三条，都值得记：</p>
+      <ul>
+        <li><b>回环靠的是低层 SURF 特征，误检与漏检都躲不掉。</b>原文对这两种错的态度很明确：假阳性危害小、假阴性危害大（这一点和第一季 <b>0014</b> 课「假阳性铁律」的立场是一致的，只是它这里控制得比较好）。原文还专门给了一张误检与漏检的失败案例图。</li>
+        <li><b>没有显式估计 IMU 与激光之间的时间偏移</b>——这是一个它自己承认的遗留问题，而巧妙的是，<b>下一课 0090 里的 LI-Init 正好是这个问题的补丁</b>。</li>
+        <li><b>单雷达小范围场景下精度略逊 LIO-SAM</b>，原因是概率子图的分辨率有限。</li>
+      </ul>
+    </section>
+
+    <section class="section-card" id="slict">
+      <h2>5. SLICT：多尺度面片与多输入</h2>
+
+      <p>一句话招式：<b>用一棵八叉树装起「多个尺度的面片」当全局地图，姿态用滑窗线性插值，还能同时吃好几路雷达。</b></p>
+
+      <h3>先补一个概念：面片（surfel）是什么</h3>
+
+      <p>面片（surfel，直译「表面元」）是地图的一种表示方式。它不是「一堆点」，而是<b>一小片被压扁的、带朝向的小圆片</b>：位置取这一小撮点的均值，朝向取它们的法线，大小取它们的铺开范围，再额外记一个「平面度」（说明这一片到底平不平）。</p>
+
+      <p>在 SLICT 里，每个面片对应一棵八叉树（UFOMap）里的一个体素节点所包含的点集。父节点的点集包含子节点的点集——于是同一处表面在<b>不同粗细的格子里各有一个面片</b>，恰好拼成一棵「面片树」。这正是「多尺度」的物理基础。</p>
+
+      <div class="callout">
+        <h4>和前面三处「地图表示」的关系</h4>
+        <p>① 第二季 <b>0033</b>（KinectFusion）用「多次观测加权平均」来更新表面——SLICT 的面片融合是同一族思想在激光显式地图上的体现；② 第二季 <b>0034／0035</b>（Voxel Hashing、Voxblox）走的是<b>体素 + 有符号距离（TSDF）</b>那条路，把空间填满；③ 上一课 <b>0082</b>（SuMa／SuMa++）走的是<b>面片</b>这条路，SLICT 属于这一支，但它用 UFOMap 的层级结构管理面片，而不是 SuMa 那样的 2D 投影面片。<b>一句话：TSDF 把空间填满，面片只贴表面。</b></p>
+      </div>
+
+      <h3>多尺度在解决什么</h3>
+
+      <p>原文的动机写得很清楚：前端做特征关联时，大多只用<b>单尺度的局部地图</b>；结果就是远处的特征稀疏，关联不上，于是<b>长期漂移</b>。而如果改用全局地图，把整张地图的 k-d 树全部重算是不可行的。</p>
+
+      <p>SLICT 的做法是：点对面片的关联<b>在多个体素尺度上依次尝试</b>——近处用小尺度（细）面片，如果点太远、小面片里的点不够，就自动放大到更粗的尺度去找一面大面片贴上。这样一来，远近的激光因子都能用上，长期漂移被压住。</p>
+
+      <p>原文还给了一个尺度选择的实验：把最大深度设到 <b>5（对应约 1.6 m 的尺度）时 ATE 最优</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">多尺度面片：同一面墙，两种画法</text>
+
+          <!-- 左格 -->
+          <rect x="18" y="50" width="414" height="310" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="225" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">① 小面片</text>
+          <text x="225" y="96" text-anchor="middle" font-size="11" fill="#7a8a99">细节清楚，但数量多、算得慢</text>
+
+          <rect x="66" y="118" width="318" height="150" fill="#eef2f6" stroke="#c3d2de" stroke-width="1"/>
+          <rect x="90" y="140" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="170" y="140" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="250" y="140" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="90" y="200" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="170" y="200" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="250" y="200" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+
+          <g fill="#cc785c" fill-opacity="0.35" stroke="#a8563a" stroke-width="1">
+            <ellipse cx="100" cy="150" rx="13" ry="9"/><ellipse cx="150" cy="145" rx="13" ry="9"/>
+            <ellipse cx="200" cy="152" rx="13" ry="9"/><ellipse cx="250" cy="146" rx="13" ry="9"/>
+            <ellipse cx="300" cy="154" rx="13" ry="9"/><ellipse cx="352" cy="148" rx="13" ry="9"/>
+            <ellipse cx="110" cy="205" rx="13" ry="9"/><ellipse cx="160" cy="198" rx="13" ry="9"/>
+            <ellipse cx="210" cy="206" rx="13" ry="9"/><ellipse cx="260" cy="200" rx="13" ry="9"/>
+            <ellipse cx="310" cy="208" rx="13" ry="9"/><ellipse cx="355" cy="202" rx="13" ry="9"/>
+            <ellipse cx="130" cy="252" rx="13" ry="9"/><ellipse cx="200" cy="250" rx="13" ry="9"/>
+            <ellipse cx="270" cy="253" rx="13" ry="9"/><ellipse cx="340" cy="251" rx="13" ry="9"/>
+          </g>
+          <text x="225" y="330" text-anchor="middle" font-size="11.5" fill="#a8563a">一帧里几百个小面片</text>
+
+          <!-- 右格 -->
+          <rect x="468" y="50" width="414" height="310" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="675" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 大面片</text>
+          <text x="675" y="96" text-anchor="middle" font-size="11" fill="#7a8a99">粗略但快</text>
+
+          <rect x="516" y="118" width="318" height="150" fill="#eef2f6" stroke="#c3d2de" stroke-width="1"/>
+          <rect x="540" y="140" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="620" y="140" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="700" y="140" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="540" y="200" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="620" y="200" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+          <rect x="700" y="200" width="50" height="38" fill="#dbe6f0" stroke="#b8c9d8" stroke-width="1"/>
+
+          <g fill="#cc785c" fill-opacity="0.3" stroke="#a8563a" stroke-width="1">
+            <ellipse cx="580" cy="165" rx="45" ry="28"/><ellipse cx="690" cy="160" rx="45" ry="28"/>
+            <ellipse cx="790" cy="170" rx="45" ry="28"/><ellipse cx="620" cy="228" rx="45" ry="28"/>
+            <ellipse cx="762" cy="230" rx="45" ry="28"/>
+          </g>
+          <text x="675" y="330" text-anchor="middle" font-size="11.5" fill="#2f6d51">几个大面片就盖住了</text>
+
+          <!-- 尺度滑杆 -->
+          <text x="450" y="398" text-anchor="middle" font-size="12" font-weight="700" fill="#455a64">尺度</text>
+          <line x1="120" y1="420" x2="766" y2="420" stroke="#90a4ae" stroke-width="2.5"/>
+          <path d="M778 420 L764 413 L764 427 Z" fill="#90a4ae"/>
+          <g fill="#90a4ae">
+            <circle cx="120" cy="420" r="4"/><circle cx="283" cy="420" r="4"/>
+            <circle cx="446" cy="420" r="4"/><circle cx="609" cy="420" r="4"/>
+            <circle cx="772" cy="420" r="4"/>
+          </g>
+          <text x="120" y="442" text-anchor="middle" font-size="11" fill="#455a64">细</text>
+          <text x="450" y="442" text-anchor="middle" font-size="11" fill="#455a64">SLICT 同时用多个尺度</text>
+          <text x="772" y="442" text-anchor="middle" font-size="11" fill="#455a64">粗</text>
+
+          <text x="450" y="500" text-anchor="middle" font-size="12" fill="#5a4a42">代价是它跑不到实时：205 ms 一帧，而激光周期只有 100 ms</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一面建筑立面，用「很多小面片」和「几个大面片」两种画法分别长什么样，以及尺度这根滑杆在两者之间的位置。<br>
+          <b>怎么看这张图：</b>① 左格的小面片<b>贴着窗户、门框的边界走</b>，细节留得住，但一帧要几百片，算起来慢；② 右格的大面片只大致盖住了立面，<b>窗户的位置被糊掉了</b>，但片数少了两个数量级，快；③ 下面那根滑杆就是「尺度」这条轴：左端细、右端粗。SLICT 的答案是<b>不选一头，而是同时用多个尺度</b>——近处用细的、远处用粗的，让远近的激光因子都能找到对应。<br>
+          <b>要记住的一句话：</b>这里的取舍是<b>精度换速度</b>——多尺度把精度买回来了，代价写得很诚实：<b>205 ms 一帧，跑不到 100 ms 的激光周期，也就是非实时</b>（原文自己也承认这一点，并说靠加线程有可能做到实时）。
+        </figcaption>
+      </figure>
+
+      <h3>连续时间与多输入</h3>
+
+      <p>SLICT 的连续时间做法，和 Direct LIO 完全不同，这是本课要盯住的第二个对照点：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>它用原始点，不先用去畸变点</b>
+          <p>它拿<b>原始点</b>去建点对面片（PTS）因子——也就是说，点没有被提前「掰直」，它的畸变留到优化里一起去解。</p>
+        </div>
+        <div class="mini-card">
+          <b>姿态靠滑窗线性插值</b>
+          <p>每个点的时间戳落进滑窗之后，姿态由<b>相邻两个状态之间线性插值</b>得到（旋转部分按角度插值、平移部分线性插值）。它和 IMU 预积分因子一起进 MAP 优化。</p>
+        </div>
+      </div>
+
+      <p>原文专门交代了这个选择：此前的连续时间激光惯性里程计有用线性插值的，也有用 B 样条的（它点名了 MARS 用的是 B 样条），<b>而 SLICT 选了线性插值</b>。所以：Direct LIO 是解析多项式，SLICT 是滑窗线性插值，<b>两个都不是 B 样条</b>——这一点在第二节已经提醒过，这里再落一次实。</p>
+
+      <p>「多输入」指的是<b>多路激光合并</b>：比如 NTU VIRAL 数据集上的水平 + 垂直双雷达，以及作者自采的 OS1-128 加 Livox Mid-70 组合。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_SLICT__Multi-Input_Multi-Scale_Surfel-Based_Lidar-Inerti/89ebf641d3c63a2aae6aae84d0da740cdfbeba432c4bd3b8ca23479e7db15acc.jpg" alt="SLICT Fig.1 local map vs global map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>While a local map (top) helps keep computation bounded, it limits the association only to recent marginalized features, which gives chance to estimation drift relative to the initial state. In contrast, with a global map, we can achieve early association with the earliest features (white box) and reinforce global consistency.<br>
+          （中译：局部地图（上）有助于把计算量限制住，但它把关联限制在最近被边缘化的特征上，这就给了估计相对于初始状态漂移的机会。相反，用全局地图时，我们可以和最早的特征（白框处）建立关联，从而加强全局一致性。）<br>
+          <b>怎么看这张图：</b>① 上下两张图唯一的区别就是<b>地图范围</b>：上图是局部、下图是全局；② 请找那张图里被白框标出来的位置——那是<b>最早被扫到的特征</b>；③ 关键的一问是：当前帧能不能和那么早的特征建立关联？局部地图的答案是「不能」（那些点早被边缘化掉了），全局地图的答案是「能」。<b>这就是 SLICT 要用全局面片地图的动机</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_SLICT__Multi-Input_Multi-Scale_Surfel-Based_Lidar-Inerti/3e9dc39d004d96db025bdbe308cbd9f366bf506190f0a972dee5b7fe2010774b.jpg" alt="SLICT Fig.2 surfel and tree-like structure">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Illustration of surfel and the tree-like structure: A voxel i contains a set of points, which (in this example) contains two subsets, encapsulating the points in the voxels m, n at smaller scales. Each of the sets define a surfel whose attributes are described in Section II-D1.<br>
+          （中译：面片与树状结构的图示。体素 $i$ 包含一个点集，在本例中它又包含两个子集，分别封装了更小尺度的体素 $m$、$n$ 中的点。每一个点集都定义了一个面片，其属性在正文 II-D1 节描述。）<br>
+          <b>怎么看这张图：</b>① 这张图是「多尺度」这三个字最直观的<b>数据结构说明</b>——请顺着父子关系看，同一处表面在不同粗细的格子里各有一个面片；② 注意<b>父体素的点集包含子体素的点集</b>，所以粗面片不是另外算出来的，而是把小面片的点合起来算的；③ 记住这一点，上一张自绘图里「一个点找不到对应时可以往粗尺度上找」就顺理成章了。<br>
+          <b>顺带说一处原文的小笔误：</b>PDF 里出现过 <i>contiuous-time</i>（少了一个 n），按上下文应为 <i>continuous-time</i>，属排版笔误，不影响语义。
+        </figcaption>
+      </figure>
+
+      <h3>它的数字与边界</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>精度</b>
+          <p>NTU VIRAL 上多数序列最优（关闭回环的情况下）：eee_01 的 ATE 为 <b>0.0316 m</b>，FAST-LIO2 是 0.0585 m。Newer College 的 01_short 为 0.3843 m，FAST-LIO2 为 0.3883 m。自采数据 seq_01 为 1.0778 m，加上回环后降到 0.7437 m。</p>
+        </div>
+        <div class="mini-card">
+          <b>★ 非实时（必须点名）</b>
+          <p>原文给出的周期是 <b>205 ms</b>（其中求解 43 ms、地图更新 13 ms），而激光的周期是 <b>100 ms</b>，平台是 i7-12700KF。作者的解释是：<b>5 个尺度的关联大约是直接法的 5 倍代价</b>，并说用更多线程有可能做到实时。<b>这就是「多尺度面片换精度」的代价。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>漂移</b>
+          <p>在海拔变化较大的场景里，<b>z 方向的漂移比较明显</b>——自采数据里两个点之间有约 13–15 m 的高差。</p>
+        </div>
+        <div class="mini-card">
+          <b>其它短板</b>
+          <p>回环做得简单，只够处理小漂移（原文自己说可以换更先进的方法）；点对面片的判定准则也比较简单，原文建议改成自适应的。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>6. 三篇并排看：一张表当主干</h2>
+
+      <p>现在把三篇（外加上一课的 KISS-ICP 当参照）并排摊开。请注意最后两列——<b>「主打优势」是它们自己的主张，「原文承认短板」是它们自己写下来的边界</b>，我没有替任何一篇补充。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">篇</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">提取特征？</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">用 IMU？</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">运动补偿方式</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">主打优势</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">原文承认短板</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>KISS-ICP</b><br>（0088 课）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否（点对点，<b>连法线都不要</b>）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>否</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">常速模型去畸变</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">免调参、跨雷达同参数、快</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">开环无回环；常速假设在极端加速下失效</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>Direct LIO</b><br>（ICRA 2023）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否（只做盒子滤波 + 轻量体素）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>是</b>（非线性几何观测器）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">连续时间<b>解析多项式</b>，逐点闭式</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">轻量（合并补偿与先验、去掉 scan-to-scan）、可并行、便宜 IMU 也准</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">无回环；依赖观测器收敛；未测极端退化</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>D-LIOM</b><br>（TMM 2022）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否（直接配准概率子图）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>是</b>（紧耦合预积分 + 在线偏置）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">IMU 预积分去畸变</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">紧耦合 + 重力因子 + 子图回环 + 多雷达 + 动态初始化</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">回环靠低层 SURF 会误检漏检；未估 IMU-激光时偏；小场景单雷达略逊 LIO-SAM</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>SLICT</b><br>（RA-L 2023）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">否（多尺度面片）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>是</b>（预积分因子）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">连续时间，<b>原始点 + 滑窗线性插值</b>姿态</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">多尺度面片全局图、多雷达输入、精度最高</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>非实时</b>（205 ms vs 100 ms）；z 向漂移；回环简单</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>读这张表时建议盯三处：</p>
+
+      <ul>
+        <li><b>「运动补偿方式」这一列没有一篇写成 B 样条</b>——这不是我漏掉了，而是本节三篇确实都不是。B 样条那一路在第二季 <b>0031／0032</b> 课里。</li>
+        <li><b>只有 D-LIOM 和 KISS 之外的三篇都用了 IMU</b>，但用法完全不同：Direct LIO 是几何观测器，D-LIOM 是预积分因子 + 在线偏置，SLICT 是预积分因子 + 逐点原始点因子。</li>
+        <li><b>SLICT 是唯一把「非实时」写进正文的一篇</b>，而它的精度也是最高的。这一列的诚实程度值得注意——它没有把「多尺度换来的精度」说成免费的。</li>
+      </ul>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SLICT 把「多尺度面片」加进系统之后，最直接的后果是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="正好相反——多尺度关联是额外开销，不是节省。原文说 5 个尺度的关联大约是直接法的 5 倍代价，这也是它非实时的直接原因。" onclick="lessonKit.answer(this,'q0089b')">每帧的计算量明显下降</button>
+          <button data-correct="yes" data-explanation="对。近处小面片不够就自动放大到更粗的尺度，远处的点也能找到对应，于是长期漂移被压住、精度上去了；代价是关联要做多个尺度，205 ms 一帧，跑不到 100 ms 的激光周期。" onclick="lessonKit.answer(this,'q0089b')">精度上去、实时性没了</button>
+          <button data-correct="no" data-explanation="z 向漂移恰恰是它自己承认的短板之一，出现在海拔变化较大的场景里。多尺度关联解决的是远处的点找不到对应的问题，不是高度漂移。" onclick="lessonKit.answer(this,'q0089b')">高度漂移被彻底消除</button>
+        </div>
+        <div class="quiz-feedback" id="q0089b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="result">
+      <h2>7. 数字、边界与我们的判断</h2>
+
+      <p>把三篇的关键数字并成一张简表，方便对照：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">篇</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">最有代表性的一组数字</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Direct LIO</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">高动态序列：误差 0.1959 m（不补偿）→ <b>0.0612 m</b>（全连续），旋转峰值 3.5 rad/s；单帧耗时 <b>34–35 ms</b> 级，快于 CT-ICP 的 412.27 ms；用约 10 美元的 MPU-6050 仍最优</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>D-LIOM</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">VIRAL 绝对定位误差 <b>0.10 m</b>（LIO-SAM 0.15）；TONGJI 重访误差 <b>0.58–0.81 m</b>（LOAM 失败）；建图 <b>33.5 ms</b>（LIO-SAM 124.1 ms）；回环精度／召回 <b>90.94% / 95.45%</b>；去掉重力因子后误差涨到 7.14／11.45 m</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>SLICT</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">NTU VIRAL eee_01 ATE <b>0.0316 m</b>（FAST-LIO2 0.0585）；自采加回环 1.0778 → <b>0.7437 m</b>；周期 <b>205 ms</b>，其中求解 43 ms、地图更新 13 ms，而激光周期 100 ms</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>再把这层「边界」归纳一下。你会发现三篇的短板<b>指向三个不同的方向</b>，这恰好说明它们在光谱上站的位置不同：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>Direct LIO 缺的是「后端」</b>
+          <p>没有回环、没有位姿图，所以它跑得越久漂得越多。它把力气全花在「每一帧算得更准」上。</p>
+        </div>
+        <div class="mini-card">
+          <b>D-LIOM 缺的是「细节」</b>
+          <p>概率子图有分辨率、回环用低层 SURF 特征、时偏没估。它把力气花在「系统更完整」上。</p>
+        </div>
+        <div class="mini-card">
+          <b>SLICT 缺的是「时间」</b>
+          <p>205 ms 一帧，跑不过 100 ms 的激光周期。它把力气花在「精度更高」上，并且老老实实承认了代价。</p>
+        </div>
+      </div>
+
+      <h3>★ 我们的判断（注意：这是判断，不是原文自评）</h3>
+
+      <div class="callout">
+        <h4>请把下面这段当作读者视角，而不是论文结论</h4>
+        <p>三篇里，<b>Direct LIO 的那一步「把连续时间写成解析多项式而不是去拟合样条」最有想法</b>——它把「连续时间」这件本来很贵的事，变成了一个可以并行、可以闭式求解的小计算，这是实打实的路线创新。而且它敢用一个十美元级的 IMU 做实验，说明这套东西靠的是方法而不是器件。<br>
+        <b>D-LIOM 更像一次「把已有零件认真装齐」</b>：概率子图直接配准、因子图紧耦合、重力因子、子图回环、多雷达、动态初始化——单看每一件都不算全新，但把它们凑成一个四项全勾的系统，并用「建图快近四倍」证明了直接法的工程价值，这个贡献是实在的。<br>
+        <b>SLICT 属于「把精度这条线推到极限」</b>：多尺度面片确实压住了远处特征关联不上的问题，但它换的是实时性。以「非实时」为代价换精度，在论文层面是诚实的取舍，在工程层面则要看你有没有余量。<br>
+        <b>一句话总结光谱：</b>KISS 减、Direct LIO 巧、D-LIOM 全、SLICT 精——<b>四条路都是「不提特征」，但各自缺的那一块完全不同</b>。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用你自己的话说清「逐帧离散补偿」与「连续时间补偿」的根本差别，并解释为什么前者在无人机急转时会明显吃亏。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>根本差别是「轨迹被看成什么」。</b></p>
+              <p>① <b>逐帧离散补偿</b>把轨迹看成「一串采样点」——每帧只有端点处有一个位姿。帧内怎么办？只能外加一个假设（LOAM 用的是「这 0.1 秒内匀速」），然后<b>按时间比例插值</b>。所以帧内的实际运动是被<b>脑补</b>出来的。</p>
+              <p>② <b>连续时间补偿</b>把轨迹看成「一个关于时间的函数」。任意时刻 $t$ 代进去就能求出一个位姿，不需要在帧内再假设什么。</p>
+              <p><b>为什么无人机急转时会吃亏：</b>匀速假设的错误程度，和帧内速度的变化量成正比。无人机急转时，一帧 0.1 秒内角速度可能变化很大，匀速假设错得离谱；而按错误的速度去摆点，就会把点摆到错误的位置，重建出来的墙面会弯、会有重影。Direct LIO 的实测正说明了这一点：在最剧烈的那段序列上，不做补偿的误差是 0.1959 m，做了逐点连续时间补偿之后降到 0.0612 m——<b>差了大约三倍</b>。</p>
+              <p>一句话：<b>离散补偿是「在两点之间猜」，连续时间是「随时可查」。</b></p>
+            </div></details>
+          </li>
+          <li>本节三篇里有两篇自称「连续时间」。请分别说出它们的实现方式，并说明它们和 B 样条的区别。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>Direct LIO：解析多项式。</b>它先用 IMU 数值积分出一条粗轨迹（位置的三阶项里带着加加速度、姿态的二阶项里带着角加速度），然后在最近的前后两个 IMU 测量之间解一组<b>只依赖时间 $t$ 的闭式方程</b>——位置是时间的三次式、四元数是二次式。对每个点代一次 $t$，就得到它专属的变换。原文明确说的是「解一组解析方程，而不是解一个优化问题（比如样条拟合）」。</p>
+              <p><b>SLICT：滑窗线性插值。</b>每个点的时间戳落进滑窗之后，姿态由<b>相邻两个状态之间线性插值</b>（旋转按角度插、平移按比例插）得到；而且它<b>用原始点、不预先去畸变</b>，畸变留到优化里一起解。原文还专门交代了这个选择：此前这一支里有用线性插值的、也有用 B 样条的（它点名了 MARS 用 B 样条），SLICT 选的是线性插值。</p>
+              <p><b>与 B 样条的区别：</b>B 样条把轨迹写成「若干控制点加权求和」，权重由基函数给出，然后<b>把控制点当成待优化的参数去解</b>——它是一个优化问题。而解析多项式是<b>闭式求解</b>：参数从 IMU 积分直接得到，代进去就有结果；滑窗线性插值则是<b>在优化的过程中</b>被待求的滑窗状态所决定，谈不上控制点。</p>
+              <p>所以准确的表述是：<b>它们同属「连续时间」这个大类，但实现路径不同；本节的 Direct LIO 与 SLICT 都不是 B 样条。</b>B 样条那一路在第二季 0031／0032 课。</p>
+            </div></details>
+          </li>
+          <li>SLICT 为什么要用「多尺度」面片，而不是老老实实用一个固定尺度的地图？请从「远处特征关联」这个角度解释，并说明它的代价。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>原因：单尺度的关联会在远处失效，而远处失效就意味着长期漂移。</b></p>
+              <p>① <b>先看局部地图的问题。</b>原文的动机写得很直白：前端做特征关联时大多只用单尺度的局部地图，好处是算量有界，坏处是<b>只能和最近那一小段被边缘化的特征关联</b>，于是估计相对于初始状态就会漂。原文有一张图专门画这件事——局部地图（上）和全局地图（下）的差别，就在「能不能和最早的那些特征建立关联」。</p>
+              <p>② <b>再看固定尺度的问题。</b>一个激光点打到远处的墙时，它周围的点是很稀疏的。如果你只准备了一种细尺度的地图格子，那么在那个格里可能根本凑不出足够多的点来定义一个面片，这个点就<b>找不到对应</b>——对应的激光因子被浪费掉。</p>
+              <p>③ <b>SLICT 的解法：</b>点对面片的关联在<b>多个体素尺度上依次尝试</b>。近处用细面片（贴合细节），细面片里点数不够时就自动放大到更粗的尺度，在那里找到一面大面片把点贴上。这样远近的点都能用上，长期漂移被压住。原文还给了尺度选择实验：最大深度取到 5（约 1.6 m 尺度）时 ATE 最优。</p>
+              <p><b>代价很明确：时间。</b>关联要在多个尺度上做，原文说 5 个尺度的关联大约是直接法的 5 倍代价。实测周期 <b>205 ms</b>（求解 43 ms + 地图更新 13 ms + 其余开销），而激光的周期只有 <b>100 ms</b>——<b>所以它跑不到实时</b>。原文也承认了这一点，并说用更多线程有可能做到实时。</p>
+              <p>一句话：<b>多尺度买到的是「远处也能关联上」，付掉的是「一帧算两次的时间」。</b></p>
+            </div></details>
+          </li>
+          <li>D-LIOM 和 SLICT 都自称「不做特征提取」，但 D-LIOM 的回环用到了 SURF 特征。这算不算自相矛盾？请说明你的判断与理由。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>不算矛盾，但需要把「哪些环节不提特征」说清楚。</b></p>
+              <p>① <b>「直接法」这个标签针对的是前端配准。</b>D-LIOM 的前端是把扫描<b>直接</b>配准到概率子图（占据体素图）上，残差写成「让每个点落到概率高的地方」，中间不经过「挑角点／挑平面点」这一步。这就是它说「直接」的含义，和 FAST-LIO2 那种「定位到地图上、不算特征」同源。</p>
+              <p>② <b>回环是另一个环节，用它自己的办法。</b>D-LIOM 的回环把 3D 子图按重力方向投影成 2D 图，在 2D 图上找 <b>SURF 特征</b>做匹配，估一个 3 自由度的变换（RANSAC 估旋转平移、分支定界搜高度）。SURF 是视觉里的经典特征，用在这里完全可以。</p>
+              <p>③ <b>所以准确的表述是：</b>D-LIOM 的<b>前端配准不提几何特征</b>，但它的<b>回环模块用的是低层 SURF 特征</b>。这不是自相矛盾，而是分模块的技术选择。而且原文自己也承认了这个选择的代价——回环因此存在<b>误检与漏检</b>，原文还给了一张典型的失败案例图。</p>
+              <p><b>对我们读论文的启发：</b>「某某方法是直接法」这类标签，一定要问清楚<b>是针对哪个环节说的</b>。同一个系统里，前端可以是直接的，回环可以是特征法的，后端可以是因子图的——三者并不冲突。<b>把标签落到具体模块上，是读系统论文时最省事的一条纪律。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0088-KISS-ICP2023-反工程化的极简之作.html">← KISS-ICP（2023）：反工程化的极简之作</a>
+        <a class="next" href="0090-强度与鲁棒-反射率这条额外通道.html">强度与鲁棒：反射率这条额外通道 →</a>
+      </div>
+      <p class="foot-note">「直接法」这三个字看着简单，三篇看下来你会发现它其实是一条从骨头到完整系统的光谱 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

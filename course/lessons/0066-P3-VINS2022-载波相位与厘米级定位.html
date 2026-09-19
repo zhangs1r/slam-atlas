@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P³-VINS（2022）：载波相位与厘米级定位 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0066</div>
+      <h1>P³-VINS（2022）：载波相位与厘米级定位</h1>
+      <p class="subtitle">📡 GVINS 卡在米级？这一篇把载波相位和整周模糊度也塞进因子图，直接冲到厘米级</p>
+      <div class="hero-meta">
+        <span>🎯 主题：PPP/INS/Visual 紧耦合</span>
+        <span>👥 作者：与 GVINS 同团队的 PPP-VINS 作者</span>
+        <span>📅 2022 · <i>P³-VINS: Tightly-Coupled PPP/INS/Visual SLAM Based on Optimization Approach</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">比 GVINS 更进一步</a>
+        <a href="#b">相位模糊度</a>
+        <a href="#c">为什么载波更准</a>
+        <a href="#d">实验与局限</a>
+        <a href="#e">与 GVINS 对照</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能说清：P³-VINS 在 GVINS 上加了哪三样东西、什么是「相位模糊度」、为什么载波相位能比伪距准若干个数量级、以及它为什么仍卡在「浮点解」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 紧耦合主线：第一季 <b>0006</b>（松/紧）→ GVINS → <b>P³-VINS 在 GVINS 上再加 L+A+IF</b>，是「紧耦合还能再紧一层」的范例。② 本季 <b>0057</b> VINS-Mono：P³ 的初始化与 i/f/D/c 因子直接继承 GVINS→VINS-Mono 体系。③ 第二季 <b>0019</b> BA / <b>0022</b> NEES：浮点模糊度本质是个待估整数参数，和 BA 的待估参数同属大非线性优化。</p></div>
+      </div>
+
+      <div class="callout"><h4>★ 先说一个 OCR / 排版坑</h4><p>论文文件名和正文标题里到处是 <b>P&lt;sup&gt;3&lt;/sup&gt;-VINS</b> 这样的上标残留。它的真名就是 <b>P³-VINS</b>（PPP / INS / Visual 紧耦合），那个 <b>&lt;sup&gt;3&lt;/sup&gt;</b> 是排版残留，不是「P 的三次方」。本课一律写作 P³-VINS。</p></div>
+
+      <h2>1. 它比 GVINS 更进一步在哪</h2>
+      <p>上节课我们记住了 GVINS 的致命上限：<b>只用了码伪距，精度锁在米级</b>。P³-VINS 要做的，就是在 GVINS 的同一套紧耦合框架上，<b>再加载波相位 + 整周模糊度 + 双频无电离层（IF）组合</b>，把 PPP（精密单点定位）的厘米潜力揉进来。</p>
+      <p>论文 §I 自己点出 GVINS 缺两样：① 没用载波相位观测；② 没做多频组合来降误差。P³-VINS 恰好补这两刀。所以它不是另起炉灶，而是「GVINS 加三件套」。</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>GVINS 的观测</h4><p>码伪距 + 多普勒（米级）。因子图里只有 g 因子（码伪距/多普勒）和 c 因子（钟差）。</p></div>
+        <div class="mini-card"><h4>P³-VINS 多出来的</h4><p>额外加了 <b>L 载波相位因子</b>、<b>A 相位模糊度因子</b>、以及 <b>双频 IF 无电离层组合</b>。这就是 Fig.2 里红字标出的「与 GVINS 的差异」。</p></div>
+      </div>
+
+      <h2 id="b">2. 相位模糊度是什么：接收机不知道自己过了几个整周</h2>
+      <p>这是本课最抽象、也最该画出来的概念。载波是一列连续的正弦波。接收机量到的「相位」其实是<b>波上某一点的小数部分</b>——它知道自己在波的哪个位置（比如「在波峰往下一点的位置」），但<b>不知道从卫星到接收机这整段里，波完整的振动过了几个整周</b>。这个未知的整周数，就叫<b>整周模糊度 N（integer ambiguity）</b>。</p>
+      <p>打个比方：你闭眼听钟摆「滴—答—滴—答」数拍子，你能听出「现在在滴和答之间的 3/4 处」（小数相位），但如果你中途走神了，就不知道这已经是第几个「滴—答」循环了（整周数 N 未知）。一旦把 N 求出来，距离就从「含糊的小数」变成「精确的整周数 × 波长 + 小数」，精度瞬间到厘米级。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 标题 -->
+          <text x="200" y="40" fill="#2c3e50" font-size="15" text-anchor="middle">卫星发出的连续载波</text>
+          <!-- 正弦波 -->
+          <polyline fill="none" stroke="#2980b9" stroke-width="3" points="80,120 100,94 120,94 140,120 160,146 180,146 200,120 220,94 240,94 260,120 280,146 300,146 320,120 340,94 360,94 380,120 400,146 420,146 440,120 460,94 480,94 500,120 520,146 540,146 560,120 580,94 600,94 620,120 640,146 660,146 680,120 700,94 720,94 740,120 760,146 780,146 800,120 820,94"/>
+          <!-- 波长 λ -->
+          <line x1="110" y1="70" x2="230" y2="70" stroke="#c0392b" stroke-width="2"/>
+          <text x="170" y="62" fill="#c0392b" font-size="14" text-anchor="middle">波长 λ</text>
+          <!-- 整周刻度 -->
+          <line x1="80" y1="120" x2="80" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <line x1="200" y1="120" x2="200" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <line x1="320" y1="120" x2="320" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <line x1="440" y1="120" x2="440" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <line x1="560" y1="120" x2="560" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <line x1="680" y1="120" x2="680" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <line x1="800" y1="120" x2="800" y2="185" stroke="#7f8c8d" stroke-width="1"/>
+          <text x="80" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">N=0</text>
+          <text x="200" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">1</text>
+          <text x="320" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">2</text>
+          <text x="440" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">3</text>
+          <text x="560" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">4</text>
+          <text x="680" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">5</text>
+          <text x="800" y="200" fill="#7f8c8d" font-size="12" text-anchor="middle">6</text>
+          <text x="300" y="225" fill="#7f8c8d" font-size="13" text-anchor="middle">整周数 N = 未知量</text>
+          <!-- 接收机截断线 -->
+          <line x1="700" y1="60" x2="700" y2="200" stroke="#e74c3c" stroke-width="3"/>
+          <text x="700" y="270" fill="#c0392b" font-size="14" text-anchor="middle">接收机截断位置</text>
+          <text x="590" y="250" fill="#c0392b" font-size="13" text-anchor="middle">小数相位=已知</text>
+          <!-- 接收机 -->
+          <rect x="668" y="285" width="64" height="34" rx="5" fill="#dfe6ee" stroke="#2c3e50" stroke-width="2"/>
+          <text x="700" y="307" fill="#2c3e50" font-size="13" text-anchor="middle">接收机</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条从卫星发出的连续正弦载波，波长记为 λ；下方把整周数标成 N=0,1,2… 的刻度；一根红色竖线代表接收机「截断」波的位置。<br>
+          <b>怎么看这张图：</b>① 蓝色波每过 λ 重复一次，一个 λ 就是「一个整周」；② 红色竖线处接收机量到的是「在波上的哪个小数位置」——这部分<b>已知</b>；③ 但竖线落在 N=5 和 N=6 之间，到底是第几个整周（N 到底是多少），接收机<b>不知道</b>，这就是要解的模糊度。<br>
+          <b>要记住的一句话：</b>知道小数相位还不够，必须把整周数 N 也求出来，距离才能精确到厘米级。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">3. 为什么载波相位能比伪距准得多：波长短 = 刻度细</h2>
+      <p>直觉其实很朴素：<b>尺子的刻度越细，能读得越准</b>。伪距量的是「码片」（一段很长的码），刻度粗，只能在码片内插值，所以到米级；载波相位量的是「波本身」，波长比码片短若干个数量级，相位能读到不足一周的小数，于是到厘米级。</p>
+      <div class="callout"><h4>★ 诚实标注：原文没给具体数字</h4><p>论文<b>通篇只用符号 λ 表示波长，没有任何「L1≈19 cm、C/A 码≈300 m」这类具体数字</b>。所以本课<b>不写任何具体波长/码长数字</b>，只用「载波波长比码波长短若干个数量级」这种定性表述。凡是看到有人说本文给了 19 cm / 300 m，那都是原文没有的发挥。</p></div>
+      <p>相位观测模型（式 2，原文符号）：载波相位 $L = \text{几何距} + c\cdot dt_r + T - I + \lambda(N + \text{硬件偏}) + \text{噪声}$。关键就在那一项 $\lambda N$——只要解出整数 N，厘米级就到手。双频 IF 组合（式 3）则利用一阶电离层延迟 ∝ $1/f^2$，把两个频率线性组合后<b>消去一阶电离层</b>，进一步提精度。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 372" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 同一个距离 -->
+          <line x1="80" y1="70" x2="820" y2="70" stroke="#2c3e50" stroke-width="3"/>
+          <line x1="80" y1="58" x2="80" y2="82" stroke="#2c3e50" stroke-width="3"/>
+          <line x1="820" y1="58" x2="820" y2="82" stroke="#2c3e50" stroke-width="3"/>
+          <text x="450" y="50" fill="#2c3e50" font-size="14" text-anchor="middle">要量的同一个距离</text>
+          <!-- 粗尺（伪距） -->
+          <text x="250" y="140" fill="#2c3e50" font-size="15" text-anchor="middle" font-weight="700">伪距（码）</text>
+          <line x1="80" y1="200" x2="820" y2="200" stroke="#34495e" stroke-width="3"/>
+          <line x1="80" y1="185" x2="80" y2="215" stroke="#34495e" stroke-width="3"/>
+          <line x1="230" y1="185" x2="230" y2="215" stroke="#34495e" stroke-width="3"/>
+          <line x1="380" y1="185" x2="380" y2="215" stroke="#34495e" stroke-width="3"/>
+          <line x1="530" y1="185" x2="530" y2="215" stroke="#34495e" stroke-width="3"/>
+          <line x1="680" y1="185" x2="680" y2="215" stroke="#34495e" stroke-width="3"/>
+          <line x1="820" y1="185" x2="820" y2="215" stroke="#34495e" stroke-width="3"/>
+          <text x="250" y="240" fill="#7f8c8d" font-size="14" text-anchor="middle">刻度粗 → 只能读到米级</text>
+          <rect x="360" y="150" width="60" height="50" fill="#e74c3c" opacity="0.25"/>
+          <text x="390" y="170" fill="#c0392b" font-size="12" text-anchor="middle">±一大块</text>
+          <!-- 细尺（载波） -->
+          <text x="650" y="280" fill="#2c3e50" font-size="15" text-anchor="middle" font-weight="700">载波相位</text>
+          <line x1="80" y1="320" x2="820" y2="320" stroke="#34495e" stroke-width="3"/>
+          <g stroke="#34495e" stroke-width="1.5">
+            <line x1="80" y1="310" x2="80" y2="330"/>
+            <line x1="100" y1="310" x2="100" y2="330"/>
+            <line x1="120" y1="310" x2="120" y2="330"/>
+            <line x1="140" y1="310" x2="140" y2="330"/>
+            <line x1="160" y1="310" x2="160" y2="330"/>
+            <line x1="180" y1="310" x2="180" y2="330"/>
+            <line x1="200" y1="310" x2="200" y2="330"/>
+            <line x1="220" y1="310" x2="220" y2="330"/>
+            <line x1="240" y1="310" x2="240" y2="330"/>
+            <line x1="260" y1="310" x2="260" y2="330"/>
+            <line x1="280" y1="310" x2="280" y2="330"/>
+            <line x1="300" y1="310" x2="300" y2="330"/>
+            <line x1="320" y1="310" x2="320" y2="330"/>
+            <line x1="340" y1="310" x2="340" y2="330"/>
+            <line x1="360" y1="310" x2="360" y2="330"/>
+            <line x1="380" y1="310" x2="380" y2="330"/>
+            <line x1="400" y1="310" x2="400" y2="330"/>
+            <line x1="420" y1="310" x2="420" y2="330"/>
+            <line x1="440" y1="310" x2="440" y2="330"/>
+            <line x1="460" y1="310" x2="460" y2="330"/>
+            <line x1="480" y1="310" x2="480" y2="330"/>
+            <line x1="500" y1="310" x2="500" y2="330"/>
+            <line x1="520" y1="310" x2="520" y2="330"/>
+            <line x1="540" y1="310" x2="540" y2="330"/>
+            <line x1="560" y1="310" x2="560" y2="330"/>
+            <line x1="580" y1="310" x2="580" y2="330"/>
+            <line x1="600" y1="310" x2="600" y2="330"/>
+            <line x1="620" y1="310" x2="620" y2="330"/>
+            <line x1="640" y1="310" x2="640" y2="330"/>
+            <line x1="660" y1="310" x2="660" y2="330"/>
+            <line x1="680" y1="310" x2="680" y2="330"/>
+            <line x1="700" y1="310" x2="700" y2="330"/>
+            <line x1="720" y1="310" x2="720" y2="330"/>
+            <line x1="740" y1="310" x2="740" y2="330"/>
+            <line x1="760" y1="310" x2="760" y2="330"/>
+            <line x1="780" y1="310" x2="780" y2="330"/>
+            <line x1="800" y1="310" x2="800" y2="330"/>
+            <line x1="820" y1="310" x2="820" y2="330"/>
+          </g>
+          <text x="650" y="352" fill="#7f8c8d" font-size="14" text-anchor="middle">刻度细密 → 能读到厘米级</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面一根「真实距离」线；下面并排两把尺——左边的「伪距（码）」刻度很粗，右边「载波相位」刻度很细密，量的是同一个距离。<br>
+          <b>怎么看这张图：</b>① 粗尺只能在两大刻度之间「估」一个值，误差是一大块（红色半透明块）；② 细尺能落在很近的刻度上，读数精确得多；③ 注意两张图都<b>没有标任何具体数字</b>，只靠视觉粗细对比表达「厘米级 vs 米级」。<br>
+          <b>要记住的一句话：</b>波长短 = 刻度细 = 测得准，但原文只给 λ 符号，没给具体波长。
+        </figcaption>
+      </figure>
+
+      <h2>4. 模糊度怎么在因子图里估（浮点解，不是固定解）</h2>
+      <p>P³-VINS 对模糊度采取的是<b>浮点解（float）</b>策略：UPD（单差模糊度的小数部分偏差，&lt;0.5 周）被模糊度吸收，所以只估浮点的 N。每颗星的 N 当作一个状态，<b>没有周跳时建模成随机游走</b>（式 8：$N_k - N_{k-1}$）；一旦发生周跳（信号短暂失锁导致整周数突变），就按式 2 重新初始化。论文<b>没有做固定解（fixed）</b>——也就是说它把 N 当连续变量估，没有强制取整到整数。</p>
+      <p>周跳检测用 Melbourne-Wübbena（MW）组合 + Geometry-Free（GF）组合，两者都不报周跳才认为无周跳。和 INS/Visual 的紧耦合方式：滑窗优化，初始化与 GVINS 粗到精三步完全相同，因子图（Fig.3）在 GVINS 基础上多了 L（载波）、A（模糊度）两类因子。下面这张原图就是全篇最该讲透的因子图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_P___3__-VINS__Tightly-Coupled_PPP_INS_Visual_SLAM_Based_/1a9541d29a5d653eec17b3fb749c709df06c8ed052ce6a7900a6d984b558aa94.jpg" alt="Factor graph of P3-VINS">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Factor graph representation of P³-VINS.<br>
+          <b>怎么看这张图：</b>和上节课 GVINS 的 Fig.6 对照看——它沿用了 i（惯性）、f（视觉）、D（多普勒）、c（钟差）四类因子，<b>额外多了 L（载波相位因子）和 A（相位模糊度因子）</b>。盯着这两条新边，就是 P³-VINS 比 GVINS「更狠」的地方：载波相位把精度从米级拉到厘米级。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">5. 实验数字与原文承认的局限</h2>
+      <p>论文在公开数据集（GVINS 的运动场序列，行人头盔）和实车两处做了对比，对手是 GVINS 和 PPP（RTKLIB）。</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>公开数据集（MAE / RMSE，单位 m）</h4>
+          <p>P³ <b>0.56 / 0.61</b>，GVINS 0.73 / 0.80，PPP 1.14 / 1.28。P³ 综合最优；PPP 竖向误差大，GVINS 横向噪声大。</p></div>
+        <div class="mini-card"><h4>实车（~2 分钟，MAE / RMSE，单位 m）</h4>
+          <p>P³ <b>3.01 / 3.37</b>，GVINS 5.36 / 5.84，PPP 4.55 / 4.61。PPP 最平滑但<b>未收敛</b>（最小误差约 3 m）。</p></div>
+      </div>
+      <p>⚠️ <b>收敛时间</b>：PPP 单独需要很长时间才收敛（实车 2 分钟都不够）；P³ 因为 VIO 提供了约束，<b>没有这个收敛慢的问题</b>。下面两张原图分别看公开数据集的三轴误差和实车轨迹。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_P___3__-VINS__Tightly-Coupled_PPP_INS_Visual_SLAM_Based_/3524a20bbadfa960ebb8978c621ad17f4d42c1d9c0609db075d32ed5bad9b8dc.jpg" alt="ENU Positioning Error in Public Dataset">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>ENU Positioning Error in Public Dateset.<br>
+          <b>怎么看这张图：</b>三轴（东/北/天）误差对比。PPP 竖向（天向）差最大，GVINS 横向噪声大，P³ 三轴都压得最平——这就是为什么论文说 P³ 综合最优。盯三根曲线谁最贴近零线即可。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_P___3__-VINS__Tightly-Coupled_PPP_INS_Visual_SLAM_Based_/ddfb4a036668acf58036155c69927f67af415b9510c3a281b82139c8a83a727b.jpg" alt="Final Trajectories in Real-World Experiments">
+        <figcaption>
+          <b>原图注（Fig. 10）：</b>Final Trajectories in Real-World Experiments.<br>
+          <b>怎么看这张图：</b>实车最终轨迹。树木遮挡下 GVINS 横向噪声危险，P³ 明显更准。注意这是真实车载、约 2 分钟场景——看两根轨迹的贴合与抖动差异。
+        </figcaption>
+      </figure>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>原文承认的局限（逐条）</h4><ul>
+          <li>仅<b>浮点模糊度</b>：未用 UPD，故只估 float N，精度上限低于固定解。</li>
+          <li>需<b>双频接收机</b>做 IF 组合消电离层（如 ZED-F9P）。</li>
+          <li>需<b>精密星历/钟差产品</b>：PPP 依赖精密轨道与钟差。</li>
+          <li><b>PPP 收敛慢</b>：被 VIO 缓解，但本身仍是弱项。</li>
+          <li><b>周跳</b>：需 MW/GF 检测并重新初始化模糊度。</li>
+          <li><b>城市环境</b>：树木对卫星信号有不可忽略影响。</li>
+        </ul></div>
+        <div class="mini-card"><h4>小结：P³-VINS 做对了什么</h4><ul>
+          <li>在 GVINS 上加 L+A+IF，精度从米级冲到分米/厘米。</li>
+          <li>浮点模糊度 + VIO 约束，绕开 PPP 单独收敛慢。</li>
+          <li>初始化完全复用 GVINS 三步，工程干净。</li>
+          <li>下一步瓶颈：做固定解（用 UPD）还能再提一截。</li>
+        </ul></div>
+      </div>
+
+      <h2 id="e">6. 与 GVINS 的对照小结</h2>
+      <p>把两篇放一条线上看最清楚：<b>0006 松耦合 → GVINS（伪距+多普勒紧耦合，米级）→ P³-VINS（再加载波相位+模糊度+IF 双频，分米/厘米级）</b>，是同一条「紧耦合 + GNSS 原始观测量」主线上的三级跳。GVINS 因无载波相位卡在米级，P³-VINS 用载波相位突破到厘米——用两张 RMSE 表直接对照即可印证。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_P___3__-VINS__Tightly-Coupled_PPP_INS_Visual_SLAM_Based_/48524d09afde21e0e7f557cf07cf2702b9df21305372f579ad714d1e2141540f.jpg" alt="Overview of P3-VINS">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of P³-VINS.<br>
+          <b>怎么看这张图：</b>这张总览图里，<b>红字标出的就是相对 GVINS 新增的部分</b>（L 载波、A 模糊度、IF 双频）。把它和上节课 GVINS 的框架对照，一眼就能看出「P³-VINS 比 GVINS 多了什么」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断 1</h3>
+        <p>P³-VINS 的论文里，是否给出了载波波长（如 L1≈19 cm）或码长（如 C/A≈300 m）的具体数字？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="对。原文通篇只用符号 λ 表示波长，没有任何 19 cm / 300 m 这类具体数字；写具体数字都是原文没有的发挥。" onclick="lessonKit.answer(this,'q0066a')">没给具体数字</button>
+          <button data-correct="yes" data-explanation="错。原文没有给出 19 cm / 300 m 等任何具体波长/码长，只用 λ 符号。" onclick="lessonKit.answer(this,'q0066a')">给了具体数字</button>
+        </div>
+        <div class="quiz-feedback" id="q0066a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 2</h3>
+        <p>P³-VINS 解相位模糊度 N 时，用的是固定解（强制取整到整数）还是浮点解（当连续变量估）？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。P³-VINS 是浮点解（float）策略，只估浮点 N，未做固定解（fixed）。" onclick="lessonKit.answer(this,'q0066b')">浮点解</button>
+          <button data-correct="no" data-explanation="错。论文未做固定解，是把 N 当连续变量估的浮点解，没有强制取整。" onclick="lessonKit.answer(this,'q0066b')">固定解</button>
+        </div>
+        <div class="quiz-feedback" id="q0066b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用一句话说清「整周模糊度 N」是什么，为什么它不求出就不能到厘米级？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>载波相位观测里含有 λN 项（N 是整周数，未知）。接收机只能量到波上的小数相位，不知道从卫星到接收机过了几个整周。只要把整数 N 求出来，距离 = 整周数×波长 + 小数，精度才能到厘米级。</div></details>
+          </li>
+          <li>为什么论文只写 λ、不写具体波长数字，我们却要诚实照办？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为原文通篇只用符号 λ 表示波长，没有任何 19 cm / 300 m 等具体数字。「原文没有的东西不许补」是硬规范；写具体数字属于原文没有的发挥，会误导读者以为论文给了这些量。</div></details>
+          </li>
+          <li>P³-VINS 的 PPP 为什么「收敛慢」，又被什么缓解了？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>PPP 单独靠精密星历/钟差产品解算，需要很长时间才收敛（实车 2 分钟都不够）。P³-VINS 因 VIO 提供了运动约束，把模糊度和位姿一起紧耦合优化，从而绕开了 PPP 单独收敛慢的问题。</div></details>
+          </li>
+          <li>本篇对相位模糊度用了固定解还是浮点解？这意味着它的精度上限在哪？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>用的是浮点解（float），只估浮点的 N，未用 UPD 做固定解（fixed）。因此精度上限低于固定解——这是论文自己承认的局限之一。</div></details>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0065-GVINS2022-把GNSS放进因子图.html">← GVINS（2022）：把 GNSS 放进因子图</a>
+        <a class="next" href="0067-自动驾驶SLAM综述2017-室外大尺度与高精地图.html">自动驾驶 SLAM 综述（2017）：室外大尺度与高精地图 →</a>
+      </div>
+      <p class="foot-note">从米到厘米，差的就是那几个整周 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

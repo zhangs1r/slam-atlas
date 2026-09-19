@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Faster-LIO（2022）：用体素哈希取代树 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0085</div>
+      <h1>Faster-LIO（2022）：用体素哈希取代树</h1>
+      <p class="subtitle">把 ikd-Tree 换成 iVox：查询不再随地图变大，还顺手吃满多核 🚀</p>
+      <div class="hero-meta">
+        <span>🎯 主题：增量稀疏体素 iVox · 哈希定位 · 并行 k-NN</span>
+        <span>👥 作者：Chunge Bai、Tao Xiao、Yajie Chen、Haoqian Wang、Fang Zhang、Xiang Gao（HKU MaRS）</span>
+        <span>📅 2022 · <i>Faster-LIO: Lightweight Tightly Coupled Lidar-Inertial Odometry Using Parallel Sparse Incremental Voxels</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">一句话结论与作者澄清</a>
+        <a href="#b">它针对哪个环节动刀</a>
+        <a href="#c">iVox 是什么</a>
+        <a href="#d">同一招式，三个战场</a>
+        <a href="#e">优势：定位不再随地图变大</a>
+        <a href="#f">「上千 Hz」到底是什么口径</a>
+        <a href="#g">局限</a>
+        <a href="#h">收束与练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 Faster-LIO 到底在 FAST-LIO2 的哪个环节上动刀；用「切块 + 哈希 + 每格限量」三句话讲清 iVox；把它和第二季 <b>0034</b> 的 Voxel Hashing、第三季 <b>0038</b> 的 Instant NGP 串成一条线；并且<b>如实</b>说明标题里那个「上千 Hz」究竟在说什么。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>紧接上一节 <b>0084</b>：ikd-Tree 把更新代价压到了 $O(\log n)$，但树这种结构本身还有两个天生的麻烦——查询要顺着指针一层层走，而且<b>很难并行</b>。本节就是针对这两点。同时显式对比第二季 <b>0034</b>（Voxel Hashing：在显存里给体素块做哈希）与第三季 <b>0038</b>（Instant NGP：多分辨率哈希编码）——<b>同一个招式，三个战场</b>。</p>
+        </div>
+      </div>
+
+      <h2>1. 一句话结论，外加一个必须先澄清的作者问题</h2>
+
+      <p>先给结论：<b>Faster-LIO 把 FAST-LIO2 地图里那棵 ikd-Tree 换掉了，换成了一种叫 iVox（incremental voxels，增量式体素）的稀疏哈希结构。</b>换完之后，查询不需要再顺着树一层层往下走，而是「一算就知道在哪个格子」；同时因为没有了指针追逐，各个格子的计算可以分给多个 CPU 核心同时干。原文的实验结论是：在保持同等精度的前提下，比 FAST-LIO2 快 <b>1.5 到 2 倍</b>。</p>
+
+      <div class="callout">
+        <h4>先澄清一个容易被转述错的细节：作者里没有 Cui</h4>
+        <p>有些网络转述会把作者写成「Bai, Cui, Chen 等」。我们的精读材料核对过原文，正确的作者列表是：<b>Chunge Bai、Tao Xiao、Yajie Chen、Haoqian Wang、Fang Zhang、Xiang Gao</b>，来自<b>香港大学 MaRS 实验室</b>——与 FAST-LIO、FAST-LIO2 <b>同门</b>。<b>名单里没有 Cui。</b>本节以原文作者列表为准。</p>
+      </div>
+
+      <p>把这一模块的三篇论文摆在一起看，主线就非常清楚了：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">课程</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">它解决什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">用到什么数据结构</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0083 FAST-LIO</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">让「融合上千个特征点」算得动</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">静态 k-d 树（每步重建）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0084 FAST-LIO2</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">让地图能一边长一边查，并甩掉提特征</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">ikd-Tree（增量 k-d 树）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>0085 本节 Faster-LIO</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">让查询不再「顺指针走」，并吃满多核</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">iVox（增量稀疏体素哈希）</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它针对 FAST-LIO2 的哪个环节动刀</h2>
+
+      <p>上一节结束时，ikd-Tree 看起来已经很强了：插入 $O(\log n)$、查询 $O(\log n)$、没有 nanoflann 那种尖峰。那还能从哪儿再快？</p>
+
+      <p>原文先给了 ikd-Tree 一个公道的评价，然后立刻转身：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「FastLIO and FastLIO2 are LIO systems that achieve almost 100 Hz in large-scale scenarios. The incremental k-d tree significantly reduces the tree update time, which is also verified in our experiments. … <b>Nevertheless, we show that iVox is even faster than the ik-d tree in FastLIO2 while accomplishing the same level of accuracy.</b>」<br>
+      （中译：FastLIO 与 FastLIO2 在大规模场景中达到接近 100 Hz。增量 k-d 树显著降低了树的更新时间，这一点在我们的实验中也得到了验证。…… <b>尽管如此，我们要说明：iVox 比 FastLIO2 中的 ik-d 树更快，同时达到同等精度。</b>）</p>
+
+      <p>那么 Faster-LIO 具体嫌弃树的哪一点？原文摘要第一段把答案说得很干脆：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「To achieve the high tracking speed, we <b>neither use complicated tree-based structures</b> to divide the spatial point cloud <b>nor the strict k nearest neighbor (k-NN) queries</b> to compute the point matching.」<br>
+      （中译：为了达到高跟踪速度，我们<b>既不用复杂的树状结构</b>来划分空间点云，<b>也不用严格的 k 最近邻（k-NN）查询</b>来计算点匹配。）</p>
+
+      <p>这句话里其实藏了<b>两把刀</b>，要分开看：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>第一把刀：砍掉「树」</b>
+          <p>树结构有个天生的毛病——<b>查询必须沿着指针从根一路走到叶</b>：先比一个坐标，决定往左还是往右；再比一个，再决定一次……就像进一个陌生小区，一路问人「三号楼往哪走」。这一路走下来没法跳步，而且因为路径是<b>串行依赖</b>的（不走到这一层就不知道下一层去哪），<b>很难分给多个 CPU 核心同时跑</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>第二把刀：放弃「严格」近邻</b>
+          <p>原文明确承认 iVox 的 k-NN「is easy, effective, but <b>not strict</b> compared with tree-like algorithms」（比树状算法简单、有效，但<b>不严格</b>）——它是<b>近似</b>的。这是一个主动的取舍：与其花大力气找「绝对最近的那个点」，不如快速找「足够近的若干点」，反正后面拟合平面也不需要绝对精确。</p>
+        </div>
+      </div>
+
+      <p>原文还给了一句很有说服力的动机，讲的是<b>为什么「快」本身就有价值</b>：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「For many real robots or vehicles, LIO is not the only algorithm running in the system. All the active modules must share the computation resource. <b>The system would be more robust if we had a faster and more lightweight LIO.</b>」<br>
+      （中译：对许多真实的机器人或车辆来说，LIO 并不是系统里唯一在跑的算法，所有活跃模块都要瓜分算力。<b>如果我们的 LIO 更快、更轻，整个系统就会更鲁棒。</b>）</p>
+
+      <p>这句话值得单独记住：<b>在真实系统里，「快」不是炫技，而是把算力还给别的模块。</b>同一台车上可能还有避障、规划、感知在抢 CPU；你的 LIO 省下来的每毫秒，都是别人的。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="220" y="30" text-anchor="middle" font-size="15.5" font-weight="700" fill="#9b2c2c">k-d 树：一层层问路</text>
+          <rect x="60" y="56" width="320" height="270" fill="#fbfcfd" stroke="#888" stroke-width="1.6"/>
+          <line x1="220" y1="56" x2="220" y2="326" stroke="#888" stroke-width="1.5"/>
+          <line x1="60" y1="185" x2="220" y2="185" stroke="#888" stroke-width="1.5"/>
+          <line x1="220" y1="140" x2="380" y2="140" stroke="#888" stroke-width="1.5"/>
+          <line x1="140" y1="185" x2="140" y2="326" stroke="#b0b0b0" stroke-width="1.2"/>
+          <line x1="300" y1="56" x2="300" y2="140" stroke="#b0b0b0" stroke-width="1.2"/>
+          <g fill="#9e9e9e">
+            <circle cx="100" cy="100" r="3.4"/><circle cx="170" cy="80" r="3.4"/><circle cx="255" cy="90" r="3.4"/><circle cx="340" cy="105" r="3.4"/>
+            <circle cx="95" cy="240" r="3.4"/><circle cx="180" cy="265" r="3.4"/><circle cx="330" cy="200" r="3.4"/>
+            <circle cx="265" cy="295" r="3.4"/><circle cx="345" cy="285" r="3.4"/><circle cx="110" cy="305" r="3.4"/>
+            <circle cx="250" cy="230" r="3.4"/><circle cx="300" cy="180" r="3.4"/>
+          </g>
+          <polyline points="285,245 250,245 250,200 200,200 200,160 150,160 150,120 118,120"
+                    fill="none" stroke="#1f6fb0" stroke-width="3"/>
+          <circle cx="285" cy="245" r="6" fill="#c0392b"/>
+          <circle cx="118" cy="120" r="5.5" fill="#1f6fb0"/>
+          <text x="220" y="352" text-anchor="middle" font-size="12" fill="#555">查询要沿着一层层的划分往下走</text>
+          <text x="220" y="376" text-anchor="middle" font-size="12" fill="#1f6fb0">经过好几个节点才落到目标格</text>
+
+          <text x="690" y="30" text-anchor="middle" font-size="15.5" font-weight="700" fill="#1d6f3c">体素哈希：直接算门牌号</text>
+          <polygon points="600,110 555,78 705,78 750,110" fill="#eef7f1" stroke="#444" stroke-width="1.5"/>
+          <rect x="600" y="110" width="150" height="150" fill="#f7fbf8" stroke="#444" stroke-width="1.6"/>
+          <line x1="650" y1="110" x2="650" y2="260" stroke="#9e9e9e" stroke-width="1.2"/>
+          <line x1="700" y1="110" x2="700" y2="260" stroke="#9e9e9e" stroke-width="1.2"/>
+          <line x1="600" y1="160" x2="750" y2="160" stroke="#9e9e9e" stroke-width="1.2"/>
+          <line x1="600" y1="210" x2="750" y2="210" stroke="#9e9e9e" stroke-width="1.2"/>
+          <rect x="650" y="160" width="50" height="50" fill="#c9e8d2" stroke="#1d6f3c" stroke-width="1.6"/>
+          <line x1="824" y1="296" x2="684" y2="192" stroke="#c0392b" stroke-width="2.4"/>
+          <path d="M678 188 L684 199 L691 190 Z" fill="#c0392b"/>
+          <circle cx="830" cy="300" r="6" fill="#c0392b"/>
+          <text x="690" y="352" text-anchor="middle" font-size="12" fill="#555">一个点直接算出它在第几格</text>
+          <text x="690" y="376" text-anchor="middle" font-size="12" fill="#1d6f3c">一步到位，不用一层层找</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个空间画了两次。左边是 k-d 树：空间被一根根竖线横线不断二分（每一刀都对应树上的一个判断节点），查询从红点出发，<b>要一格一格地问过去</b>——先问「你在中线的哪边」，再问「你在横线的哪边」，一路拐到左边的蓝点为止。右边是体素哈希：空间被切成规则的立方格（像魔方），任何一个点<b>直接一算就知道自己在第几格</b>，中间没有任何「问路」的过程。<br>
+          <b>怎么看这张图：</b>① 左联的蓝色折线就是「顺着指针一层层走」，每一段都代表树上的一个节点；② 注意这条折线是<b>拐来拐去、必须按顺序走</b>的，这就是「难并行」的根源；③ 右联的红色直箭头代表「坐标除以格子边长，取整，完事」——一步到位，而且和地图里一共有多少点完全无关；④ 右联里被涂绿的格子就是那个点的「门牌号」。<br>
+          <b>要记住的一句话：</b><b>树是「问路」，哈希是「直接算门牌号」。</b>问路要经过好几个路口，算门牌号只要一次除法。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. iVox 是什么：切块、哈希、每格限量</h2>
+
+      <p>iVox 全称 <b>incremental voxels</b>（增量式体素）。它的机制可以用三句话讲完：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 空间切成体素</b>
+          <p>把整个世界按固定边长 $s$ 切成一个个小立方格（voxel）。一个点属于哪个格子，只由它的坐标决定。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 用哈希表定位</b>
+          <p>体素坐标不是直接当数组下标用（那会浪费巨量内存），而是<b>经过一个哈希函数映射到哈希表的一个槽位</b>。这样即使世界很大，也只给「真的有点的格子」分配空间。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 每格只留固定数量的点</b>
+          <p>每个格子里的点数是有限的（插入时做了下采样），所以「在格子里找最近邻」这件事的代价是<b>可控的小常数</b>，而不是「格子里堆了多少算多少」。</p>
+        </div>
+      </div>
+
+      <p>哈希函数原文写得很具体：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$id_v = \text{hash}(\mathbf{v}) = \left(v_x n_x\right)\ \mathrm{xor}\ \left(v_y n_y\right)\ \mathrm{xor}\ \left(v_z n_z\right)\ \bmod N$$</div>
+      </div>
+
+      <p>其中 $\mathbf{v} = \frac{1}{s}\left[p_x, p_y, p_z\right]^{\top}$ 是点 $\mathbf{p}$ 的体素坐标；<b>$s$ 是体素边长，$n_x, n_y, n_z$ 是三个大素数，$N$ 是哈希表的容量</b>。三个坐标各乘一个大素数再逐位异或，是为了把「$x$ 变一点」和「$y$ 变一点」的影响<b>混开</b>，避免不同的三维格子被挤进同一个槽位。</p>
+
+      <p>接下来是查询。原文把 k-NN 搜索拆成了三步：</p>
+
+      <ol>
+        <li>算出查询点 $\mathbf{p}$ 所在的体素，<b>再找出它周围的邻近体素</b>（原文实现里用的是 6、18 或 26 邻格，见图 Fig. 3）；</li>
+        <li>在每一个候选体素里，<b>最多取 K 个近邻</b>；</li>
+        <li>把各个体素里的结果<b>合并，挑出最好的 K 个</b>。</li>
+      </ol>
+
+      <p>为什么只找「周围一圈」就够？因为 k-NN 本来就是有搜索半径限制的：真正有资格当邻居的点，物理上就住在附近的那几个格子。原文的措辞是「The k-NN search is limited within a pre-defined range」（k-NN 搜索被限制在一个预先定义的范围之内）。这也就是前面说的「<b>不严格</b>」——它可能有遗漏，但对 LIO 来说够用。</p>
+
+      <p>删除的策略和树完全不同。原文直说「遍历整个体素哈希表太贵了」，所以它不用「按空间位置主动删」，而是用 <b>LRU 缓存</b>（least recently used，最近最少使用）<b>按时间维度淘汰</b>：维护一个「最近访问过的体素」队列并设定最大容量，一旦体素总数超限，就从队尾淘汰最久没用的那些。原文的理由是，哈希表上的插入和删除都是 $O(1)$，「very computationally cheap for real-time LIO algorithms」（对实时 LIO 算法而言计算上非常便宜）。</p>
+
+      <p>另外，为了让「每格只留固定数量」真的成立，插入时还有一道过滤：<b>如果邻域里已经有点比这个新点更靠近体素中心，那这个新点就不插了。</b>原文举的经验值是体素边长取 <b>0.5 m</b> 在大多数数据集上表现良好。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Faster-LIO/acad0f93b1965da398544f565fdee51b3c6dd5a626a6a4d4d1ed65710e9d96a7.jpg" alt="Points in the same voxel mapped to the same 1-D hash index">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>3D points in the global map within the same voxel are mapped to the same 1-dimension hash index. There are two optional data structures within a voxel: the linear iVox and iVox-PHC.<br>
+          （中译：全局地图中落在<b>同一个体素</b>内的三维点被映射到<b>同一个一维哈希索引</b>。体素内部有两种可选的数据结构：linear iVox 与 iVox-PHC。）<br>
+          <b>怎么看这张图：</b>① 先看「一堆三维点 → 一个一维编号」这条映射关系，这就是哈希函数在做的事——<b>把三维空间坐标压缩成哈希表里的一个下标</b>；② 再看底下那两种内部结构：<b>linear iVox</b> 就是简单地排成一个序列，<b>iVox-PHC</b> 则用伪希尔伯特曲线（Pseudo Hilbert Curve）把格内的点排成有序一维序列；③ 这两种结构决定了「在格子内部找最近邻」的代价——前者是 $O(n)$（$n$ 是格内点数），后者是 $O(\log n)$。<br>
+          <b>要记住的一句话：</b>哈希负责「把人送到对的房间」，房间里面怎么摆东西，才由 iVox / iVox-PHC 决定——这是两个层次的问题。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Faster-LIO/3ff27d4c77019666d8c729fa7cf2ec8b48fb8a6f0698727b2c198de2f1a38760.jpg" alt="Find the nearby 6, 18 or 26 voxels">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Find the nearby (6, 18, or 26) voxels of a given query point p (the center of 3×3×3 cubes).<br>
+          （中译：为给定查询点 p 寻找邻近的 6、18 或 26 个体素（p 位于 $3\times3\times3$ 个立方体的中心）。）<br>
+          <b>怎么看这张图：</b>① 中心那一格就是查询点所在的体素；② 把它周围总共 $3\times 3\times 3 = 27$ 个格子按「接触方式」分成三档：<b>面接触</b>的 6 个、<b>加上棱接触</b>共 18 个、<b>再加上角接触</b>共 26 个；③ 这三个数字就是你「找多认真」的旋钮——只找 6 格快但可能漏，找 26 格稳但更慢。<b>原文的实现允许在这三档里选。</b><br>
+          <b>要记住的一句话：</b>k-NN 在体素世界里变成了一个非常朴素的几何问题——<b>先看自己这一格，再看周围那一圈，就这么多。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 同一个招式，三个战场：iVox vs Voxel Hashing vs Instant NGP</h2>
+
+      <p>「用哈希表把三维坐标变成一个可以直接寻址的索引」——这个招式你在这门课里其实已经见过两次了，只是每次的战场不同。原文自己也点出了它的思想来源：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「For general spatial data storage, <b>voxel hashing is also a common approach to replacing hierarchical tree-like structures</b>. [35] employs hashed voxels for map management in visual SLAM systems and [36] uses voxel hashing for volumetric 3D reconstruction. Furthermore, this letter shows that the hashed voxels can be used for <b>nearest neighbor searching and incremental mapping</b> for LIO systems.」<br>
+          （中译：对于通用的空间数据存储而言，<b>体素哈希也是替代层次化树状结构的常见手段</b>。[35] 把哈希体素用于视觉 SLAM 系统的地图管理，[36] 把体素哈希用于体积式三维重建。而本 letter 进一步说明，哈希体素还可以用于 LIO 系统的<b>最近邻搜索与增量建图</b>。）</p>
+
+      <p>把三次出场并排放在一起：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">出场</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">战场</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">哈希体素用来干什么</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">每个格子里装什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">第二季 <b>0034</b><br>Voxel Hashing</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">稠密表面重建</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">把空间切成体素块，哈希到显存里，解决「重建的空间无限大、显存有限」的矛盾</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">TSDF 截断符号距离场</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">第三季 <b>0038</b><br>Instant NGP</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">神经辐射场（NeRF）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">用<b>多分辨率</b>哈希编码把连续坐标映射成特征向量，喂给一个小网络</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">可学习的特征向量</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>本节 iVox</b><br>Faster-LIO</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">激光惯性里程计</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">把很稀疏的激光点按体素哈希组织起来，支持增量插入与<b>近似 k-NN 查询</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">原始激光点（每格限量）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><b>一句话总结这个招式：</b>用哈希函数把「三维坐标」直接变成「一个内存地址」，从而绕开所有树形结构必然带来的「一层层找」。</p>
+
+      <p>但请注意一个关键的不同：<b>前两次战场上，格子里的东西是「稠密的、连续的场」（TSDF 值、特征向量），而激光点云是极端稀疏的</b>——一帧点云撒在空间里，绝大多数格子里什么都没有。原文特意强调了这一点：「Since the lidar point cloud is sparse, we are not using any volumetric representations like TSDF but a <b>sparse hash map that only stores those voxels having at least one point</b>.」——正因为激光点云稀疏，我们不用 TSDF 那类体积表示，而是一个<b>只存「至少有一个点」的体素的稀疏哈希表</b>。</p>
+
+      <p>所以三者的共同点是「哈希 + 体素」这个招式，区别在于<b>格子里装什么</b>、以及<b>格子有多满</b>。<b>同一个招式，三个战场，三种内容物。</b></p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 优势：定位不再随地图变大，而且天生能并行</h2>
+
+      <h3>5.1 复杂度到底省在哪：一个很容易被说错的点</h3>
+
+      <p>很多介绍会说「iVox 把 kNN 从 $O(\log n)$ 降到了 $O(1)$」。这个说法<b>方向是对的，但必须精确</b>，否则容易误解。原文对复杂度的讨论讲得非常清楚，而且专门写了一句话来解释它和树方法的区别：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「Please note that the complexity discussed here is defined by <b>the number of points within each voxel, not the whole point cloud</b>. Usually, tree-like methods tend to discuss the search complexity of the whole cloud since the tree is built on it. However, for voxel-based methods, <b>the number of all the points does not directly affect the search efficiency since the voxel index can be calculated in constant complexity</b>.」<br>
+          （中译：请注意，这里讨论的复杂度是由<b>每个体素内部的点数</b>定义的，<b>而不是整片点云</b>。树状方法通常讨论整片点云上的搜索复杂度，因为树是建在整片点云上的。然而对基于体素的方法而言，<b>总点数并不直接影响搜索效率，因为体素索引可以在常数复杂度内算出来</b>。）</p>
+
+      <p>这段话是本节的<b>理论核心</b>。把它拆成三层：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>第一层：定位是 $O(1)$</b>
+          <p>「我在第几格」是一次除法加取整，跟地图里有十万个点还是一亿个点<b>完全无关</b>。这就是哈希相对树最本质的胜利。</p>
+        </div>
+        <div class="mini-card">
+          <b>第二层：格内搜索的 $n$ 变小了</b>
+          <p>原文给的格内复杂度是：<b>linear iVox 为 $O(n)$</b>，<b>iVox-PHC 为 $O(\log n)$</b>——但这里的 $n$ 是<b>格子内部的点数</b>，不是全图点数！而格子内部因为做了下采样，$n$ 本来就很小。</p>
+        </div>
+        <div class="mini-card">
+          <b>第三层：地图变大不再拖慢查询</b>
+          <p>树的查询随「全图点数」按 $\log n$ 缓慢增长；体素的查询只取决于「身边那一圈的格子有多满」。<b>地图长得再大，也和你这一次查询没关系。</b>这就是它在大规模长序列上优势更明显的原因。</p>
+        </div>
+      </div>
+
+      <p>原文还顺便解释了一个 iVox 的设计约束：既然每格只留有限个点，「格内点数」就不会失控，所以 linear 和 PHC 两种内部结构在实际中差别不大——「we will prevent inserting too many points into the same voxel at the incremental mapping step in LIO, so it would not make much difference」。</p>
+
+      <h3>5.2 并行：为什么这在今天是一个硬指标</h3>
+
+      <p>第二个优势是<b>天然可并行</b>。前面说过，树的查询是一条串行的指针路径——不走到上一层就不知道下一层去哪，所以很难把一次查询拆给多个核心。而体素的查询没有这种依赖：<b>每一个格子的搜索都是独立的</b>，26 个邻格可以同时开 26 个线程去搜。</p>
+
+      <p>原文的实现细节值得抄下来：Faster-LIO 是在 FAST-LIO2 的代码基础上改的，其中一项改动就是「<b>we use libtbb and C++ 17 for parallelization instead of the omp in FastLIO2</b>」（我们用 libtbb 和 C++17 做并行，替代 FastLIO2 里的 OpenMP）。它把整条点云处理管线并行化，包括近邻搜索与 Hessian 的累积。</p>
+
+      <p>原文甚至直接提醒读者：由于实现里有大量 CPU 并行计算，<b>核心数、线程数和睿频会主导算法的整体性能</b>——「the number of cores, threads, and boost frequency will dominate the algorithm's overall performance」。它的实验跑在三台机器上：AMD R7-5800X（8 核 3.8 GHz）、Intel Xeon Gold 5128（16 核 2.3 GHz）、以及一台笔记本电脑的 Intel i7-10750H（6 核，睿频 5 GHz）。</p>
+
+      <p><b>大白话：</b>过去我们说「这个算法快」，问的是「它需要几步」；现在这个问题不够了，还要问「这几步能不能同时干」。<b>在多核时代，「能并行」本身就是性能。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="220" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#9b2c2c">树：必须顺序走完</text>
+          <rect x="70" y="56" width="300" height="190" fill="#fbfcfd" stroke="#888" stroke-width="1.6"/>
+          <line x1="220" y1="56" x2="220" y2="246" stroke="#888" stroke-width="1.5"/>
+          <line x1="70" y1="150" x2="220" y2="150" stroke="#888" stroke-width="1.4"/>
+          <line x1="220" y1="110" x2="370" y2="110" stroke="#888" stroke-width="1.4"/>
+          <polyline points="220,60 220,110 285,110 285,180 130,180" fill="none" stroke="#1f6fb0" stroke-width="3"/>
+          <circle cx="130" cy="180" r="5.5" fill="#1f6fb0"/>
+          <circle cx="220" cy="60" r="5" fill="#c0392b"/>
+          <text x="220" y="292" text-anchor="middle" font-size="12" fill="#555">一次查询就是一条串行的路</text>
+          <text x="220" y="316" text-anchor="middle" font-size="12" fill="#b00000">走完上一步才能走下一步</text>
+
+          <text x="690" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#1d6f3c">体素：天生可以并行</text>
+          <circle cx="620" cy="150" r="6" fill="#c0392b"/>
+          <line x1="628" y1="146" x2="778" y2="100" stroke="#1d9b4e" stroke-width="2.4"/>
+          <line x1="628" y1="150" x2="798" y2="168" stroke="#1d9b4e" stroke-width="2.4"/>
+          <line x1="628" y1="154" x2="778" y2="232" stroke="#1d9b4e" stroke-width="2.4"/>
+          <line x1="626" y1="158" x2="728" y2="260" stroke="#1d9b4e" stroke-width="2.4"/>
+          <rect x="780" y="80" width="56" height="38" fill="#eef7f1" stroke="#444" stroke-width="1.3"/>
+          <rect x="800" y="150" width="56" height="38" fill="#eef7f1" stroke="#444" stroke-width="1.3"/>
+          <rect x="780" y="214" width="56" height="38" fill="#eef7f1" stroke="#444" stroke-width="1.3"/>
+          <rect x="700" y="240" width="56" height="38" fill="#eef7f1" stroke="#444" stroke-width="1.3"/>
+          <text x="690" y="292" text-anchor="middle" font-size="12" fill="#555">四个核心各管一片，互不干扰</text>
+          <text x="690" y="316" text-anchor="middle" font-size="12" fill="#1d6f3c">没有谁要等谁，能同时开工</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个「找近邻」的任务画了两次。左边（树）用一根拐来拐去的蓝线表示查询路径——从红点出发，必须一格一格地走到蓝点，<b>中间每一步都依赖上一步的结果</b>；右边（体素）红点是查询点，四根绿箭头同时指向四个不同的格子，代表四个 CPU 核心各自去自己负责的那一片找，<b>谁也不用等谁</b>。<br>
+          <b>怎么看这张图：</b>① 左边那条线为什么是弯的？因为它对应的是树上的判断序列——先往左还是往右、再往左还是往右，<b>每一步都要等上一步的答案</b>；② 右边那四根箭头为什么可以同时画出来？因为没有依赖关系，各格的搜索彼此独立；③ 最后想一件事：如果 CPU 从 1 核变成 16 核，左边的算法几乎一点便宜都占不到，右边的算法却可以接近线性加速——<b>这就是「能并行」在今天为什么是硬指标</b>。<br>
+          <b>要记住的一句话：</b>多核时代，<b>能并行本身就是性能</b>。（本图为示意，用于对比两种结构的依赖关系，不代表原文的某张插图。）
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>按原文对复杂度的讨论，iVox 与树结构在查询代价上<b>最本质</b>的差别是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文特别强调：这里讨论的复杂度由「每个体素内部的点数」定义，而不是整片点云；体素索引可以在常数复杂度内算出来，所以总点数不直接影响查询效率。这正是它在地图变大时不掉速的原因。" onclick="lessonKit.answer(this,'q0085a')">复杂度只看格内点数</button>
+          <button data-correct="no" data-explanation="错。事实正好相反：树是建在整片点云上的，所以查询复杂度随全图点数按 log n 增长——这正是被 iVox 改进掉的那一点。" onclick="lessonKit.answer(this,'q0085a')">复杂度只看全图点数</button>
+        </div>
+        <div class="quiz-feedback" id="q0085a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 把「上千 Hz」这个口径说清楚</h2>
+
+      <p>这一节要格外小心，因为「上千 Hz」是这类论文最容易被转述夸大的地方。我们只按原文写。</p>
+
+      <p>原文里「Hz」出现在<b>三处</b>，措辞略有差别，我们逐条照抄：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">出处</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">原文原话</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">中译</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">摘要</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">「the speed of iVox reaches <b>1000–2000 Hz per scan</b> in solid-state lidars and <b>over 200 Hz</b> for 32 lines spinning lidars」</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">iVox 的速度在固态激光上达到<b>每帧 1000–2000 Hz</b>，对 32 线旋转式激光<b>超过 200 Hz</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">贡献列表</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">「reaches the speed of <b>over 1500 Hz</b> for solid-state lidar and <b>over 200 Hz</b> for spinning lidar data」</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">对固态激光数据达到<b>超过 1500 Hz</b>，对旋转式激光数据<b>超过 200 Hz</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">结论</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">「achieves <b>over 1000 Hz</b> for solid-state lidars and <b>over 200 Hz</b> for spinning lidars」</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .6rem">固态激光<b>超过 1000 Hz</b>，旋转式激光<b>超过 200 Hz</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>三处数字不完全一致（1000–2000 / 1500 / 1000 ），这说明它们是不同口径或不同实验条件下的表述。<b>这件事本身要照实说，不要挑一个最大的来用。</b></p>
+
+      <p style="font-size:.9rem;color:#7a6a60">（OCR 说明：原文 PDF 抽取出的摘要文本把此处写成了「the speed ofiVox」，是「of」与「iVox」之间丢了空格，我们按原意补回空格，未改动任何数字。）</p>
+
+      <h3>6.1 它到底是什么，不是什么</h3>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>它是：整套流程的「处理帧率」</b>
+          <p>也就是<b>每秒能把多少帧激光扫描走完整条 LIO 流程</b>（含近邻搜索、残差计算、iEKF 更新）。原文在多处把 Hz 和 FPS 换着用——比如实验部分的标题就是「The efficiency of LIO is evaluated by computing the average processing time of each step and the average <b>frames per second (FPS)</b>」。所以这是一个<b>吞吐率</b>指标。</p>
+        </div>
+        <div class="mini-card">
+          <b>它不是：位姿输出频率，也不是雷达点频</b>
+          <p>它<b>不是</b>「里程计以 1000 Hz 输出位姿」——真正的位姿输出率受 IMU 频率与扫描结构约束，这一点要看下一节 Point-LIO 才能讲（它才把带宽明确推到 4–8 kHz）。它<b>也不是</b>「激光雷达每秒吐 1000 个点」——固态雷达的点云密度是另一回事。把这两件事混进来，就是夸大。</p>
+        </div>
+      </div>
+
+      <p>为什么这个「吞吐率」能那么高？因为它<b>测的是数据处理能力的天花板，而不是真实数据流的速率</b>。传感器实际给多少帧，系统就处理多少帧；iVox 只是说明「这个数据结构自己不吃力」，能把余量留给系统里别的模块——正好呼应第 2 节那句「所有活跃模块都要瓜分算力」。</p>
+
+      <h3>6.2 与 FAST-LIO2 的真实对比</h3>
+
+      <p>原文给的对比结论很干脆：</p>
+
+      <ul>
+        <li><b>FPS 快 1.5 到 2 倍</b>：「Faster-LIO typically achieves <b>1.5 to 2 times FPS</b> compared with the original FastLIO2, both in solid-state lidar and spinning lidar datasets.」</li>
+        <li><b>在旋转式数据上收益更大</b>：「In the spinning lidar datasets (NCLT and UTBM), iVox can save almost <b>40% to 75%</b> processing time in IEKF, and the overall FPS can be increased by <b>200% to 320%</b>.」——在 NCLT 与 UTBM 这类旋转式数据上，iVox 能在 IEKF 环节省下约 40% 到 75% 的时间，整体 FPS 提升 200% 到 320%。</li>
+        <li><b>在固态数据上收益没那么明显</b>：原文也承认，「in the AVIA dataset, the number of scanned points in solid-state lidar is not so stable as the spinning lidar, the computation time of the iVox is generally shorter than ik-d tree, but not that obvious in sequences like AVIA1 or AVIA2」——固态激光的每帧点数不如旋转式稳定，iVox 通常比 ikd-Tree 快，但在 AVIA1、AVIA2 这类序列上优势不那么明显。</li>
+        <li><b>精度保持在同一水平</b>：漂移量级可比（原文口径是「keeping the same level of accuracy」）。</li>
+      </ul>
+
+      <p>请注意最后两条的诚实度：<b>原文并没有说「在所有场景都快 1.5–2 倍」</b>，它明确指出了收益在不同数据上是不均匀的。这种自我限定恰恰是读论文时最该盯住的地方。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Faster-LIO/949a11d7ea8df228549bf831b5e5363b232231f450f9b2fd106f293160638a7c.jpg" alt="Reconstructed point cloud and FPS comparison with FastLIO2">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The reconstructed point cloud of Faster-LIO from NCLT dataset and the FPS compared with FastLIO2 [18], tested with AMD R7 5800X and Intel Xeon Gold 5218.<br>
+          （中译：Faster-LIO 在 NCLT 数据集上的重建点云，以及与 FastLIO2 [18] 的 FPS 对比，测试平台为 AMD R7 5800X 与 Intel Xeon Gold 5218。）<br>
+          <b>怎么看这张图：</b>① 上面那张是<b>重建出来的点云</b>，用来证明「快」没有以牺牲质量为代价——结构仍然清晰、没有糊成一团；② 下面的柱/曲线是 <b>FPS 对比</b>，同一个数据集上，Faster-LIO（含 PHC 版本）整体压在 FAST-LIO2 之上；③ 注意图注里那两台机器——<b>AMD 与 Intel 都测了</b>，这很重要，因为前面说过这个算法的性能对核心数与睿频非常敏感，只在一台机器上报数字是不够的。<br>
+          <b>要记住的一句话：</b>这张图要同时看两件事——<b>速度上去了，点云没变糊</b>；只快不准的系统在 SLAM 里没有意义。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文标题与摘要里那个「上千 Hz」，按原文最准确的理解应该是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文把它和 FPS 换着用，指的是整套 LIO 流程每秒能处理多少帧激光扫描，是一个吞吐率指标（处理能力的天花板），而不是真实数据流一定以这个频率到达。" onclick="lessonKit.answer(this,'q0085b')">每秒能处理上千帧扫描</button>
+          <button data-correct="no" data-explanation="错。这是最常见的夸大读法。位姿输出率受 IMU 频率与扫描结构约束；把带宽明确推到 4–8 kHz 的是下一节的 Point-LIO，不是本篇。" onclick="lessonKit.answer(this,'q0085b')">每秒输出上千个位姿</button>
+        </div>
+        <div class="quiz-feedback" id="q0085b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 局限：三条原文自己说的边界</h2>
+
+      <p>Faster-LIO 没有专门的 limitations 小节，但它把几条边界散在了正文里，而且说得很实在。我们把它归成三条。</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 近邻是「不严格」的</b>
+          <p>原文亲口承认：iVox 的 k-NN「is easy, effective, but <b>not strict</b> compared with tree-like algorithms, yet sufficient for LIO applications」——<b>比树状算法不严格，但对 LIO 应用足够</b>。所以它是一个「用一点精度换速度」的取舍。如果你真的需要精确最近邻，它就不合适。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 分辨率是个敏感的旋钮</b>
+          <p>体素边长 $s$ 同时决定三件事：格子太大会丢细节、太小则格子数量和哈希冲突都暴涨。原文说「The leaf size of the filter is the key parameter that tunes the <b>trade-off between accuracy and speed</b>」，并给出经验值 0.5 m。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 哈希冲突</b>
+          <p>不同的三维格子经过哈希后可能落到同一个槽位。原文没有把它当作重点问题（因为哈希桶结构能容纳），但它是这条路线固有的结构性问题——这一点在第一季 <b>0011</b> 讲过的哈希表类方法里也出现过。</p>
+        </div>
+      </div>
+
+      <p>原文对第 ② 条给了一张很有说明力的召回率实验，措辞也相当坦诚：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「The recall experiment shows that iVox is faster in low recall rate scenarios, where the parameters are adjusted as small voxel size or small nearby ranges. <b>However, if we want to know the exact neighbors, iVox may not be a good choice</b> since we need a large voxel size or nearby search range to achieve a higher recall rate.」<br>
+      （中译：召回率实验显示，iVox 在<b>低召回率</b>场景下更快——那对应着小体素边长或小邻域范围。然而，<b>如果我们想要精确的邻居，iVox 可能不是一个好选择</b>，因为要达到更高的召回率就需要更大的体素或更大的搜索范围。）</p>
+
+      <p>把这句话翻译成直白的话：<b>iVox 是一条「快 → 准」的曲线，你自己选一个点站上去；它没有免费的午餐，也不是在所有位置上都比树好。</b></p>
+
+      <p>还有一件必须交代的事：<b>Faster-LIO 没有处理「退化场景」。</b>上一节 FAST-LIO2 明确承认，在完全退化的环境（正对开阔海面、天空、纯地面、单一墙面、距墙不足 1 m）会失败。Faster-LIO 换掉的是<i>地图数据结构</i>，并没有换掉<i>观测模型</i>，所以这条边界原封不动地继承了下来。<b>换数据结构解决的是「算得快不快」，解决不了「算不算得出来」。</b>这一点非常值得记牢——它是本季后面几篇论文各自出招的分界线。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Faster-LIO/a957911d95cbcfb5e7ea65ca1e7710f9e8ffdbb859a6bdd61c574bfa479a00aa.jpg" alt="Processing time versus recall percent curve">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Processing time with relation to recall percent curve of the compared algorithms. <b>Bottom-lower is better.</b><br>
+          （中译：各对比算法在「处理时间 — 召回率百分比」上的关系曲线。<b>越靠下、越靠左越好。</b>）<br>
+          <b>怎么看这张图：</b>① 横轴是召回率（你找到了多少比例的真实最近邻），纵轴是处理时间；② 原文的实验设置是「用一个 1000 点的局部地图、以暴力搜索的结果作为真值」，然后<b>调节各算法的参数</b>来画出各自的权衡曲线；③ 结论是：<b>在低召回率那一端 iVox 更快；但如果把召回率往上推，iVox 的优势会缩小</b>——因为要更高召回就得把体素调大或把邻域范围开大。<br>
+          <b>要记住的一句话：</b>这张图是全文最诚实的一张——它没有画成「iVox 全面碾压」，而是画出了<b>一条你自己的取舍曲线</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 收束：本模块三篇的数据结构演进</h2>
+
+      <p>把 0083、0084、0085 三篇的「地图怎么管」放在一张表里，这一模块的脉络就一目了然：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.88rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">维度</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">静态 k-d 树（0083 FAST-LIO、0074 LOAM）</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">ikd-Tree（0084 FAST-LIO2）</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .5rem;text-align:left">iVox（本节 Faster-LIO）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem"><b>插入</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">整体重建 $O(n\log n)$</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">增量 $O(\log n)$（路径插入 + 树上下采样）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">linear $O(1)$ / PHC $O(\log n)$</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem"><b>删除</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">不支持，靠重建</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">懒惰删除 + box-wise + 重建时物理清除</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">LRU 缓存按时间淘汰</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem"><b>查询（kNN）</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">$O(\log n)$（$n$＝全图点数），树大时慢</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">$O(\log n)$（$n$＝全图点数），有包围盒剪枝</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">定位 $O(1)$；格内 $O(n)$ 或 $O(\log n)$（$n$＝<b>格内</b>点数）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem"><b>并行性</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">差</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">双线程并行重建（operation logger）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">天然并行（libtbb / C++17）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem"><b>内存布局</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">指针树节点</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">树节点（叶与内部节点都存点）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">哈希表 + 体素数组（连续）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem"><b>适合</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">离线 / 小地图</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">实时 LIO、地图随车移动</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .5rem">密集高频扫描、想榨干多核</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><b>一句话收束这个模块：</b>FAST-LIO 用一个新的卡尔曼增益公式把「求逆」变小，解决了「算得动」；FAST-LIO2 用直接法 + ikd-Tree 甩掉了提特征、并让地图能一边长一边查，解决了「管得住」；Faster-LIO 用体素哈希把查询的代价从「随全图点数增长」变成「只看身边那一圈」，解决了「查得快、还能并行」。<b>三篇的共同主线，是「不提特征 + 增量数据结构 + 更细的更新粒度」。</b></p>
+
+      <p>而它们共同的、没有被解决的边界，就是上一节点名的那件事：<b>环境本身不给几何约束时，谁都无能为力。</b>接下来这个模块剩下的几篇——Point-LIO（把更新粒度打到逐点、解决 IMU 饱和）、iG-LIO（把 GICP 的分布配准搬进来）、LOG-LIO（把法向与分布做成实时一等公民）——都是在这条主线的不同位置上继续加码。下一节我们先看 Point-LIO 怎么把「帧」这个概念本身拆掉。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Faster-LIO/5cb2a513725927511a37da952208ef7366e3db60df5d48950b9382e11e38779c.jpg" alt="Ground-truth and estimated trajectories in NCLT and UTBM">
+        <figcaption>
+          <b>原图注（Fig. 11）：</b>The ground-truth and estimated trajectories in NCLT and UTBM dataset. Dashed lines represent the reference ground-truth obtained from RTK and the colorful solid lines represent the estimated result. The color of the figure denotes the error of the estimated trajectory: red-large, blue-small.<br>
+          （中译：NCLT 与 UTBM 数据集上的真值与估计轨迹。虚线代表由 RTK 获得的参考真值，彩色实线代表估计结果。图中颜色表示估计轨迹的误差：红色表示误差大，蓝色表示误差小。）<br>
+          <b>怎么看这张图：</b>① 先找虚线（RTK 真值）与实线（估计轨迹）——两者是否贴合；② 再看<b>颜色</b>：如果整条实线大部分是蓝色，说明误差一直很小；如果某一段突然变红，说明那段出了问题；③ 这两个数据集都是<b>旋转式激光雷达</b>（NCLT 用 HDL-32E、UTBM 用两台北纬 HDL-32E），正是前面第 6 节里「iVox 收益更大」的那一类数据。<br>
+          <b>要记住的一句话：</b>这张图和 Fig. 1 是一对——Fig. 1 回答「快了多少」，这张图回答「快了之后准不准」。<b>两条一起看，才是「1.5–2 倍提速而精度不降」的完整证据。</b>
+        </figcaption>
+      </figure>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>Faster-LIO 是针对 FAST-LIO2 的哪个环节动刀的？原文说树结构有哪两个固有弱点？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>动刀的环节：地图（空间索引）的数据结构</b>——把 ikd-Tree 换成 iVox 增量稀疏体素哈希。原文的说法是「we show that iVox is even faster than the ik-d tree in FastLIO2 while accomplishing the same level of accuracy」。</p>
+              <p><b>树的两个弱点：</b></p>
+              <p>① <b>查询要顺指针一层层走</b>：查询复杂度随全图点数按 $\log n$ 增长，树越大越慢。原文的表述是它不使用「complicated tree-based structures to divide the spatial point cloud」。</p>
+              <p>② <b>难并行</b>：路径是串行依赖的——不走到这一层就不知道下一层往哪走，无法把一次查询拆给多个核心。因此原文用「parallel k-NN search」作为核心卖点之一，并把 FAST-LIO2 里的 OpenMP 换成了 libtbb + C++17。</p>
+            </div></details>
+          </li>
+          <li>请用「切块、哈希、每格限量」三句话解释 iVox，并写出它的哈希函数。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>三句话：</b>① <b>切块</b>——把世界按固定边长 $s$ 切成小立方格（体素）；② <b>哈希</b>——体素坐标不直接当下标，而是通过哈希函数映射到哈希表的槽位，只为「真的有点的格子」分配空间；③ <b>每格限量</b>——每个体素内只保留有限数量的点（插入时做了下采样），使格内搜索的规模可控。</p>
+              <p><b>哈希函数：</b>$id_v = \text{hash}(\mathbf{v}) = (v_x n_x)\ \mathrm{xor}\ (v_y n_y)\ \mathrm{xor}\ (v_z n_z)\ \bmod N$，其中 $\mathbf{v} = \frac{1}{s}[p_x,p_y,p_z]^{\top}$ 是体素坐标，$n_x,n_y,n_z$ 是大素数，$N$ 是哈希表容量。</p>
+              <p><b>查询三步：</b>① 算出查询点所在体素并找出邻近体素（6 / 18 / 26 邻格）；② 在每个候选体素里最多取 K 个近邻；③ 合并各体素结果，挑出最好的 K 个。</p>
+            </div></details>
+          </li>
+          <li>把 iVox 与第二季 0034 的 Voxel Hashing、第三季 0038 的 Instant NGP 放在一起，它们的共同招式是什么？iVox 与它们最关键的不同又是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>共同招式：</b>都是用哈希函数把「三维坐标」直接映射成一个内存地址 / 特征索引，从而绕开树状结构「一层层找」的过程。原文自己也点出了这个传承：「voxel hashing is also a common approach to replacing hierarchical tree-like structures」，并引用了在视觉 SLAM 与体积式重建中的先例。</p>
+              <p><b>关键不同：格子里装什么、格子有多满。</b></p>
+              <p>第二季 <b>0034</b> 的格子装的是 <b>TSDF 值</b>（稠密的截断符号距离场，用于表面重建）；第三季 <b>0038</b> 的格子装的是<b>可学习的特征向量</b>（用于神经辐射场）；本节 iVox 的格子装的是<b>原始激光点</b>。</p>
+              <p>更要紧的是稀疏性：原文特意说明「Since the lidar point cloud is sparse, we are not using any volumetric representations like TSDF but a sparse hash map that only stores those voxels having at least one point」——激光点云极端稀疏，绝大多数格子里什么都没有，所以必须用<b>稀疏</b>哈希表，而不能用稠密的体积表示。这是激光这个战场与另外两个战场最大的区别。</p>
+            </div></details>
+          </li>
+          <li>论文里的「1000–2000 Hz」到底是什么口径？为什么不能说「Faster-LIO 以 1000 Hz 输出位姿」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>口径：</b>它是<b>整套 LIO 流程的处理帧率（吞吐率）</b>，也就是「每秒能处理多少帧激光扫描」。原文在实验部分把 Hz 与 FPS 换着用，明确写的是「the average frames per second (FPS)」。</p>
+              <p>而且原文三处表述并不完全一致：摘要写「1000–2000 Hz per scan」（固态）与「over 200 Hz」（32 线旋转式）；贡献列表写「over 1500 Hz」（固态）；结论写「over 1000 Hz」（固态）。<b>这几个数字有出入，应当照实全部列出，而不是挑最大的一个用。</b></p>
+              <p><b>为什么不能说「以 1000 Hz 输出位姿」：</b>位姿输出率受 IMU 频率与扫描结构约束，和「数据处理能力的天花板」是两件事。把带宽明确推到 4–8 kHz 的是下一节的 Point-LIO，而 Faster-LIO 这篇并没有做这件事。同样也不能说成「激光雷达每秒吐 1000 个点」，那是把处理帧率错当成了传感器点频。</p>
+            </div></details>
+          </li>
+          <li>iVox 路线有哪些已知的取舍与局限？其中哪一条是它「继承了 FAST-LIO2 而没有解决」的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>① 近邻不严格：</b>原文亲口承认 iVox 的 k-NN「not strict compared with tree-like algorithms, yet sufficient for LIO applications」——是主动用精度换速度。</p>
+              <p><b>② 分辨率敏感：</b>体素边长 $s$ 同时影响精度与速度（原文称 leaf size 是「the key parameter that tunes the trade-off between accuracy and speed」，经验值 0.5 m）；要更高的召回率就得把体素调大或把邻域范围开大。</p>
+              <p><b>③ 哈希冲突：</b>不同体素可能映射到同一槽位，这是哈希类方法的固有结构性问题。</p>
+              <p><b>继承而未解决的那一条：退化场景。</b>FAST-LIO2 在原文中明确承认，在完全退化的环境（正对开阔海面、天空、纯地面、单一墙面、距墙不足 1 m）会失败。Faster-LIO 换掉的是<i>地图数据结构</i>，并没有改<i>观测模型</i>，所以这条边界原样继承。<b>换句话说：换数据结构能解决「算得快不快」，解决不了「算不算得出来」。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0084-FAST-LIO2-2022-ikd-Tree与不再提特征.html">← FAST-LIO2（2022）：ikd-Tree 与「不再提特征」</a>
+        <a class="next" href="0086-Point-LIO2023-逐点处理与高带宽.html">Point-LIO（2023）：逐点处理与高带宽 →</a>
+      </div>
+      <p class="foot-note">树也好、哈希也好，都是为了让「不提特征」跑得动、跑得更快。下一节，Point-LIO 把「帧」这个概念本身拆掉 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

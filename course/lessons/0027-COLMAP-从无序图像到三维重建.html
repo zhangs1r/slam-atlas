@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>COLMAP（2016）：从无序图像到三维重建 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0027</div>
+      <h1>COLMAP（2016）：从无序图像到三维重建</h1>
+      <p class="subtitle">一堆乱序照片，怎么长出整个三维模型？这一节先立一件事：它是一篇方法论文，不是综述 🏛️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：增量式 SfM 的五大新组件（COLMAP）</span>
+        <span>👥 作者：Johannes L. Schönberger、Jan-Michael Frahm</span>
+        <span>📅 2016 · CVPR · <i>Structure-from-Motion Revisited</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 这一节先立身份：方法论文，非综述</a>
+        <a href="#b">2. 它要解决什么：鸡生蛋</a>
+        <a href="#c">3. ★ 完整流水线（配 Fig. 2）</a>
+        <a href="#d">4. ★ 五条贡献（第 4 节）</a>
+        <a href="#e">5. 实验数字与安全提醒</a>
+        <a href="#f">6. ★ 它与 SLAM 的关系</a>
+        <a href="#g">7. 明确局限、OCR 提醒与收尾</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：先说出「为什么它是一篇方法论文而非综述」的三条依据；讲清增量式 SfM 的「鸡生蛋」死结；背出五条贡献各自解决了什么；并诚实指出「原文全文没有 SLAM 一词」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0024/0025</b>：COLMAP 的初始化与三角化，用的正是 VO 那套对极几何与 PnP。接 <b>0019</b>：原文明确写「先解 reduced camera system、再回代点」——这正是 0019 的 Schur 消元用在真实系统里。接 <b>0010</b>：第一季讲深度学习视觉定位时提到 PoseNet 依赖 SfM 点云，那个 SfM 就是这一路。</p></div>
+      </div>
+
+      <h2>1. 这一节先立身份：方法论文，不是综述</h2>
+      <p>读 COLMAP 最容易踩的坑，是把它当「SfM 综述」去记文献。本节开头必须先纠正：<b>它是方法论文，不是综述。</b>三条依据原文摆得很硬：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 摘要开门见山</h4><p>摘要第一句就是「<i>We propose a new SfM technique…</i>」——提出新方法是它的主旨，不是盘点别人。</p></div>
+        <div class="mini-card"><h4>② 第 4 节叫 Contributions</h4><p>第 4 节标题直接叫 <b>Contributions</b>，逐条列五个新组件，这是方法论文的标配。</p></div>
+        <div class="mini-card"><h4>③ 第 5 节是 Experiments</h4><p>第 5 节与 Bundler / VisualSFM / DISCO / Theia 做对比表，是方法验证，不是文献归类。</p></div>
+      </div>
+      <p>顺带说清：第 2 节「Review of Structure-from-Motion」<b>只是流水线背景铺垫</b>，不是文献综述。所以这一课我们按「方法论文」讲，比当综述罗列文献更实在。</p>
+      <div class="callout">
+        <h4>生活类比：SfM 是什么</h4>
+        <p><b>SfM（Structure-from-Motion，从运动中恢复结构）</b>就是：给你一堆从不同角度拍的同一物体的照片，反推出「每台相机站在哪、每个点三维坐标是什么」。名字里的「运动」指的不是物体在动，而是<b>相机在动</b>——靠相机视角的变化，把三维结构「长」出来。COLMAP 是这套流程最知名的开源实现。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它要解决什么：「鸡生蛋」死结</h2>
+      <p>原文说，增量式 SfM 虽是主流，但「<i>robustness, accuracy, completeness, and scalability remain the key problems</i>」——鲁棒性、精度、完整性、可扩展性仍是关键问题，还称不上通用系统。失败根因被明确归为两条：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>① 场景图不完整</h4><p>匹配本身是近似的，导致场景图（后文讲）有缺口，后续重建接不上。</p></div>
+        <div class="mini-card"><h4>② 注册与三角化的共生</h4><p>原文金句：「<i>images can only be registered to existing scene structure and scene structure can only be triangulated from registered images</i>」——图像只能注册到<b>已有的</b>场景结构上，而场景结构只能从<b>已注册</b>的图像上三角化出来。</p></div>
+      </div>
+      <div class="callout">
+        <h4>★ 用生活类比讲「鸡生蛋」</h4>
+        <p>想象你要拼一幅没有说明书的拼图：你<b>得先有几块拼好的（已注册图像）</b>才能把新块（新图像）对准放上去；可那几块「拼好的」又<b>得从已放上去的块里总结出来</b>。先有鸡还是先有蛋？增量式 SfM 的破法是「先随便找两张图播种（initialization），再一张张加」——用一个小鸡崽启动，慢慢养大。这个共生关系，是理解整篇的钥匙。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 完整流水线（配 Fig. 2）</h2>
+      <p>原文把流程画成两大块，下面这张图是本节头号图。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2016_StructureFromMotion/3fc9f821e1ca40b0d0ae7d1b4945a7feba722142bed1e486b7689fcf211772be.jpg" alt="Fig. 2 增量式 SfM 流水线">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b><i>Incremental Structure-from-Motion pipeline. Green: Correspondence Search (Feature Extraction, Matching, Geometric Verification). Blue: Incremental Reconstruction (Initialization, Image Registration, Triangulation, Outlier Filtering, Bundle Adjustment) with backward edges. Red: final Reconstruction.</i>（增量式 SfM 流水线。）</p>
+          <p><b>怎么看这张图：</b>绿色是 <b>Correspondence Search</b>（特征提取 / 匹配 / 几何验证）；蓝色是 <b>Incremental Reconstruction</b>（初始化 / 图像注册 / 三角化 / 外点滤波 / 光束法平差，且有回边反复迭代）；最终吐出红色 Reconstruction。注意蓝色块之间的回边——注册完要 BA、BA 完可能再三角化，是个闭环，这正是后文贡献④要优化的。</p>
+        </figcaption>
+      </div>
+
+      <h3>3.1 上游：Correspondence Search（对应搜索）</h3>
+      <p><b>Feature Extraction（特征提取）</b>：原文说 SIFT 及其衍生 / 学习特征是「gold standard（金标准）」，二进制特征更快但鲁棒性下降。</p>
+      <p><b>Matching（匹配）</b>：朴素的全对全匹配 $O(N_I^2N_{F_i}^2)$ 不可行，需要可扩展的匹配策略（后文用词袋树做近似最近邻）。</p>
+      <p><b>Geometric Verification（几何验证）</b>：用 <b>H</b> 描述纯旋转 / 平面场景，用 <b>E/F</b> 描述运动相机（可扩到三视图三焦张量）；用 <b>RANSAC</b> 抗外点；输出 <b>scene graph（场景图）</b>——节点是图像、边是验证过的像对。</p>
+      <div class="callout">
+        <h4>生活类比：场景图</h4>
+        <p><b>场景图</b>就是「哪些照片拍的是同一处」的关系网：每个节点是一张照片，两条边相连表示「这两张已经几何验证过、确实是同一场景的不同视角」。后文贡献①就是专门把这个关系网修得更干净。</p>
+      </div>
+
+      <h3>3.2 下游：Incremental Reconstruction（增量重建）</h3>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① Initialization（初始化）</h4><p>精选两视图播种。原文警告「<i>the reconstruction may never recover from a bad initialization</i>」——初始化烂了后面救不回。密集位置更鲁棒准确、稀疏位置更快。</p></div>
+        <div class="mini-card"><h4>② Image Registration（图像注册）</h4><p><b>PnP</b> 解 2D-3D 对应求位姿；未标定相机还要顺带解内参。</p></div>
+        <div class="mini-card"><h4>③ Triangulation（三角化）</h4><p>至少第二张不同视角图像注册后，可新增三维点；冗余视角提升稳定性。</p></div>
+        <div class="mini-card"><h4>④ Bundle Adjustment（光束法平差）</h4><p>最小化重投影误差（式 1），LM 求解，<b>Schur 消元先解相机、再回代点</b>（见 4.④ 与 0019）。</p></div>
+      </div>
+      <div class="callout">
+        <h4>生活类比：三角化与 PnP</h4>
+        <p><b>三角化（triangulation）</b>：从同一个点的两条视线（来自两个相机）交叉，定出它的三维位置——像你闭一只眼、再睁另一只，两视线交点就是物体。对应 0024 的「方向向量交叉」。<b>PnP（Perspective-n-Point）</b>：反过来，已知若干三维点和它们在图上的投影，求「相机此刻站在哪、朝哪看」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 五条贡献（第 4 节，本节主体）</h2>
+
+      <h3>4.1 ① Scene Graph Augmentation（场景图增强）</h3>
+      <p>多模型几何验证：先估 F→H→E。用 $N_H/N_F<\epsilon_{HF}$ 判「运动相机」、用 $N_E/N_F>\epsilon_{EF}$ 判「标定正确」；由中位三角化角 $\alpha_m$ 区分纯旋转（panoramic，全景）与平面（planar）。并用相似变换检出 <b>WTF（水印 / 时间戳 / 画框）</b>像对，直接不入图。只从非全景、优先已标定对播种，且不从全景像对三角化。</p>
+
+      <h3>4.2 ② Next Best View Selection（下一最佳视图选择）</h3>
+      <p>判据是「图像里<b>已三角化点的数量 + 分布</b>」。把图像离散成 $K_l=2^l$ 的多分辨率金字塔网格，<b>空格第一次被点亮才计分</b>、权重 $w_l=K_l^2$，避免点聚成一堆；候选是至少看到 $N_t>0$ 个三角化点的未注册图。下面这张四格图把「点多 / 分布匀都该加分」画得很直观。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2016_StructureFromMotion/1a20e90c55e663f0462b56476a147849f59c5dcd228594a80ed817cd857a7186.jpg" alt="Fig. 3 L=3 时不同点数与分布下的得分">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b><i>Scores for different number of points (left and right) with different distributions (top and bottom) in the image for $L = 3$.</i>（L=3 时，不同点数与不同分布下的得分。）</p>
+          <p><b>怎么看这张图：</b>四格得分分别是 66 / 146 / 80 / 200。左上点数少 + 聚堆 → 分低；右上点数多仍聚堆 → 略高；左下点数少但分散 → 居中；右下<b>点多且分布匀</b> → 最高（200）。这正说明「点要多、且铺得开」才加分，呼应 $w_l=K_l^2$ 的网格计分。</p>
+        </figcaption>
+      </div>
+
+      <h3>4.3 ③ Robust and Efficient Triangulation（鲁棒高效三角化）</h3>
+      <p>把多视图三角化写成 <b>RANSAC</b>：随机采样唯一的最小二重组（2 视图）做 DLT，要求足够三角化角 $\alpha$：</p>
+      <div class="formula-box"><div class="flow-formula">$$\cos\alpha=\frac{t_a-X_{ab}}{\|t_a-X_{ab}\|_2}\cdot\frac{t_b-X_{ab}}{\|t_b-X_{ab}\|_2}$$</div></div>
+      <p>以及正深度（cheirality，式 4）；内点按重投影误差（式 5）<$t$ 判。对「一条 track 里混了多个点」，用<b>递归</b>方式剥离 consensus set（consensus 小于 3 就停）。对比 Bundler 的穷举两两组合，<b>快 10–40 倍且更完整</b>。下面右图把这件事画成曲线。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2016_StructureFromMotion/13cae71ae9c6d315c41d44ec657f934c935679d90fc3929764de281376eaae30.jpg" alt="Fig. 6 右：三角化一个 N 视图点平均所需采样次数">
+        <figcaption>
+          <p><b>原图注（Fig. 6，右）：</b><i>Right: Average number of samples required to triangulate N-view point.</i>（三角化一个 N 视图点平均所需采样次数。）</p>
+          <p><b>怎么看这张图：</b>这是 <b>Fig. 6 的右图</b>。曲线显示：穷举法（Bundler 式）随 track 变长采样次数爆炸式上涨；而本文的 RANSAC 递归方案几乎是平的。也就是说，视图越多，本文方法越显优势——这正是「快 10–40 倍」的来源。</p>
+        </figcaption>
+      </div>
+
+      <h3>4.4 ④ BA / Filtering / Re-Triangulation / Iterative Refinement</h3>
+      <p>局部 BA 用 <b>Cauchy 鲁棒核</b>，大问题用 <b>PCG</b>（Ceres 求解器）；Internet 照片只用<b>一个径向畸变参数</b>。滤波按重投影误差与最小三角化角剔观测、全局 BA 后剔退化相机。<b>RT（Re-Triangulation）分 pre-BA 与 post-BA 两步</b>——post-BA RT 继续之前三角化失败的 track 并尝试合并 track。关键闭环：<b>BA → RT → filtering 迭代到被滤观测与新增点不再下降</b>（Bundler / VisualSFM 只做一轮）。BA 的能量函数写做：</p>
+      <div class="formula-box"><div class="flow-formula">$$E=\sum_j\rho_j\big(\|\pi(P_c,X_k)-x_j\|_2^2\big)$$</div></div>
+      <p>LM 求解，并做 Schur 消元：<b>先解 reduced camera system、再回代点</b>——原文明确写「the number of cameras is usually smaller than the number of points」。这正是 <b>0019</b> 那节讲的 Schur 消元，被用在真实系统里。</p>
+
+      <h3>4.5 ⑤ Redundant View Mining（冗余视图挖掘）</h3>
+      <p>把不受最新扩展影响、且高度重叠的图像聚成组，<b>整组参数化成一台相机</b>：</p>
+      <div class="formula-box"><div class="flow-formula">$$P_{cr}=P_cG_r$$</div></div>
+      <p>用可见性向量交并比贪婪成组：</p>
+      <div class="formula-box"><div class="flow-formula">$$V_{ab}=\frac{\|v_a\wedge v_b\|}{\|v_a\vee v_b\|}$$</div></div>
+      <p>省掉了 Ni 等人的 separator 交替优化。下面这张把「completeness 提升」从数字变成眼睛能看见的差别。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2016_StructureFromMotion/cd0cdba3e54764ec8d6d1057763889975df49177c8f0d95b63fa49cc3cebe33e.jpg" alt="Fig. 9 Gendarmenmarkt 重建：左 Bundler、右本文方法">
+        <figcaption>
+          <p><b>原图注（Fig. 9）：</b><i>Reconstruction of Gendarmenmarkt for Bundler (left) and our method (right).</i>（Gendarmenmarkt 重建，左 Bundler、右本文方法。）</p>
+          <p><b>怎么看这张图：</b>左图（Bundler）稀疏、破碎，楼体没连起来；右图（本文）楼体完整、点云连成一片。这就是贡献⑤（以及整套迭代精化）带来的「completeness 提升」——不是精度数字变了，而是「能注册、能连上」的更多了。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 实验数字与安全提醒</h2>
+      <p>原文在 <b>17 个数据集、共 144,953 张无序 Internet 照片</b>上测；用 RootSIFT，每张图对 <b>100</b> 个最近邻匹配（词袋树），2.7 GHz / 256 GB 机器，<b>计时不含 correspondence search</b>。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>Rome</h4><p>74,394 张图；注册数 Bundler 13,455 / VisualSFM 14,797 / <b>Ours 20,918</b>。</p></div>
+        <div class="mini-card"><h4>Quad 位姿精度</h4><p>DISCO 1.16 m / Bundler 1.01 m / VisualSFM 0.89 m / <b>Ours 0.85 m</b>。</p></div>
+        <div class="mini-card"><h4>Dubrovnik</h4><p>47M 验证匹配组成 2.9M feature track；三角化参数 $\alpha=2^\circ$、$t=8$ px、$\epsilon_0=0.03$。</p></div>
+        <div class="mini-card"><h4>冗余视角挖掘提速</h4><p>V=0.6/0.3/0.1 时总时提速 <b>5%/14%/32%</b>，重投影误差 0.26→0.27/0.28/0.29 px。</p></div>
+        <div class="mini-card"><h4>Colosseum</h4><p>取 V=0.4 全局提速 <b>36%</b> 而重建等价。</p></div>
+        <div class="mini-card"><h4>整体</h4><p>全程比 Bundler <b>快 50 倍以上</b>。</p></div>
+      </div>
+      <p>下面这张是 Rome 的「能注册多少张」直观图——红点是相机、黑点是结构，注册成功的越多，completeness 越高。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2016_StructureFromMotion/e98f9db428248159ece60d474dbfd8f4d07e4ae3627757f989df89f2ffd5dee5.jpg" alt="Fig. 1 Rome 数据集 75K 张中注册成功 21K 张的结果">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b><i>Result of Rome with 21K registered out of 75K images.</i>（Rome 数据集，75K 张里注册成功 21K 张的结果。）</p>
+          <p><b>怎么看这张图：</b>红点是恢复出的相机位姿、黑点是三维结构。75K 张里只有 21K 注册成功——这说明即使最强方法，<b>completeness（能注册多少）本身就是个指标</b>，不是所有照片都能进重建。这正是增量式 SfM「鸡生蛋」留下的必然缺口。</p>
+        </figcaption>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>COLMAP 的 BA 做 Schur 消元时，为什么「先解相机、再回代点」更划算？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="答对。原文明确写「the number of cameras is usually smaller than the number of points」——相机数远少于点数，先消元掉点、只在较小的相机系统上求解，再回代点，计算量大幅下降。这正是 0019 讲的 Schur 消元。" onclick="lessonKit.answer(this,'q0027a')">因为相机数通常远少于三维点数，先在小相机系统上求解再回代更省</button>
+          <button data-correct="no" data-explanation="不对。点和相机都要解，Schur 消元不是「只解相机」；它先把点边缘掉、最后再回代更新点，目的是降维而非跳过。" onclick="lessonKit.answer(this,'q0027a')">因为三维点不用解，只解相机就行</button>
+          <button data-correct="no" data-explanation="不对。Schur 消元是为了降维加速、利用相机数少的结构，和「防止过拟合」无关。" onclick="lessonKit.answer(this,'q0027a')">因为这样能防止点云过拟合</button>
+        </div>
+        <div class="quiz-feedback" id="q0027a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ 它与 SLAM 的关系（必须诚实指出）</h2>
+      <p>这是本节最重要的结论之一，也最容易被误读：<b>原文完全没有讨论 SLAM。</b>全文未出现「SLAM」一词，也没有与任何视觉 SLAM 系统的对比。所以：</p>
+      <div class="callout">
+        <h4>★ 同一条几何，两种使用方式</h4>
+        <p>COLMAP 是<b>离线、与回环无关</b>的重建工具——它假设你手里有所有照片、可以反复迭代、不在乎因果顺序。而 VO / SLAM 关心的是「<b>在线、因果、闭环</b>」：边走边建、实时输出、靠回环纠偏（见 0014）。两者用的是同一套几何（对极、PnP、三角化、BA），但<b>使用方式相反</b>：一个离线的「事后重建」，一个在线的「边走边定位」。不要把 COLMAP 当成 SLAM 系统来记。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 明确局限、OCR 提醒与收尾</h2>
+      <h3>7.1 明确局限（原文自己写的）</h3>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 不宣称通用</h4><p>原文明说 robustness/accuracy/completeness/scalability「remain the key problems」，本文只是「a further step」，不宣称通用系统。</p></div>
+        <div class="mini-card"><h4>② 场景图缺口无法补救</h4><p>场景图若不完整（匹配近似所致），后续无法补救——鸡生蛋的硬伤。</p></div>
+        <div class="mini-card"><h4>③ 回避策略</h4><p>对全景像对、WTF 像对采取<b>回避</b>（不播种、不三角化），而非正面解决。</p></div>
+        <div class="mini-card"><h4>④ 主点固定 / 畸变从简</h4><p><b>主点固定于图像中心</b>（「principal point calibration is an ill-posed problem」），未标定相机只用「一个径向畸变参数」的简单模型。</p></div>
+        <div class="mini-card"><h4>⑤ 近似匹配设定</h4><p>依赖每图 100 最近邻这种近似匹配设定，不是穷举。</p></div>
+      </div>
+
+      <h3>7.2 OCR 提醒（课里如实说明）</h3>
+      <p>md 材料有被 OCR 误识的地方，读时留心：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>作者名</h4><p>md 里被识别成「Schonberger」，应为 <b>Schönberger</b>（带变音符号）。</p></div>
+        <div class="mini-card"><h4>符号 $\mathcal{T}$</h4><p>同时被用作「输入图像集」与「feature track」，属同形误识——同一字母两种意思，看上下文区分。</p></div>
+      </div>
+      <p>另外 md 本体在 <b>4.1 节末被截断</b>、Table 1 带 <code>[truncated]</code>，所以<b>不要引用被截断处的细节</b>——本节所有引用都避开那一段。</p>
+
+      <h3>7.3 衔接与收尾</h3>
+      <p>本节把「一堆无序照片 → 整个三维模型」讲透了：它的初始化与三角化用的是 0024/0025 那套对极几何与 PnP，它的 BA 用的是 0019 的 Schur 消元，它产出的点云正是 0010 里 PoseNet 做视觉定位所依赖的地图。下一节 <b>0028</b> 我们回到「在线」世界：MSCKF（2007）如何做到「不把路标放进状态向量」。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 COLMAP 与 SLAM 的关系，下面哪句符合原文？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。原文全文未出现「SLAM」一词，也没有与视觉 SLAM 系统的对比，不能把它当 SLAM 系统。" onclick="lessonKit.answer(this,'q0027b')">COLMAP 是一套完整的视觉 SLAM 系统，自带回环检测</button>
+          <button data-correct="yes" data-explanation="答对。原文完全没讨论 SLAM；COLMAP 是离线、与回环无关的重建工具，和 VO/SLAM 关心的「在线、因果、闭环」是两回事，只是共用同一套几何。" onclick="lessonKit.answer(this,'q0027b')">COLMAP 是离线重建工具，不处理在线/闭环，与 SLAM 是同一几何的两种使用方式</button>
+          <button data-correct="no" data-explanation="不对。COLMAP 正是增量式 SfM 的代表，恰恰处理「无序照片→三维模型」；说它不做 SfM 与原文矛盾。" onclick="lessonKit.answer(this,'q0027b')">COLMAP 不做 SfM，只做实时定位</button>
+        </div>
+        <div class="quiz-feedback" id="q0027b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：用三条依据说明 COLMAP 是方法论文而非综述</summary>
+          <div>
+            <p>① 摘要第一句即「We propose a new SfM technique…」；② 第 4 节标题直接叫 Contributions，逐条列五个新组件；③ 第 5 节是 Experiments，与 Bundler/VisualSFM/DISCO/Theia 对比。第 2 节只是背景铺垫，不是文献综述。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：用「鸡生蛋」解释增量式 SfM 的失败根因</summary>
+          <div>
+            <p>原文：图像只能注册到已有场景结构上，而场景结构只能从已注册图像上三角化出来——二者共生。破法是先选两视图播种（initialization），再逐张加入；但场景图不完整（匹配近似）会留下无法补救的缺口，初始化烂了后面救不回。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：五条贡献各解决什么（各一句话）</summary>
+          <div>
+            <p>① 场景图增强：多模型验证 + 检 WTF/全景，修干净关系网；② 下一最佳视图：按已三角化点的数量+分布选图，避免点聚堆；③ 鲁棒三角化：RANSAC + 递归剥离，比 Bundler 快 10–40 倍且更完整；④ BA/滤波/再三角化迭代：BA→RT→filtering 循环到不再下降（别人只一轮）；⑤ 冗余视图挖掘：重叠图聚成一组当一台相机，提速不损精度。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：Schur 消元在 COLMAP 的 BA 里怎么用（接 0019）</summary>
+          <div>
+            <p>BA 最小化重投影误差 $E=\sum_j\rho_j(\|\pi(P_c,X_k)-x_j\|_2^2)$，LM 求解；Schur 消元先解 reduced camera system、再回代点。原文点明「相机数通常远少于点数」，所以先在小相机系统求解、再更新点——正是 0019 那节讲的 Schur 消元用在真实系统。</p>
+          </div>
+        </details>
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：为什么 COLMAP 不是 SLAM，以及两条 OCR 提醒</summary>
+          <div>
+            <p>原文全文无「SLAM」一词、无 SLAM 对比；它是离线、与回环无关的重建工具，和 VO/SLAM 的「在线、因果、闭环」相反，只是共用同一套几何。OCR 提醒：作者名应为 Schönberger（md 误识成 Schonberger）；符号 $\mathcal{T}$ 同时表「输入图像集」与「feature track」属同形误识；md 在 4.1 末截断、Table 1 带 [truncated]，勿引截断处细节。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0026-SGM半全局匹配2008-双目深度怎么算.html">← 上一课：SGM（2008）：双目深度怎么算</a>
+        <a class="next" href="0028-MSCKF2007-不把路标放进状态向量.html">下一课：MSCKF（2007）：不把路标放进状态向量 →</a>
+      </div>
+      <p class="foot-note">COLMAP 把「一堆照片长成模型」做成了工业级现实。记住它「方法论文非综述」与「不处理 SLAM」这两条边界，下一节回在线世界 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

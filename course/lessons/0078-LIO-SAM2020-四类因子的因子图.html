@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LIO-SAM（2020）：四类因子装进一张图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0078</div>
+      <h1>LIO-SAM（2020）：四类因子装进一张图</h1>
+      <p class="subtitle">🧩 这一课是模块主干：把激光、IMU、GPS、回环四种测量，统一塞进同一张因子图一起解。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：激光惯性里程计（因子图集大成）</span>
+        <span>👥 作者：Shan, Englot, Meyers, Wang, Ratti, Rus（MIT）</span>
+        <span>📅 2020 · <i>LIO-SAM: Tightly-coupled Lidar Inertial Odometry via Smoothing and Mapping</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">本文在讲什么</a>
+        <a href="#b">四类因子</a>
+        <a href="#c">为何用因子图</a>
+        <a href="#d">关键帧与滑动窗</a>
+        <a href="#e">IMU 预积分四用</a>
+        <a href="#f">回环检测</a>
+        <a href="#g">实验数字</a>
+        <a href="#h">局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能说出四类因子各自残差从哪来、为什么用 iSAM2 因子图而不用滤波、滑动窗多大、IMU 预积分在本篇怎么落地、回环为何用欧氏阈值。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 接第二季 <b>0029/0030</b>（IMU 预积分因子即其直接应用，ΔR/Δv/Δp、偏置联合优化）；② 接第二季 <b>0020</b>（因子图＝节点-边，H 非零块＝2×边数+节点数）；③ 接第一季 <b>0014</b>（回环用 ICP+欧氏距离阈值，比 BoW 更保守，符合假阳性铁律）；④ 接第一季 <b>0006</b>（本篇是紧耦合范例，Related Work 直接对比 LOAM 的松耦合）。</p></div>
+      </div>
+
+      <h2>1. 本文在讲什么：把激光 SLAM 升级成全 SLAM</h2>
+      <p>LOAM 很好用，但它把数据存进一个全局体素地图，难做回环检测、难融 GPS 之类的绝对测量，而且特征丰富时在线优化会变慢、大规模会漂。本篇（IROS 2020，MIT 团队）的解法是：<b>用一张因子图（factor graph），把四类测量统一成「因子」一起优化</b>，再配一个局部滑动窗保实时。一句话定位：<b>本模块主干——会回环、能融 GPS 的全 SLAM</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_LIO-SAM__Tightly-coupled_Lidar_Inertial_Odometry_via_Smo/c84305d3f94b7c2a348850d772ff12cc97a09dfd6925a6adce501a89216f8bce.jpg" alt="The system structure of LIO-SAM">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The system structure of LIO-SAM. The system receives input from a 3D lidar, an IMU and optionally a GPS. Four types of factors are introduced... (a) IMU preintegration factor, (b) lidar odometry factor, (c) GPS factor, and (d) loop closure factor.（系统结构；输入来自 3D 激光、IMU、可选 GPS；四类因子：IMU 预积分、激光里程计、GPS、回环。）
+          <br><b>怎么看这张图：</b>这是全篇总图，也是本课的骨架。中间一排圆形是机器人状态节点 $x$，四种颜色的边分别接在节点上——蓝＝IMU 预积分、绿＝激光里程计、橙＝GPS、红＝回环。读者先把这张图记牢，后面每一节就是展开其中一种因子。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 四类因子：每种残差从哪来（用四种颜色标）</h2>
+      <p>因子图里，<b>变量节点</b>是机器人状态 $x=[R^T,p^T,v^T,b^T]^T$（姿态、位置、速度、偏置），<b>因子</b>就是各种测量给出的残差。四类因子如下：</p>
+
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.95rem;">
+        <tr style="background:#f4f6fb;">
+          <td style="padding:.6rem;border:1px solid #d7dce8;font-weight:700;">因子</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;font-weight:700;">残差来源</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;font-weight:700;">颜色</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;"><b>① IMU 预积分因子</b></td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">Forster 流形预积分，相对运动 $\Delta R_{ij}=R_i^T R_j$、$\Delta v_{ij}$、$\Delta p_{ij}$ 当残差</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;color:#2f5bb0;font-weight:700;">蓝</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;"><b>② 激光里程计因子</b></td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">新帧与局部体素图 scan-match，点-边/点-面距离最小化后得相对变换 $\Delta T_{i,i+1}=T_i^T T_{i+1}$</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;color:#2f7a4b;font-weight:700;">绿</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;"><b>③ GPS 因子</b></td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">GPS 转本地笛卡尔系；仅当估计协方差 &gt; GPS 协方差时才插入</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;color:#c9962f;font-weight:700;">橙</td>
+        </tr>
+        <tr>
+          <td style="padding:.6rem;border:1px solid #d7dce8;"><b>④ 回环因子</b></td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;">欧氏空间搜 15 m 内近邻老状态，scan-match 得相对变换当回环约束</td>
+          <td style="padding:.6rem;border:1px solid #d7dce8;color:#b4453b;font-weight:700;">红</td>
+        </tr>
+      </table>
+
+      <p>三类因子的残差写清楚一点：</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ \text{IMU:}\;\Delta R_{ij}=R_i^T R_j,\quad \Delta v_{ij}=R_i^T(v_j-v_i-g\Delta t_{ij}),\quad \Delta p_{ij}=R_i^T(p_j-p_i-v_i\Delta t_{ij}-\tfrac12 g\Delta t_{ij}^2) $$
+      </div></div>
+      <div class="formula-box"><div class="flow-formula">
+      $$ \text{激光边:}\; d_{e_k}=\frac{\|(p_k^e-p_u^e)\times(p_k^e-p_v^e)\|}{\|p_u^e-p_v^e\|},\quad \Delta T_{i,i+1}=T_i^T T_{i+1} $$
+      </div></div>
+      <p>原文明说：「applying IMU preintegration also naturally gives us one type of constraint for the factor graph — IMU preintegration factors... The IMU bias is jointly optimized alongside the lidar odometry factors.」也就是说<b>预积分残差直接当因子，偏置和激光因子一起被联合优化</b>。GPS 因子更谨慎：只有当激光惯性的漂移估计协方差大于 GPS 自身协方差才插入（因为激光惯性漂移增长很慢，乱插反而坏事）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 490" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="450" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <text x="450" y="48" text-anchor="middle" font-size="18" font-weight="700" fill="#243049">越野车绕环形土路一圈回到起点：四类因子的因子图</text>
+          <!-- 环形轨迹（俯视） -->
+          <ellipse cx="450" cy="250" rx="300" ry="160" fill="none" stroke="#b9c2d4" stroke-width="3"/>
+          <!-- 关键帧图标 -->
+          <g>
+            <circle cx="150" cy="250" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="235" cy="135" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="450" cy="92" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="665" cy="135" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="750" cy="250" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="665" cy="365" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="450" cy="408" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+            <circle cx="235" cy="365" r="9" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          </g>
+          <!-- 车（起点/终点，顶部带雷达+IMU） -->
+          <rect x="430" y="232" width="40" height="26" rx="5" fill="#eef2f8" stroke="#243049" stroke-width="2"/>
+          <rect x="442" y="220" width="16" height="10" rx="3" fill="#cdd6e8" stroke="#243049" stroke-width="1.5"/>
+          <text x="450" y="210" text-anchor="middle" font-size="12" fill="#243049">车顶雷达+IMU</text>
+          <!-- 四种颜色边 -->
+          <line x1="150" y1="250" x2="235" y2="135" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="235" y1="135" x2="450" y2="92" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="450" y1="92" x2="665" y2="135" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="665" y1="135" x2="750" y2="250" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="750" y1="250" x2="665" y2="365" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="665" y1="365" x2="450" y2="408" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="450" y1="408" x2="235" y2="365" stroke="#2f5bb0" stroke-width="3"/>
+          <line x1="235" y1="365" x2="150" y2="250" stroke="#2f5bb0" stroke-width="3"/>
+          <text x="300" y="180" text-anchor="middle" font-size="12" fill="#2f5bb0">蓝：IMU 预积分边</text>
+          <line x1="150" y1="250" x2="235" y2="365" stroke="#2f7a4b" stroke-width="2.5" stroke-dasharray="2 3"/>
+          <line x1="235" y1="135" x2="150" y2="250" stroke="#2f7a4b" stroke-width="2.5" stroke-dasharray="2 3"/>
+          <text x="150" y="320" text-anchor="middle" font-size="12" fill="#2f7a4b">绿：激光里程计边</text>
+          <!-- GPS 边（橙，连某帧到地面塔） -->
+          <line x1="750" y1="250" x2="800" y2="120" stroke="#c9962f" stroke-width="3"/>
+          <rect x="788" y="100" width="26" height="22" rx="3" fill="#fbe9c8" stroke="#c9962f" stroke-width="2"/>
+          <text x="803" y="92" text-anchor="middle" font-size="11" fill="#c9962f">GPS 塔</text>
+          <text x="800" y="150" text-anchor="middle" font-size="12" fill="#c9962f">橙：GPS 边</text>
+          <!-- 回环边（红双箭头，首尾） -->
+          <line x1="150" y1="250" x2="450" y2="408" stroke="#b4453b" stroke-width="4"/>
+          <polygon points="150,250 162,244 162,256" fill="#b4453b"/>
+          <polygon points="450,408 438,402 438,414" fill="#b4453b"/>
+          <text x="270" y="430" text-anchor="middle" font-size="13" font-weight="700" fill="#b4453b">红：回环边（首尾闭合）</text>
+          <text x="450" y="470" text-anchor="middle" font-size="13" fill="#555">回环边一接上，整圈轨迹就被拉直了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>俯视一台车顶装着 16 线激光雷达与 IMU 的越野车，在一条环形土路上绕了一圈回到起点；沿途关键帧是一串小圆点节点，四种颜色的边分别连上：蓝＝IMU 预积分边、绿＝激光里程计边、橙＝GPS 边（连到地面 GPS 塔）、红＝回环边（把首尾节点连起来）。
+          <br><b>怎么看这张图：</b>① 蓝色边连每一对相邻帧，是连续的运动约束；② 橙色边只在少数帧出现（GPS 谨慎插入）；③ 最醒目的是红色双箭头——轨迹首尾闭合处一旦接上回环边，整张地图会被「拉直」。
+          <br><b>要记住的一句话：</b>四类因子不是平列的四根绳，而是同一张图里不同颜色的边，一起被 iSAM2 联合优化。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 为什么用因子图（iSAM2）而不是滤波</h2>
+      <p>原文给了三点理由：</p>
+      <ul>
+        <li>因子图「better suited to perform inference when compared with Bayes nets」——更适合作推断；</li>
+        <li>它能把 LOAM 做不了的<b>回环、GPS、罗盘</b>等绝对/相对测量都当因子加入并全局联合优化；</li>
+        <li>用 iSAM2 做<b>增量平滑（smoothing）</b>而非滤波，可实时更新。</li>
+      </ul>
+      <p>和滤波派（如 LINS 用误差状态 EKF 递归修正）对比：<b>滤波派只保留最新一个状态，历史约束被递归掉、丢了</b>；而 LIO-SAM 是「via Smoothing and Mapping」——平滑/优化派<b>保留全部状态节点，事后可以用新测量修正整条轨迹</b>。这正是第二季 <b>0020</b> 课 GraphSLAM 讲的「节点-边」结构：Hessian 的非零块数＝2×边数+节点数，所有历史边都还留着。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="320" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <text x="240" y="50" text-anchor="middle" font-size="17" font-weight="700" fill="#b4453b">滤波：只看后视镜开车</text>
+          <text x="660" y="50" text-anchor="middle" font-size="17" font-weight="700" fill="#2f7a4b">因子图：保留整条行车记录</text>
+          <!-- 滤波：只保留当前状态 -->
+          <circle cx="240" cy="150" r="16" fill="#fcd9d4" stroke="#b4453b" stroke-width="2"/>
+          <text x="240" y="155" text-anchor="middle" font-size="13" fill="#b4453b">当前</text>
+          <rect x="150" y="200" width="180" height="40" rx="8" fill="#fbe9c8" stroke="#c9962f" stroke-width="1.5"/>
+          <text x="240" y="225" text-anchor="middle" font-size="13" fill="#7a5a14">后视镜（只看眼前）</text>
+          <text x="240" y="290" text-anchor="middle" font-size="13" fill="#555">每步只留一个状态，旧约束丢了</text>
+          <!-- 因子图：一串节点+边 -->
+          <line x1="540" y1="150" x2="780" y2="150" stroke="#9aa6bd" stroke-width="2"/>
+          <circle cx="540" cy="150" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="600" cy="150" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="660" cy="150" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="720" cy="150" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <circle cx="780" cy="150" r="14" fill="#ffffff" stroke="#243049" stroke-width="2"/>
+          <line x1="554" y1="150" x2="586" y2="150" stroke="#2f7a4b" stroke-width="3"/>
+          <line x1="614" y1="150" x2="646" y2="150" stroke="#2f7a4b" stroke-width="3"/>
+          <line x1="674" y1="150" x2="706" y2="150" stroke="#2f7a4b" stroke-width="3"/>
+          <line x1="734" y1="150" x2="766" y2="150" stroke="#2f7a4b" stroke-width="3"/>
+          <rect x="540" y="200" width="240" height="40" rx="8" fill="#dff0e4" stroke="#2f7a4b" stroke-width="1.5"/>
+          <text x="660" y="225" text-anchor="middle" font-size="13" fill="#1f5636">整条行车记录（可回头翻）</text>
+          <text x="660" y="290" text-anchor="middle" font-size="13" fill="#555">新测量能修正整条历史轨迹</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左联用「只看后视镜开车」比喻滤波——每步只保留一个当前状态，旧约束被丢；右联用「保留整条行车记录」比喻因子图——一串状态节点加边都留着，可以回头翻、用新测量修正历史。
+          <br><b>怎么看这张图：</b>① 左联只有一个「当前」节点，意味着历史信息随递归消失；② 右联五个节点都还在，绿色边是因子，新测量（如回环）出现时能顺藤摸瓜改整条轨迹；③ 这就是论文选 iSAM2 smoothing 而非滤波的根本原因。
+          <br><b>要记住的一句话：</b>滤波丢历史，因子图留历史——后者才能做全局一致。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 关键帧与滑动窗：固定 25 个子关键帧</h2>
+      <p>保实时的关键是<b>不做全局地图匹配</b>，只和最近的一小撮关键帧比。机制如下：</p>
+      <ul>
+        <li><b>关键帧怎么选：</b>位姿变化超过阈值（平移 &gt; 1 m 或旋转 &gt; 10°）才插入一个关键帧，两关键帧之间的帧直接丢弃。</li>
+        <li><b>滑动窗多大：</b>取<b>最近 n = 25 个关键帧</b>作子关键帧，变到世界系拼成固定大小的体素地图 $M_i=\{M_i^e(0.2\text{ m}),M_i^p(0.4\text{ m})\}$。</li>
+        <li><b>旧关键帧怎么处理：</b>新关键帧只和这固定 25 个匹配；老节点离开窗口后由 iSAM2 的贝叶斯树自动边缘化为先验。原文摘要：「we marginalize old lidar scans for pose optimization, rather than matching lidar scans to a global map」。</li>
+      </ul>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="380" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <text x="280" y="48" text-anchor="middle" font-size="17" font-weight="700" fill="#243049">固定 25 个关键帧的滑动窗</text>
+          <text x="690" y="48" text-anchor="middle" font-size="17" font-weight="700" fill="#b4453b">若所有历史帧都参与</text>
+          <!-- 左：滑动窗 -->
+          <g>
+            <rect x="40" y="110" width="40" height="40" rx="6" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.5"/>
+            <rect x="95" y="110" width="40" height="40" rx="6" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.5"/>
+            <rect x="150" y="110" width="40" height="40" rx="6" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.5"/>
+            <rect x="205" y="110" width="40" height="40" rx="6" fill="#cfe3d6" stroke="#2f7a4b" stroke-width="2"/>
+            <rect x="260" y="110" width="40" height="40" rx="6" fill="#cfe3d6" stroke="#2f7a4b" stroke-width="2"/>
+            <rect x="315" y="110" width="40" height="40" rx="6" fill="#cfe3d6" stroke="#2f7a4b" stroke-width="2"/>
+            <rect x="370" y="110" width="40" height="40" rx="6" fill="#cfe3d6" stroke="#2f7a4b" stroke-width="2"/>
+            <rect x="425" y="110" width="40" height="40" rx="6" fill="#cfe3d6" stroke="#2f7a4b" stroke-width="2"/>
+          </g>
+          <rect x="195" y="100" width="280" height="60" rx="8" fill="none" stroke="#2f7a4b" stroke-width="2.5" stroke-dasharray="7 4"/>
+          <text x="335" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#2f7a4b">参与优化的最近 25 帧窗口</text>
+          <text x="190" y="180" text-anchor="middle" font-size="12" fill="#6b7488">灰＝已固定/已边缘化</text>
+          <text x="335" y="200" text-anchor="middle" font-size="12" fill="#2f7a4b">绿＝当前窗口内</text>
+          <!-- 右：全参与 -->
+          <g>
+            <rect x="600" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="630" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="660" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="690" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="720" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="750" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="780" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+            <rect x="810" y="100" width="22" height="22" rx="4" fill="#d7dcea" stroke="#8a93a8" stroke-width="1.2"/>
+          </g>
+          <rect x="595" y="92" width="240" height="40" rx="6" fill="none" stroke="#b4453b" stroke-width="2"/>
+          <text x="715" y="170" text-anchor="middle" font-size="13" font-weight="700" fill="#b4453b">框极长 → 算不动</text>
+          <text x="450" y="320" text-anchor="middle" font-size="13" fill="#555">窗口大小固定（25 个），新帧进来、最老帧被边缘化推出</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左联一串关键帧，绿色虚线框住「参与优化的最近 25 帧」，框外灰色标「已固定/已边缘化」；右联对比：若所有历史帧都参与优化，框会变得极长，标「算不动」。
+          <br><b>怎么看这张图：</b>① 左联窗口大小恒定（固定 25 个子关键帧），这是实时性的保证；② 右联提醒：不做滑动窗就得扛全部历史，计算量爆炸；③ 旧帧不是删除，而是被 iSAM2 边缘化成先验。
+          <br><b>要记住的一句话：</b>固定 25 子关键帧的滑动窗 = 实时 + 一致的两全法。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ IMU 预积分在本篇怎么用（接 0029/0030）</h2>
+      <p>LIO-SAM 把第二季 <b>0029/0030</b> 课的 IMU 预积分直接拿来用（调用 Forster 的流形预积分，没自创偏置一阶修正），而且派了四个用场：</p>
+      <ol>
+        <li><b>去畸变：</b>用非线性运动模型估计扫描期间的运动，校正一帧里不同时刻的点；</li>
+        <li><b>给激光里程计初值：</b>由 IMU 预测 $T_{i+1}$，作为 scan-match 起点；</li>
+        <li><b>作因子：</b>预积分残差即 IMU 预积分因子，偏置和激光因子联合优化；</li>
+        <li><b>估 IMU 偏置：</b>「激光里程计解算结果反过来用来估计 IMU 偏置」，形成闭环。</li>
+      </ol>
+      <p>注意一点：<b>本篇没有独立的初始化/重力估计小节</b>。它依赖 LOAM 式特征提取 + Forster 预积分给运动初值，重力作为预积分里的常向量 $g$ 处理，没有像 VINS-Mono 那样写四步松对齐初始化。对比 Related Work 里 LIOM 因继承 VINS 初始化敏感性而在 Rotation 数据集失败，那是 LIOM 的问题，不是 LIO-SAM 自身。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ 回环因子：ICP 配准 + 欧氏距离阈值（接 0014）</h2>
+      <p>新状态 $x_{i+1}$ 入图后，LIO-SAM 在<b>欧氏空间搜 15 m 内</b>的近邻老状态，把新帧特征 $F_{i+1}$ 与老关键帧 $\{F_{3-m}\dots F_{3+m}\}$（m=12）scan-match，得到的相对变换 $\Delta T$ 就当回环因子。原文明说这是 naive 但有效的「欧氏距离阈值」回环。</p>
+      <p>为什么强调它？对比视觉 SLAM 用词袋（BoW）先靠描述子筛候选，LIO-SAM <b>只看几何距离、不做描述子</b>——更粗糙，但也更保守。这正好呼应第一季 <b>0014</b> 课的「假阳性铁律」：回环一旦接错（假阳性）会把整张地图拽歪，所以宁可少检、不可错检。欧氏距离阈值把候选限制在真正空间邻近处，从源头降低假阳性风险。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 实验数字：三个自采数据集上的表现</h2>
+      <p><b>传感器：</b>Velodyne VLP-16 + MicroStrain 3DM-GX5-25 IMU + Reach M GPS；平台三种（手持、Clearpath Jackal UGV、Duffy 21 船）；Intel i7-10710U，仅 CPU、无并行，跑 ROS。对比 LOAM 与 LIOM（＝2019 LIO-mapping）。</p>
+      <ul>
+        <li><b>端到端平移误差（m，Table II）：</b>Campus：LOAM 192.43 / LIOM 失败 / LIO-odom 9.44 / LIO-GPS 6.87 / <b>LIO-SAM 0.12</b>；Park：121.74 / 34.60 / 36.36 / 2.93 / <b>LIO-SAM 0.04</b>；Amsterdam：失败 / 失败 / 失败 / 1.21 / <b>LIO-SAM 0.17</b>。</li>
+        <li><b>RMSE w.r.t GPS（Park，Table III）：</b>LOAM 47.31 / LIOM 28.96 / LIO-odom 23.96 / LIO-GPS 1.09 / <b>LIO-SAM 0.96</b>。</li>
+        <li><b>单帧耗时（ms，Table IV）：</b>LOAM / LIOM / LIO-SAM 在 Rotation 83.6 / — / 41.9、Walking 253.6 / 339.8 / 58.4、Campus 244.9 / — / 97.8、Park 266.4 / 245.2 / 100.5、Amsterdam — / — / 79.3；<b>压力测试最高 13× 实时</b>（Rotation、Walking）。</li>
+        <li><b>因子图规模：</b>Park 4573 节点 / 9365 因子，Amsterdam 23304 节点 / 49617 因子。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_LIO-SAM__Tightly-coupled_Lidar_Inertial_Odometry_via_Smo/11a2b59a76dadc6aed191746a1e5a5ae6894b5e8c4a78a334714f559e5011dfe.jpg" alt="Mapping results in the Rotation test">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Mapping results of LOAM and LIO-SAM in the Rotation test. LIOM fails to produce meaningful results.（Rotation 测试中 LOAM 与 LIO-SAM 的建图；LIOM 失败。）
+          <br><b>怎么看这张图：</b>对比几种方法在剧烈旋转下的建图质量。LIOM（2019 那篇）直接失效，LIO-SAM 仍给出一致结果——说明四类因子+滑动窗在激进旋转下更稳。注意这是「Rotation 测试」，对应 Table IV 里 41.9 ms 的单帧耗时。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_LIO-SAM__Tightly-coupled_Lidar_Inertial_Odometry_via_Smo/5f7f8d8c79eb84515d73ca4c8a8b5918e1df8503f5babe66016378464f4bb69c.jpg" alt="Results using the Campus dataset">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Results of various methods using the Campus dataset... The red dot indicates the start and end location. The trajectory direction is clock-wise. LIOM is not shown because it fails to produce meaningful results.（MIT 校园数据集；红点是起终点；顺时针；LIOM 因失败未画出。）
+          <br><b>怎么看这张图：</b>红点代表起点也是终点——看哪种方法的轨迹首尾真正闭合。LIO-SAM 的轨迹贴合真实环路，红点处闭合良好，这正是回环因子在起作用（呼应本课封面图的红边）。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_LIO-SAM__Tightly-coupled_Lidar_Inertial_Odometry_via_Smo/deab8c94b1e0a93b8e989fdce6c4a76acd6b65ef110b4cb5c694e26b48117764.jpg" alt="Results using the Park dataset">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Results of various methods using the Park dataset... The red dot indicates the start and end location.（Pleasant Valley Park 数据集；红点＝起终点。）
+          <br><b>怎么看这张图：</b>Park 是 LIO-SAM 误差最低的数据集（端到端平移误差 0.04 m）。对比 LOAM/LIOM 的发散轨迹，LIO-SAM 的环路闭合最干净，和 Table II/III 的数字互相印证。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 局限逐条（原文承认的失败边界）</h2>
+      <ul>
+        <li><b>回环检测粗糙：</b>naive 欧氏距离（15 m）阈值，大场景可能漏检或受限。</li>
+        <li><b>无 GPS/回环时仍漂：</b>LIO-odom、LIO-GPS 长时会漂；GPS 高程误差可达约 100 m，需回环纠正。</li>
+        <li><b>依赖 LOAM 式特征与运动先验做初值</b>，对前端特征提取质量敏感。</li>
+        <li><b>无完整初始化/重力对齐小节</b>（见第 5 节），靠 LOAM 式初值 + Forster 预积分。</li>
+      </ul>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>因子图（smoothing）相比滤波，最大的区别在于对待历史状态的方式？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确。平滑/优化派（iSAM2）保留全部状态节点，新测量出现时可以从后往前修正整条历史轨迹；滤波派只留最新状态，历史约束被递归丢掉了。" onclick="lessonKit.answer(this,'q0078a')">保留全部状态可回溯修正</button>
+          <button data-correct="no" data-explanation="不对。只留最新一帧是滤波派（如 LINS 的误差状态 EKF）的做法，正是 LIO-SAM 改用因子图想避免的——那样会丢失历史约束、难做回环。" onclick="lessonKit.answer(this,'q0078a')">只保留最新状态不回溯</button>
+        </div>
+        <div class="quiz-feedback" id="q0078a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>LIO-SAM 的回环检测用欧氏距离阈值挑候选、再 ICP 配准，相比视觉 SLAM 的词袋（BoW）是更保守还是更激进？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确。它只看空间距离、不做描述子匹配，候选被限制在真正邻近处，从源头降低假阳性——符合第一季 0014 课的假阳性铁律，宁可少检不可错检。" onclick="lessonKit.answer(this,'q0078b')">更保守只看距离</button>
+          <button data-correct="no" data-explanation="不对。它没用描述子，不比 BoW 快或更激进；相反，欧氏阈值很克制，是一种保守策略，代价可能是大场景漏检。" onclick="lessonKit.answer(this,'q0078b')">更激进用描述子</button>
+        </div>
+        <div class="quiz-feedback" id="q0078b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>写出四类因子的名称、对应颜色与各自的残差来源。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>①IMU 预积分因子（蓝）：Forster 流形预积分的 ΔR/Δv/Δp 残差；②激光里程计因子（绿）：新帧与局部体素图 scan-match 得相对变换 ΔT=T_i^T T_{i+1}；③GPS 因子（橙）：GPS 转本地笛卡尔系，仅当估计协方差大于 GPS 协方差时插入；④回环因子（红）：欧氏 15 m 内近邻老状态 scan-match 得相对变换。</div></details>
+        </li>
+        <li>为什么 LIO-SAM 用 iSAM2 因子图而不是滤波？结合第二季 0020 课说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>滤波只保留最新状态、历史约束被递归丢弃，难做回环/GPS 等全局修正；因子图保留全部状态节点和边，新测量可修正整条轨迹。这正是 0020 课 GraphSLAM 的「节点-边」结构：Hessian 非零块数＝2×边数+节点数，历史信息都还在。</div></details>
+        </li>
+        <li>滑动窗的关键帧怎么选？窗口多大？旧关键帧去哪了？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>关键帧由位姿变化触发：平移&gt;1 m 或旋转&gt;10°，两关键帧间帧丢弃。窗口取最近 n=25 个关键帧作子关键帧拼成固定大小体素地图，新关键帧只和这 25 个匹配。老节点离开窗口后由 iSAM2 贝叶斯树自动边缘化为先验，不做全局图匹配。</div></details>
+        </li>
+        <li>IMU 预积分在本篇派了哪四个用场？接第二季哪两课？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>四个用场：①去畸变；②给激光里程计初值；③作因子（预积分残差即 IMU 预积分因子，偏置联合优化）；④估 IMU 偏置（激光解算反估偏置）。直接应用第二季 0029/0030 课的流形预积分（ΔR/Δv/Δp、偏置联合优化）。</div></details>
+        </li>
+        <li>Campus 数据集上端到端平移误差，LIO-SAM 是多少？它相比 LOAM 提升多大？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>Campus：LIO-SAM 端到端平移误差 0.12 m，而 LOAM 高达 192.43 m（基本跑飞）、LIOM 失败。提升约三个数量级，说明四类因子+回环+GPS 把漂移压到了厘米级。顺带记住：回环这一步用的是欧氏 15 m 阈值挑候选再 ICP 配准，不看描述子，比视觉 BoW 更保守——这是第一季 0014 课「假阳性铁律」在激光侧的落地。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0077-紧耦合3D激光惯性2019-LIO-SAM的前身.html">← 紧耦合 3D 激光惯性（2019）：把 IMU 请进优化</a>
+        <a class="next" href="0079-BALM2021-把BA搬到激光上.html">BALM（2021）：把 BA 搬到激光上 →</a>
+      </div>
+      <p class="foot-note">四类因子一张图，是激光 SLAM 从「会走」到「走得准、走得全」的集大成一步 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

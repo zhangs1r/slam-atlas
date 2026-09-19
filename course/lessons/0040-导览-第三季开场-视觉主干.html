@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>导览：第三季开场 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0040</div>
+      <h1>第三季开场：视觉 SLAM 到底是怎么跑起来的</h1>
+      <p class="subtitle">前两季我们学会了看地图、也学会了造零件；这一季把零件装成一台<b>真的能跑</b>的机器 📷</p>
+      <div class="hero-meta">
+        <span>🎯 主题：视觉 SLAM 主干（特征法 / 直接法 / VIO）</span>
+        <span>📚 覆盖：42 篇论文</span>
+        <span>🧭 七个模块 · 37 节课</span>
+      </div>
+      <div class="toc">
+        <a href="#debt">这一季要还两笔债</a>
+        <a href="#map">七个模块的地图</a>
+        <a href="#scale">一条暗线：尺度</a>
+        <a href="#read">怎么读这一季</a>
+        <a href="#check">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出这一季七个模块分别在解决什么；② 讲清"特征法 vs 直接法"争的到底是什么；③ 把第二季欠的两笔债对号入座；④ 知道三种不同的读法。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>直接接 <b>0017 第二季导览</b>（那里也有一张悬念清单）。第二季把"<b>为什么能算</b>"讲透了——BA 的 Schur 消元、预积分、边缘化、TSDF、NeRF。这一季回答"<b>怎么跑起来</b>"。</p>
+        </div>
+      </div>
+
+      <h2>1. 前两季留下了什么，这一季要接什么</h2>
+
+      <p>先把三季的分工说清楚，这样你读的时候心里有底。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>第一季（0001–0016）<br>先建立坐标系</h4>
+          <p>20 篇综述与全景文章。目标是让你<b>知道这个领域有什么</b>——有哪些方法家族、各自在什么场景失效、论文里"泼冷水"的部分长什么样。读完你有了<b>词汇表</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第二季（0017–0039）<br>打地基</h4>
+          <p>19 篇数学与后端。目标是让你<b>知道为什么能算</b>——BA 的稀疏性怎么利用、IMU 预积分到底解决什么、地图怎么存下来。读完你有了<b>工具箱</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第三季（0040–0076）<br>视觉主干</h4>
+          <p>42 篇系统与方法的<b>主干论文</b>。目标是让你<b>看懂真实的 SLAM 系统是怎么组织起来的</b>——从 2007 年一路走到 2025 年。读完你有了<b>一台完整的机器</b>。</p>
+        </div>
+      </div>
+
+      <h2 id="debt">2. 这一季要还的两笔债</h2>
+
+      <p>第二季结束时，我在 <b>0017 课</b>里留了一张悬念清单。还剩下三条没还，其中<b>两条正好落在这一季</b>。</p>
+
+      <div class="grid-2">
+        <div class="callout">
+          <h4>悬念④：「提取 vs 不提取特征」为什么来回摆动？</h4>
+          <p>第一季 <b>0006 课</b>（LiDAR 里程计综述）第一次提出这个疑问：特征法说特征稳、直接法说特征丢信息，两边都有道理。<br>
+          第二季 <b>0022 课</b>（点云 BA）给了一个中间态——<b>提取</b>面/边特征做关联，但残差用<b>全部原始点</b>。<br>
+          <b>这一季的 0046–0050 是这条线索的完整答案。</b>你会看到这条路怎么从"全稠密但要 GPU"（DTAM）→"只挑梯度大的像素"（LSD-SLAM）→"干脆回到稀疏点但补上光度标定"（DSO）→"只在关键帧提特征"（SVO），一路摆动。</p>
+        </div>
+        <div class="callout">
+          <h4>悬念⑤：IMU 初始化到底怎么做？</h4>
+          <p>第二季 <b>0029 课</b>讲预积分时，原文明确说它<b>没有初始化章节</b>——它假设前端已经给了关键帧、外参已标定、时间已同步。<br>
+          我在课上把这条标成了"<b>该论文的空白</b>"。<br>
+          <b>这一季的 0057 与 0064 就是来填这个空白的。</b>VINS-Mono 用视觉 SfM 先跑一遍再解重力/尺度/速度；而 0064 那篇更狠——<b>只用 IMU 测量做优化</b>，在还没有可靠视觉信息的那几秒就把重力方向和尺度定出来。</p>
+        </div>
+      </div>
+
+      <p>剩下的<b>悬念③（ikd-Tree 与 k-d 树差在哪）</b>与<b>（3DGS 的自适应密度控制）</b>不在这一季，它们分别在<b>阶段 D（激光主干）</b>与<b>阶段 F（神经隐式与 3D 高斯）</b>里还。</p>
+
+      <h2 id="map">3. 这一季的地图：七个模块</h2>
+
+      <p>42 篇论文不可能一篇一节。我按<b>认知依赖</b>（不是按年份）把它们排成七个模块。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 560" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 背景 -->
+          <rect x="0" y="0" width="900" height="560" fill="#fdfbf7"/>
+
+          <!-- 标题 -->
+          <text x="450" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#3a2d26">第三季 · 视觉主干：七个模块</text>
+          <text x="450" y="56" text-anchor="middle" font-size="12.5" fill="#8a786e">按认知依赖排列 —— 先把"位姿怎么算"讲完，再讲"地图怎么建"，最后到"怎么在大尺度上活下来"</text>
+
+          <!-- 层 1：位姿（三个模块） -->
+          <rect x="30" y="76" width="252" height="196" rx="12" fill="#fdf0e9" stroke="#cc785c" stroke-width="2"/>
+          <text x="156" y="102" text-anchor="middle" font-size="14.5" font-weight="700" fill="#a8563a">① 位姿怎么算</text>
+          <text x="156" y="122" text-anchor="middle" font-size="11.5" fill="#8a786e">三种"用什么像素"的路线打架</text>
+
+          <rect x="46" y="136" width="220" height="40" rx="8" fill="#ffffff" stroke="#e8d5cb"/>
+          <text x="60" y="153" font-size="12" font-weight="600" fill="#3a2d26">特征点路线</text>
+          <text x="60" y="168" font-size="10.5" fill="#8a786e">0041–0045  MonoSLAM→PTAM→ORB-SLAM×3</text>
+
+          <rect x="46" y="182" width="220" height="40" rx="8" fill="#ffffff" stroke="#e8d5cb"/>
+          <text x="60" y="199" font-size="12" font-weight="600" fill="#3a2d26">直接法与半直接法</text>
+          <text x="60" y="214" font-size="10.5" fill="#8a786e">0046–0050  DTAM→LSD→DSO→VI-DSO→SVO</text>
+
+          <rect x="46" y="228" width="220" height="34" rx="8" fill="#ffffff" stroke="#e8d5cb"/>
+          <text x="60" y="245" font-size="12" font-weight="600" fill="#3a2d26">VIO 主干</text>
+          <text x="60" y="258" font-size="10.5" fill="#8a786e">0057–0064  VINS-Mono / ROVIO / OpenVINS …</text>
+
+          <!-- 层 2：地图 -->
+          <rect x="324" y="76" width="252" height="196" rx="12" fill="#eef4ee" stroke="#7a9b7f" stroke-width="2"/>
+          <text x="450" y="102" text-anchor="middle" font-size="14.5" font-weight="700" fill="#4f6b53">② 地图怎么建</text>
+          <text x="450" y="122" text-anchor="middle" font-size="11.5" fill="#8a786e">深度从哪来、怎么存、怎么长期维护</text>
+
+          <rect x="340" y="136" width="220" height="40" rx="8" fill="#ffffff" stroke="#d5e0d6"/>
+          <text x="354" y="153" font-size="12" font-weight="600" fill="#3a2d26">RGB-D 稠密 SLAM</text>
+          <text x="354" y="168" font-size="10.5" fill="#8a786e">0051–0053  DVO-SLAM / RGBD-SLAM / RTAB-Map</text>
+
+          <rect x="340" y="182" width="220" height="40" rx="8" fill="#ffffff" stroke="#d5e0d6"/>
+          <text x="354" y="199" font-size="12" font-weight="600" fill="#3a2d26">学习式稠密 SLAM</text>
+          <text x="354" y="214" font-size="10.5" fill="#8a786e">0054–0056  CNN-SLAM / CodeSLAM / DeepFactors</text>
+
+          <rect x="340" y="228" width="220" height="34" rx="8" fill="#ffffff" stroke="#d5e0d6"/>
+          <text x="354" y="245" font-size="12" font-weight="600" fill="#3a2d26">通向神经隐式</text>
+          <text x="354" y="258" font-size="10.5" fill="#8a786e">0076  NICER-SLAM / DN-SLAM → 阶段 F</text>
+
+          <!-- 层 3：大尺度与鲁棒 -->
+          <rect x="618" y="76" width="252" height="196" rx="12" fill="#eef1f7" stroke="#7b8bb0" stroke-width="2"/>
+          <text x="744" y="102" text-anchor="middle" font-size="14.5" font-weight="700" fill="#4e5f80">③ 怎么活下来</text>
+          <text x="744" y="122" text-anchor="middle" font-size="11.5" fill="#8a786e">真实世界的噪声、光照、动态、规模</text>
+
+          <rect x="634" y="136" width="220" height="40" rx="8" fill="#ffffff" stroke="#d9dfec"/>
+          <text x="648" y="153" font-size="12" font-weight="600" fill="#3a2d26">GNSS 与自动驾驶</text>
+          <text x="648" y="168" font-size="10.5" fill="#8a786e">0065–0067  GVINS / P³-VINS / 自驾综述</text>
+
+          <rect x="634" y="182" width="220" height="40" rx="8" fill="#ffffff" stroke="#d9dfec"/>
+          <text x="648" y="199" font-size="12" font-weight="600" fill="#3a2d26">动态环境六篇</text>
+          <text x="648" y="214" font-size="10.5" fill="#8a786e">0068–0069  DynaVINS / SG-SLAM / DPL-SLAM …</text>
+
+          <rect x="634" y="228" width="220" height="34" rx="8" fill="#ffffff" stroke="#d9dfec"/>
+          <text x="648" y="245" font-size="12" font-weight="600" fill="#3a2d26">线特征与光照鲁棒</text>
+          <text x="648" y="258" font-size="10.5" fill="#8a786e">0070–0075  UV-SLAM / AirVO / RD-VIO …</text>
+
+          <!-- 时间轴 -->
+          <line x1="60" y1="318" x2="840" y2="318" stroke="#d9c9bf" stroke-width="2"/>
+          <text x="60" y="342" font-size="12" fill="#8a786e">2007</text>
+          <text x="230" y="342" font-size="12" fill="#8a786e">2011</text>
+          <text x="400" y="342" font-size="12" fill="#8a786e">2014</text>
+          <text x="530" y="342" font-size="12" fill="#8a786e">2017</text>
+          <text x="660" y="342" font-size="12" fill="#8a786e">2020</text>
+          <text x="800" y="342" font-size="12" fill="#8a786e">2025</text>
+
+          <circle cx="60" cy="318" r="5" fill="#cc785c"/>
+          <circle cx="230" cy="318" r="5" fill="#cc785c"/>
+          <circle cx="400" cy="318" r="5" fill="#7a9b7f"/>
+          <circle cx="530" cy="318" r="5" fill="#7a9b7f"/>
+          <circle cx="660" cy="318" r="5" fill="#7b8bb0"/>
+          <circle cx="800" cy="318" r="5" fill="#7b8bb0"/>
+
+          <text x="60" y="368" text-anchor="middle" font-size="10.5" fill="#a8563a">MonoSLAM</text>
+          <text x="230" y="368" text-anchor="middle" font-size="10.5" fill="#a8563a">DTAM</text>
+          <text x="400" y="368" text-anchor="middle" font-size="10.5" fill="#4f6b53">LSD-SLAM</text>
+          <text x="530" y="368" text-anchor="middle" font-size="10.5" fill="#4f6b53">ORB-SLAM2</text>
+          <text x="660" y="368" text-anchor="middle" font-size="10.5" fill="#4e5f80">VINS-Mono</text>
+          <text x="800" y="368" text-anchor="middle" font-size="10.5" fill="#4e5f80">AirSLAM</text>
+
+          <!-- 底部说明 -->
+          <rect x="30" y="400" width="840" height="132" rx="12" fill="#ffffff" stroke="#e8d5cb"/>
+          <text x="52" y="426" font-size="13" font-weight="700" fill="#3a2d26">一句话记住这一季</text>
+          <text x="52" y="452" font-size="12.5" fill="#5a4a42">同样的几何、同样的优化器，差别只在三件事：</text>
+          <text x="52" y="476" font-size="12.5" fill="#5a4a42">① 用<tspan font-weight="700">哪些像素</tspan>（少量关键点 / 梯度大的像素 / 全部像素）</text>
+          <text x="52" y="498" font-size="12.5" fill="#5a4a42">② 误差在<tspan font-weight="700">哪里度量</tspan>（图像的像素位置上 vs 像素的灰度值上）</text>
+          <text x="52" y="520" font-size="12.5" fill="#5a4a42">③ 数据关联<tspan font-weight="700">怎么建立</tspan>（描述子匹配 / 投影 + 极线搜索 / 隐式由对齐产生）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边三块是"算位姿"的三条路线（特征点 / 直接法 / VIO），中间三块是"建地图"，右边三块是"在真实世界里活下来"。下面一条时间轴把这一季的代表系统按年份排开。<br>
+          <b>怎么看这张图：</b>① 先看上面三个大框——它们回答的是<b>三个不同的问题</b>，不是三个互相替代的选项；② 再看时间轴，注意<b>特征法与直接法在时间上是交替登场的</b>（这一交替就是悬念④）；③ 最后看底部那句话——整季 42 篇论文，差别其实只落在三件事上。<br>
+          <b>要记住的一句话：</b>这一季不是"从旧方法学到新方法"，而是<b>看同一个问题被三套不同哲学反复回答</b>。
+        </figcaption>
+      </figure>
+
+      <table>
+        <tr><th>模块</th><th>课号</th><th>核心问题</th></tr>
+        <tr><td>0 · 导览</td><td>0040</td><td>这一季的地图与读法</td></tr>
+        <tr><td>1 · 特征点路线</td><td>0041–0045</td><td>从 EKF 到三线程：MonoSLAM / PTAM / ORB-SLAM / 2 / 3</td></tr>
+        <tr><td>2 · 直接法与半直接法</td><td>0046–0050</td><td>不用特征点，误差直接算在灰度上：DTAM / LSD-SLAM / DSO / VI-DSO / SVO</td></tr>
+        <tr><td>3 · RGB-D 稠密 SLAM</td><td>0051–0053</td><td>有现成深度图就轻松了？DVO-SLAM / RGBD-SLAM / RTAB-Map</td></tr>
+        <tr><td>4 · 学习式稠密 SLAM</td><td>0054–0056</td><td>深度学习能提供什么先验：CNN-SLAM / CodeSLAM / DeepFactors</td></tr>
+        <tr><td>5 · VIO 主干</td><td>0057–0064</td><td>优化派与滤波派之争 + IMU 初始化：VINS-Mono / ROVIO / Basalt / OpenVINS / Kimera / DM-VIO</td></tr>
+        <tr><td>6 · GNSS 与自动驾驶</td><td>0065–0067</td><td>走出室内之后：GVINS / P³-VINS / 自动驾驶 SLAM 趋势</td></tr>
+        <tr><td>7 · 动态环境与鲁棒性</td><td>0068–0075</td><td>真实世界里的行人、光照、弱纹理、算力：六篇动态 + 六篇线特征 + 四篇杂项</td></tr>
+        <tr><td>8 · 通向下一季</td><td>0076</td><td>神经隐式 SLAM：NICER-SLAM / DN-SLAM → 阶段 F</td></tr>
+      </table>
+
+      <h2 id="scale">4. 一条暗线：单目「尺度」是怎么被一步步解决的</h2>
+
+      <p>如果你只能记住这一季的一条线索，请记这条。第二季 <b>0024 课</b>（VO 教程）说过一句很关键的话：</p>
+
+      <blockquote>单目相机只能给出<b>方向（bearing）</b>，位姿只能恢复到<b>一个尺度因子</b>之内。</blockquote>
+
+      <p>这句话在第二季只是一个"已知限制"。但你看完整季会发现——<b>这十多年的视觉 SLAM 史，有相当一部分就是在跟这个尺度因子搏斗。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#fdfbf7"/>
+          <text x="450" y="32" text-anchor="middle" font-size="18" font-weight="700" fill="#3a2d26">单目尺度这条暗线的六个站</text>
+          <text x="450" y="54" text-anchor="middle" font-size="12" fill="#8a786e">同一句"尺度不可观"，被六种完全不同的方式回应过</text>
+
+          <!-- 六个站点 -->
+          <rect x="34" y="80" width="130" height="112" rx="10" fill="#fdf0e9" stroke="#cc785c"/>
+          <text x="99" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8563a">站 1</text>
+          <text x="99" y="122" text-anchor="middle" font-size="11" fill="#3a2d26">LSD-SLAM</text>
+          <text x="99" y="142" text-anchor="middle" font-size="10" fill="#6b5a51">显式建模</text>
+          <text x="99" y="158" text-anchor="middle" font-size="10" fill="#6b5a51">每帧归一化</text>
+          <text x="99" y="174" text-anchor="middle" font-size="10" fill="#6b5a51">sim(3) 上做回环</text>
+
+          <rect x="179" y="80" width="130" height="112" rx="10" fill="#fdf0e9" stroke="#cc785c"/>
+          <text x="244" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8563a">站 2</text>
+          <text x="244" y="122" text-anchor="middle" font-size="11" fill="#3a2d26">DSO</text>
+          <text x="244" y="142" text-anchor="middle" font-size="10" fill="#6b5a51">干脆不管</text>
+          <text x="244" y="158" text-anchor="middle" font-size="10" fill="#6b5a51">只做纯里程计</text>
+          <text x="244" y="174" text-anchor="middle" font-size="10" fill="#6b5a51">评测时对齐</text>
+
+          <rect x="324" y="80" width="130" height="112" rx="10" fill="#eef4ee" stroke="#7a9b7f"/>
+          <text x="389" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4f6b53">站 3</text>
+          <text x="389" y="122" text-anchor="middle" font-size="11" fill="#3a2d26">ORB-SLAM2</text>
+          <text x="389" y="142" text-anchor="middle" font-size="10" fill="#6b5a51">换硬件</text>
+          <text x="389" y="158" text-anchor="middle" font-size="10" fill="#6b5a51">双目 / RGB-D</text>
+          <text x="389" y="174" text-anchor="middle" font-size="10" fill="#6b5a51">直接给绝对尺度</text>
+
+          <rect x="469" y="80" width="130" height="112" rx="10" fill="#eef4ee" stroke="#7a9b7f"/>
+          <text x="534" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4f6b53">站 4</text>
+          <text x="534" y="122" text-anchor="middle" font-size="11" fill="#3a2d26">CNN-SLAM</text>
+          <text x="534" y="142" text-anchor="middle" font-size="10" fill="#6b5a51">向学习借</text>
+          <text x="534" y="158" text-anchor="middle" font-size="10" fill="#6b5a51">CNN 预测深度</text>
+          <text x="534" y="174" text-anchor="middle" font-size="10" fill="#6b5a51">给尺度与初值</text>
+
+          <rect x="614" y="80" width="130" height="112" rx="10" fill="#eef1f7" stroke="#7b8bb0"/>
+          <text x="679" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4e5f80">站 5</text>
+          <text x="679" y="122" text-anchor="middle" font-size="11" fill="#3a2d26">VI-DSO</text>
+          <text x="679" y="142" text-anchor="middle" font-size="10" fill="#6b5a51">用 IMU 补</text>
+          <text x="679" y="158" text-anchor="middle" font-size="10" fill="#6b5a51">尺度变成变量</text>
+          <text x="679" y="174" text-anchor="middle" font-size="10" fill="#6b5a51">动态边缘化兜底</text>
+
+          <rect x="759" y="80" width="130" height="112" rx="10" fill="#eef1f7" stroke="#7b8bb0"/>
+          <text x="824" y="102" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4e5f80">站 6</text>
+          <text x="824" y="122" text-anchor="middle" font-size="11" fill="#3a2d26">VINS-Mono</text>
+          <text x="824" y="142" text-anchor="middle" font-size="10" fill="#6b5a51">联合初始化</text>
+          <text x="824" y="158" text-anchor="middle" font-size="10" fill="#6b5a51">视觉 SfM 起步</text>
+          <text x="824" y="174" text-anchor="middle" font-size="10" fill="#6b5a51">联解重力/尺度/速度</text>
+
+          <!-- 箭头 -->
+          <line x1="168" y1="136" x2="175" y2="136" stroke="#d9c9bf" stroke-width="2"/>
+          <line x1="313" y1="136" x2="320" y2="136" stroke="#d9c9bf" stroke-width="2"/>
+          <line x1="458" y1="136" x2="465" y2="136" stroke="#d9c9bf" stroke-width="2"/>
+          <line x1="603" y1="136" x2="610" y2="136" stroke="#d9c9bf" stroke-width="2"/>
+          <line x1="748" y1="136" x2="755" y2="136" stroke="#d9c9bf" stroke-width="2"/>
+
+          <!-- 说明 -->
+          <rect x="34" y="214" width="855" height="162" rx="12" fill="#ffffff" stroke="#e8d5cb"/>
+          <text x="56" y="240" font-size="12.5" font-weight="700" fill="#3a2d26">三种思路，各有代价</text>
+          <text x="56" y="266" font-size="12" fill="#5a4a42">① <tspan font-weight="700">把尺度当变量一起估</tspan>（LSD-SLAM / VI-DSO / VINS-Mono）——最彻底，但要付出额外状态与数值代价；</text>
+          <text x="56" y="290" font-size="12" fill="#5a4a42">② <tspan font-weight="700">换传感器绕过去</tspan>（ORB-SLAM2 双目 / RTAB-Map）——最省事，但要花钱、要标定、要处理同步；</text>
+          <text x="56" y="314" font-size="12" fill="#5a4a42">③ <tspan font-weight="700">借外部先验</tspan>（CNN-SLAM 的学习深度 / GVINS 与 P³-VINS 的 GNSS）——最容易上手，但把「模型好坏」变成了新变量。</text>
+          <text x="56" y="348" font-size="12" font-weight="700" fill="#a8563a">读完这一季，你再看任何一篇视觉 SLAM 论文，第一件事就是问：它是怎么处理尺度的？</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>六个代表系统，六种对"单目尺度不可观"的回答，按课号顺序排开。左边两个（LSD-SLAM、DSO）是视觉内部的解法，中间两个（ORB-SLAM2、CNN-SLAM）是换硬件与借先验，右边两个（VI-DSO、VINS-Mono）是把 IMU 拉进来。<br>
+          <b>怎么看这张图：</b>① 先看每一格里"加粗的动词"——<b>显式建模 / 干脆不管 / 换硬件 / 向学习借 / 用 IMU 补 / 联合初始化</b>，这是六种完全不同的应对哲学；② 再看最下面三行，我把它们归成了三类思路；③ 最后记住那句加粗的话——它是这一季最实用的一把"读论文的尺子"。<br>
+          <b>要记住的一句话：</b>"尺度不可观"这句话在 0024 课只是一个限制；在这一季，它是<b>一整个研究方向的发动机</b>。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断 ①</h3>
+        <p>第二季 0024 课说"单目只能恢复到一个尺度因子之内"。那么下面哪种说法是对的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="尺度不可观是单目的几何缺陷，任何纯视觉单目算法都绕不过去——它只能被『估计』或被『外部信息补上』，不能被『算得更准』解决。" onclick="lessonKit.answer(this,'q0040a')">提高标定精度就能定出尺度</button>
+          <button data-correct="yes" data-explanation="对。要么把尺度作为一个待估变量放进优化（LSD-SLAM / VI-DSO / VINS-Mono），要么从外部拿一个尺度（双目基线、学习到的深度先验、GNSS）。" onclick="lessonKit.answer(this,'q0040a')">要么把尺度当变量估出来</button>
+          <button data-correct="no" data-explanation="积累更多帧只会让尺度漂移更严重，不会让尺度变得可观——这一点 LSD-SLAM 用『尺度漂移』这个词专门提醒过。" onclick="lessonKit.answer(this,'q0040a')">多跑几千帧尺度就自己出现</button>
+        </div>
+        <div class="quiz-feedback" id="q0040a"></div>
+      </div>
+
+      <h2>5. 另一种读法：按"误差在哪个空间度量"看</h2>
+
+      <p>如果你更偏工程思维，这条线索可能更好用。整个视觉 SLAM 的方法家族，可以按<b>误差定义在哪里</b>分成两半：</p>
+
+      <div class="grid-2">
+        <div class="callout">
+          <h4>重投影误差（在图像坐标上比）</h4>
+          <p>把 3D 点投到图像上，看它离观测到的<b>像素位置</b>差多少。<br>
+          特点：<b>只关心"点跑到哪了"</b>，对亮度变化、曝光变化完全免疫（因为压根不看灰度）。<br>
+          代表：PTAM / ORB-SLAM 全系 / VINS-Mono。/ 理论根在第二季 <b>0024 课</b>的"3D-2D 在图像平面最小化更准"。</p>
+        </div>
+        <div class="callout">
+          <h4>光度误差（在灰度值上比）</h4>
+          <p>把一块像素图案按深度和位姿"搬"到另一帧，看<b>对应像素的灰度</b>差多少。<br>
+          特点：<b>用上了图像里几乎全部信息</b>，在弱纹理、模糊、运动快时更稳；代价是怕光照变化、怕标定不准、会非常非凸。<br>
+          代表：DTAM / LSD-SLAM / DSO / SVO / ROVIO。</p>
+        </div>
+      </div>
+
+      <p>而这个选择还有一个"终极裁决"——第二季 <b>0026 课</b>讲 SGM 时提过"稠密不提取特征"这一路，到这一季 <b>0048 课（DSO）</b>给出了最漂亮的一段实验：作者人为加两类噪声，看谁先垮。结论是：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{几何噪声强(卷帘快门/标定不准)} \Rightarrow \text{间接法胜}\qquad \text{光度噪声强/标定良好} \Rightarrow \text{直接法胜}$$</div>
+      </div>
+
+      <p>所以"特征法好还是直接法好"这个问题<b>本身问错了</b>。正确问法是：<b>我的相机好不好、场景光变不变、算力够不够。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断 ②</h3>
+        <p>一台手机（卷帘快门、镜头畸变大、自动曝光乱跳）上跑视觉里程计，按 DSO 那篇的实验结论，哪种路线更现实？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="DSO 的实验恰恰把这台手机列为『直接法不适用』的典型：卷帘快门与标定误差属于几何噪声，会让直接法的优化直接失败。" onclick="lessonKit.answer(this,'q0040b')">直接法，因为信息用得最多</button>
+          <button data-correct="yes" data-explanation="对。几何噪声下间接法几乎不受影响，所以手机这类『为人类观看而造』的相机上，特征法（间接法）更现实。原文也明确说了这一点。" onclick="lessonKit.answer(this,'q0040b')">间接法，因为它免疫几何噪声</button>
+          <button data-correct="no" data-explanation="两条路的差别不在算力，而在『误差度量在哪个空间』。DSO 的结论是几何噪声让直接法失败，跟速度快慢无关。" onclick="lessonKit.answer(this,'q0040b')">看哪个跑得快就用哪个</button>
+        </div>
+        <div class="quiz-feedback" id="q0040b"></div>
+      </div>
+
+      <h2 id="read">6. 怎么读这一季（三种读法）</h2>
+
+      <div class="tab-buttons">
+        <button data-tab-button="read" data-tab-id="r1" onclick="lessonKit.openTab('read','r1')">速览读法（8 节）</button>
+        <button data-tab-button="read" data-tab-id="r2" onclick="lessonKit.openTab('read','r2')">系统读法（全部 37 节）</button>
+        <button data-tab-button="read" data-tab-id="r3" onclick="lessonKit.openTab('read','r3')">工具书读法</button>
+      </div>
+      <div class="tab-panel" data-tab-panel="read" data-tab-id="r1">
+        <p><b>如果你的时间只够读 8 节</b>，按这个顺序：</p>
+        <ol>
+          <li><b>0042 PTAM</b> —— 架构革命：为什么跟踪与建图要分家（这一个想法之后所有系统都在用）</li>
+          <li><b>0043 ORB-SLAM</b> —— 特征法标杆：三线程 + 一套 ORB 服务所有任务</li>
+          <li><b>0047 LSD-SLAM</b> —— 尺度第一次被当变量估（sim(3)）</li>
+          <li><b>0048 DSO</b> —— 直接法的巅峰 + 全季最重要的"四象限"坐标系</li>
+          <li><b>0057 VINS-Mono</b> —— 优化派 VIO 的教科书，也是第二季悬念⑤的答案</li>
+          <li><b>0061 OpenVINS</b> —— 一致性讲得最透的一篇</li>
+          <li><b>0063 DM-VIO</b> —— 延迟边缘化：把"边缘化会给错信息"这件事彻底解决</li>
+          <li><b>0067 自动驾驶 SLAM 综述</b> —— 把整季放回大尺度场景里看</li>
+        </ol>
+        <p>这 8 节串起来，就是一条完整的"视觉 SLAM 主干演进史"。</p>
+      </div>
+      <div class="tab-panel" data-tab-panel="read" data-tab-id="r2">
+        <p><b>如果你想跟着课程顺序走完 37 节</b>，建议这样安排节奏：</p>
+        <ul>
+          <li><b>模块 1、2（0041–0050）</b>连着读——它们是"同一个问题、两套哲学"的正面交锋，分开读会丢掉对比的快感。</li>
+          <li><b>模块 3、4（0051–0056）</b>可以快一点：RGB-D 与学习式这两支是"换条件"而不是"换哲学"，重点是看它们各自补上了什么、又留下了什么坑。</li>
+          <li><b>模块 5（0057–0064）</b>要慢，尤其 VINS-Mono 与 OpenVINS 两节。这一模块是这一季技术密度最高的地方，也是第二季预积分那一套真正开始干活的地方。</li>
+          <li><b>模块 6、7（0065–0075）</b>可以当成"挑着读"——按你现在关心的问题选（室外？动态？光照？算力受限？）。</li>
+        </ul>
+      </div>
+      <div class="tab-panel" data-tab-panel="read" data-tab-id="r3">
+        <p><b>如果你是在做项目、想按问题查</b>，用这张对照表：</p>
+        <table>
+          <tr><th>我遇到的问题</th><th>直接去读</th></tr>
+          <tr><td>跟踪老丢，重定位慢</td><td>0043（ORB-SLAM 重定位）· 0045（ORB-SLAM3 多地图）</td></tr>
+          <tr><td>场景没纹理，点特征提不出来</td><td>0046–0048（直接法三兄弟）· 0070–0071（线特征与消失点）</td></tr>
+          <tr><td>光照一会儿亮一会儿暗</td><td>0048（DSO 光度标定）· 0071（AirVO / AirSLAM）</td></tr>
+          <tr><td>纯旋转 / 静止时初始化就崩</td><td>0050（SVO 的平面初始化）· 0064（纯惯性初始化）</td></tr>
+          <tr><td>IMU 和相机怎么真正融起来</td><td>0057–0058（VINS-Mono 上下）· 0063（DM-VIO）</td></tr>
+          <tr><td>滤波器越跑越自信但其实漂了</td><td>0061（OpenVINS 的 FEJ 与一致性）</td></tr>
+          <tr><td>路上有人、有车、有会动的东西</td><td>0068–0069（动态环境六篇组课）· 0072（RD-VIO）</td></tr>
+          <tr><td>要在大尺度户外跑（城市、高速）</td><td>0065–0067（GVINS / P³-VINS / 自驾综述）· 0073（激光辅助单目）</td></tr>
+          <tr><td>算力很紧（嵌入式、无人机）</td><td>0050（SVO）· 0068（RLD-SLAM）· 0075（受限平台 RGB-D 惯性）</td></tr>
+          <tr><td>想往神经隐式那条路走</td><td>0056（DeepFactors）· 0076（NICER-SLAM / DN-SLAM）→ 然后进阶段 F</td></tr>
+        </table>
+      </div>
+
+      <h2>7. 这一季会用到的"看图工具"</h2>
+
+      <p>最后交代一件事：这一季有大量<b>抽象公式</b>（极线几何、光度误差、边缘化、FEJ 一致性、相位模糊度……）。
+      原文的插图往往很漂亮但不够"带入门"。所以从这一季开始，我给自己加了一条规矩：</p>
+
+      <div class="callout">
+        <h4>本季新规矩</h4>
+        <p>凡是<b>晦涩抽象、原文又没有好图</b>的地方，我都会<b>自己画一张具象的图</b>——画面里会出现真实的房间、相机、桌子、走廊、卫星、行人，而不是抽象的点线方块。
+        每张自绘图下面固定三段：<b>这张图在画什么 / 怎么看这张图（分步） / 要记住的一句话</b>。<br>
+        另外，凡是图上出现的<b>曲线和数值点，都是用真实公式算出来的</b>，你可以拿计算器验算。你如果发现哪张图算错了，请直接告诉我——那是我最想被指出的错误。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="check">
+      <h2>8. 读完这一季，你应该能回答</h2>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>关于架构</h4>
+          <p>为什么现代视觉 SLAM 系统几乎都是"三/四线程"结构？跟踪、局部建图、回环、全局优化各自在做什么、为什么可以并行？</p>
+        </div>
+        <div class="mini-card">
+          <h4>关于哲学</h4>
+          <p>"特征法 vs 直接法"到底在争什么？为什么不能简单说谁更好？在什么条件下该选哪一边？</p>
+        </div>
+        <div class="mini-card">
+          <h4>关于融合</h4>
+          <p>IMU 到底给视觉 SLAM 补了三样什么东西（尺度、重力方向、短时运动先验）？初始化为什么是难点？</p>
+        </div>
+        <div class="mini-card">
+          <h4>关于现实</h4>
+          <p>走出实验室之后会撞上什么（光照、动态物体、弱纹理、算力、GNSS 多路径）？每一类问题现在有哪些主流解法？</p>
+        </div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用一句话说清"重投影误差"与"光度误差"的区别。说出各自<b>用到了图像里的什么信息</b>、以及各自的<b>致命弱点</b>是什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>重投影误差</b>：把 3D 点投影到图像上，比较投影位置与观测到的像素位置之间的差距。它只用到<b>特征点的位置</b>（坐标），完全不用灰度的具体数值。<br>
+              <b>致命弱点</b>：只依赖少量稀疏特征，丢掉了边缘、弱纹理等大量信息；在模糊、快速运动、弱纹理场景下容易匹配失败。</p>
+              <p><b>光度误差</b>：把一块像素图案按估计的深度与位姿"搬"到另一帧，比较对应像素的<b>灰度值</b>。它用到了图像里几乎全部信息。<br>
+              <b>致命弱点</b>：对光照/曝光变化极其敏感（所以 DSO 才必须做光度标定 + 仿射亮度模型）；误差函数高度非凸，对初值敏感；对相机标定精度和卷帘快门这类<b>几何噪声</b>尤其脆弱。</p>
+              <p>一句话记法：<b>重投影误差关心"点跑到哪了"，光度误差关心"这块图案变暗了多少"。</b></p>
+            </div></details>
+          </li>
+          <li>第二季 0029 课明确说预积分那篇论文<b>没有初始化章节</b>。请说出：视觉惯性初始化到底要解出哪几个量？为什么它必须是"联合"求解而不是一个个单独解？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>至少要解出四样：<b>① 重力方向</b>（决定 roll/pitch 参考）、<b>② 尺度</b>（单目看不到的世界尺度）、<b>③ 速度</b>（IMU 积分需要初速度）、<b>④ IMU 偏置</b>（陀螺与加速度计的零偏）。</p>
+              <p>为什么必须联合：这几样<b>互相纠缠</b>。举例——重力方向估错，会被 IMU 积分的加速度项"吸收"成尺度误差；尺度估错，又会让速度看起来偏大。单独解任何一个都会把误差归到别人头上（这正是"错误可观性"的来源）。所以主流做法是搭一个线性最小二乘（VINS-Mono 用视觉 SfM 起步，把这四样打包成一个线性方程一起解），或者干脆用"只用惯性测量的优化"（0064 课那篇）。</p>
+            </div></details>
+          </li>
+          <li>"四象限坐标系"里，dense/sparse 与 direct/indirect 是<b>两个正交轴</b>。请各举一个"直接但不稠密"和"稠密但不直接"的例子，并说明为什么这两个例子恰好证明了"正交"。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>直接但不稠密</b>：DSO（0048 课）。它直接在灰度上最小化光度误差（direct），但只用约 2000 个活动点（sparse）——用的点甚至比 ORB-SLAM 还少。</p>
+              <p><b>稠密但不直接</b>：稠密光流 + 正则化那一类（原文在 DSO 的引言里点名过这一格）。它处理整幅图的每个像素（dense），但像素之间的对应关系是靠光流/描述子匹配 <b>显式</b>建立的（indirect），误差仍定义在几何位置上。</p>
+              <p>之所以这两个例子能证明正交：如果"直接"必然意味着"稠密"，那么 DSO 这个反例就不该存在；同理，如果"稠密"必然意味着"直接"，光流法这个反例也不该存在。<b>两个反例各堵住一个方向，所以这两根轴是独立的。</b></p>
+            </div></details>
+          </li>
+          <li>本季有六个"站"在回应"单目尺度不可观"。请按你自己的理解，把六个站分成两类，并说出每一类的<b>代价</b>分别是什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>第一类：把尺度纳入估计</b>（LSD-SLAM 的 sim(3)、VI-DSO 把 scale 当变量、VINS-Mono 联合初始化）。<br>
+              代价：多出状态与耦合，数值上更难——VI-DSO 正是因此才需要发明"动态边缘化"，因为普通边缘化会把旧尺度钉死、把系统拉偏。</p>
+              <p><b>第二类：从外部拿一个尺度</b>（ORB-SLAM2 用双目基线、CNN-SLAM 用学习到的深度、GVINS/P³-VINS 用 GNSS）。<br>
+              代价：多一个"外部来源"，就要多处理它的可靠性问题——双目要标定与同步、学习深度受训练分布限制（CNN-SLAM 在跨域时精度会掉）、GNSS 在城市峡谷里会被多路径污染（所以 GVINS 才需要鲁棒核）。</p>
+              <p>补充：还有<b>第三条路是"我不管"</b>——DSO 就明说自己是纯里程计、尺度随便，评测时用 Sim(3) 对齐。代价是它没法单独用来做导航控制。</p>
+            </div></details>
+          </li>
+          <li>为什么这一季把 <b>PTAM（0042）</b>排得这么靠前，甚至排在 ORB-SLAM 之前？请从"它贡献了什么想法"而不是"它性能多好"的角度回答。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为 PTAM 贡献的不是性能，而是<b>一个架构想法</b>：<b>把"跟踪"与"建图"拆成两个独立的线程</b>。</p>
+              <p>在它之前（MonoSLAM），所有路标和相机状态塞在同一个 EKF 状态向量里，规模一大就崩。PTAM 的观察是：这两件事的<b>时间尺度根本不同</b>——跟踪每帧都要出结果（几十 Hz），建图则是"慢工出细活"（可以几百毫秒）。既然快慢不同，就没必要挤在一条时间线上。</p>
+              <p>拆开之后还带来两个额外好处：① 建图线程可以做真正的<b>批量 BA</b>（而不是 EKF 的一步更新），精度更高；② 地图可以只保留<b>关键帧</b>，规模不再随时间线性增长。</p>
+              <p>这个"分而治之"的想法，之后 ORB-SLAM 直接继承并扩展成三线程（加了回环），再往后几乎所有现代系统都是这个结构。<b>性能会被超越，架构想法不会。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0039-Plenoxels2022-连神经网络都不要.html">← Plenoxels（2022）：连神经网络都不要</a>
+        <a class="next" href="0041-MonoSLAM2007-EKF时代的单目SLAM.html">MonoSLAM（2007）：EKF 时代的单目 SLAM →</a>
+      </div>
+      <p class="foot-note">第二季我们把地基打好了，这一季开始往上盖。慢慢来，这一季有 37 节，不着急一天读完 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

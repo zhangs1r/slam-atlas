@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MSCKF（2007）：不把路标放进状态向量 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0028</div>
+      <h1>MSCKF（2007）：不把路标放进状态向量</h1>
+      <p class="subtitle">前面十一节课讲的都是「优化」，这一节我们回到「滤波」阵营，看一篇 2007 年的聪明设计——它的招牌动作是：把不想估的变量，干净地消掉 🧹</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多状态约束卡尔曼滤波（MSCKF）的核心招式</span>
+        <span>👥 作者：Mourikis &amp; Roumeliotis</span>
+        <span>📅 2007 · ICRA · <i>A Multi-State Constraint Kalman Filter for Vision-aided Inertial Navigation</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 它要解决什么：GPS 失效时如何实时定位</a>
+        <a href="#b">2. 状态向量：只放位姿，不放路标</a>
+        <a href="#c">3. 误差状态：姿态为什么用 3 维最小表示</a>
+        <a href="#d">4. IMU 测量模型：ECEF 系里的地球自转与重力</a>
+        <a href="#e">5. ★ 核心贡献：两次投影消掉路标</a>
+        <a href="#f">6. 实验：没有真值也能验证</a>
+        <a href="#g">7. 明确局限与一条常见误传</a>
+        <a href="#h">8. 结论、开放方向与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 MSCKF 为什么「不把路标放进状态向量」；讲透它的两次投影（左零空间 + QR）是怎么把路标抹掉的；并把它和 0019 的 Schur 消元并列理解为「同一思想的两个版本」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 <b>0019</b>：那里用块消元（Schur 补）把三维点消掉，这里用正交投影把路标消掉——同一件事的滤波版。接 <b>0003</b>：第一季讲过的「滤波 → 优化」主线里，这是滤波阵营的代表作。接 <b>0008</b>：第一季提到 IMU 有 200 Hz 但没讲怎么用，这一节是第一次给出 IMU 在估计器里的具体用法（式 7/8/9）。</p></div>
+      </div>
+
+      <h2>1. 它要解决什么：GPS 失效时如何实时定位</h2>
+      <p>视觉-惯性导航想解决的问题很实在：在 <b>GPS 会失效</b> 的场景——城市峡谷（高楼把卫星信号挡了）、室内、甚至太空——让一个带着相机和 IMU（惯性测量单元，简单说就是陀螺仪 + 加速度计）的平台，<b>实时</b>算出自己在哪、朝哪走。原文一上来就点出：图像是高维测量，能同时跟踪成百上千个特征点，<b>「数据量巨大，对估计算法设计提出了重大挑战」</b>。这其实是整篇的动机背景。</p>
+      <p>在 2007 年，处理「位姿 + 路标」大规模联合估计主要有三条路线，原文对它们逐一做了诚实的评述：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① SLAM 型</h4><p>联合估计全部位姿和全部路标。优点是能正确处理变量间的相关性；缺点是「<i>properly treating these correlations is computationally costly</i>」——要算对相关性就贵，所以「在数千个特征的场景里做视觉 SLAM 仍是难题」。</p></div>
+        <div class="mini-card"><h4>② 仅位姿型（成对图像约束）</h4><p>只拿两两图像之间的约束来估位姿。两个硬伤：一是「<i>when a feature is seen in multiple images, the additional constraints… are discarded, thus resulting in loss of information</i>」（同一特征被多帧看到时，多出来的约束被丢掉了，<b>信息损失</b>）；二是「<i>when the same image measurements are processed for computing several displacement estimates, these are not statistically independent</i>」（同一批测量被反复用，<b>统计上不再独立</b>）。</p></div>
+        <div class="mini-card"><h4>③ 多相机位姿窗口型</h4><p>维护一个位姿滑窗。原文举了 [13]（增广状态 KF 维护位姿窗口）、[14]（联合估全部位姿，但都用两两相对位姿测量）、[16]（Nistér VO，用完就丢路标，<b>不含惯性</b>，且「路标估计和相机轨迹的相关性没被正确处理」）、[17]（VSDF，混合批/递归，有延迟线性化和信息矩阵稀疏两个好处，但有运动模型时复杂度「<i>at best quadratic in the number of features</i>」）。</p></div>
+      </div>
+      <div class="callout">
+        <h4>本文的自我定位（很关键）</h4>
+        <p>作者说自己<b>兼具延迟线性化（delayed linearization）的好处，而复杂度对特征数是线性的</b>。换句话说：别人要么慢（SLAM 型、VSDF）、要么丢信息或不能处理相关性（仅位姿型、Nistér VO），MSCKF 想两头都占——既准（不丢相关性信息），又便宜（特征数只线性增长）。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 状态向量：只放位姿，不放路标</h2>
+      <p>我们先解释一个基本词：<b>状态向量（state vector）</b>就是估计器「正在求解的一筐未知数」。在 SLAM 里，这筐数里通常既有「相机/机器人位姿」，也有「路标（三维特征点）的位置」。</p>
+      <p>MSCKF 的第一个大胆决定是：<b>状态里只放相机位姿的历史副本，不放路标。</b>具体写法是（式 1/4）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf X_{\mathrm{IMU}}=[{}_G^I\bar q^T\ \mathbf b_g^T\ {}^G\mathbf v_I^T\ \mathbf b_a^T\ {}^G\mathbf p_I^T]^T$$</div>
+        <div class="flow-formula">$$\hat{\mathbf X}_k=[\hat{\mathbf X}_{\mathrm{IMU}_k}^T\ {}_G^{C_1}\hat{\bar q}^T\ {}^G\hat{\mathbf p}_{C_1}^T\ \cdots\ {}_G^{C_N}\hat{\bar q}^T\ {}^G\hat{\mathbf p}_{C_N}^T]^T$$</div>
+      </div>
+      <p>大白话翻译：状态分两块。第一块 $\mathbf X_{\mathrm{IMU}}$ 是<b>「当前这一个时刻」</b>的本体状态，里面装着——机体系相对世界系的姿态四元数 $\bar q$（带个横杠表示是「误差四元数/标称四元数」那一族）、陀螺零偏 $\mathbf b_g$、世界系下的速度 ${}^G\mathbf v_I$、加速度计零偏 $\mathbf b_a$、世界系下的位置 ${}^G\mathbf p_I$。第二块是把<b>过去 $N$ 个相机位姿</b>（每个相机的姿态和位置）像串糖葫芦一样串进状态里，所以叫「多状态（Multi-State）」。</p>
+      <div class="callout">
+        <h4>为什么这样设计：维数不随特征数涨</h4>
+        <p>注意，整串状态里<b>一个路标坐标都没有</b>。路标的数量是几百几千，可状态维度只和「相机位姿的个数 $N$」有关。原作者特意让状态维度对特征数是<b>线性</b>的——这正是上一节说的「复杂度的卖点」：无论你看到多少特征点，要解的方程组大小都不膨胀。这是 MSCKF 能跑实时的根本设计动机。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 误差状态：姿态为什么用 3 维最小表示</h2>
+      <p>滤波器真正传播的不是「状态本身」，而是「<b>状态误差</b>」的均值和协方差。这里有个零基础最容易卡住的点：<b>姿态该怎么写？</b></p>
+      <p>一个旋转用四元数有 4 个分量，但「真实的旋转自由度只有 3」（你转一下只需要 3 个数：绕三个轴的转角）。所以作者让姿态误差用 <b>3 维最小表示</b>（式 2/3）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\bar q=\delta\bar q\otimes\hat{\bar q},\qquad \delta\bar q\simeq\begin{bmatrix}\tfrac12\delta\pmb\theta^T &amp; 1\end{bmatrix}^T$$</div>
+      </div>
+      <p>意思是：真实姿态 = 一个小误差旋转 $\delta\bar q$ 乘到估计姿态 $\hat{\bar q}$ 上（符号 $\otimes$ 是四元数乘法）；而这个小误差旋转，用一个 3 维小向量 $\delta\pmb\theta$ 就足够描述（式子右边那个 4 分量里，前 3 个是 $\tfrac12\delta\pmb\theta$，最后一个是 1，近似成立）。</p>
+      <div class="callout">
+        <h4>为什么姿态不能用四元数 4 个分量进协方差</h4>
+        <p>如果把 4 个分量都当独立变量写进协方差矩阵，就会出现麻烦：四元数有「单位长度」这个约束（4 个数其实不独立），直接拿 4 维高斯去描述，<b>协方差矩阵会奇异（不可逆），正规方程欠定</b>——解不出来或解出错。所以必须塌缩到 3 维「最小表示」。这跟 0019 里讲过的「参数化要在局部接近线性」是<b>同一件事</b>：旋转不是平面上的向量，不能随便加减，得在局部用 3 个数近似。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. IMU 测量模型：ECEF 系里的地球自转与重力</h2>
+      <p>这一节第一次把 IMU 真正接进估计器。作者选的全球坐标系是 <b>ECEF（地球中心地球固定系）</b>——顾名思义，这个坐标系跟着地球一起转。正因为它跟着地球转，模型里就必须<b>显式写出地球自转和重力</b>（式 7/8）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\pmb\omega_m=\pmb\omega+\mathbf C({}_G^I\bar q)\pmb\omega_G+\mathbf b_g+\mathbf n_g$$</div>
+        <div class="flow-formula">$$\mathbf a_m=\mathbf C({}_G^I\bar q)\Big({}^G\mathbf a-{}^G\mathbf g+2\lfloor\pmb\omega_G\times\rfloor{}^G\mathbf v_I+\lfloor\pmb\omega_G\times\rfloor^2{}^G\mathbf p_I\Big)+\mathbf b_a+\mathbf n_a$$</div>
+      </div>
+      <p>逐符号翻译：第一行是陀螺测到的角速度 $\pmb\omega_m$，它等于「真实角速度 $\pmb\omega$」+「把地球自转 $\pmb\omega_G$ 从世界系搬到机体系」+「零偏 $\mathbf b_g$」+「噪声 $\mathbf n_g$」。第二行是加速度计读数 $\mathbf a_m$，它等于「把世界系里的真实加速度 ${}^G\mathbf a$ 减去重力 ${}^G\mathbf g$，再加上地球自转带来的科里奥利项和离心项（那两个带 $\lfloor\pmb\omega_G\times\rfloor$ 的项），搬到机体系」+「加速度零偏 $\mathbf b_a$」+「噪声 $\mathbf n_a$」。</p>
+      <div class="callout">
+        <h4>★ 与下一节预积分的关键对照（务必记住）</h4>
+        <p>下一节（0029）的预积分论文里，作者<b>明确写道</b>：「<i>We neglect the effects due to earth's rotation, which amounts to assuming that W is an inertial frame</i>」（我们忽略地球自转的影响，相当于把世界系当成惯性系）。<b>两篇同样是 VIO，一篇用 ECEF（显式建地球自转与重力），一篇把世界系当惯性系直接忽略地球自转。</b>这是两篇论文最重要的对照点——一篇认真考虑了地球在转，一篇干脆假设地球不转。等看到下一节你会更清楚这个反差。</p>
+      </div>
+      <p>有了测量模型，误差状态的协方差就按 <b>Lyapunov 方程</b>（一个描述「协方差怎么随时间演化」的微分方程）传播（式 12）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\dot{\mathbf P}_{II}=\mathbf F\mathbf P_{II}+\mathbf P_{II}\mathbf F^T+\mathbf G\mathbf Q_{\mathrm{IMU}}\mathbf G^T$$</div>
+      </div>
+      <p>其中状态转移矩阵 $\mathbf F$ 通过数值积分 $\dot\Phi(t_k+\tau,t_k)=\mathbf F\Phi$ 得到。<b>协方差（covariance）</b>就是「估计误差的不确定性有多大」的矩阵化描述——对角线越大表示那个量越没谱。Lyapunov 方程说的是：不确定度会随时间从噪声 $\mathbf Q$ 累积、并在状态之间互相耦合着长大。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 核心贡献：两次投影消掉路标</h2>
+      <p>这是全篇的技术高潮，也是它名字里「约束（Constraint）」的由来。目标只有一个：<b>用上「同一个路标被多帧看到」的全部信息，却又不把路标放进状态。</b>作者靠「两次投影」做到。</p>
+
+      <h3>第一层：一条测量的真身是「残差」</h3>
+      <p>零基础最容易错的一点：以为「像素坐标直接就是观测量」。在扩展卡尔曼滤波（EKF）里，真正进方程的不是像素，而是<b>残差（residual）</b>——预测值和测量值之差。对第 $j$ 个路标在第 $i$ 帧的观测（式 18/21/22）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf z_i^{(j)}=\frac{1}{{}^{C_i}Z_j}\begin{bmatrix}{}^{C_i}X_j\\{}^{C_i}Y_j\end{bmatrix}+\mathbf n_i^{(j)}$$</div>
+        <div class="flow-formula">$$\mathbf r^{(j)}\simeq\mathbf H_{\mathbf X}^{(j)}\tilde{\mathbf X}+\mathbf H_f^{(j)}\ {}^G\tilde{\mathbf p}_{f_j}+\mathbf n^{(j)}$$</div>
+      </div>
+      <p>第二行是关键：残差 $\mathbf r^{(j)}$ 被线性化成「$\mathbf H_{\mathbf X}$ 乘状态误差 $\tilde{\mathbf X}$」加上「$\mathbf H_f$ 乘<b>路标坐标误差</b> ${}^G\tilde{\mathbf p}_{f_j}$」再加噪声。注意，这里路标误差 ${}^G\tilde{\mathbf p}_{f_j}$ 还是个甩不掉的尾巴——它把「我们不想估的路标」硬塞进了方程。</p>
+
+      <h3>第二层：左零空间投影（式 23）——把路标抹掉</h3>
+      <p>$\mathbf H_f^{(j)}$ 是个 $2M_j\times 3$ 的列满秩矩阵（$M_j$ 是这个路标被看到的帧数）。作者取一个矩阵 $\mathbf A$，它的列张成 $\mathbf H_f$ 的<b>左零空间（left nullspace）</b>：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf r_o^{(j)}=\mathbf A^T(\mathbf z^{(j)}-\hat{\mathbf z}^{(j)})\simeq\mathbf A^T\mathbf H_{\mathbf X}^{(j)}\tilde{\mathbf X}+\mathbf A^T\mathbf n^{(j)}=\mathbf H_o^{(j)}\tilde{\mathbf X}+\mathbf n_o^{(j)}$$</div>
+      </div>
+      <p>投影之后的新残差 $\mathbf r_o^{(j)}$，<b>维度是 $2M_j-3$</b>。原文说得很干脆：「<i>Since the $2M_j\times3$ matrix $\mathbf H_f^{(j)}$ has full column rank, its left nullspace is of dimension $2M_j-3$</i>」，而且「<i>This residual is independent of the errors in the feature coordinates, and thus EKF updates can be performed based on it</i>」——<b>残差里不再含路标坐标误差，所以可以直接拿去做 EKF 更新了。</b></p>
+      <div class="callout">
+        <h4>「零空间」的几何直觉</h4>
+        <p>把 $\mathbf H_f$ 想成一个「从路标坐标到图像残差」的映射。$2M_j\times 3$ 的它表示：有 3 个方向（路标坐标的 3 个自由度）会「漏」进残差。左零空间就是一组「专门抵消这 3 个方向」的基——乘上去之后，路标坐标这个未知量就被<b>从方程里抹掉了</b>，只剩下对状态 $\tilde{\mathbf X}$ 的约束。$\mathbf A$ 不必真的显式构造出来，用 Givens 旋转花 $O(M_j^2)$ 就能完成；噪声协方差也简单，$E\{\mathbf n_o^{(j)}\mathbf n_o^{(j)T}\}=\sigma^2_{\mathrm{im}}\mathbf I_{2M_j-3}$。</p>
+      </div>
+
+      <h3>第三层：把所有特征堆起来做 QR（式 26–28）</h3>
+      <p>把所有路标的 $\mathbf H_{\mathbf X}$ 上下拼成大矩阵，做一次 QR 分解：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf H_{\mathbf X}=[\mathbf Q_1\ \mathbf Q_2]\begin{bmatrix}\mathbf T_H\\\mathbf 0\end{bmatrix}\quad\Longrightarrow\quad \mathbf r_n=\mathbf Q_1^T\mathbf r_o=\mathbf T_H\tilde{\mathbf X}+\mathbf n_n,\qquad \mathbf R_n=\sigma^2_{\mathrm{im}}\mathbf I_r$$</div>
+      </div>
+      <p>原文一句话点破：「<i>The residual $\mathbf Q_2^T\mathbf r_o$ is only noise, and can be completely discarded.</i>」——被 $\mathbf Q_2^T$ 投影掉的那部分纯粹是噪声，直接扔掉；剩下的 $\mathbf r_n$ 是干净的、只关于状态 $\tilde{\mathbf X}$ 的约束。</p>
+
+      <h3>更新与复杂度（式 29–31）：投影为什么省算力</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf K=\mathbf P\mathbf T_H^T(\mathbf T_H\mathbf P\mathbf T_H^T+\mathbf R_n)^{-1},\qquad \Delta\mathbf X=\mathbf K\mathbf r_n$$</div>
+        <div class="flow-formula">$$\mathbf P_{k+1|k+1}=(\mathbf I_\xi-\mathbf K\mathbf T_H)\mathbf P_{k+1|k}(\mathbf I_\xi-\mathbf K\mathbf T_H)^T+\mathbf K\mathbf R_n\mathbf K^T$$</div>
+      </div>
+      <p>这里 $\xi=6N+15$ 是状态误差的维数。一次更新的代价是 $\max(O(r^2d),O(\xi^3))$。关键对比来了：<b>如果不投影、直接用 $\mathbf r_o$，卡尔曼增益要算一个 $O(d^3)$ 的大逆</b>（其中 $d$ 是总测量维数）。原文说「<i>since typically $d\gg\xi,r$</i>」，投影带来了实质节省。举个具体例子：<b>10 个特征，每个被 10 个位姿看到，那么 $d=170$</b>——这时候投影的省算力就非常可观了。</p>
+      <div class="callout">
+        <h4>★ 与 0019 的 Schur 消元并列讲</h4>
+        <p>请把它和 0019 钉在一起记：<b>两者都是「把不想估的变量消掉」</b>。那里用块消元（Schur 补），把三维点从正规方程里消掉；这里用正交投影（零空间 + QR），把路标从 EKF 更新里消掉。张成的空间维数都是 <b>$2M-3$</b>——两种范式，同一个「减 3」。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>MSCKF 的第一次投影（左零空间）把 $\mathbf H_f^{(j)}$ 的哪一部分从残差里抹掉了？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。左零空间基专门抵消路标坐标误差 ${}^G\tilde{\mathbf p}_{f_j}$ 那个尾巴，投影后残差只剩状态误差 $\tilde{\mathbf X}$，维数也从 $2M_j$ 降到 $2M_j-3$。" onclick="lessonKit.answer(this,'q0028a')">把路标坐标误差项抹掉，残差不再依赖路标</button>
+          <button data-correct="no" data-explanation="不对。姿态误差仍然在状态 $\tilde{\mathbf X}$ 里，投影后残差 $\mathbf H_o\tilde{\mathbf X}$ 依然依赖姿态，没有被抹掉。" onclick="lessonKit.answer(this,'q0028a')">把相机姿态误差也一起抹掉，只剩纯噪声</button>
+          <button data-correct="no" data-explanation="不对。投影改变的是残差依赖的变量（消掉路标），并不增大测量噪声；噪声协方差只是按投影重新变成了 $\sigma^2_{\mathrm{im}}\mathbf I_{2M_j-3}$。" onclick="lessonKit.answer(this,'q0028a')">把测量噪声本身放大了，所以才更准</button>
+        </div>
+        <div class="quiz-feedback" id="q0028a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验：没有真值也能验证</h2>
+      <p>原文用的是自采的室外数据：美国 Minneapolis 一处住宅区街道，传感器架在车顶。具体配置（§IV，抄准）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>传感器</h4><p>Pointgrey FireFly 相机 <b>640×480 @ 3 Hz</b>；Inertial Science ISIS IMU <b>@ 100 Hz</b>；共 <b>1598 张图、约 9 分钟</b>；特征用 SIFT；最多保留 $N_{\max}=30$ 个相机位姿；全程<b>离线</b>处理。</p></div>
+        <div class="mini-card"><h4>精度</h4><p>轨迹全长 <b>3.2 km</b>；共 <b>142,903 个特征</b>被成功跟踪并用于 EKF 更新；末位置误差约 <b>10 m，即 0.31% 行程</b>；<b>3σ 姿态优于 1°、速度优于 0.35 m/s</b>。</p></div>
+        <div class="mini-card"><h4>算力</h4><p>单核 Intel T7200（2 GHz）上以 <b>14 Hz</b> 处理（相机只录了 3 Hz，受硬盘空间限制，不是算法瓶颈）。</p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2007_A_Multi-State_Constraint_Kalman_Filter_for_Vision-aided_/7f6636e6502cf814974b22417b063a6e0b39015abf10c8dd4bf0fefffb1c240f.jpg" alt="Fig. 1">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Some images from the dataset used for the experiment. The entire video sequence can be found at [26].（实验所用数据集中的若干图像；完整视频见 [26]。）<br>
+          <b>怎么看这张图：</b>这是论文里展示数据集的三张示例图之一，告诉你实验是在真实街道场景里跑的——有房屋、路面、车辆，不是实验室摆拍。它帮你建立「这篇方法真在真实大场景验证过」的直观印象。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2007_A_Multi-State_Constraint_Kalman_Filter_for_Vision-aided_/bf4f151c0967aade2525a0cf56d2d5b8a3d55070abe9ab8dfc4e5c680d110873.jpg" alt="Fig. 2">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The estimated trajectory overlaid on a map of the area where the experiment took place. The initial position of the car is denoted by a red square, and the scale of the map is shown on the top left corner.（估计轨迹叠加在实验区域地图上；车辆初始位置用红方块标出，地图比例尺在左上角。）<br>
+          <b>怎么看这张图：</b>这是「没有真值怎么验证」的核心一张。把 3.2 km 的估计轨迹叠到真实街道地图上，肉眼看它和街道布局重合得怎么样；红方块是起点。它不证明「误差 10 m」这个数（那是靠别的手段估的），但能直观说明轨迹没飘到离谱。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2007_A_Multi-State_Constraint_Kalman_Filter_for_Vision-aided_/be87b2984dd37da89ac30424e987ec672dabc7b813a41344b3c1a7862a9234a1.jpg" alt="Fig. 3(a)">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The 3σ bounds for the errors in the position, attitude, and velocity. The plotted values are 3-times the square roots of the corresponding diagonal elements of the state covariance matrix. Note that the EKF state is expressed in ECEF frame, but for plotting we have transformed all quantities in the initial IMU frame…（位置、姿态、速度误差的 3σ 界；数值为状态协方差对角元的 3 倍平方根。EKF 状态在 ECEF 系，绘图时转到初始 IMU 系，其 x 轴约指南、y 轴指东。）<br>
+          <b>怎么看这张图：</b>这是 Fig. 3 的 (a) 子图，画的是位置误差的 3σ 界（滤波器<b>自报</b>的置信区间，不是真值）。注意图注说状态原本在 ECEF 系，画图时转到了初始 IMU 系。它和 (b)(c) 一起，是用「滤波器自己报的不确定性」来验证一致性的关键证据。
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <h4>★ 必须如实说明的两件事</h4>
+        <p>① <b>本文没有做与 EKF-SLAM 的定量对比实验。</b>对 VSDF 的对比是理论论证，对 [16] 是定性描述——<b>不要替原文补实验</b>。② <b>数据没有真值</b>：原文写「<i>A GPS sensor was not available during the experiment, and therefore no ground-truth trajectory data exists.</i>」所以验证只能靠两条路：Fig. 2 把轨迹叠地图目测 + Fig. 3 的 3σ 界（滤波器自报的置信区间）。<b>这种「没有真值怎么办」的科研态度，本身就值得你学。</b></p>
+      </div>
+      <p>鲁棒性方面，作者用一个简单的 <b>马氏距离（Mahalanobis distance）检验</b>来剔除落在动态物体（车、行人、风中树叶）上的特征。原文还强调，本序列相机运动几乎平行于光轴，那是对图像法最不利的条件之一。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 明确局限与一条常见误传</h2>
+      <p>读这篇论文，务必要诚实列出它的边界（逐条）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 最优性只到一阶</h4><p>原文：「<i>is optimal, up to linearization errors</i>」——一切推导建立在「线性化近似够好」前提上，大转角/大位移会出错。</p></div>
+        <div class="mini-card"><h4>② 特征位置估计次优</h4><p>附录原文：在最小二乘求特征位置时，相机位姿被当成已知常数、忽略了它的协方差，「<i>at the expense of the optimality of the feature position estimates</i>」（牺牲了特征位置估计的最优性）。</p></div>
+        <div class="mini-card"><h4>③ 非线性会致不一致</h4><p>远距离特征时「<i>false local minima can cause convergence to inconsistent solutions</i>」，靠逆深度参数化 + 延迟线性化缓解。</p></div>
+        <div class="mini-card"><h4>④ 图像只有 3 Hz</h4><p>原文归因于「<i>due to limited hard disk space on the test system</i>」——纯硬件限制，不是算法上限。</p></div>
+        <div class="mini-card"><h4>⑤ 验证范围窄</h4><p>只在单目 + 单一 IMU 上验证；双目、尺度、时间同步、纯旋转/静止退化等情况都未讨论。</p></div>
+      </div>
+      <div class="callout">
+        <h4>★ 一条必须纠正的常见误传</h4>
+        <p><b>本文没有可观性（observability）分析章节</b>，也没有「特征点不进入状态反而避免了错误可观性信息」这类论证。那个论证出现在<b>下一节</b>的预积分论文的 Related Work，以及 Hesch 等人的后续工作里。<b>不要把这条安在 MSCKF 头上。</b></p>
+      </div>
+      <div class="callout">
+        <h4>OCR 提醒（可在课里如实说明）</h4>
+        <p>原始 PDF 转文字时，坐标系的上下标前缀被误读成了 $\mathbf{\Pi}$、$\mathbf{\Xi}$、$\mathbf{\Lambda}$ 等「幽灵符号」；式 (6) 整行错位；$\lfloor\pmb\omega_G\times\rfloor$ 的方括号被读成了竖线；最逗的是——<b>真值末位置 $[0\ 0\ 0]^T$ 里的两个 0 被 OCR 认成了 $\omega$</b>。这条直接印证了 OCR 会把数字 0 与字母 ω 混淆，读论文原文时要多留个心眼。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 结论、开放方向与衔接</h2>
+      <p>原文结论：测量模型最优（至线性化误差）、复杂度对特征数线性、可在真实大场景里实时高精度定位；方法还能移植到别的本体/外部传感器（轮式里程计、激光雷达）。两条开放方向：<b>状态长度可以自适应调整</b>；<b>若把 persistent features（长期存在的特征）也放进状态，就能升级成完整 SLAM</b>，进一步改善长回路区域的精度。</p>
+      <div class="paper-divider"></div>
+      <h3>本节与全季的关系</h3>
+      <p>回到开头那句话：<b>这一节展示了一个跨范式通用的招式——把不想估的变量消掉。</b>上一节 0019 用的是 Schur 块消元，这一节用的是零空间投影，是同一思想的两个版本，请你把它们并排钉在脑子里。同时，它也是第一季 0003 讲的「滤波 → 优化」主线里，<b>滤波阵营的代表作</b>：一次线性化、测量必须延迟、无法重线性化。</p>
+      <p>而最自然的下一步，就是<b>下一节（0029）</b>：预积分论文明确把 MSCKF 列为「structureless（无结构）」的滤波代表，并指出它的代价是「<i>processing needs to be delayed… measurements can only be linearized and absorbed once</i>」（处理必须被延迟、每条测量只能被线性化和吸收一次）。这句话正是从「滤波」走到「优化 + 预积分」的教科书级过渡词——我们下一节见。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么 MSCKF 必须把「同一个路标被多帧看到」的测量「延迟」到该路标不再被观测后才处理？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。因为零空间投影要消掉的是「路标坐标误差」，而路标坐标是在多帧观测齐全后才能一起消掉的；一旦该路标还可能出现新观测，EKF 就得等它「退休」再统一处理，这正是滤波版 structureless 方法的代价。" onclick="lessonKit.answer(this,'q0028b')">因为投影需要该路标的全部观测到位才能一次性消掉路标</button>
+          <button data-correct="no" data-explanation="不对。这里没有「神经网络」或训练的概念；延迟是为了数学上能完整构造零空间投影，与学习无关。" onclick="lessonKit.answer(this,'q0028b')">因为要等 GPU 把特征跟踪训练完</button>
+          <button data-correct="no" data-explanation="不对。延迟恰恰是 MSCKF 相对批优化的短板；下一节会讲优化法（如 iSAM2）可以多次重线性化、增量加入新测量，不必这样被动延迟。" onclick="lessonKit.answer(this,'q0028b')">因为延迟能让它在精度上超过批优化方法</button>
+        </div>
+        <div class="quiz-feedback" id="q0028b"></div>
+      </div>
+
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 1：</b>MSCKF 的状态向量里放了什么、没放什么？为什么这个选择能让复杂度对特征数线性？</p>
+          <p><b>答：</b>状态里放的是「当前本体状态 + 过去 $N$ 个相机位姿」，<b>一个路标坐标都没放</b>。因为状态维度只和位姿个数 $N$ 有关，与看到的路标数量无关；路标虽然被观测到几百上千个，却不增加要解的未知数规模，所以复杂度对特征数只是线性。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 2：</b>式 (23) 的投影后残差维数是 $2M_j-3$，那个「减 3」减掉的是什么？</p>
+          <p><b>答：</b>减掉的是路标坐标的 3 个自由度。$\mathbf H_f^{(j)}$ 是 $2M_j\times 3$ 列满秩，它的左零空间维数正好是 $2M_j-3$；投影把「路标坐标误差」这 3 个方向从残差里抹掉了，所以残差不再依赖路标。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 3：</b>为什么说 MSCKF 把路标「消掉」和 0019 的 Schur 消元是同一件事？</p>
+          <p><b>答：</b>两者目标相同——把不想估的变量（路标/三维点）从估计方程里移除，只留下位姿相关项，从而省算力又不丢信息。区别只是手段：0019 在批量最小二乘里用块消元（Schur 补）把点消掉；MSCKF 在 EKF 更新里用正交投影（零空间 + QR）把点消掉。两者张成的空间维数都是 $2M-3$。</p>
+        </div></details>
+        <details class="exercise-answer"><summary>展开查看答案</summary><div>
+          <p><b>练习 4：</b>本文实验「没有真值」却声称末位置误差约 10 m（0.31% 行程），这是怎么得到的？这样声称严谨吗？</p>
+          <p><b>答：</b>原文明确说实验期间没有 GPS、因此不存在真值轨迹。10 m 这个数并不是「和真值比」得到的，而是靠 Fig. 2（轨迹叠地图目测）和 Fig. 3（滤波器自报的 3σ 界）来间接说明一致性。严谨地说，这是「自洽性（consistency）验证」而非「精度真值验证」，作者没有夸大成有真值的精度评测——读论文时要分清这两件事。</p>
+        </div></details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0027-COLMAP-从无序图像到三维重建.html">← 上一课：COLMAP（2016）</a>
+        <a class="next" href="0029-IMU预积分上-为什么需要预积分.html">下一课：IMU 预积分（上） →</a>
+      </div>
+      <p class="foot-note">把「不想估的变量消掉」这招练熟，下两节你会看到它如何在更硬的连续时间问题上再进化 💪</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

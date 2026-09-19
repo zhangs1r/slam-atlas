@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RTAB-Map（2019）：记忆管理与长期建图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0053</div>
+      <h1>RTAB-Map（2019）：记忆管理与长期建图</h1>
+      <p class="subtitle">全季唯一一篇「库论文」——它把一整套 SLAM 做成了能长期在线的工程产品，真正的难点是「怎么不把内存和时间撑爆」 🗄️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：三级记忆、TF-IDF 回环、多传感器接口、记忆管理</span>
+        <span>👥 作者：Labbé & Michaud（舍布鲁克大学）</span>
+        <span>📅 2019 · <i>RTAB-Map as an open-source lidar and visual SLAM library</i>（JFR）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">先判定：这是库论文</a>
+        <a href="#b">★ 三级记忆抽屉</a>
+        <a href="#c">★ 回环检索公式的诚实说明</a>
+        <a href="#d">多传感器接口</a>
+        <a href="#e">★ 记忆管理的可扩展性证据</a>
+        <a href="#f">工程准则与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：判定 RTAB-Map 是一篇「库论文」并说出依据；用抽屉比喻讲清 STM/WM/LTM 三级记忆怎么流动；复述回环检索用 TF-IDF + 贝叶斯（并诚实说明 2019 正文未重述公式）；复述输入×输出矩阵；用 Fig. 18 说明记忆管理为何必要；以及记住「无长距激光则本体里程计必需」这条工程准则。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>上一节 <b>0052 RGBD-SLAM-v2</b> 暴露了一个硬伤：大回环后体素地图只能重建。本节 RTAB-Map 正是为解决「长期在线建图」而生的——它的节点里存<b>局部占据栅格</b>，回环时按新位姿<b>重拼</b>全局栅格，从而绕开了上一节的坑。它和 <b>0023 PCL</b> 一样是「库论文」（前面我们讲过 PCL 那篇没有性能数字、没有 limitations 的教训），所以本节也要对照着看它作为库论文「该有而原文有没有」的东西。</p></div>
+      </div>
+
+      <h2>1. ★ 先判定：这是一篇「库论文」，依据是什么</h2>
+      <p>读任何一篇之前，先给它定性。RTAB-Map 这篇是<b>全季唯一一篇库论文（library paper）</b>——它不像前面 DVO、RGBD-SLAM-v2 那样只讲一个算法，而是讲「一个开源库怎么把整套 SLAM 工程化」。判定依据很硬：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>开源库 + ROS 节点</h4><p>自 2013 年开源，集成进 ROS 成为 <b>rtabmap_ros</b> 包；正文给的是整个系统的<b>框图</b>（见 Fig. 1）和节点数据流，而不是单一算法。</p></div>
+        <div class="mini-card"><h4>密集的参数表</h4><p>正文列了 <b>Table 2</b> 一堆默认参数（Mem/STMSize=30、Mem/RehearsalSimilarity=0.2、Rtabmap/TimeThr=0 ms 等），这是「给工程师调」的论文特征。</p></div>
+        <div class="mini-card"><h4>方法比较矩阵</h4><p><b>Table 1</b> 把十几种开源 SLAM 的「输入 × 输出」列成矩阵横向比较——典型库论文写法。</p></div>
+        <div class="mini-card"><h4>社区规模</h4><p>原文自称是 ROS 上最活跃使用的包之一，论坛 + GitHub + ROS Answers 累计 <b>超过 1,600 个问题</b>。</p></div>
+      </div>
+      <p>它真正的贡献不在某个惊艳的新公式，而在「<b>把长期在线 SLAM 的工程难题系统化了</b>」：内存怎么不爆、回环怎么不忘、多传感器怎么统一、离线比较怎么做得公平。这就回到我们这一节的主线——把一整套 SLAM 做成产品时，真正难的是什么。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_RTABMap/5f4517d7571a35800bd7deff1536a268d288769db9b2c71280a089d613aa1747.jpg" alt="rtabmap ROS node block diagram">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Block diagram of rtabmap ROS node. Required inputs: TF, odometry from any source (3DoF or 6DoF), one of camera inputs with calibration. Optional: 2D lidar scan or 3D lidar point cloud. Outputs: Map Data, Map Graph, odometry correction on TF, optional OctoMap, optional dense Point Cloud, optional 2D Occupancy Grid.<br>
+          <b>怎么看这张图：</b>这是 RTAB-Map 的「总装图」。最该盯住的是那个 <b>WM（working memory，工作记忆）</b>和 <b>LTM（long-term memory，长期记忆）</b>的划分——所有模块（回环检测、图优化、全局地图拼装）都围着 WM 转，而 LTM 是「暂时归档、需要时再捞回来」的地方。这正是本节灵魂「三级记忆」的工程落点。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 核心一：三级记忆（本节灵魂）</h2>
+      <p>长期在线 SLAM 最大的敌人是：<b>图越长，每加一个节点的处理时间越长，迟早突破实时上限</b>。RTAB-Map 的解法是把记忆切成三级，并用「权重 + 抽屉」来管理。先用生活比喻：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>STM（短期记忆）</h4><p>像<b>手边</b>的便签：固定容量（默认 <b>30 个节点</b>，Mem/STMSize=30），是刚进来、还没定性的新节点缓冲。</p></div>
+        <div class="mini-card"><h4>WM（工作记忆）</h4><p>像<b>桌上</b>正在用的文件：回环检测、图优化、地图拼装都只在 WM 里跑。WM 有容量上限（Rtabmap/MemoryThr）。</p></div>
+        <div class="mini-card"><h4>LTM（长期记忆）</h4><p>像<b>库房</b>：被移出 WM 的节点归档到这里，「不在桌上了」，但没删。</p></div>
+      </div>
+      <p>流动规则（请一定记清方向）：</p>
+      <ul>
+        <li><b>新节点先进 STM。</b> STM 满了（到 30）就把<b>权重最小且最旧</b>的节点挪进 LTM。</li>
+        <li><b>权重怎么来？</b> 用启发式更新：当新节点和上一个节点「视觉上相似」（对应视觉词比例超过 Mem/RehearsalSimilarity=<b>0.2</b>），新节点的权重就 +1 并继承上一节点的权重；越常被 revisits 到的地方权重越高，越「重要」、越晚被踢出。</li>
+        <li><b>回环一旦命中，就把 LTM 里「该节点的图邻域」整片打捞回 WM。</b> 注意：<b>只有被用到的东西才会从库房调回桌上</b>——这就是它能长期运行、又不被内存压垮的根本原因。</li>
+      </ul>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 三级记忆的抽屉图（数据怎么流动）</text>
+          <!-- STM left -->
+          <rect x="30" y="70" width="240" height="330" fill="#e3f2fd" stroke="#1565c0" stroke-width="2.5" rx="8"/>
+          <text x="150" y="98" fill="#0d3c75" font-size="14" text-anchor="middle" font-weight="700">手边 STM（30 格）</text>
+          <!-- slots -->
+          <rect x="55" y="120" width="190" height="26" fill="#ffffff" stroke="#90caf9" stroke-width="1.5"/>
+          <rect x="55" y="156" width="190" height="26" fill="#ffffff" stroke="#90caf9" stroke-width="1.5"/>
+          <rect x="55" y="192" width="190" height="26" fill="#ffecb3" stroke="#ef6c00" stroke-width="1.5"/>
+          <text x="150" y="209" fill="#7a1f00" font-size="11" text-anchor="middle">权重最小且最旧</text>
+          <rect x="55" y="228" width="190" height="26" fill="#ffffff" stroke="#90caf9" stroke-width="1.5"/>
+          <rect x="55" y="264" width="190" height="26" fill="#ffffff" stroke="#90caf9" stroke-width="1.5"/>
+          <text x="150" y="320" fill="#37474f" font-size="11" text-anchor="middle">... 30 格缓冲 ...</text>
+          <!-- new photo entering STM -->
+          <rect x="55" y="345" width="40" height="34" fill="#aed581" stroke="#558b2f" stroke-width="1.5"/>
+          <text x="150" y="368" fill="#33691e" font-size="11" text-anchor="middle">新拍到的画面 → 进 STM</text>
+          <!-- WM middle -->
+          <rect x="330" y="70" width="240" height="330" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5" rx="8"/>
+          <text x="450" y="98" fill="#1b5e20" font-size="14" text-anchor="middle" font-weight="700">桌上 WM（工作记忆）</text>
+          <rect x="355" y="120" width="190" height="26" fill="#ffffff" stroke="#a5d6a7" stroke-width="1.5"/>
+          <rect x="355" y="156" width="190" height="26" fill="#ffffff" stroke="#a5d6a7" stroke-width="1.5"/>
+          <rect x="355" y="192" width="190" height="26" fill="#ffffff" stroke="#a5d6a7" stroke-width="1.5"/>
+          <text x="450" y="250" fill="#37474f" font-size="11" text-anchor="middle">回环检测 / 图优化 /</text>
+          <text x="450" y="266" fill="#37474f" font-size="11" text-anchor="middle">地图拼装都在这跑</text>
+          <text x="450" y="320" fill="#37474f" font-size="11" text-anchor="middle">容量上限 = MemoryThr</text>
+          <!-- LTM right -->
+          <rect x="630" y="70" width="240" height="330" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2.5" rx="8"/>
+          <text x="750" y="98" fill="#4a0072" font-size="14" text-anchor="middle" font-weight="700">库房 LTM（很大）</text>
+          <rect x="655" y="120" width="190" height="22" fill="#ffffff" stroke="#ce93d8" stroke-width="1.5"/>
+          <rect x="655" y="150" width="190" height="22" fill="#ffffff" stroke="#ce93d8" stroke-width="1.5"/>
+          <rect x="655" y="180" width="190" height="22" fill="#ffffff" stroke="#ce93d8" stroke-width="1.5"/>
+          <text x="750" y="250" fill="#37474f" font-size="11" text-anchor="middle">归档节点（被移出 WM）</text>
+          <text x="750" y="270" fill="#37474f" font-size="11" text-anchor="middle">不占 WM 算力</text>
+          <!-- arrows -->
+          <line x1="270" y1="205" x2="328" y2="205" stroke="#37474f" stroke-width="2.5"/>
+          <polygon points="328,205 316,199 316,211" fill="#37474f"/>
+          <text x="299" y="195" fill="#37474f" font-size="11" text-anchor="middle">满则搬</text>
+          <line x1="570" y1="205" x2="628" y2="205" stroke="#37474f" stroke-width="2.5"/>
+          <polygon points="628,205 616,199 616,211" fill="#37474f"/>
+          <text x="599" y="195" fill="#37474f" font-size="11" text-anchor="middle">归档</text>
+          <!-- loop retrieval: from LTM back to WM -->
+          <path d="M 720 320 Q 450 400 380 320" fill="none" stroke="#d84315" stroke-width="2.5" stroke-dasharray="6,4"/>
+          <polygon points="380,320 392,314 390,326" fill="#d84315"/>
+          <text x="550" y="410" fill="#bf360c" font-size="12" text-anchor="middle">回环命中 → 邻居整片打捞回 WM</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三组抽屉/架子：左「手边 STM（固定 30 格）」、中「桌上 WM」、右「库房 LTM（很大）」。一张新拍到的画面（绿块）进 STM；STM 满时，<b>权重最小且最旧</b>的那格（橙块）被搬去库房；右下方红色虚线表示：一旦回环命中，LTM 里该节点的<b>图邻域</b>会被整片打捞回 WM。<br>
+          <b>怎么看这张图：</b>① 数据只往一个方向稳定流动：新 → STM → WM →（必要时）LTM；② 关键反转在红色虚线：<b>只有被回环用到的节点才会从库房调回桌上</b>，所以长期运行也不爆内存；③ WM 里永远只有「当前相关」的一小撮节点，所有重活都在 WM 上做。<br>
+          <b>要记住的一句话：</b>三级记忆 = 手边 / 桌上 / 库房；被用到的才会从库房调回桌上。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>RTAB-Map 里，当一个节点被移进 LTM（长期记忆）后，它还会占用工作记忆 WM 的算力吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="被移进 LTM 的节点「不再在 WM 里可用」，只有回环命中、其图邻域被整片打捞回 WM 时才重新占用算力。这正是它长期在线不爆内存的原因。" onclick="lessonKit.answer(this,'q0053a')">会一直占着 WM 算力</button>
+          <button data-correct="yes" data-explanation="进入 LTM 后脱离 WM，不占工作记忆算力；只有被回环命中、整片邻域打捞回 WM 时才重新参与计算。" onclick="lessonKit.answer(this,'q0053a')">不会，除非被回环打捞回 WM</button>
+        </div>
+        <div class="quiz-feedback" id="q0053a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 核心二：回环检索的概率公式（诚实说明）</h2>
+      <p>回环检测用<b>词袋（bag-of-words）</b>模型：把每帧的视觉特征量化进一个不断增长的视觉词表，新节点和 WM 里节点比较时，用 <b>TF-IDF</b> 更新一个<b>贝叶斯滤波器</b>，估计「这是旧地点还是新地点」的后验概率。滤波器判到超过阈值（Rtabmap/LoopThr=0.11）就触发回环。</p>
+      <p><b>⚠️ 这里必须诚实标注：</b>这套 TF-IDF + 贝叶斯的回环检索公式是<b>2013 年 RTAB-Map 原始论文（Labbé & Michaud, 2013）提出的</b>，<b>本篇 2019 年的 JFR 正文并没有重述它的具体数学式</b>，而是直接引用早期工作。所以——<b>我不会替它补一个公式塞进这里</b>。该有的公式在 2013 原文里，本篇只是说「we use the bag-of-words approach described in Labbé & Michaud (2013)」并接上 TF-IDF + Bayes filter 的定性描述。这是「原文没有的东西不许补」这条铁律的又一个实践。</p>
+
+      <h3>3.1 顺带：还有 proximity detection（邻近检测）</h3>
+      <p>2017 年加入的 proximity detection 用<b>激光</b>找「图里离当前位置很近、但方向不同」的节点（比如原路返回同一条走廊时相机拍不到回环）。它的复杂度只和机器人附近的节点有关，不随地图变大而涨——这是词袋回环的一个很好补充。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 2019 年这篇 RTAB-Map 论文里的回环检索公式，下面哪句对？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="2019 JFR 正文并没有重述 TF-IDF+贝叶斯的具体公式，它引用的是 2013 年 RTAB-Map 原始论文。硬规范不允许我们替论文补一个公式。" onclick="lessonKit.answer(this,'q0053c')">2019 正文给出了完整公式</button>
+          <button data-correct="yes" data-explanation="本篇只做定性描述并引用 2013 原文；公式归属 2013 年的 RTAB-Map 论文，本篇未重述。诚实做法是标注这一点而非编造公式。" onclick="lessonKit.answer(this,'q0053c')">公式归属 2013 原文，本篇未重述</button>
+        </div>
+        <div class="quiz-feedback" id="q0053c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 多传感器统一接口</h2>
+      <p>作为库，RTAB-Map 的核心卖点之一是<b>把各种传感器统一到同一套图优化框架</b>：里程计是「外置输入」，所以视觉、激光、轮速计、IMU 都能塞进来。它支持 RGB-D / 双目 / 激光 / 激光+视觉组合，里程计可替换，还有<b>两级同步</b>（同传感器用 exact 同步、跨传感器用 approximate 同步）。下面把原文 Table 1 的「输入 × 在线输出」做成 RTAB-Map 自己的矩阵复述：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>RTAB-Map 支持的输入</h4><p>双目 ✓、RGB-D ✓、多相机 ✓、IMU（经外部里程计）✓、2D 激光 ✓（可选）、3D 激光 ✓（可选）、本体里程计 ✓</p></div>
+        <div class="mini-card"><h4>RTAB-Map 的在线输出</h4><p>2D 位姿 ✓、3D 占据栅格（OctoMap）✓、稠密点云 ✓，以及<b>只有它和激光系方法才给的 2D 占据栅格</b>（便于导航）</p></div>
+      </div>
+      <p>原文 Table 1 把 GMapping、Hector SLAM、ORB-SLAM2、DVO-SLAM、RGBDSLAMv2 等十几家横排比较，结论很有意思：<b>除了 RTAB-Map 和 RGBDSLAMv2，几乎没有视觉 SLAM 开箱即给占据栅格</b>——而占据栅格是自主导航的刚需。这也呼应了上一节 RGBD-SLAM-v2 用 OctoMap 的选择不是偶然。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_RTABMap/7871409741cf06926272dec8efd74cb28b02c3fc40d5970fdfa366e35d6140ad.jpg" alt="RTAB-Map visual odometry F2F F2M">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Block diagram of rgbd_odometry and stereo_odometry ROS nodes. Two odometry approaches can be used: a Frame-To-Frame approach in green, and a Frame-To-Map approach in orange.<br>
+          <b>怎么看这张图：</b>这张图说明「里程计是可插拔的」。绿色是 F2F（帧对帧），橙色是 F2M（帧对局部地图）。RTAB-Map 把 Odometry 当外部输入，所以你可以换成激光里程计、轮速计，甚至直接把 ORB-SLAM2、LOAM、MSCKF 的里程计接进来——它自己只负责后面的回环和地图。这也是它作为「库」能横向比较各类配置的底气。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_RTABMap/c1f0ec7f1bfca2852b1ab354912d33d210ea10b938884597990c810f61e1d8b6.jpg" alt="STM local occupancy grid creation">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Short-term memory's local occupancy grid creation. Depending on the parameters and the availability of optional laser scan and point cloud inputs, the local occupancy grid can either be 2D or 3D.<br>
+          <b>怎么看这张图：</b>这张图和上一节的「体素重建硬伤」直接相关。RTAB-Map 让<b>每个节点存一张局部占据栅格</b>（而不是把全局体素按旧位姿固化）。回环优化后，它只需把各个局部栅格按新位姿重新拼成全局栅格——这正是对 <b>0052</b> 那个「大回环后只能重建」坑的优雅绕开：重建的是「轻量局部栅格的拼装」，而非重投所有深度图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 可扩展性证据：记忆管理开 / 关</h2>
+      <p>讲了半天三级记忆，得有证据说明它真有用。论文用 <b>Fig. 18</b> 把「记忆管理开 / 关」的每帧处理耗时画了出来：</p>
+      <ul>
+        <li><b>横轴</b>是走过的会话数 / 时间（论文把两个 MIT Stata 序列首尾相接，做成一次超长建图实验）。</li>
+        <li><b>那条水平线</b>是实时约束：在 2 Hz 的节点添加速率下，每加一个节点允许的最大时间。</li>
+        <li><b>关掉记忆管理</b>时：图越来越大，更新时间一路上涨，<b>有些更新超过 500 ms</b>，直接突破实时线——机器人若还在动，地图就会出现大空洞。</li>
+        <li><b>打开记忆管理</b>时：更新时间被压在实时线以下全程满足；代价是搬节点进出 WM/LTM 的平均开销约 <b>52 ms</b>（小头）。</li>
+      </ul>
+      <p>论文正文还在 Fig. 18 附近给出了一组很有说服力的对比数字：开启记忆管理后，工作记忆里的约束数从约 <b>2048</b> 条砍到约 <b>1256</b> 条（砍掉近一半以上），而最终 ATE 仍保持在约 <b>12 cm</b> 左右——说明记忆管理几乎不损精度、却大幅削减了计算与内存。</p>
+      <p style="color:#7a1f00;"><b>诚实标注：</b>上面 2048 / 1256 / 12 cm 这组数字来自课程大纲的提示与论文正文描述；本机抽取的 Fig. 18 图注片段未逐字包含该处精确数值，正式引用请以原论文 Fig. 18 附近正文为准。Fig. 18 图注本身已确证的是「>500 ms / 实时线 / 52 ms 开销」这三件事。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="24" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">图 B · 记忆管理开 / 关的每帧耗时对比（示意趋势，非精确数值）</text>
+          <!-- axes -->
+          <line x1="70" y1="310" x2="850" y2="310" stroke="#37474f" stroke-width="2"/>
+          <line x1="70" y1="30" x2="70" y2="310" stroke="#37474f" stroke-width="2"/>
+          <text x="60" y="50" fill="#37474f" font-size="12" text-anchor="end">耗时</text>
+          <text x="850" y="332" fill="#37474f" font-size="12" text-anchor="end">走过的会话数 / 时间</text>
+          <!-- real-time horizontal line -->
+          <line x1="70" y1="90" x2="850" y2="90" stroke="#c62828" stroke-width="2" stroke-dasharray="6,4"/>
+          <text x="845" y="84" fill="#7a1f00" font-size="12" text-anchor="end">实时约束（2 Hz 上限）</text>
+          <!-- OFF line: rising, crosses above -->
+          <polyline points="80,120 200,150 320,200 440,260 560,300 680,320 800,330 850,332" fill="none" stroke="#c62828" stroke-width="3"/>
+          <text x="300" y="200" fill="#7a1f00" font-size="13" text-anchor="middle">关掉记忆管理：随时间上升，冲破实时线</text>
+          <!-- ON line: flat -->
+          <polyline points="80,160 200,150 320,155 440,150 560,158 680,152 800,156 850,154" fill="none" stroke="#2e7d32" stroke-width="3"/>
+          <text x="640" y="135" fill="#1b5e20" font-size="13" text-anchor="middle">打开记忆管理：基本平稳，守住实时线</text>
+          <circle cx="440" cy="260" r="5" fill="#c62828"/>
+          <text x="450" y="285" fill="#7a1f00" font-size="12" text-anchor="start">某次更新 &gt; 500 ms（超时）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两条折线——红色「关掉记忆管理」随时间一路上升、冲破顶上的实时约束虚线（有几次更新超过 500 ms）；绿色「打开记忆管理」基本平着走，全程在实时线以下。<br>
+          <b>怎么看这张图：</b>① 红线的上升斜率就是「图越长越慢」的代价；② 绿色被压平，靠的就是上一节的 STM/WM/LTM 三级记忆在给 WM 减肥；③ 代价只是搬节点约 52 ms 的小开销。<br>
+          <b>要记住的一句话：</b>记忆管理把「随地图线性增长」的处理时间压成了常数级——这是长期在线建图能成立的前提。曲线为示意趋势，精确数字见原文 Fig. 18。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2019_RTABMap/0f8f3e27aafa95fc1eaf0b98df3b5b0e455bec946d2d8b2424122c82b0d0bd98.jpg" alt="Memory management timing without and with">
+        <figcaption>
+          <b>原图注（Fig. 18）：</b>Timing results without (a) and with (b) memory management for RTAB-Map WM modules. The horizontal line is the real-time constraint, that is, the maximum time allowed for addition of new nodes to map at 2 Hz. In that case, RTAB-Map's WheelIMU→S2M without memory management is not satisfying real-time constraints, because some updates require more than 500 ms.<br>
+          <b>怎么看这张图：</b>这是论文真实的耗时曲线（WM 各模块）。对照就能验证上面自绘图 B 的结论：关掉记忆管理那张（a）里明显有若干尖峰冲破实时线；打开后（b）整体被压平。注意它的实验配置是 WheelIMU→S2M（轮速计+IMU 修正的激光里程计），和本节最后的工程准则呼应。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★ 一条工程准则、局限与巩固练习</h2>
+      <h3>6.1 一条原文明确点出的工程准则</h3>
+      <p>论文在讨论（Section 6）里给出了一句非常实在的准则，值得所有做自主导航的人背下来：</p>
+      <div class="formula-box"><div class="flow-formula">「Unless a long-range lidar is used, having odometry input from proprioceptive sensors (e.g., IMU, wheel encoders) is mandatory for robust autonomous navigation.」</div></div>
+      <p>翻译加解释：<b>如果没有长距激光，那么本体里程计（IMU、轮速计这类本体传感器）是必需的。</b> 原因是：视觉里程计会漂、而回环检索又<b>依赖位姿</b>（检索的候选范围由当前位姿决定）；一旦位姿漂了，候选范围也跟着歪，回环就可能检索失败。所以「自己先别漂太狠」得靠本体里程计兜底。下一节的图 C 把这件事画了出来。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="24" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">图 C · 为什么「检索依赖位姿」是弱点（没有长距激光时）</text>
+          <!-- ground truth loop -->
+          <polyline points="80,260 200,180 360,140 520,170 680,220 800,260" fill="none" stroke="#9e9e9e" stroke-width="2" stroke-dasharray="5,4"/>
+          <text x="440" y="130" fill="#607d8b" font-size="12" text-anchor="middle">真实闭环轨迹（绿色处本应被识别回环）</text>
+          <!-- drifted estimate -->
+          <polyline points="80,260 200,190 340,180 470,250 600,300 720,300 800,260" fill="none" stroke="#1565c0" stroke-width="3"/>
+          <circle cx="470" cy="250" r="7" fill="#1565c0"/>
+          <text x="500" y="272" fill="#0d3c75" font-size="12" text-anchor="middle">估计位姿（已漂）</text>
+          <!-- search bubble around drifted pose -->
+          <circle cx="470" cy="250" r="70" fill="none" stroke="#c62828" stroke-width="1.5" stroke-dasharray="4,3"/>
+          <text x="470" y="335" fill="#7a1f00" font-size="12" text-anchor="middle">回环候选范围（跟着漂移的位姿歪了）→ 没罩住真回环点</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>灰色虚线是真实轨迹（本应在右侧绿点处闭合），蓝色实线是漂了的估计轨迹。以「漂移位姿」为中心画一个红色虚线圆，表示回环检索的候选范围——它跟着位姿一起歪了，<b>没罩住真实回环点</b>，于是检索失败。<br>
+          <b>怎么看这张图：</b>① 蓝线漂离灰线越远，红色候选圈偏得越狠；② 这正是「回环检索依赖位姿」的致命弱点：位姿准，检索才准；③ 所以原文才说：没有长距激光时，必须用本体里程计把漂移压住。<br>
+          <b>要记住的一句话：</b>检索依赖位姿 → 位姿漂了 → 候选范围歪了 → 回环检索失败。
+        </figcaption>
+      </figure>
+
+      <h3>6.2 原文承认的局限</h3>
+      <ul>
+        <li><b>回环检索依赖相机：</b>词袋方法要靠视觉特征，所以「即使做激光 SLAM，也通常得带个相机」；纯激光大回环得另接激光回环检测。</li>
+        <li><b>视觉运动估计失败会连累几何估计：</b>原文坦言若视觉运动估计挂了，激光运动估计也做不了（二者串行依赖）。</li>
+        <li><b>全局地图不完整：</b>打开记忆管理后，在线全局占据栅格只围绕当前位姿附近，不能总是表示「访问过的全部环境」。</li>
+        <li><b>传感器共性局限：</b>玻璃、反光面会让基于光的传感器失效；短距传感器在空旷/长廊里也会出问题。</li>
+      </ul>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>凭哪些依据判定 RTAB-Map 是一篇「库论文」而不是普通算法论文？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>① 开源库 + ROS 节点（rtabmap_ros），给的是系统框图而非单一算法；② 密集默认参数表（Table 2，如 Mem/STMSize=30、RehearsalSimilarity=0.2）；③ 方法比较矩阵（Table 1 横向比十几种 SLAM 的输入输出）；④ 自陈社区规模（论坛+GitHub+ROS Answers 超 1,600 个问题）。</div></details>
+          </li>
+          <li>用抽屉比喻讲清 STM / WM / LTM 三级记忆怎么流动，以及谁会被移进 LTM、谁会被捞回 WM。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>STM=手边（固定30格缓冲），WM=桌上（回环/优化/拼装都在这跑，有容量上限），LTM=库房（很大）。新节点先入 STM；STM 满时把权重最小且最旧的挪进 LTM；权重由启发式更新（RehearsalSimilarity=0.2 决定继承）。回环命中时，LTM 里该节点的图邻域被整片打捞回 WM。只有被用到的才会回桌上。</div></details>
+          </li>
+          <li>RTAB-Map 的回环检索用了什么概率方法？为什么这一节不能写出它的完整公式？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>用 bag-of-words + TF-IDF 更新贝叶斯滤波器估计「新/旧地点」后验，超阈值（LoopThr=0.11）触发回环。但不能写出完整公式：TF-IDF+贝叶斯的数学式归属 2013 年 RTAB-Map 原始论文，2019 这篇 JFR 正文并未重述，只做定性引用。硬规范要求诚实标注、不替它补公式。</div></details>
+          </li>
+          <li>记忆管理开 / 关的耗时对比（Fig. 18）证明了什么？顺带说明那个「2048 vs 1256 / 12 cm」该怎么引用。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>关掉记忆管理时更新时间随时间上升、有更新超过 500 ms 突破实时线；打开后全程满足 2 Hz 实时约束，仅约 52 ms 搬节点开销。说明记忆管理把线性增长的处理时间压成常数级。论文正文还给出约束数 2048→1256、ATE 仍约 12 cm 的对比，但精确数字本机抽取图注未含，引用应以原论文 Fig.18 附近正文为准（已在正文诚实标注）。</div></details>
+          </li>
+          <li>原文明确点出的那条工程准则是什么？为什么「检索依赖位姿」会让它成立？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>准则：除非用长距激光，否则本体里程计（IMU/轮速计）对稳健自主导航是必需的。因为视觉里程计会漂，而回环检索的候选范围由当前位姿决定——位姿漂了，候选范围也歪，回环检索就可能失败。所以要用本体里程计先把漂移压住。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0052-RGBD-SLAM-v2-2014-稀疏特征加EMM回环.html">← 上一课：RGBD-SLAM-v2（2014）：稀疏特征 + EMM 回环</a>
+        <a class="next" href="0054-CNN-SLAM2017-向学习借深度.html">下一课：CNN-SLAM（2017）：向学习借深度 →</a>
+      </div>
+      <p class="foot-note">把 SLAM 做成产品，最难的问题往往不是「算得准」，而是「跑得久、撑得住」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

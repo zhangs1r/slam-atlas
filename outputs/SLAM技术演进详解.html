@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLAM 技术演进与差异详解 · 255 篇语料库</title>
+<style>
+  :root{
+    --bg:#0d1117;--bg2:#161b22;--bg3:#1c2129;--bg4:#242c37;--line:#30363d;
+    --fg:#e6edf3;--fg2:#a8b3c0;--fg3:#6e7681;
+    --c-vision:#58a6ff;--c-lidar:#3fb950;--c-fusion:#d29922;
+    --c-neural:#bc8cff;--c-gs:#f778ba;--c-learn:#ff7b72;
+    --c-multi:#39c5cf;--c-event:#ffa657;--c-survey:#8b949e;--c-map:#7ee787;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);line-height:1.75;padding:0 0 90px;
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",-apple-system,sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+  header{padding:44px 0 26px;border-bottom:1px solid var(--line);margin-bottom:8px}
+  h1{font-size:30px;font-weight:680;letter-spacing:-.4px}
+  h1 em{font-style:normal;color:var(--c-vision)}
+  .sub{color:var(--fg2);margin-top:10px;font-size:14px;max-width:840px}
+  .stats{display:flex;gap:12px;margin-top:22px;flex-wrap:wrap}
+  .stat{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:10px 16px}
+  .stat b{display:block;font-size:21px;color:var(--c-vision);font-weight:660}
+  .stat i{font-style:normal;font-size:11.5px;color:var(--fg2)}
+
+  nav.toc{position:sticky;top:0;z-index:50;background:rgba(13,17,23,.94);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);margin:0 -22px 34px;padding:11px 22px;
+    display:flex;gap:6px;flex-wrap:wrap}
+  nav.toc a{font-size:12.5px;color:var(--fg2);text-decoration:none;padding:4px 11px;border-radius:6px;
+    border:1px solid transparent;white-space:nowrap}
+  nav.toc a:hover{color:var(--fg);background:var(--bg3);border-color:var(--line)}
+
+  h2{font-size:21px;margin:52px 0 8px;padding-left:12px;border-left:3px solid var(--c-vision)}
+  h2 small{font-weight:400;color:var(--fg3);font-size:13px;margin-left:10px}
+  h3{font-size:16px;margin:30px 0 12px;color:var(--fg)}
+  p.lead{color:var(--fg2);font-size:14px;margin:10px 0 20px}
+
+  /* 因果链 */
+  .chain{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:17px 19px;margin:14px 0}
+  .chain .row{display:flex;align-items:flex-start;gap:11px;padding:7px 0}
+  .chain .row + .row{border-top:1px dashed #262d36}
+  .chain .yr{flex:0 0 62px;font-size:12px;color:var(--fg3);padding-top:2px;font-variant-numeric:tabular-nums}
+  .chain .txt{font-size:13.5px;color:var(--fg2)}
+  .chain .txt b{color:var(--fg)}
+  .chain .tag{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:20px;
+    margin-right:7px;border:1px solid;vertical-align:1.5px}
+
+  /* 世代演进 */
+  .gen{display:flex;gap:0;margin:18px 0;overflow-x:auto;padding-bottom:8px}
+  .gen .step{flex:1 1 0;min-width:200px;position:relative;padding:0 9px}
+  .gen .step:not(:last-child):after{content:"→";position:absolute;right:-7px;top:34px;color:var(--fg3);font-size:15px;z-index:2}
+  .gen .card{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:12px 13px;height:100%}
+  .gen .card.b1{border-top:3px solid var(--fg3)}
+  .gen .card.b2{border-top:3px solid var(--c-lidar)}
+  .gen .card.b3{border-top:3px solid var(--c-vision)}
+  .gen .card.b4{border-top:3px solid var(--c-neural)}
+  .gen .card.b5{border-top:3px solid var(--c-gs)}
+  .gen .nm{font-size:13.5px;font-weight:650;margin-bottom:2px}
+  .gen .yr{font-size:10.5px;color:var(--fg3);margin-bottom:8px}
+  .gen .lim{font-size:11.5px;color:#ff9e9e;margin-bottom:7px;line-height:1.5}
+  .gen .lim:before{content:"局限 ";color:var(--fg3);font-size:10px}
+  .gen .sol{font-size:11.5px;color:#9fe0a8;line-height:1.55}
+  .gen .sol:before{content:"→ ";color:var(--fg3)}
+
+  /* 对比表 */
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--bg2);color:var(--fg2);font-weight:600;font-size:11.5px;position:sticky;top:44px;z-index:10}
+  tr:hover td{background:#12171e}
+  td b{color:var(--fg)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--c-map)}
+
+  /* 概念卡 */
+  .concepts{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin:16px 0}
+  @media(max-width:800px){.concepts{grid-template-columns:1fr}}
+  .cc{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .cc h4{font-size:13.5px;margin-bottom:7px;color:var(--c-map)}
+  .cc p{font-size:12.5px;color:var(--fg2);line-height:1.7}
+  .cc .who{font-size:11px;color:var(--fg3);margin-top:7px}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:16px 19px;margin:15px 0}
+  .box.warn{border-color:#5c2b2b;background:#1a1213}
+  .box.ok{border-color:#24422c;background:#101a13}
+  ul{list-style:none}
+  li{font-size:13px;color:var(--fg2);padding:5px 0 5px 19px;position:relative;line-height:1.7}
+  li:before{content:"";position:absolute;left:4px;top:12px;width:5px;height:5px;border-radius:50%;background:var(--fg3)}
+  li b{color:var(--fg)}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:11.5px;color:var(--c-fusion)}
+  footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:var(--fg3);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div style="background:linear-gradient(90deg,#12202e,#161b22);border:1px solid #1f3a54;border-left:3px solid #58a6ff;border-radius:10px;padding:13px 18px;margin:26px 0 0">
+  <div style="font-size:11px;color:#58a6ff;letter-spacing:1.5px;margin-bottom:5px">阅读提示</div>
+  <div style="font-size:13.5px;color:#a8b3c0;line-height:1.7">
+    本页是<b style="color:#e6edf3">速查 / 进阶版</b>——术语密度高、偏结论。<br>
+    如果读起来吃力，建议先看通俗图文版：<a href="SLAM%E5%9B%BE%E8%A7%A3%E5%85%A5%E9%97%A8.html" style="color:#58a6ff;font-weight:600">《SLAM 图解入门》</a>
+    ——含 15 个手绘动画、生活类比、术语逐条解释和场景选型工具，能先把直觉建立起来，再回来看这一页会顺很多。
+  </div>
+</div>
+
+<header>
+  <h1>SLAM 技术演进与差异 <em>详解</em></h1>
+  <div class="sub">基于本地 255 篇论文语料库逐篇通读后梳理。每条技术描述都来自论文正文（摘要 / 作者自述贡献 / 方法段 / 实验设置），
+  不做凭标题的推测。演进逻辑以「前代局限 → 本代解法」的因果链呈现。</div>
+  <div class="stats">
+    <div class="stat"><b>255</b><i>篇论文</i></div>
+    <div class="stat"><b>2007–2025</b><i>时间跨度</i></div>
+    <div class="stat"><b>9081</b><i>张原文插图</i></div>
+    <div class="stat"><b>9</b><i>条技术主线</i></div>
+    <div class="stat"><b>9</b><i>家出版商渠道</i></div>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#paradigm">范式迁移</a>
+  <a href="#lidar">激光惯性</a>
+  <a href="#liv">多传感器融合</a>
+  <a href="#visual">视觉惯性</a>
+  <a href="#neural">隐式表示</a>
+  <a href="#gs">3D 高斯</a>
+  <a href="#frontend">学习式前端</a>
+  <a href="#multi">多机协同</a>
+  <a href="#event">事件相机</a>
+  <a href="#concepts">核心概念</a>
+  <a href="#open">开放问题</a>
+</nav>
+
+<h2 id="paradigm">一、五次范式迁移 <small>以及每次迁移的驱动原因</small></h2>
+<p class="lead">技术不是线性进步的，每一次代际更替都源于前一代在**某个具体场景下的失效**。下面每条链都标出了"谁失效了、为什么、谁解决了"。</p>
+
+<div class="chain">
+  <div class="row"><div class="yr">1970s–2000s</div><div class="txt"><b>滤波时代</b>：EKF-SLAM 把路标与位姿放进同一个状态向量联合估计。
+    <span class="tag" style="color:var(--c-survey);border-color:#3d444d">失效场景</span>路标数增长时协方差矩阵 O(n²) 爆炸，无法扩展到大规模环境。</div></div>
+  <div class="row"><div class="yr">2000s–2010s</div><div class="txt"><b>→ 因子图 / 优化时代</b>：<code>g2o</code>(2011) 与 GraphSLAM 把问题重述成稀疏图优化，利用稀疏性把复杂度压到近线性。
+    <span class="tag" style="color:var(--c-vision);border-color:#26406b">代价</span>失去滤波的增量性，需要重优化。</div></div>
+  <div class="row"><div class="yr">2011–2017</div><div class="txt"><b>→ 稠密表示登场</b>：DTAM / KinectFusion 证明"不用特征点，逐像素做"可行——KinectFusion 把所有深度流融合成单一全局隐式表面（TSDF），同时跟踪实时深度帧。
+    <span class="tag" style="color:var(--c-survey);border-color:#3d444d">失效场景</span>逐像素计算量巨大，且 TSDF 内存随场景线性增长，无法大尺度。</div></div>
+  <div class="row"><div class="yr">2015–2020</div><div class="txt"><b>→ 多传感器紧耦合</b>：单目尺度不可观测、视觉在退化场景失效。VINS-Mono 用"视觉 SfM 滑窗 + 视觉惯性对齐"恢复尺度；LIO-SAM 把 IMU 预积分、激光里程计、GPS、回环全放上因子图。
+    <span class="tag" style="color:var(--c-lidar);border-color:#24422c">关键</span>精度不再靠单一传感器堆出来。</div></div>
+  <div class="row"><div class="yr">2021–2023</div><div class="txt"><b>→ 神经隐式表示</b>：iMAP 首次证明单个 MLP 可以作为实时 SLAM 的<b>唯一</b>场景表示，在线训练、无需先验。
+    <span class="tag" style="color:var(--c-survey);border-color:#3d444d">失效场景</span>全连接网络不含局部信息 → 重建过度平滑、无法扩到大场景。</div></div>
+  <div class="row"><div class="yr">2023–2025</div><div class="txt"><b>→ 显式可微原语（3DGS）</b>：3DGS 用一组显式 3D 高斯表示场景，渲染比隐式查询快得多。MonoGS 首次做到以 3DGS 为唯一表示的近实时 SLAM。
+    <span class="tag" style="color:var(--c-gs);border-color:#5c2b48">新局限</span>内存随场景线性增长、回环时不像神经点那样可形变。</div></div>
+</div>
+
+<h2 id="lidar">二、激光惯性 SLAM <small>一场关于"数据结构"和"要不要提特征"的竞赛</small></h2>
+
+<h3>2.1 世代演进</h3>
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">LOAM / LeGO-LOAM</div><div class="yr">2014 / 2018</div>
+    <div class="lim">逐迭代耗时约 100 ms（Faster-LIO 文中的实测），机械雷达多线束扫一帧都要等</div>
+    <div class="sol">提取<b>边缘点 + 平面点</b>，用两步 Levenberg-Marquardt 分离求解不同分量；LeGO-LOAM 加<b>点云分割滤噪 + 地平面先验</b>，专攻嵌入式平台</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">LIO-SAM</div><div class="yr">2020</div>
+    <div class="lim">对全局地图配准，帧数一多就跑不动</div>
+    <div class="sol">改<b>对局部固定大小子关键帧集合配准</b>；整车状态放上<b>因子图</b>——IMU 预积分因子 + 激光里程计因子 + GPS 因子 + 回环因子，配关键帧筛选与旧帧边缘化</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">FAST-LIO2</div><div class="yr">2022</div>
+    <div class="lim">手工特征模块是最大的工程量，且每换一种扫描模式就要重设计</div>
+    <div class="sol"><b>直接配准原始点到地图，完全不做特征提取</b>（能利用细微特征、天然适配不同扫描模式）；地图用 <b>ikd-Tree</b> 维护——支持增量插入/删除/树上下采样/动态重平衡</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">Faster-LIO / iG-LIO</div><div class="yr">2022 / 2024</div>
+    <div class="lim">k-d 树仍是瓶颈</div>
+    <div class="sol">Faster-LIO 用 <b>iVox 增量体素 + 并行近似 kNN</b>（线列 iVox / PHC iVox 两种底层结构），固态雷达下单帧可达 1000–2000 Hz；iG-LIO 把 <b>GICP 约束与惯性约束统一在 MAP 估计里</b>，用体素表面协方差估扫描协方差</div>
+  </div></div>
+  <div class="step"><div class="card b5">
+    <div class="nm">Point-LIO</div><div class="yr">2023</div>
+    <div class="lim">按帧累积必然产生帧内运动畸变，且限制了输出频率</div>
+    <div class="sol"><b>逐点处理</b>：每个激光点在它真实的采样时刻就融合，不累积成帧 → 消除帧内畸变，里程计与建图更新接近点的采样率，从而能跟踪极快运动</div>
+  </div></div>
+</div>
+
+<div class="box">
+  <ul>
+    <li><b>还有一条"反方向"的路——KISS-ICP（2023）</b>：它反过来问"这么多组件到底有没有用"。结论是：只用<b>点对点 ICP + 自适应对应阈值 + 鲁棒核 + 点云子采样 + 运动补偿</b>，<b>完全不用 IMU</b>，参数极少且跨雷达免调参，就能达到有竞争力的精度。这个工作与 FAST-LIO2 的"不做特征提取"一起，构成对本领域过度工程化的纠偏。</li>
+    <li><b>DLO（2022）</b>走的是"速度优先"：用<b>自适应关键帧机制</b>高效捕获环境信息，配定制 ICP 求解器，在消费级处理器上实时——直接服务于 DARPA 地下挑战赛这类算力受限场景。</li>
+    <li><b>BALM（2021）</b>把 BA 搬到激光上：直接最小化特征点到边缘/平面的距离，并证明<b>边缘与平面参数可以解析闭式求解</b>（这是与视觉 BA 最大的结构差别——视觉 BA 要同时解特征位置和相机位姿）。</li>
+    <li><b>MULLS（2021）</b>的核心是 <b>MULLS-ICP</b>：对点对点、点到面、点到线三种误差度量在粗到细的层级上<b>联合做线性最小二乘</b>，且不依赖扫描线顺序。</li>
+    <li><b>LOG-LIO（2024）</b>补的是法向量估计：<b>Ring FALS</b> 利用扫描的结构信息做实时法向估计，并设计了<b>分层数据关联</b>——点到面片（surfel）优先于点到平面，大尺度面片优先于小尺度。</li>
+    <li><b>SuMa++（2019）</b>是另一条支线：把<b>语义标签融进面片（surfel）地图表示</b>，并利用语义标签过滤动态物体，从而在移动物体很多的环境下也能准确建图。</li>
+  </ul>
+</div>
+
+<h3>2.2 关键差异速查</h3>
+<table>
+  <tr><th>系统</th><th>后端</th><th>地图数据结构</th><th>是否提特征</th><th>决定性差异</th></tr>
+  <tr><td><b>LeGO-LOAM</b></td><td>两步 LM</td><td>点云特征图</td><td>是（边/面）</td><td>地面优化 + 分割滤噪，主打轻量嵌入式</td></tr>
+  <tr><td><b>LIO-SAM</b></td><td>因子图</td><td>局部子关键帧</td><td>是</td><td>多因子融合 + 局部配准而非全局</td></tr>
+  <tr><td><b>FAST-LIO2</b></td><td>迭代 EKF</td><td class="mono">ikd-Tree</td><td><b>否</b></td><td>直接配原始点 + 增量 k-d 树</td></tr>
+  <tr><td><b>Faster-LIO</b></td><td>迭代 EKF</td><td class="mono">iVox</td><td><b>否</b></td><td>并行近似 kNN，1000–2000 Hz</td></tr>
+  <tr><td><b>Point-LIO</b></td><td>迭代 EKF</td><td>逐点</td><td><b>否</b></td><td>点在采样时刻即融合，无帧内畸变</td></tr>
+  <tr><td><b>KISS-ICP</b></td><td>优化</td><td>体素下采样点云</td><td><b>否</b></td><td><b>不用 IMU</b>，极简且跨雷达免调参</td></tr>
+  <tr><td><b>iG-LIO</b></td><td>迭代 EKF</td><td>增量体素</td><td>否</td><td>GICP 与惯性约束统一在 MAP 框架</td></tr>
+  <tr><td><b>LOG-LIO</b></td><td>迭代 EKF</td><td>体素 + 面片</td><td>否</td><td>Ring FALS 法向估计 + 分层关联</td></tr>
+</table>
+
+<h2 id="liv">三、LiDAR-Inertial-Visual 融合 <small>终点是"一个统一地图装下所有传感器"</small></h2>
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">R3LIVE</div><div class="yr">2022</div>
+    <div class="lim">激光地图没有外观信息，视觉地图没有几何精度</div>
+    <div class="sol"><b>分工</b>：LIO 负责重建几何结构，VIO 负责纹理渲染，最终输出稠密的 RGB 着色点云</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">FAST-LIVO</div><div class="yr">2022</div>
+    <div class="lim">两个子系统各自建图，信息没打通</div>
+    <div class="sol">LIO 与 VIO <b>两个直接紧耦合适系统</b>联合估计状态；关键设计是 VIO 子系统<b>最大化复用 LIO 已建的点云地图</b>——把图像块挂到地图点上，最小化光度误差（不提取任何视觉特征）</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">FAST-LIVO2</div><div class="yr">2025</div>
+    <div class="lim">LiDAR 与图像的测量维度不匹配，难以统一更新</div>
+    <div class="sol"><b>ESIKF + 序贯更新</b>解决维度不匹配；LiDAR 建几何、视觉把图像块链到 LiDAR 点上、<b>LiDAR 点的平面先验反过来提升图像对齐精度</b>（且先验动态精化）；<b>两者融进同一个体素地图</b>，加按需光线投射、实时曝光估计、光束发散测距噪声建模；支持非常规扫描的固态雷达与鱼眼</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">LIV-GaussMap</div><div class="yr">2024</div>
+    <div class="lim">体素地图只能表示几何，不能渲染新视角</div>
+    <div class="sol">用<b>尺寸自适应体素的 LiDAR-惯性系统</b>初始化场景表面高斯与各帧位姿，再用视觉光度梯度优化高斯质量与密度；高斯带<b>球谐系数</b>承载视觉信息</div>
+  </div></div>
+</div>
+<div class="box ok">
+  <ul><li><b>趋势判断</b>：这条线已经收敛到明确答案——<b>不再维护"激光地图"和"视觉地图"两套东西，而是维护一个统一的可微/可增量更新的场景表示</b>，让几何与光度在其中互相约束。FAST-LIVO2 用体素做到，LIV-GaussMap 用高斯做到。</li></ul>
+</div>
+
+<h2 id="visual">四、视觉与视觉惯性 <small>尺度从哪来、初始化怎么做、动态环境怎么办</small></h2>
+
+<h3>4.1 视觉 SLAM 的三种范式</h3>
+<table>
+  <tr><th>范式</th><th>代表</th><th>核心机制</th><th>失效场景</th></tr>
+  <tr><td><b>特征法</b></td><td>MonoSLAM / PTAM / ORB-SLAM 族</td><td>ORB-SLAM 用<b>同一套特征点服务跟踪、建图、重定位、回环四件事</b>；PTAM 把跟踪与建图拆到两个并行线程</td><td>弱纹理、低光照、运动模糊</td></tr>
+  <tr><td><b>直接法</b></td><td>LSD-SLAM / DSO</td><td>DSO 用<b>光度误差</b>替代重投影误差，把相机几何标定与<b>光度标定</b>（曝光、渐晕、响应函数）一起联合优化；<b>放弃平滑先验、改为图像上均匀采样</b>，从而能利用边缘甚至无纹理墙面</td><td>光照剧变、大基线</td></tr>
+  <tr><td><b>半直接法</b></td><td>SVO</td><td>稀疏对齐求位姿 + 概率式建图（对离群测量鲁棒），面向 MAV 的轻量高速</td><td>需要较好的初始位姿</td></tr>
+</table>
+
+<h3>4.2 VIO 的两条路线与关键难题</h3>
+<div class="box">
+  <ul>
+    <li><b>优化派</b>：VINS-Mono 的范式——先纯视觉 SfM 滑窗恢复结构，再做<b>视觉-惯性对齐</b>恢复尺度、重力方向、速度、偏置；跟踪用紧耦合非线性优化；回环用 <b>4-DoF 位姿图</b>保证全局一致，支持地图保存/加载/合并。ORB-SLAM3 把这条推到"IMU 初始化阶段也完全依赖 MAP 估计"，并用多地图系统配合改进的场景识别在长时间丢失后还能合并。</li>
+    <li><b>滤波派</b>：MSCKF 的核心是<b>推导一个测量模型来表达"同一静态特征被多个相机位姿观测"带来的几何约束</b>，从而不必把 3D 特征位置放进状态向量，复杂度对特征数线性。ROVIO 走的是直接法 + EKF。OpenVINS 作为研究平台，特别强调 <b>FEJ（First-Estimates Jacobian）一致性</b>处理，内置在线标定与仿真器。</li>
+    <li><b>理论根基</b>：<b>On-Manifold Preintegration（2017）</b>解决了预积分在旋转流形上的处理，给出解析形式的雅可比与偏置后验修正——这是所有现代 VIO 的地基。</li>
+  </ul>
+</div>
+
+<h3>4.3 三个"难题"的演进</h3>
+<div class="chain">
+  <div class="row"><div class="yr">尺度与初始化</div><div class="txt">单目尺度不可观测 → VINS-Mono 用视觉惯性对齐恢复 → <b>VI-DSO（2018）</b>把尺度与重力方向纳入模型<b>在初始化后联合优化</b>，并提出<b>动态边缘化</b>以适应变量剧烈变化 → <b>Inertial-Only Optimization（2020）</b>专门做纯惯性的初始化优化 → <b>DM-VIO（2022）</b>用<b>延迟边缘化</b>（维护第二个图，延迟边缘化以便用新线性化点重建先验）+ <b>位姿图 BA</b>（兼得位姿图效率与 BA 的完整不确定性）+ 多阶段 IMU 初始化器 + 动态加权光度因子。</div></div>
+  <div class="row"><div class="yr">全局一致性</div><div class="txt">GVINS 把 <b>GNSS 原始观测（伪距 + 多普勒）</b>而非解算位置直接融入因子图，并用由粗到细的在线标定建立全局测量与局部状态的连接，实现室内外无缝；P³-VINS 进一步用 PPP 的伪距/载波相位/相位模糊度三类因子。</div></div>
+  <div class="row"><div class="yr">动态环境</div><div class="txt">DynaSLAM 用 Mask R-CNN + 多视图几何检测动态物体并<b>修补被遮挡背景</b> → DynaSLAM II 把动态物体位姿也一并输出（多目标跟踪 + SLAM 紧耦合）→ Dynam-SLAM 用<b>立体场景流与 IMU 松耦合</b>做动态检测（显式建模场景流不确定性），再把动态特征<b>紧耦合进优化、转成"虚拟路标"</b>——注意这是值得注意的转向：<b>动态特征不再丢弃，而是变成可利用的约束</b>。</div></div>
+</div>
+
+<h2 id="neural">五、神经隐式表示 SLAM <small>把地图变成一个可微函数</small></h2>
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">iMAP</div><div class="yr">2021</div>
+    <div class="lim">纯 MLP 不含局部信息 → 重建过度平滑、难扩展到大场景</div>
+    <div class="sol">首次证明<b>单个 MLP 可作为实时 SLAM 的唯一场景表示</b>——在线训练、无需先验数据；跟踪 10 Hz / 建图 2 Hz</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">NICE-SLAM / Vox-Fusion</div><div class="yr">2022</div>
+    <div class="lim">同上</div>
+    <div class="sol">NICE-SLAM 引入<b>层次化特征网格</b>把多尺度局部信息注入隐式场；Vox-Fusion 用<b>八叉树索引的体素嵌入</b> + 隐式网络，实现可扩展的细节重建</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">ESLAM / Co-SLAM</div><div class="yr">2023</div>
+    <div class="lim">特征网格仍慢，且多数方法只能优化少量活跃关键帧</div>
+    <div class="sol">ESLAM 用<b>多尺度轴对齐特征平面 + TSDF 混合表示</b>，无需预训练；Co-SLAM 提出 <b>one-blob 编码（平滑连贯）+ hash 网格（快速收敛、高频局部细节）的联合编码</b>，使射线采样策略允许对<b>所有关键帧做全局 BA</b>（而非只挑活跃关键帧）</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">Point-SLAM / Loopy-SLAM</div><div class="yr">2023 / 2024</div>
+    <div class="lim">网格类表示回环后难以高效修正</div>
+    <div class="sol">把神经特征<b>锚定在数据驱动增长的点云上</b>，点密度随输入信息密度自适应；Loopy-SLAM 进一步用点基 submap + 全局场景识别触发回环 + 位姿图在 submap 间做刚性对齐——<b>点基表示让地图修正可以高效完成，无需保留全部历史输入帧</b></div>
+  </div></div>
+  <div class="step"><div class="card b5">
+    <div class="nm">PIN-SLAM</div><div class="yr">2024</div>
+    <div class="lim">神经 SLAM 普遍缺回环或只有局部一致</div>
+    <div class="sol">首个<b>完整</b>的隐式神经 SLAM（里程计 + 回环检测 + 全局一致隐式建图）；用<b>稀疏可优化的神经点</b>建隐式 SDF，做<b>无对应的点-隐式模型配准</b>求位姿；神经点<b>天然弹性可形变</b>，回环时随全局位姿一起形变；回环检测直接用神经点特征</div>
+  </div></div>
+</div>
+
+<h2 id="gs">六、3D Gaussian Splatting SLAM <small>2024 年爆发，2025 年补齐短板</small></h2>
+<div class="gen">
+  <div class="step"><div class="card b1">
+    <div class="nm">3DGS / InstantNGP</div><div class="yr">2023 / 2022</div>
+    <div class="lim">NeRF 的隐式查询渲染慢，训练以小时计</div>
+    <div class="sol">3DGS 用<b>显式 3D 高斯原语</b>（位置/协方差/不透明度/球谐系数）通过可微光栅化渲染，渲染与优化都快得多；InstantNGP 的<b>多分辨率 hash 编码</b>把训练压到秒级；Plenoxels 则证明<b>连神经网络都可以不要</b>——稀疏 3D 网格 + 球谐即可</div>
+  </div></div>
+  <div class="step"><div class="card b2">
+    <div class="nm">MonoGS</div><div class="yr">2024</div>
+    <div class="lim">原版 3DGS 需要离线 SfM 提供精确位姿，无法做 SLAM</div>
+    <div class="sol">首个以 3DGS 为<b>唯一</b>表示的近实时 SLAM，且支持<b>单目</b>：直接对 3D 高斯优化相机位姿（李群上的解析雅可比）、高斯形状<b>各向同性正则化</b>、几何验证</div>
+  </div></div>
+  <div class="step"><div class="card b3">
+    <div class="nm">SplaTAM / GS-SLAM</div><div class="yr">2024</div>
+    <div class="lim">把离线合成的 3DGS 用于完整场景重建时，地图扩展策略缺失</div>
+    <div class="sol">SplaTAM 用<b>轮廓掩码</b>优雅表达场景密度的存在性，快速判断某区域是否已建图，从单个未定位 RGB-D 相机做高保真重建；GS-SLAM 提出<b>自适应 3D 高斯扩展策略</b>动态增删高斯以重建新观测区域并改进旧区域，跟踪用由粗到细选可靠高斯</div>
+  </div></div>
+  <div class="step"><div class="card b4">
+    <div class="nm">Photo-SLAM</div><div class="yr">2024</div>
+    <div class="lim">学术方案算力需求高，落不到机器人上</div>
+    <div class="sol"><b>hyper primitives map</b>——<b>同时用显式几何特征做定位、用学习到的隐式光度特征表达纹理</b>；基于几何特征主动致密化；<b>高斯金字塔训练</b>渐进学习多级特征；能在 <b>Jetson AGX Orin 等嵌入式平台实时跑</b></div>
+  </div></div>
+  <div class="step"><div class="card b5">
+    <div class="nm">WildGS-SLAM / Splat-SLAM</div><div class="yr">2025</div>
+    <div class="lim">动态环境失效；RGB-only 时缺几何先验；地图与位姿优化受限</div>
+    <div class="sol">WildGS-SLAM 用浅层 MLP + <b>DINOv2 特征</b>预测<b>不确定性图</b>，引导动态物体剔除（<b>不需要深度或显式语义</b>）；Splat-SLAM 是<b>首个全局优化的 RGB-only</b> 方案，提出 <b>DSPO</b>（视差-尺度-位姿联合优化）做 BA，高斯地图随关键帧位姿与深度更新动态适配</div>
+  </div></div>
+</div>
+
+<h2 id="frontend">七、学习式前端与场景识别 <small>深度学习最先渗透的是匹配与检索</small></h2>
+<div class="concepts">
+  <div class="cc">
+    <h4>特征匹配的演进</h4>
+    <p>SuperGlue 用 <b>GNN + 可微最优传输</b>联合求解两组局部特征的匹配，并能拒绝不可匹配点——基于注意力的上下文聚合让它能联合推理 3D 场景与特征分配。<br>
+    LightGlue 重新审视 SuperGlue 的多个设计决策并给出简单有效的改进，<b>最关键的性質是自适应</b>：容易匹配的图像对（重叠大、外观变化小）推理明显更快；内存与计算都更省。<br>
+    LoFTR 换了个思路——<b>不做检测器</b>：先在粗层建立逐像素稠密匹配，再在细层精化，用 Transformer 的自注意力与交叉注意力获得特征。</p>
+    <div class="who">SuperGlue 2020 · LoFTR 2021 · LightGlue 2023 · SiLK 2023</div>
+  </div>
+  <div class="cc">
+    <h4>回环与场景识别</h4>
+    <p><b>DBoW2（2012）</b>用二进制词袋做快速场景识别，是 ORB-SLAM 系列回环的技术基础。<br>
+    <b>Scan Context（2018）</b>不做直方图、不依赖训练，<b>直接记录可见空间的三维结构</b>，对视角变化（反向重访、转角）不变；Scan Context++（2022）进一步做到对<b>横向偏移</b>也鲁棒——这针对的是城市环境中不可避免的车道级变化。<br>
+    <b>LCDNet（2022）</b>同时做地点识别与 6-DoF 相对位姿估计，用<b>非平衡最优传输（UOT）</b>的可微相对位姿头，并在<b>反向回环</b>这个难点上大幅领先。<br>
+    <b>LCR-Net（2024）</b>把回环与重定位统一到一个框架，用位姿感知注意力，<b>不依赖耗时的鲁棒位姿估计器</b>。</p>
+    <div class="who">DBoW2 2012 · Scan Context 2018/2022 · LCDNet 2022 · OverlapTransformer 2022 · LCR-Net 2024 · SALAD 2024</div>
+  </div>
+  <div class="cc">
+    <h4>端到端深度 VO</h4>
+    <p><b>DeepVO（2017）</b>首次证明单目 VO 可以端到端做——直接从 RGB 估计位姿，无需先验知识或参数来恢复绝对尺度。<br>
+    <b>UnDeepVO（2018）</b>用无监督方式，<b>训练时借助立体像对</b>获得绝对尺度的位姿与稠密深度。<br>
+    <b>DROID-SLAM（2021）</b>是转折点：通过 <b>Dense Bundle Adjustment 层</b>对相机位姿与逐像素深度做<b>循环迭代更新</b>，精度大幅提升且<b>灾难性失败显著减少</b>。<br>
+    <b>DPVO（2023）</b>把稠密光流换成<b>跟踪图像块</b>的循环网络架构，在保持精度的同时大幅降低计算量。</p>
+    <div class="who">DeepVO 2017 · UnDeepVO 2018 · D3VO 2020 · DROID-SLAM 2021 · DPVO 2023</div>
+  </div>
+  <div class="cc">
+    <h4>基础模型进入 SLAM</h4>
+    <p><b>DUSt3R（2024）</b>提出 <b>pointmap 表示</b>——网络预测规范坐标系下的 3D 形状，同时保留像素与场景的隐式关系，从而<b>统一了单目与双目 3D 重建</b>，且不需要标定与位姿。<br>
+    <b>MASt3R-SLAM（2025）</b>是首个<b>以双视图 3D 重建先验为基础</b>的实时 SLAM：做 pointmap 匹配、跟踪与局部融合、图构建与回环、<b>二阶全局优化</b>，并能处理通用且随时间变化的相机模型。<br>
+    <b>SLAM3R（2024）</b>用前馈网络直接从 RGB 视频预测统一坐标系下的 3D pointmap。<br>
+    <b>DINOv2 / SAM</b> 则作为特征与分割的基础模型被下游 SLAM 直接调用（如 WildGS-SLAM 用 DINOv2 做动态不确定性）。</p>
+    <div class="who">DINOv2 2023 · SAM 2023 · DUSt3R 2024 · SLAM3R 2024 · MASt3R-SLAM 2025 · Metric3D v2 2024</div>
+  </div>
+</div>
+
+<h2 id="multi">八、多机协同 SLAM <small>从"能协同"到"抗异常回环、可扩展、去中心化"</small></h2>
+<table>
+  <tr><th>系统</th><th>架构</th><th>决定性差异</th></tr>
+  <tr><td><b>Multi-UAV-SLAM</b> 2017</td><td>集中式（一台中央服务器 + 多智能体，无线通信）</td><td>协同 SLAM 的早期架构原型</td></tr>
+  <tr><td><b>DOOR-SLAM</b> 2020</td><td>完全分布式</td><td>用<b>分布式两两一致测量集最大化（PCM）</b>剔除机间伪回环——因为不怕异常了，就可以用<b>更激进的参数</b>而不牺牲召回；只靠点对点通信，前端不交换原始传感器数据</td></tr>
+  <tr><td><b>COVINS</b> 2021</td><td>集中式</td><td>面向多智能体 + 多用户 AR 的大规模协同 VI SLAM</td></tr>
+  <tr><td><b>Kimera-Multi</b> 2022</td><td>完全分布式</td><td>用<b>分布式渐进非凸（GNC）</b>做鲁棒位姿图优化，能识别并拒绝由感知歧义导致的机间与机内错误回环；输出全局一致的<b>度量-语义 3D 网格</b></td></tr>
+  <tr><td><b>LAMP 2.0</b> 2022</td><td>集中式</td><td>DARPA 地下挑战赛 Team CoSTAR 方案：可适配不同里程计源的单机前端接口 + 可扩展多机前端 + 鲁棒多机后端；回环检测模块能<b>处理并优先排序迅速增长的候选</b></td></tr>
+  <tr><td><b>DiSCo-SLAM</b> 2022</td><td>分布式</td><td>首个把轻量 <b>Scan Context 描述子</b>用于多机 SLAM，实现数据高效的机间观测交换；<b>两阶段（全局+局部）优化</b>以应对未知初始条件</td></tr>
+  <tr><td><b>Swarm-SLAM</b> 2024</td><td>去中心化</td><td>四性质：可扩展 / 灵活 / 去中心化 / 稀疏；<b>邻机管理模块</b>持续跟踪谁在通信范围内、已交换过什么数据；<b>机间回环优先级排序</b>降低通信量、加速收敛；ROS 2 实现在五个数据集 + 三个 ad-hoc 网络实测</td></tr>
+  <tr><td><b>D²SLAM</b> 2024</td><td>去中心化分布式</td><td>面向<b>空中集群</b>：区分<b>近场估计</b>（近距精确相对状态）与<b>远场估计</b>（一致的全局轨迹）；前端同时支持立体与全向相机以应对空中视场挑战；分布式优化在网络延迟下仍保持扩展性与韧性</td></tr>
+  <tr><td><b>DCL-SLAM</b> 2024</td><td>完全分布式</td><td>前端无关（front-end agnostic），可快速迁移到不同激光雷达/平台/场景；机间回环用<b>三级通信流水线</b>做到数据高效</td></tr>
+</table>
+
+<h2 id="event">九、事件相机 <small>用"像素亮度变化"而不是"图像帧"来感知</small></h2>
+<div class="box">
+  <ul>
+    <li><b>动机（来自论文正文）</b>：事件相机是仿生视觉传感器，输出像素级亮度变化而非标准强度帧。它<b>不受运动模糊影响</b>且<b>动态范围极高</b>，因此能在高速运动与极端光照下提供可靠视觉信息。反过来，运动量小的时候它信息很少——而标准相机在低速、良好光照下信息丰富。二者天然互补。</li>
+    <li><b>Ultimate SLAM（2018）</b>：首个把<b>事件 + 标准帧 + IMU 三者紧耦合</b>的流水线，用于 HDR 与高速场景。</li>
+    <li><b>EVO（2017）</b>：基于<b>边缘图做 image-to-model 对齐</b>的跟踪 + 与事件式 3D 重建结合，构成首个事件相机的并行跟踪与建图流水线，CPU 上实时、每秒可估数百个位姿，恢复半稠密 3D 地图。</li>
+    <li><b>ESVO（2021）</b>：事件式双目视觉里程计，核心是<b>测量双目事件流时空一致性的目标函数</b>，并用<b>逆深度的概率特性</b>做融合以提升稠密度与精度。</li>
+    <li><b>DEVO（2022）</b>：深度相机 + 高分辨率事件相机的混合双目；用<b>阈值化 time-surface 图</b>做边缘检测与半稠密深度提取，做 6-DoF 位姿估计。</li>
+    <li><b>ESVIO（2023）</b>：首个<b>纯事件式双目惯性里程计</b>（ESIO，滑窗图优化），并扩展为图像辅助版本，把双目事件流、双目图像帧、IMU 紧耦合。</li>
+    <li><b>PL-EVIO（2024）</b>：把<b>事件角点特征 + 基于线的事件特征 + 基于点的图像特征</b>紧耦合；专门针对纯点特征在人工场景中退化的问题。</li>
+    <li><b>CMax-SLAM（2024）</b>：用<b>对比度最大化</b>做事件相机的旋转运动 BA，同时重建场景边缘的<b>锐利全景图</b>。</li>
+  </ul>
+</div>
+
+<h2 id="concepts">十、核心概念速查 <small>读论文时反复出现、但常被跳过的东西</small></h2>
+<div class="concepts">
+  <div class="cc"><h4>TSDF（截断符号距离场）</h4>
+    <p>把空间切成体素，每个体素存"到最近表面的带符号距离"，只保留表面附近一定范围内的值（截断）。KinectFusion 用它把所有深度流融合成单一全局隐式表面。优点是融合简单、能抗噪；缺点是内存随场景体积线性增长。</p>
+    <div class="who">KinectFusion 2011 · Voxblox 2017 从中增量构建 ESDF 用于规划</div></div>
+  <div class="cc"><h4>ikd-Tree（增量 k-d 树）</h4>
+    <p>FAST-LIO2 提出的动态数据结构。相比 octree / R*-tree / nanoflann k-d tree，它<b>同时支持增量插入、删除、树上下采样和动态重平衡</b>，且整体性能更优。它解决的是"地图要能边建边改"这个实时 SLAM 的刚需。</p>
+    <div class="who">FAST-LIO2 2022 · 后续被 Faster-LIO 的 iVox、iG-LIO 的增量体素挑战</div></div>
+  <div class="cc"><h4>Hash 编码（hash grid）</h4>
+    <p>InstantNGP 提出的多分辨率哈希网格编码：把空间按多个分辨率切格，用哈希表存特征，从而用极小的网络获得高频细节，把 NeRF 训练从小时级压到秒级。Co-SLAM 把它与 one-blob 编码结合用于 SLAM。</p>
+    <div class="who">InstantNGP 2022 · Co-SLAM 2023</div></div>
+  <div class="cc"><h4>IMU 预积分</h4>
+    <p>把两帧之间的大量 IMU 测量预先积分成一个"相对运动约束"，从而不必把每个 IMU 采样都放进优化。难点在旋转处于流形（非欧氏空间）上，直接积分会有误差。<b>On-Manifold Preintegration（2017）</b>给出了正确的流形处理与解析雅可比——这是现代 VIO 的地基。</p>
+    <div class="who">On-Manifold Preintegration 2017 · LIO-SAM 用它做因子</div></div>
+  <div class="cc"><h4>边缘化 vs 延迟边缘化</h4>
+    <p>滑动窗口优化需要丢掉旧状态（边缘化）以控制规模，但边缘化不可逆且会固定线性化点。VI-DSO 提出<b>动态边缘化</b>以适应变量剧烈变化；DM-VIO 提出<b>延迟边缘化</b>——维护第二个图、延迟边缘化，从而能在需要时用新线性化点重建先验。</p>
+    <div class="who">VI-DSO 2018 · DM-VIO 2022</div></div>
+  <div class="cc"><h4>可形变表示与全局一致性</h4>
+    <p>神经 SLAM 的核心难题是漂移导致地图扭曲。刚性网格类表示修正代价高。PIN-SLAM 用<b>弹性可形变的神经点</b>——回环时神经点随全局位姿调整一起形变，从而高效得到全局一致地图；Loopy-SLAM 用<b>点基 submap + 位姿图刚性对齐</b>达到类似目的。</p>
+    <div class="who">PIN-SLAM 2024 · Loopy-SLAM 2024</div></div>
+  <div class="cc"><h4>ESIKF 序贯更新</h4>
+    <p>误差状态迭代卡尔曼滤波。难点是 LiDAR 与图像的测量维度差异很大，直接一起更新在数值上不好处理。FAST-LIVO2 用<b>序贯更新</b>——把不同传感器的测量按顺序逐个更新，从而把两者放进同一个滤波框架。FAST-LIO2 也用 IESKF，并对运动畸变做<b>形式化反向传播补偿</b>。</p>
+    <div class="who">FAST-LIO 2021 · FAST-LIO2 2022 · FAST-LIVO2 2025</div></div>
+  <div class="cc"><h4>Pointmap 表示</h4>
+    <p>DUSt3R 提出：网络直接预测规范坐标系下的 3D 点图，同时保留"每个像素对应场景中哪个 3D 点"这一隐式关系。好处是<b>统一了单目与双目重建</b>，且不需要相机标定和初始位姿。MASt3R-SLAM 把它作为先验用于实时 SLAM。</p>
+    <div class="who">DUSt3R 2024 · MASt3R-SLAM 2025 · SLAM3R 2024</div></div>
+</div>
+
+<h2 id="open">十一、开放问题 <small>来自 DARPA SubT 综述的冷静结论</small></h2>
+<div class="box warn">
+  <ul>
+    <li><b>领域走到了哪一步</b>：在<b>具备高质量多模态传感套件</b>的前提下，地下 SLAM 问题"可以说已经解决"——但仅限于环境、尺度、传感器、参数调优和算力都满足特定条件的情况。</li>
+    <li><b>最常见的失效模式不是精度不够</b>，而是穿越崎岖地形时的<b>跌落、撞击导致定位失败</b>。这些高频运动无法被机载感知系统完全捕获（例如结构光传感器采样率较低），会导致运动估计变差并最终定位失败。</li>
+    <li><b>领域缺少"弹性"的基础研究</b>：鲁棒系统是设计用来"承受"的，但真正需要的是在<b>意外碰撞与传感器流中断</b>下可靠的失效检测与恢复。这不是"多加几个传感器"能解决的。</li>
+    <li><b>向上扩展</b>：集中式方案在 5–10 台机器人可达到精确实时；去中心化方案在中等规模（&lt;1 km）不依赖机间回环也能达到小误差。但扩展到 <b>&gt;100 台</b>机器人仍是开放问题。</li>
+    <li><b>向下扩展</b>：现有方案大多依赖一个或多个激光雷达 + 强力嵌入计算机。用<b>低成本组件</b>实现同等能力、以支持大量可消耗机器人执行高风险任务（搜索救援、行星探索），仍需大量工作。</li>
+    <li><b>非传统传感</b>：热成像可穿透视觉退化条件，雷达能在低光/粉尘中维持工作——引入这些模态并设计失效检测与恢复方法，是有明确价值的方向。</li>
+    <li><b>评测正在走向绝对精度化</b>：Hilti-Oxford 用毫米级真值、微米级验证外参、硬件时间同步，把 SLAM 评测从"相对排名"推向"绝对精度"。</li>
+  </ul>
+</div>
+
+<footer>
+  语料库：<span class="mono">papers/</span> 255 篇 PDF（1.3 GB） · <span class="mono">md/</span> 全文 Markdown（268 MB） · <span class="mono">md/images/</span> 9081 张原文插图<br>
+  逐篇技术索引：<span class="mono">md/_compact.md</span>（自述差异） · <span class="mono">md/_digest.md</span>（完整抽取版）<br>
+  本页所有技术描述均来自论文正文的抽取内容，未做凭标题的推测。
+</footer>
+
+</div>
+</body>
+</html>

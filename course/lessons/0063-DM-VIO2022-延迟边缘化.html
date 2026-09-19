@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DM-VIO（2022）：延迟边缘化 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0063</div>
+      <h1>DM-VIO（2022）：延迟边缘化</h1>
+      <p class="subtitle">单目 VIO 为什么能反超双目？关键在「多留一张晚 100 帧的因子图」🔁</p>
+      <div class="hero-meta">
+        <span>🎯 主题：延迟边缘化、PGBA、多级 IMU 初始化</span>
+        <span>👥 作者：L. von Stumberg, D. Cremers（慕尼黑工大）</span>
+        <span>📅 2022 · <i>DM-VIO: Delayed Marginalization Visual-Inertial Odometry</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它要解决哪三个难题</a>
+        <a href="#b">★ 延迟边缘化 vs 动态边缘化</a>
+        <a href="#c">★ PGBA：位姿图 BA</a>
+        <a href="#d">★ 多级 IMU 初始化</a>
+        <a href="#e">实验：三大数据集</a>
+        <a href="#f">局限与收尾</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="section-card" id="a">
+        <h2>1. 它要解决哪三个难题</h2>
+        <div class="lead-grid">
+          <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清单目 VIO 的三个老毛病；讲清「延迟边缘化」和上一课 <b>0049 VI-DSO</b> 的「动态边缘化」是<b>两回事</b>；复述 PGBA 怎么用「八元约束」把位姿图与滑窗耦合；复述三级 IMU 初始化的流水线；并诚实指出 DM-VIO 的强项与盲区。</p></div>
+          <div class="callout"><h4>和前面课程怎么接</h4><p>本课是 <b>0049 VI-DSO</b>（同作者、动态边缘化）的<b>完整后续系统</b>。它还用到了 <b>0030 预积分</b> 的 IMU 因子、<b>0032 连续时间</b> 里「边缘化 = Schur 补先验」的认识、以及 <b>0019 gauge freedom</b> 里「尺度是 4 个不可观量之一」。VI-DSO 只解决了「单维尺度」的边角问题，本课的延迟边缘化才把尺度/重力的事后修正彻底做通。</p></div>
+        </div>
+
+        <p>DM-VIO 是一个<b>单目</b>视觉-惯性里程计系统。它的野心很大：单靠一颗摄像头 + IMU，在 EuRoC、TUM-VI、4Seasons 上跑赢不少<b>双目</b>方法。它之所以能做到，是因为它正面解决了此前的三个顽疾（原文第 11、156 行）：</p>
+
+        <div class="grid-3">
+          <div class="callout"><h4>① 单目尺度在常速下不可观</h4><p>匀速直线运动里，尺度本质上解不出来；更糟的是，初始化可能要等极久，甚至在等待中<b>越初始化越糟</b>。</p></div>
+          <div class="callout"><h4>② 普通边缘化不可逆</h4><p>边缘化会把被删变量的信息压成一个先验，但连接变量的<b>线性化点必须冻结</b>（即 FEJ，first-estimate Jacobian）。尺度一旦变了，这个旧先验就失效、开始给错信息。</p></div>
+          <div class="callout"><h4>③ VI-DSO 的动态边缘化有天花板</h4><p>同门的动态边缘化只处理<b>一维尺度</b>，而且尺度剧变时会丢掉<b>大量惯性信息</b>——这正是本课要超越的地方。</p></div>
+        </div>
+
+        <div class="callout"><h4>原文原话（为什么必须超越动态边缘化）</h4><p>DM-VIO 在第 156 行直接点名了 VI-DSO 的不足：「In [6] dynamic marginalization was introduced to combat this, but it is limited in its application to a single one-dimensional variable, namely the scale, and loses most prior inertial information when the scale changes quickly.」——注意：这里 [6] 指的就是 VI-DSO。所以<b>动态边缘化 ≠ 延迟边缘化</b>，下一节专讲它俩的区别。</p></div>
+      </section>
+
+      <section class="section-card" id="b">
+        <h2>2. ★ 延迟边缘化 vs 动态边缘化（本课核心）</h2>
+        <p>先说清两者最容易被混的点：<b>动态边缘化（VI-DSO）只针对单一的一维变量——尺度</b>；而 <b>延迟边缘化（DM-VIO）维护的是一整张「晚 d=100 帧」的因子图</b>。下面这张图是本课灵魂，请盯着看。</p>
+
+        <figure class="figure">
+          <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+               font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+            <text x="450" y="26" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">两张因子图的时间轴对比：主图立即删，延迟图晚 100 帧删</text>
+            <!-- main graph label -->
+            <text x="24" y="112" fill="#0d3c75" font-size="14" text-anchor="start" font-weight="700">主图（立即边缘化）</text>
+            <!-- main keyframe blocks P0..P5 -->
+            <rect x="200" y="85" width="56" height="40" fill="#cfd8dc" stroke="#90a4ae" stroke-width="2" rx="5"/>
+            <line x1="208" y1="93" x2="248" y2="117" stroke="#546e7a" stroke-width="2.5"/>
+            <line x1="248" y1="93" x2="208" y2="117" stroke="#546e7a" stroke-width="2.5"/>
+            <rect x="280" y="85" width="56" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <rect x="360" y="85" width="56" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <rect x="440" y="85" width="56" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <rect x="520" y="85" width="56" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <rect x="600" y="85" width="56" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <text x="228" y="111" fill="#37474f" font-size="13" text-anchor="middle" font-weight="700">P0</text>
+            <text x="308" y="111" fill="#0d3c75" font-size="13" text-anchor="middle">P1</text>
+            <text x="388" y="111" fill="#0d3c75" font-size="13" text-anchor="middle">P2</text>
+            <text x="468" y="111" fill="#0d3c75" font-size="13" text-anchor="middle">P3</text>
+            <text x="548" y="111" fill="#0d3c75" font-size="13" text-anchor="middle">P4</text>
+            <text x="628" y="111" fill="#0d3c75" font-size="13" text-anchor="middle">P5</text>
+            <text x="228" y="142" fill="#c62828" font-size="11" text-anchor="middle">t 时刻已删</text>
+            <!-- delayed graph label -->
+            <text x="24" y="272" fill="#1b5e20" font-size="14" text-anchor="start" font-weight="700">延迟图（晚 d=100 帧）</text>
+            <!-- delayed keyframe blocks P0..P5 all alive -->
+            <rect x="200" y="245" width="56" height="40" fill="#bbdefb" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <rect x="280" y="245" width="56" height="40" fill="#bbdefb" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <rect x="360" y="245" width="56" height="40" fill="#bbdefb" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <rect x="440" y="245" width="56" height="40" fill="#bbdefb" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <rect x="520" y="245" width="56" height="40" fill="#bbdefb" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <rect x="600" y="245" width="56" height="40" fill="#bbdefb" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <text x="228" y="271" fill="#0d3c75" font-size="13" text-anchor="middle">P0</text>
+            <text x="308" y="271" fill="#0d3c75" font-size="13" text-anchor="middle">P1</text>
+            <text x="388" y="271" fill="#0d3c75" font-size="13" text-anchor="middle">P2</text>
+            <text x="468" y="271" fill="#0d3c75" font-size="13" text-anchor="middle">P3</text>
+            <text x="548" y="271" fill="#0d3c75" font-size="13" text-anchor="middle">P4</text>
+            <text x="628" y="271" fill="#0d3c75" font-size="13" text-anchor="middle">P5</text>
+            <text x="228" y="302" fill="#2e7d32" font-size="11" text-anchor="middle">t+100 才删</text>
+            <!-- dashed vertical line connecting P0 columns -->
+            <line x1="228" y1="125" x2="228" y2="245" stroke="#c62828" stroke-width="2" stroke-dasharray="6 4"/>
+            <text x="240" y="190" fill="#c62828" font-size="12" text-anchor="start" font-weight="700">延迟 100 帧</text>
+            <!-- readvance arrow -->
+            <path d="M 660 285 C 660 230, 660 175, 660 130" fill="none" stroke="#ef6c00" stroke-width="2.5"/>
+            <polygon points="660,122 654,134 666,134" fill="#ef6c00"/>
+            <text x="672" y="205" fill="#e65100" font-size="12" text-anchor="start" font-weight="700">readvance</text>
+            <text x="672" y="223" fill="#e65100" font-size="12" text-anchor="start">回填更新先验</text>
+          </svg>
+          <figcaption>
+            <b>这张图在画什么：</b>上下两条平行时间轴，各自排着关键帧 P0..P5。上=主图，下=延迟图。<br>
+            <b>怎么看这张图：</b>① 在时刻 t，主图已经把最老的关键帧 P0 边缘化掉（画成灰色打叉）；② 同一时刻，延迟图里的 P0 还好好活着（绿色），它要等到 t+100 才被删——这就是「延迟 100 帧」；③ 红虚线把两个 P0 连起来，表示它们本是同一个帧；④ 橙色向上箭头是 <b>readvance</b>：延迟图在更晚的时候用完整的 IMU 信息重新算了一遍，把「带 IMU 的更新先验」灌回主图。<br>
+            <b>要记住的一句话：</b>因为延迟图「按相同顺序」边缘化，它的 Markov blanket（被删变量周围的邻居集合）和主图一样大，所以多维护一张图，开销却极小。
+          </figcaption>
+        </figure>
+
+        <h3>2.1 为什么「延迟」就能解决三个问题</h3>
+        <p>延迟边缘化的妙处，在于它让三件「普通边缘化做不到」的事变成了可能（原文第 161–167 行）：</p>
+        <div class="grid-2">
+          <div class="callout"><h4>① 撤销部分边缘化 → 做 PGBA</h4><p>因为老帧的信息在延迟图里还留着 d 帧，可以把它「请回来」重新参与优化，这就是下一节的位姿图 BA。</p></div>
+          <div class="callout"><h4>② 初始化后 readvance 回填</h4><p>初始化一旦把尺度/重力定准，就能把这份更准的 IMU 信息沿 readvance 灌回主图的先验里，让主图立刻受益。</p></div>
+          <div class="callout"><h4>③ 尺度大变时替换 FEJ</h4><p>当尺度估计偏离初始线性化点太远，触发 <b>marginalization replacement</b>，用延迟图重算一个先验，把旧的 FEJ（冻结的线性化点）整体换掉。普通边缘化没法「换」。</p></div>
+          <div class="callout"><h4>代价极小</h4><p>原文第 171 行：因为边缘化顺序完全相同，延迟图与主图的 Markov blanket 大小一致，延迟图边缘化的速度和主图一样快。</p></div>
+        </div>
+
+        <p>下面这张图把「撤销边缘化」这件事画清楚——这是延迟边缘化相对普通边缘化的<b>独有本事</b>。</p>
+
+        <figure class="figure">
+          <svg viewBox="0 0 900 320" width="100%" xmlns="http://www.w3.org/2000/svg"
+               font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+            <text x="450" y="26" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">「撤销边缘化」是什么意思：普通边缘化卡死，延迟图能换一根新弹簧</text>
+            <!-- panel 1 -->
+            <text x="160" y="56" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">① 已边缘化</text>
+            <rect x="60" y="120" width="50" height="40" fill="#cfd8dc" stroke="#90a4ae" stroke-width="2" rx="5"/>
+            <text x="85" y="145" fill="#37474f" font-size="12" text-anchor="middle">老帧</text>
+            <polyline points="110,140 125,128 140,152 155,128 170,152 185,140" fill="none" stroke="#1565c0" stroke-width="2.5"/>
+            <rect x="205" y="120" width="60" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <text x="235" y="145" fill="#0d3c75" font-size="12" text-anchor="middle">当前估计</text>
+            <text x="160" y="195" fill="#37474f" font-size="11" text-anchor="middle">老帧变成一根先验弹簧</text>
+            <!-- panel 2 -->
+            <text x="450" y="56" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">② 想改尺度</text>
+            <rect x="350" y="120" width="50" height="40" fill="#cfd8dc" stroke="#90a4ae" stroke-width="2" rx="5"/>
+            <text x="375" y="145" fill="#37474f" font-size="12" text-anchor="middle">老帧</text>
+            <line x1="400" y1="140" x2="470" y2="140" stroke="#c62828" stroke-width="4"/>
+            <rect x="470" y="120" width="60" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <text x="500" y="145" fill="#0d3c75" font-size="12" text-anchor="middle">当前估计</text>
+            <line x1="530" y1="120" x2="560" y2="92" stroke="#2e7d32" stroke-width="2.5"/>
+            <polygon points="560,92 552,98 562,102" fill="#2e7d32"/>
+            <text x="500" y="92" fill="#2e7d32" font-size="11" text-anchor="middle">想改尺度</text>
+            <text x="450" y="195" fill="#37474f" font-size="11" text-anchor="middle">弹簧绷紧，拉住新估计</text>
+            <!-- panel 3 -->
+            <text x="740" y="56" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">③ 换根新弹簧</text>
+            <rect x="640" y="120" width="50" height="40" fill="#eceff1" stroke="#b0bec5" stroke-width="2" rx="5"/>
+            <text x="665" y="145" fill="#78909c" font-size="12" text-anchor="middle">旧弹簧</text>
+            <line x1="690" y1="140" x2="725" y2="140" stroke="#b0bec5" stroke-width="3" stroke-dasharray="5 4"/>
+            <rect x="725" y="120" width="60" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="2" rx="5"/>
+            <text x="755" y="145" fill="#0d3c75" font-size="12" text-anchor="middle">当前估计</text>
+            <rect x="640" y="200" width="50" height="40" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2" rx="5"/>
+            <text x="665" y="225" fill="#1b5e20" font-size="11" text-anchor="middle">延迟图</text>
+            <polyline points="690,220 705,208 720,232 735,208 750,232 765,220" fill="none" stroke="#2e7d32" stroke-width="2.5"/>
+            <text x="755" y="195" fill="#1b5e20" font-size="11" text-anchor="middle">新弹簧接上</text>
+            <text x="740" y="272" fill="#37474f" font-size="11" text-anchor="middle">用延迟图重算，替换旧先验</text>
+          </svg>
+          <figcaption>
+            <b>这张图在画什么：</b>三格连环画。① 边缘化完成后，老帧变成一个连接当前估计的「先验弹簧」；② 当尺度剧变、你想重新估计时，这根旧弹簧绷得死死的，把新估计往回拉；③ 延迟图里还留着老帧的信息，于是可以剪断旧弹簧、用延迟图重算一根新弹簧接上。<br>
+            <b>怎么看这张图：</b>① 弹簧=边缘化留下的先验；② 第②格说明「普通边缘化不可逆」的痛点；③ 第③格的绿色新弹簧就是 marginalization replacement。<br>
+            <b>要记住的一句话：</b>普通边缘化做不到第③步——它把老帧信息压死、无法挽回；延迟边缘化因为多留了 d 帧，才有「换弹簧」的余地。
+          </figcaption>
+        </figure>
+
+        <figure class="figure">
+          <img src="../../md/images/2022_DM-VIO/d207be35f57d4bfa60161e92ecd0d7828f4d84e7fed52244c8782b7aaca7ec7c.jpg" alt="DM-VIO delayed marginalization and PGBA Fig 2">
+          <figcaption>
+            <b>原图注（Fig. 2）：</b>Delayed Marginalization and PGBA: a) Normal marginalization in the visual graph. (Note: not always the oldest pose is marginalized.) b) Delayed marginalization: marginalize all variables in the same order as the main graph, but with a delay d (in practice d = 100). Marginalization in this graph is equally fast as marginalizing in the main graph. c) For the pose graph bundle adju…（图注在原文中被截断，c/d 为 PGBA 与 readvance。）<br>
+            <b>怎么看这张图：</b>① (a) 普通边缘化把老变量压成一个先验；② (b) 延迟边缘化同时维护第二张图、晚 d=100 帧才边缘化；③ (c)(d) 展示 PGBA 如何注入 IMU 因子、readvance 如何产生「更新后的先验」。这张原图正好对应上面两张自绘图——看自绘图先建立直觉，再来对照原图。
+          </figcaption>
+        </figure>
+
+        <div class="interactive-card">
+          <h3>互动判断</h3>
+          <p>「延迟边缘化」和 VI-DSO 的「动态边缘化」是一回事吗？</p>
+          <div class="quiz-options">
+            <button data-correct="no" data-explanation="两者不同：动态边缘化只针对单一一维变量（尺度），且尺度剧变会丢大量惯性信息；延迟边缘化维护整张晚 100 帧的因子图，能撤销边缘化、readvance、替换 FEJ。" onclick="lessonKit.answer(this,'q0063a')">是同一回事，只是换了个名字</button>
+            <button data-correct="yes" data-explanation="动态边缘化=单维尺度处理；延迟边缘化=多维护一张晚 d 帧的因子图。原文第 156 行明确点名前者的局限，本课正是要超越它。" onclick="lessonKit.answer(this,'q0063a')">不是，延迟边缘化维护整张晚 100 帧的图</button>
+          </div>
+          <div class="quiz-feedback" id="q0063a"></div>
+        </div>
+      </section>
+
+      <section class="section-card" id="c">
+        <h2>3. ★ PGBA：位姿图 BA 怎么和滑窗耦合</h2>
+        <p>延迟边缘化最漂亮的应用，是 <b>PGBA（Pose-Graph Bundle Adjustment，位姿图 BA）</b>。它要解决的问题是：怎么把「位姿图层级的信息」和「当前滑窗里的 BA」耦合起来，既准又快。</p>
+
+        <h3>3.1 八元约束（octonary constraint）</h3>
+        <p>原文第 175–183 行：从延迟图的连接帧 $P_{\text{conn}}$ 起到最新帧，填入 IMU / 偏置因子（最多 $N_f-2=6$ 个无 IMU 帧，实际 $\ge d-N_f+2=93$ 个 IMU 因子）；优化用 <b>GTSAM 的 LM（Levenberg–Marquardt）</b> 求解，而且<b>不更新点深度、不重新线性化光度项</b>。因为这个「块」同时连接 $N_f=8$ 个关键帧、捕获了完整的 BA 协方差，所以叫<b>八元约束</b>。</p>
+        <div class="formula-box"><div class="flow-formula">
+          $$\text{八元约束：一个块同时连 } N_f=8 \text{ 帧，捕获完整 BA 协方差}$$
+          $$\text{效果：比 PGO 准（有满协方差），比 BA 快（不碰点深度 / 光度项）}$$
+        </div></div>
+
+        <figure class="figure">
+          <svg viewBox="0 0 900 320" width="100%" xmlns="http://www.w3.org/2000/svg"
+               font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+            <text x="450" y="26" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">PGBA 的「八元约束」 vs 普通 PGO 的「两两约束」</text>
+            <!-- left: octonary -->
+            <text x="230" y="56" fill="#0d3c75" font-size="14" text-anchor="middle" font-weight="700">八元约束（PGBA）</text>
+            <circle cx="230" cy="170" r="34" fill="#1565c0" stroke="#0d3c75" stroke-width="2"/>
+            <text x="230" y="175" fill="#fff" font-size="12" text-anchor="middle">块</text>
+            <circle cx="120" cy="100" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="340" cy="100" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="100" cy="230" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="360" cy="230" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="230" cy="70" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="170" cy="250" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="290" cy="250" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <circle cx="230" cy="270" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="120" y2="100" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="340" y2="100" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="100" y2="230" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="360" y2="230" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="230" y2="70" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="170" y2="250" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="290" y2="250" stroke="#1565c0" stroke-width="2"/>
+            <line x1="230" y1="170" x2="230" y2="270" stroke="#1565c0" stroke-width="2"/>
+            <text x="230" y="305" fill="#0d3c75" font-size="11" text-anchor="middle">一个块连 8 帧，满协方差</text>
+            <!-- right: PGO pairwise -->
+            <text x="670" y="56" fill="#7a1f00" font-size="14" text-anchor="middle" font-weight="700">两两约束（普通 PGO）</text>
+            <circle cx="560" cy="160" r="20" fill="#ffccbc" stroke="#c62828" stroke-width="2"/>
+            <circle cx="640" cy="160" r="20" fill="#ffccbc" stroke="#c62828" stroke-width="2"/>
+            <circle cx="720" cy="160" r="20" fill="#ffccbc" stroke="#c62828" stroke-width="2"/>
+            <circle cx="800" cy="160" r="20" fill="#ffccbc" stroke="#c62828" stroke-width="2"/>
+            <line x1="580" y1="160" x2="620" y2="160" stroke="#c62828" stroke-width="2"/>
+            <line x1="660" y1="160" x2="700" y2="160" stroke="#c62828" stroke-width="2"/>
+            <line x1="740" y1="160" x2="780" y2="160" stroke="#c62828" stroke-width="2"/>
+            <text x="680" y="120" fill="#c62828" font-size="11" text-anchor="middle">只连相邻两帧</text>
+            <text x="670" y="305" fill="#7a1f00" font-size="11" text-anchor="middle">两两二元边，丢协方差</text>
+          </svg>
+          <figcaption>
+            <b>这张图在画什么：</b>左边是 PGBA 的「八元约束」——一个中心块同时用满协方差连着 8 个关键帧；右边是普通 PGO 的「两两约束」——只把相邻两帧用一条二元边连起来。<br>
+            <b>怎么看这张图：</b>① 左图一次约束就同时考虑 8 帧之间的全部相关性（满协方差）；② 右图每条边只管一对帧，跨帧的协方差信息被丢掉了；③ 代价上，PGBA 因为「不更新点深度、不重新线性化光度项」，比完整 BA 快，又比 PGO 准。<br>
+            <b>要记住的一句话：</b>八元约束 = 「用位姿图的成本，拿到接近 BA 的精度」。
+          </figcaption>
+        </figure>
+
+        <div class="interactive-card">
+          <h3>互动判断</h3>
+          <p>PGBA 的八元约束，相比普通 PGO，关键优势是什么？</p>
+          <div class="quiz-options">
+            <button data-correct="yes" data-explanation="八元约束一个块同时连 8 帧、捕获完整 BA 协方差，所以比只连相邻两帧的 PGO 更准，又因不碰点深度/光度项而比完整 BA 快。" onclick="lessonKit.answer(this,'q0063b')">有满协方差，比 PGO 准、比 BA 快</button>
+            <button data-correct="no" data-explanation="它并不重新线性化光度项、也不更新点深度，所以不是「更完整的 BA」；它的卖点正是用位姿图成本拿到接近 BA 的精度。" onclick="lessonKit.answer(this,'q0063b')">它把每个点深度都重新优化了一遍</button>
+          </div>
+          <div class="quiz-feedback" id="q0063b"></div>
+        </div>
+      </section>
+
+      <section class="section-card" id="d">
+        <h2>4. ★ 多级 IMU 初始化</h2>
+        <p>单目尺度在常速下不可观，所以初始化必须够强。DM-VIO 用一条<b>三级流水线</b>（原文 Fig.3，第 203 行附近）：</p>
+        <div class="formula-box"><div class="flow-formula">
+          $$\text{Coarse（粗初始化）} \to \text{PGBA} \to \text{Marginalization Replacement}$$
+          $$\text{（主 VIO 同时也在绿色框里优化尺度）}$$
+        </div></div>
+        <ol>
+          <li><b>Coarse 粗初始化</b>：先给尺度、重力方向、偏置一个粗初值，作为 PGBA 的输入。</li>
+          <li><b>PGBA</b>：用上一节的八元约束，<b>捕获完整的视觉协方差</b>，解出非常准的尺度、重力方向、偏置；同时产出一份<b>更新后的边缘化先验</b>给主图。</li>
+          <li><b>Marginalization Replacement</b>：把这份更准的先验沿 readvance 替换进主图（呼应第 2 节的③）。主 VIO 系统本身（绿色框）也在并行优化尺度，两者互相喂。</li>
+        </ol>
+
+        <figure class="figure">
+          <img src="../../md/images/2022_DM-VIO/e7bc4659a15d3c861c2e3ddf8c6c245963152707233ce00526ef8ec1761463cc.jpg" alt="DM-VIO multi-stage IMU initialization Fig 3">
+          <figcaption>
+            <b>原图注（Fig. 3）：</b>Our multi-stage IMU initialization. First we perform a coarse IMU initialization, which provides initial values for the PGBA. The PGBA captures the full visual covariances, achieving very accurate initial estimates for scale, gravity direction, and biases. It also provides an updated marginalization prior for the main graph. By also optimizing the scale in the main VIO system (green box)…<br>
+            <b>怎么看这张图：</b>① 左侧 Coarse 出初值；② 中间 PGBA 用八元约束给出准的尺度/重力/偏置，并吐出更新先验；③ 右侧 Marginalization Replacement 把先验换进主图；④ 绿色框强调「主 VIO 也在并行优化尺度」。这条流水线正是上面文字的图解。
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="section-card" id="e">
+        <h2>5. 实验：三大数据集</h2>
+        <p>DM-VIO 在三个公开数据集上做了评测，结论是「单目反超双目」并非吹牛：</p>
+        <div class="summary-grid">
+          <div class="mini-card"><h4>EuRoC（Table I）</h4><p>DM-VIO 单目平均误差约 <b>0.071</b>，低于 Basalt 双目 0.072，且<b>平均尺度误差最低</b>。</p></div>
+          <div class="mini-card"><h4>TUM-VI（Table II）</h4><p>DM-VIO 单目平均漂移 <b>0.472</b>，Basalt 双目 0.939——单目反而更鲁棒。</p></div>
+          <div class="mini-card"><h4>4Seasons</h4><p>在大量常速段的挑战性户外数据上，胜过双目 ORB-SLAM3 / Basalt。</p></div>
+          <div class="mini-card"><h4>速度</h4><p>tracking <b>10.34 ms</b>、keyframe <b>53.67 ms</b>；延迟边缘化开销仅 <b>0.44 ms（0.8%）</b>。</p></div>
+        </div>
+
+        <figure class="figure">
+          <img src="../../md/images/2022_DM-VIO/b6d73378fea1dd5e751451ce354e02ed24fd82b01a68f2da48c4d55d2ac14bcc.jpg" alt="DM-VIO pointclouds and trajectories Fig 1">
+          <figcaption>
+            <b>原图注（Fig. 1）：</b>In this paper, we propose a novel method for monocular visual-inertial odometry. It provides state-of-the-art performance on three different benchmarks. Here we show pointclouds and trajectories (red) for magistrale5, V203_difficult, and neighbor_2020-03-26_13-32-55_0.<br>
+            <b>怎么看这张图：</b>① 这是论文的「封面结果图」，展示三个序列上的点云与红色轨迹；② magistrale5、V203_difficult 是难度较高的序列，说明系统对困难场景也稳；③ 它直观回答了副标题的疑问——单目 VIO 也能给出漂亮的三维重建。
+          </figcaption>
+        </figure>
+
+        <figure class="figure">
+          <img src="../../md/images/2022_DM-VIO/26dc55e362e6ef5ab8d14a9382566334faaa8b18ac02a287c4d65df3f97df8b1.jpg" alt="DM-VIO TUM-VI cumulative error Fig 4">
+          <figcaption>
+            <b>原图注（Fig. 4）：</b>Cumulative error plot for the TUM-VI dataset (drift in %). Our method clearly outperforms both VI-DSO and ORB-SLAM3 in terms of robustness. Thanks to its powerful loop closure system, ORB-SLAM3 has an advantage in terms of accuracy on some sequences.<br>
+            <b>怎么看这张图：</b>① 横轴是行进距离、纵轴是累积漂移百分比，曲线越平越好；② DM-VIO（本文）在鲁棒性上明显优于 VI-DSO 与 ORB-SLAM3；③ 原图注也诚实承认：ORB-SLAM3 因为有强回环，在部分序列精度上更占优——这正好引出下一节的局限。
+          </figcaption>
+        </figure>
+
+        <figure class="figure">
+          <img src="../../md/images/2022_DM-VIO/74a4b547e2ef198e06aac22467d950f70f8e4c3a35fd1c60735d486645be3b96.jpg" alt="DM-VIO 4Seasons cumulative error Fig 5">
+          <figcaption>
+            <b>原图注（Fig. 5）：</b>Cumulative error plot for the 4Seasons dataset (drift in %). With lots of stretches with constant velocity, this dataset is extremely challenging for monocular visual-inertial methods. Thanks to our novel IMU initializer powered by delayed marginalization and PGBA, DM-VIO is able to cope with it and even outperforms stereo-inertial methods.<br>
+            <b>怎么看这张图：</b>① 4Seasons 有大量常速段，对单目 VIO 极不友好（尺度不可观）；② 正因为延迟边缘化 + PGBA 撑起的强初始化，DM-VIO 顶住了，甚至超过双目惯性方法；③ 这是「常速不可观」被工程手段硬扛住的实证。
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="section-card" id="f">
+        <h2>6. 局限与收尾</h2>
+        <p>DM-VIO 很强，但原文自己划了边界（第 18、248、260 行），不能高估：</p>
+        <ul>
+          <li><b>无回环 / 无地图复用</b>：原文明确把回环与地图复用列为<b>未来工作</b>。所以长期、绕圈场景会被带回环的 SLAM 追平甚至反超（呼应 Fig.4 里 ORB-SLAM3 的精度优势）。</li>
+          <li><b>依赖光度前端</b>：它建立在 DSO 式直接法之上，强光照变化、运动模糊、弱纹理仍会让光度残差退化；且大尺度户外若初始尺度误差极高，可能直接失败（原文对比 VI-DSO 时提到）。</li>
+          <li><b>常速段本就不可观</b>：单目在常速运动下尺度天然解不出，DM-VIO 是靠「强初始化」硬扛，而不是真正解决不可观（呼应第 4 节与 Fig.5）。</li>
+        </ul>
+        <div class="callout"><h4>本季 VIO 主线复盘</h4><p>从 <b>0049 VI-DSO</b>（动态边缘化，只治单维尺度）→ <b>0057/0058 VINS-Mono</b>（四步松对齐初始化）→ 本节 <b>DM-VIO</b>（延迟边缘化 + PGBA + 多级初始化）：尺度/重力的事后修正一步比一步彻底。下一节 <b>0064</b> 要回到更极端的「冷启动」——连视觉都还没动起来时，怎么只用 IMU 把重力与尺度定住。</p></div>
+      </section>
+
+      <section class="exercise-box" id="x">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用三句话向同学解释：为什么「普通边缘化不可逆」会害单目 VIO？它和 FEJ 有什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① 边缘化把被删变量压成一个先验，但这个先验是在某个「线性化点」（第一次估计的值）附近算出来的；② 一旦尺度这种不可观量后来变了，旧线性化点就过时，先验开始给错信息——这就是 FEJ（first-estimate Jacobian）要冻结线性化点的原因；③ 普通边缘化一旦压死就<b>无法撤销</b>，所以尺度剧变时只能将错就错，而延迟边缘化靠多留 100 帧才得以「换弹簧」。</p>
+            </div></details>
+          </li>
+          <li>延迟边缘化相对 VI-DSO 动态边缘化，具体多了哪三件能做的事？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① <b>撤销部分边缘化</b>做 PGBA（把延迟图里还留着的旧帧请回来参与优化）；② 初始化后通过 <b>readvance</b> 把更准的 IMU 信息灌回主图先验；③ 尺度大变时触发 <b>marginalization replacement</b>，用延迟图重算先验、整体替换旧的 FEJ。动态边缘化只处理一维尺度，且尺度剧变丢大量惯性信息，这三件它都做不到。</p>
+            </div></details>
+          </li>
+          <li>八元约束为什么「比 PGO 准、比 BA 快」？写出它的两个节省开销的设计。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>准：一个块同时连 $N_f=8$ 帧、捕获完整 BA 协方差，而普通 PGO 只连相邻两帧、丢协方差。<br>
+              快（两个设计）：① <b>不更新点深度</b>；② <b>不重新线性化光度项</b>。所以优化在 GTSAM 的 LM 下代价远小于完整 BA，却拿到接近 BA 的精度。</p>
+            </div></details>
+          </li>
+          <li>多级初始化的三级分别产出什么？哪一级负责「给主图一份更新后的边缘化先验」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① Coarse：给尺度/重力/偏置粗初值；② PGBA：用八元约束解出很准的尺度、重力方向、偏置，并产出<b>更新后的边缘化先验</b>给主图；③ Marginalization Replacement：把这份先验换进主图。所以「给主图更新先验」的是 <b>PGBA 这一级</b>（再经 readvance 落实）。</p>
+            </div></details>
+          </li>
+          <li>实验里「延迟边缘化开销仅 0.44 ms（0.8%）」说明了什么？为什么多维护一张图却几乎不花钱？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>说明延迟边缘化的额外成本极低，工程上完全可承受。原因原文第 171 行：延迟图「按相同顺序」边缘化，所以它的 Markov blanket（被删变量周围的邻居集合）大小和主图一致，每步边缘化的计算量与主图一样——多留 100 帧只是多存、多算同样结构的图，并不指数膨胀。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+
+      <footer class="section-card">
+        <div class="nav-links">
+          <a href="0062-Kimera2020-度量语义地图.html">← Kimera（2020）：度量-语义地图</a>
+          <a class="next" href="0064-纯惯性初始化2020-冷启动怎么解.html">纯惯性初始化（2020）：冷启动怎么解 →</a>
+        </div>
+        <p class="foot-note">延迟边缘化是「尺度事后修正」的集大成。下一节我们把尺度问题推到更极致：连视觉都还没动，只用 IMU 怎么把重力与尺度定住 🔧</p>
+        <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

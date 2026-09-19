@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepFactors（2020）：学习先验进因子图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0056</div>
+      <h1>DeepFactors（2020）：学习先验进因子图</h1>
+      <p class="subtitle">上一节证明了「把深度压成一串数就能优化它」，但那个系统自己承认：不实时、不回环、不泛化。这一节看同一批人怎么把三件事一次补齐——做法是给学习先验找一个标准的概率后端 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：把学到的几何先验装进标准因子图 SLAM</span>
+        <span>👥 作者：Czarnowski, Laidlow, Clark, Davison（Imperial College London · Dyson Robotics Lab）</span>
+        <span>📅 2020 · <i>DeepFactors: Real-Time Probabilistic Dense Monocular SLAM</i>（IEEE RA-L）</span>
+      </div>
+      <div class="toc">
+        <a href="#gap">上一节差在哪：三条短板</a>
+        <a href="#factors">三种因子：各管一件事</a>
+        <a href="#oneway">一个小装置：one-way frames</a>
+        <a href="#prob">学习先验怎么进概率框架</a>
+        <a href="#realtime">实时是靠什么换来的</a>
+        <a href="#exp">实验、口径与代价</a>
+        <a href="#drill">巩固练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="gap">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出 CodeSLAM 的三条短板，以及本节分别怎么补；② 讲清三种因子各自在管什么，以及为什么它们要用<b>不同的鲁棒核</b>；③ 解释 one-way frames 这个设计解决了什么问题；④ 说出「学习先验 + 概率后端」这个分工为什么比「端到端学习」更稳；⑤ 看懂 code size 从 128 降到 32 这件事背后的权衡。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>直接接 <b>0055 CodeSLAM</b>（表示从哪来）与 <b>0054 CNN-SLAM</b>（它是本节明确选定的对比基线）。后端这一侧接 <b>0020 GraphSLAM 教程</b>（节点—边的因子图）与 <b>0021 g2o</b>（「H 的块结构就是图的邻接矩阵」）；它还调用了一个具体工具 <b>iSAM2</b>——这正是第二季讲增量求解时的那个「增量平滑」。另外它的鲁棒核选择也与 <b>0019</b> 讲过的「不同核函数各管一件事」呼应。</p>
+        </div>
+      </div>
+
+      <h2>1. 上一节差在哪：三条短板，三条补丁</h2>
+      <p>这是本节最有价值的一段，因为它把「学术论文之间的接力」摊开给你看了。原文在相关工作里对 CodeSLAM 的批评写得很不客气，一共三条：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>短板一：不是一个完整的 SLAM</h4>
+          <p>原文：「lacked features of <b>full SLAM</b>」——它只有滑动窗口的建图/视觉里程计，没有回环、没有重定位</p>
+        </div>
+        <div class="mini-card">
+          <h4>短板二：做不到实时</h4>
+          <p>原文：「<b>not capable of real-time performance</b>」——那一大块 1 秒级的雅可比计算，就是拦路虎</p>
+        </div>
+        <div class="mini-card">
+          <h4>短板三：不泛化到真实手持场景</h4>
+          <p>原文：「did <b>not generalise to real handheld camera scenes</b>」——训练数据是渲染出来的合成场景</p>
+        </div>
+      </div>
+      <p>于是 DeepFactors 的补法也很清楚（原文 §II 逐个对应）：<b>加上局部与全局回环、加重定位</b>；<b>把整张地图一起做批优化（不再是固定窗口）</b>；<b>优化 GPU 使用、重做实现</b>；以及一个战略性的选择——<b>用标准因子图软件（GTSAM）来搭后端</b>。</p>
+      <p>最后这一点值得多说一句。原文说，用标准框架带来的好处是「straightforward probabilistic integration of different sensor modalities which was not possible with the previous formulations of dense SLAM」——<b>从此稠密 SLAM 也能像稀疏 SLAM 一样，方便地把 IMU、GNSS 等新传感器作为新的因子加进图里</b>。这不是一个实现细节，而是一个架构上的解锁：<b>稠密 SLAM 从此有了和稀疏 SLAM 同等规格的后端。</b></p>
+      <p>另外原文还顺手澄清了它与另外两篇的关系，这对我们把第三季串成线很有用：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>vs CNN-SLAM（0054）</h4>
+          <p>「an example of other directly comparable work」，原文把 CNN-SLAM 选为主要的<b>定量对比基线</b>，因为它也是「whole estimated trajectory、不用真值位姿」来评测重建的少数系统</p>
+        </div>
+        <div class="mini-card">
+          <h4>vs BA-Net</h4>
+          <p>BA-Net 也用了类似 CodeSLAM 的「基深度图 + BA」思路，而且端到端训练过（可能学出更适合 SfM 的表示）。但它<b>不是实时 SLAM、不维护一致的多关键帧地图</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>vs DeepTAM</h4>
+          <p>DeepTAM 把 DTAM 的 TV-L1 优化与跟踪都换成网络，效果超过经典方法；但它沿用「跟踪/建图分开」的老结构，且<b>做不到实时</b>。原文还点出它的软肋：仍然依赖网络见过所有输入变化</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>原文对自己的定位（这句话很值得记）</h4>
+        <p>原文强调自己的方法「<b>relies less on the network generalisation</b>」，理由是后续优化能修正网络的坏预测——「in our system, neural networks are mainly used for <b>obtaining an image conditioned manifold to optimise over</b>」。</p>
+        <p>这句话是整条「学习 + 优化」路线的题眼：<b>网络的职责从「给出答案」降级成「给出一个可搜索的曲面」</b>。网络犯错不再是灾难，只是初值差一点。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="factors">
+      <h2>2. 三种因子：各管一件事</h2>
+      <p>这是本节的技术主干。DeepFactors 把「两个视角之间应该自洽」这件事拆成了<b>三种不同的度量方式</b>，它们各自擅长不同的东西。</p>
+
+      <h3>2.1 光度因子（photometric）：比灰度</h3>
+      <p>第一项是稠密 SLAM 的老朋友（式 2、3）：</p>
+      <div class="formula-box">
+        $$e_{pho}^{ij} = \sum_{\mathbf{x}\in\Omega_i}\big\|\,\mathtt{I}_i(\mathbf{x}) - \mathtt{I}_j(\omega_{ji}(\mathbf{x},\mathbf{c}_i,\mathtt{I}_i))\,\big\|^2$$
+      </div>
+      <p>读法：把 $i$ 帧的某个像素按深度投影到 $j$ 帧上，两个像素的灰度应该差不多。这里 $\omega_{ji}$ 是那个「投影用的 warp 函数」，而它需要深度——<b>而深度来自 code</b>。所以光度因子的梯度会一路传到 code 上去，这就是「深度能被优化」的通道。</p>
+      <div class="callout">
+        <h4>⚠️ 一个容易写错的地方</h4>
+        <p>式 2 里<b>没有出现任何鲁棒核</b>，就是一个平方和。请不要想当然地给它补一个 Huber——三个因子里只有后两个用了鲁棒核，而且用的还不是同一个。这正是本文值得细看的地方。</p>
+      </div>
+
+      <h3>2.2 重投影因子（reprojection）：比特征点的像素位置</h3>
+      <p>第二项借用经典 SfM 的间接法（式 4）：匹配到的特征点，它「投影过去的位置」应该和「实际观测到的位置」一致。原文明确用了 <b>Cauchy 鲁棒核</b>，理由是它「has a constant response to outliers」——对离群点给出<b>恒定（而不是继续增长）</b>的代价。特征用的是 <b>BRISK</b>。</p>
+
+      <h3>2.3 稀疏几何因子（sparse geometric）：比深度</h3>
+      <p>第三项是这篇的特色（式 5）：把 $i$ 帧的深度投影到 $j$ 帧，得到的深度应该和 $j$ 帧自己的深度一致。原文在这里用的是 <b>Huber 范数</b>，而且为了省算力，<b>只在一组均匀稀疏采样的像素上求值</b>，并且特意说明可以每次迭代换一批像素，从而对整张图做随机优化。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 A · 三种因子：同一件事（两视角要自洽），三种量法</text>
+
+          <!-- 场景：两个相机 + 一张桌子 -->
+          <rect x="30" y="52" width="840" height="150" fill="#faf7f4" stroke="#d7ccc8" stroke-width="1.6" rx="8"/>
+          <text x="450" y="74" fill="#6b5b52" font-size="12.5" text-anchor="middle">同一个真实场景，被两个时刻拍到</text>
+          <!-- 桌子 -->
+          <rect x="380" y="106" width="150" height="14" fill="#a1887f"/>
+          <rect x="392" y="120" width="12" height="48" fill="#8d6e63"/>
+          <rect x="506" y="120" width="12" height="48" fill="#8d6e63"/>
+          <text x="455" y="146" fill="#5d4037" font-size="11" text-anchor="middle">桌面（有纹理）</text>
+          <!-- 相机 i / j -->
+          <circle cx="140" cy="150" r="14" fill="#455a64"/>
+          <text x="140" y="184" fill="#37474f" font-size="11.5" text-anchor="middle">时刻 i</text>
+          <circle cx="760" cy="150" r="14" fill="#455a64"/>
+          <text x="760" y="184" fill="#37474f" font-size="11.5" text-anchor="middle">时刻 j</text>
+          <path d="M 154 146 L 378 116" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <path d="M 746 146 L 532 116" stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="4 3"/>
+
+          <!-- 三个度量框 -->
+          <!-- 光度 -->
+          <rect x="30" y="218" width="270" height="196" fill="#fff3e0" stroke="#ef6c00" stroke-width="2" rx="9"/>
+          <text x="165" y="244" fill="#7a1f00" font-size="13.5" text-anchor="middle" font-weight="700">① 光度因子：比灰度</text>
+          <text x="165" y="266" fill="#7a1f00" font-size="11.5" text-anchor="middle">用全部像素（稠密）</text>
+          <rect x="60" y="280" width="90" height="56" fill="#e0e0e0" stroke="#9e9e9e" stroke-width="1.3"/>
+          <rect x="72" y="292" width="18" height="14" fill="#424242"/>
+          <rect x="94" y="308" width="18" height="14" fill="#9e9e9e"/>
+          <rect x="116" y="296" width="18" height="14" fill="#616161"/>
+          <text x="105" y="352" fill="#7a1f00" font-size="10.5" text-anchor="middle">i 帧灰度块</text>
+          <rect x="180" y="280" width="90" height="56" fill="#e0e0e0" stroke="#9e9e9e" stroke-width="1.3"/>
+          <rect x="192" y="290" width="18" height="14" fill="#424242"/>
+          <rect x="214" y="306" width="18" height="14" fill="#9e9e9e"/>
+          <rect x="236" y="294" width="18" height="14" fill="#616161"/>
+          <text x="225" y="352" fill="#7a1f00" font-size="10.5" text-anchor="middle">j 帧灰度块</text>
+          <text x="165" y="378" fill="#7a1f00" font-size="11.5" text-anchor="middle">差值平方和，<tspan font-weight="700">无鲁棒核</tspan></text>
+          <text x="165" y="398" fill="#a8563a" font-size="11" text-anchor="middle">擅长：细节丰富区；代价：怕亮度变化</text>
+
+          <!-- 重投影 -->
+          <rect x="315" y="218" width="270" height="196" fill="#e8eaf6" stroke="#3949ab" stroke-width="2" rx="9"/>
+          <text x="450" y="244" fill="#1a237e" font-size="13.5" text-anchor="middle" font-weight="700">② 重投影因子：比特征点位置</text>
+          <text x="450" y="266" fill="#1a237e" font-size="11.5" text-anchor="middle">只用匹配到的特征（稀疏）</text>
+          <rect x="345" y="280" width="90" height="56" fill="#ffffff" stroke="#9fa8da" stroke-width="1.3"/>
+          <circle cx="365" cy="300" r="4" fill="#3949ab"/>
+          <circle cx="410" cy="322" r="4" fill="#3949ab"/>
+          <text x="390" y="352" fill="#1a237e" font-size="10.5" text-anchor="middle">i 帧</text>
+          <rect x="465" y="280" width="90" height="56" fill="#ffffff" stroke="#9fa8da" stroke-width="1.3"/>
+          <circle cx="487" cy="302" r="4" fill="#c62828"/>
+          <circle cx="528" cy="320" r="4" fill="#3949ab"/>
+          <text x="510" y="352" fill="#1a237e" font-size="10.5" text-anchor="middle">j 帧（红点=应到的位置）</text>
+          <text x="450" y="378" fill="#1a237e" font-size="11.5" text-anchor="middle">BRISK 特征 + <tspan font-weight="700">Cauchy 核</tspan></text>
+          <text x="450" y="398" fill="#a8563a" font-size="11" text-anchor="middle">擅长：避免局部极小、收敛快</text>
+
+          <!-- 稀疏几何 -->
+          <rect x="600" y="218" width="270" height="196" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2" rx="9"/>
+          <text x="735" y="244" fill="#1b5e20" font-size="13.5" text-anchor="middle" font-weight="700">③ 稀疏几何因子：比深度</text>
+          <text x="735" y="266" fill="#1b5e20" font-size="11.5" text-anchor="middle">均匀稀疏采样的像素</text>
+          <rect x="630" y="280" width="90" height="56" fill="#c8e6c9" stroke="#66bb6a" stroke-width="1.3"/>
+          <circle cx="650" cy="294" r="2.6" fill="#1b5e20"/>
+          <circle cx="700" cy="306" r="2.6" fill="#1b5e20"/>
+          <circle cx="668" cy="322" r="2.6" fill="#1b5e20"/>
+          <text x="675" y="352" fill="#1b5e20" font-size="10.5" text-anchor="middle">稀疏采样点</text>
+          <rect x="750" y="280" width="90" height="56" fill="#c8e6c9" stroke="#66bb6a" stroke-width="1.3"/>
+          <circle cx="770" cy="294" r="2.6" fill="#1b5e20"/>
+          <circle cx="820" cy="306" r="2.6" fill="#1b5e20"/>
+          <circle cx="788" cy="322" r="2.6" fill="#1b5e20"/>
+          <text x="795" y="352" fill="#1b5e20" font-size="10.5" text-anchor="middle">对应深度值</text>
+          <text x="735" y="378" fill="#1b5e20" font-size="11.5" text-anchor="middle">深度差平方 + <tspan font-weight="700">Huber 核</tspan></text>
+          <text x="735" y="398" fill="#a8563a" font-size="11" text-anchor="middle">擅长：把白墙等无纹理区「焊」成一片</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面是同一个真实场景（一张有纹理的桌子）被两个时刻拍到。下面三格是把「两视角应该自洽」这件事拆成的三种量法：① 光度因子比<b>灰度</b>，用全部像素、不加鲁棒核；② 重投影因子比<b>特征点的像素位置</b>，只用在匹配到的特征上、用 Cauchy 核；③ 稀疏几何因子比<b>深度值</b>，只在均匀稀疏采样的像素上算、用 Huber 核。<br>
+          <b>怎么看这张图：</b>① 先看三格右上角的「用哪些像素」：从全部 → 特征点 → 均匀稀疏，这是三种不同的采样策略，直接决定算力；② 再看三格底部的鲁棒核标注：<b>三种因子用了三种不同的处理方式（无核 / Cauchy / Huber）</b>，这不是随意选的——原文明确说 Cauchy 的特点是「对离群点给出恒定响应」，而 Huber 用的是「Huber 范数」；③ 最后看三格最下面那行「擅长」，它们说的其实是同一件事的不同侧面：<b>光度因子在细节丰富处最强，几何因子在无纹理处最救命</b>。<br>
+          <b>要记住的一句话：</b>为什么不能只留一个因子？因为它俩的能力正好互补——这也是下面那张消融表要证明的。
+        </figcaption>
+      </figure>
+
+      <h3>2.4 消融实验：谁管轨迹、谁管重建</h3>
+      <p>既然有三种因子，自然会问：「能不能只用一种？」原文在 ScanNet 验证集的三个场景上做了消融（<b>Table I</b>，`pho` 是基线，另外两种单独加和一起加）：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>scene0084_00（效果最明显）</h4>
+          <p>ATE RMSE：只用 pho <b>0.131</b> → 加 rep <b>0.074</b> → 加 geo 0.120 → 三个一起 <b>0.061</b><br>正确深度 pc110：69.14% → 71.05% → 71.81% → <b>73.66%</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>scene0606_02（重建提升最明显）</h4>
+          <p>absrel（深度相对误差，越小越好）：0.214 → 0.201 → 0.168 → <b>0.162</b><br>pc110：37.22% → 39.39% → <b>44.45%</b> → 46.16%</p>
+        </div>
+        <div class="mini-card">
+          <h4>scene0565_00（三个因子都不太救得动）</h4>
+          <p>ATE：0.128 → 0.112 → 0.115 → <b>0.114</b>；pc110：57.56% → 59.80% → 59.75% → <b>60.13%</b>——提升幅度小，说明这个场景本身对三个因子都不敏感</p>
+        </div>
+      </div>
+      <p>原文从这张表里读出的结论很干净：<b>加上任一种因子都能降低轨迹误差、提升重建精度；其中重投影因子对「轨迹」影响更强，几何因子对「重建」影响更强；三个一起用效果最好。</b>至于机制，原文给了两句解释：重投影项因为显式地做了特征匹配，所以「improves local minima avoidance and increases convergence rate」；而几何项则引入了「世界上只有一张表面」这个先验，把各帧独立的深度图<b>在缺乏光度信息的无纹理区域「钉」成一份重建</b>。</p>
+    </section>
+
+    <section class="section-card" id="oneway">
+      <h2>3. 一个小装置：one-way frames（单向帧）</h2>
+      <p>这是我认为本节最「巧」的一个设计，值得单独讲。</p>
+      <p>问题出在「只用相邻关键帧」这个设定上。光度误差要发挥作用，最好同时有<b>小基线和大基线</b>的配对——小基线好对齐、大基线给深度信息。但如果只把当前关键帧与「最后 N 个关键帧」相连，这个条件不一定满足。</p>
+      <p>原文的解法是引入一类特殊的帧：<b>它们不携带深度、不被优化，只负责把信息喂给最新的关键帧</b>。原文的定义是「one-way frames that do not have attached depth and are used to feed information to refine the latest keyframe」。等优化若干步之后，这些帧就<b>被边缘化掉、从图里删除</b>。</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepFactors/d072e14609207e1438eff2529b08edd10e871de77fb5094db64fdae28878443d.jpg" alt="factor graph example with one-way frames">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>An example instance of the factor graph used in our system containing three keyframes and two one-way frames attached to the latest keyframe. Multiple different pairwise constraints can be used simultaneously (photometric, geometric or reprojection) but for simplicity, only a single type has been presented in this figure.（本系统所用因子图的一个实例：包含三个关键帧，以及挂在最新关键帧上的两个单向帧。多种成对约束（光度、几何、重投影）可以同时使用，但为简洁起见，图中只画了其中一种。）<br>
+          <b>怎么看这张图：</b>先认出两类节点——带 code 的是关键帧（会被优化），不带深度的是单向帧（只喂信息）。再看边的方向：单向帧<b>只连到最新那个关键帧</b>，所以它们的信息只往一个方向流。最后留意原文图注的提醒：<b>实际系统里同一对节点之间可以同时挂多种因子</b>，图中只画了一种。它的一个工程后果在 5.2 节：为了让单向帧能被边缘化掉，原文<b>特意强制了一个消元顺序</b>，让它们在 iSAM2 的 Bayes 树里成为叶子节点——这样做边缘化时就不会牵连其他变量。<br>
+          <b>要记住的一句话：</b>单向帧是「用完即弃的信息搬运工」——它不进入地图，只把观测灌进最新关键帧，然后自己消失。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 B · 单向帧的「一生」：进来喂信息，然后被边缘化掉</text>
+          <text x="450" y="52" fill="#6b5b52" font-size="12.5" text-anchor="middle">关键帧留在图里（带 code），单向帧用完即走（不带深度）</text>
+
+          <!-- 主干：关键帧链 -->
+          <text x="60" y="100" fill="#0d3c75" font-size="12.5" font-weight="700">关键帧（留存）</text>
+          <circle cx="200" cy="126" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2.2"/>
+          <text x="200" y="131" fill="#0d3c75" font-size="11" text-anchor="middle">k₁</text>
+          <circle cx="360" cy="126" r="20" fill="#bbdefb" stroke="#1565c0" stroke-width="2.2"/>
+          <text x="360" y="131" fill="#0d3c75" font-size="11" text-anchor="middle">k₂</text>
+          <circle cx="520" cy="126" r="20" fill="#90caf9" stroke="#1565c0" stroke-width="2.6"/>
+          <text x="520" y="131" fill="#0d3c75" font-size="11" text-anchor="middle">k₃</text>
+          <text x="520" y="96" fill="#0d3c75" font-size="11.5" text-anchor="middle" font-weight="700">最新关键帧</text>
+          <path d="M 220 126 L 340 126" stroke="#1565c0" stroke-width="2"/>
+          <path d="M 380 126 L 500 126" stroke="#1565c0" stroke-width="2"/>
+          <text x="280" y="118" fill="#1565c0" font-size="10.5" text-anchor="middle">因子</text>
+          <text x="440" y="118" fill="#1565c0" font-size="10.5" text-anchor="middle">因子</text>
+
+          <!-- 单向帧 -->
+          <text x="620" y="100" fill="#7a1f00" font-size="12.5" font-weight="700">单向帧（用完即弃）</text>
+          <rect x="600" y="152" width="60" height="26" fill="#ffe0b2" stroke="#ef6c00" stroke-width="1.8" rx="5"/>
+          <text x="630" y="170" fill="#7a1f00" font-size="10.5" text-anchor="middle">无深度</text>
+          <rect x="600" y="196" width="60" height="26" fill="#ffe0b2" stroke="#ef6c00" stroke-width="1.8" rx="5"/>
+          <text x="630" y="214" fill="#7a1f00" font-size="10.5" text-anchor="middle">无深度</text>
+          <path d="M 540 140 L 598 162" stroke="#ef6c00" stroke-width="2.2"/>
+          <path d="M 540 146 L 598 206" stroke="#ef6c00" stroke-width="2.2"/>
+          <text x="572" y="188" fill="#7a1f00" font-size="10.5" text-anchor="middle">只喂</text>
+          <text x="572" y="202" fill="#7a1f00" font-size="10.5" text-anchor="middle">不收</text>
+
+          <!-- 时间轴 -->
+          <line x1="80" y1="270" x2="820" y2="270" stroke="#8d6e63" stroke-width="1.8"/>
+          <polygon points="820,264 834,270 820,276" fill="#8d6e63"/>
+          <text x="846" y="274" fill="#6b5b52" font-size="11.5" text-anchor="end">时间</text>
+          <line x1="300" y1="264" x2="300" y2="276" stroke="#8d6e63" stroke-width="1.4"/>
+          <text x="300" y="294" fill="#6b5b52" font-size="11" text-anchor="middle">加入 2 个单向帧</text>
+          <line x1="620" y1="264" x2="620" y2="276" stroke="#8d6e63" stroke-width="1.4"/>
+          <text x="620" y="294" fill="#6b5b52" font-size="11" text-anchor="middle">优化若干步后边缘化</text>
+          <!-- 条 -->
+          <rect x="300" y="234" width="180" height="10" fill="#ffb74d"/>
+          <rect x="480" y="234" width="140" height="10" fill="#e0e0e0" stroke="#bdbdbd" stroke-width="1"/>
+          <text x="550" y="230" fill="#8d6e63" font-size="10.5" text-anchor="middle">已移出图</text>
+
+          <rect x="80" y="320" width="740" height="62" fill="#f4f9f4" stroke="#2e7d32" stroke-width="1.6" rx="8"/>
+          <text x="450" y="344" fill="#1b5e20" font-size="12.5" text-anchor="middle" font-weight="600">为什么这么做：让「有用的观测」进得来，又不让图的规模无限膨胀</text>
+          <text x="450" y="368" fill="#1b5e20" font-size="11.5" text-anchor="middle">原文为它们强制了一个消元顺序，使它们成为 Bayes 树的叶子——这样被边缘化时不会牵连其他变量</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上半是因子图的局部：蓝色圆圈是关键帧（带 code、会被长期保留），橙色方块是单向帧（不带深度）。橙色箭头是<b>单向</b>的——只从单向帧指向最新关键帧，反向不成立。下半是一条时间轴：某个时刻加入两个单向帧，优化若干步后它们被边缘化、移出图。<br>
+          <b>怎么看这张图：</b>① 关键在箭头的<b>方向性</b>：单向帧在数学上只贡献约束、不接受修正，因此它的「存在感」是单向的；② 它们最终消失这件事很重要——这说明它们是<b>临时通道</b>，不占地图容量；③ 原文为此付出的代价是「强制消元顺序」，这是一个纯工程细节，但它说明了实现一个 SLAM 系统时，「谁先被消掉」这种顺序问题都可能需要专门处理。<br>
+          <b>要记住的一句话：</b>单向帧让系统既能吸收大量观测、又不让因子图无限长大——这是一个「用完即弃」的工程智慧。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="prob">
+      <h2>4. 学习先验怎么进概率框架</h2>
+      <p>这一节回答的是标题里的问题：「学习先验进因子图」到底怎么进去的。</p>
+      <h3>4.1 一句话：把深度写成 code 的线性函数（式 1）</h3>
+      <div class="formula-box">
+        $$\mathrm{D}_i = f(\mathbf{c}_i, \mathtt{I}_i) = \mathrm{D}_i^0 + \mathbf{J}(\mathtt{I}_i)\,\mathbf{c}_i$$
+      </div>
+      <p>其中 $\mathrm{D}_i^0 = f(\mathbf{0}, \mathtt{I}_i)$ 是「全零 code」解码出来的深度，$\mathbf{J}(\mathtt{I}_i) = \partial \mathrm{D}_i/\partial \mathbf{c}_i$ 是那个只依赖图像的雅可比。原文给出的理由是：「<b>为避免优化过程中代价高昂的重新线性化，我们要求这个关系是线性的</b>」（式 1 上方原话）。</p>
+      <p>这个式子的意义在第 1 节里已经点过：<b>它把「一张深度图」变成了「一个 32 维参数生成的流形上的一点」</b>。于是优化不再是「在三十万维空间里瞎跑」，而是「在这个学出来的、有结构的低维曲面上滑动」。</p>
+
+      <h3>4.2 一个关键数字：code size = 32</h3>
+      <p>这是本节与上一节最直观的对照，也是本模块最值得停下来想一想的地方：</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 390" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" fill="#37474f" font-size="17" text-anchor="middle" font-weight="700">图 C · code 要多大：一边是「表达力」，一边是「跑得动」</text>
+
+          <!-- 天平 -->
+          <line x1="450" y1="90" x2="450" y2="250" stroke="#795548" stroke-width="5"/>
+          <polygon points="430,250 470,250 450,282" fill="#795548"/>
+          <rect x="400" y="282" width="100" height="12" fill="#5d4037"/>
+          <line x1="200" y1="120" x2="700" y2="120" stroke="#795548" stroke-width="5"/>
+          <circle cx="450" cy="120" r="9" fill="#5d4037"/>
+
+          <!-- 左盘 128 -->
+          <line x1="240" y1="120" x2="240" y2="160" stroke="#795548" stroke-width="3"/>
+          <rect x="120" y="160" width="240" height="96" fill="#e8eaf6" stroke="#3949ab" stroke-width="2.2" rx="9"/>
+          <text x="240" y="186" fill="#1a237e" font-size="14" text-anchor="middle" font-weight="700">CodeSLAM：128 维</text>
+          <text x="240" y="210" fill="#1a237e" font-size="11.5" text-anchor="middle">原文说 128 处精度饱和</text>
+          <text x="240" y="232" fill="#1a237e" font-size="11.5" text-anchor="middle">表达力更强，但优化更重</text>
+
+          <!-- 右盘 32 -->
+          <line x1="660" y1="120" x2="660" y2="160" stroke="#795548" stroke-width="3"/>
+          <rect x="540" y="160" width="240" height="96" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.2" rx="9"/>
+          <text x="660" y="186" fill="#1b5e20" font-size="14" text-anchor="middle" font-weight="700">DeepFactors：32 维</text>
+          <text x="660" y="210" fill="#1b5e20" font-size="11.5" text-anchor="middle">原文：这是能实时的最大尺寸</text>
+          <text x="660" y="232" fill="#1b5e20" font-size="11.5" text-anchor="middle">够用，且算得动</text>
+
+          <rect x="130" y="308" width="640" height="66" fill="#fff8e1" stroke="#ef6c00" stroke-width="1.6" rx="8"/>
+          <text x="450" y="332" fill="#7a1f00" font-size="12.5" text-anchor="middle" font-weight="600">同一个团队、同一个想法，为什么把 code 砍到四分之一？</text>
+          <text x="450" y="356" fill="#7a1f00" font-size="11.5" text-anchor="middle">因为在 SLAM 里，「跑得动」这一项的权重，比「表达力最强」高得多</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一副天平，左盘是 CodeSLAM 的 128 维 code（原文说精度在 128 处饱和，再大收益极少），右盘是 DeepFactors 的 32 维。看起来是右边「吃亏」，但天平在这里只是一种修辞——真正想说的是<b>这不是「哪个更好」的比较，而是「目标函数不同」</b>。<br>
+          <b>怎么看这张图：</b>① 先看清两边的原文依据：CodeSLAM 说 128 处饱和（在<b>重建精度</b>这个目标下最优）；DeepFactors 说 32 是「the maximum code size that we can achieve real-time results with」（在<b>实时性</b>这个约束下取上限）；② 所以这不是两个人算错了，而是<b>加入实时约束之后，最优解移到了别处</b>；③ 代价也确实存在，见 5.3 节——原文自己报告在「平坦纹理墙」场景上输给了 CNN-SLAM，并把它归因于 32 维撑不住完全平坦的深度。<br>
+          <b>要记住的一句话：</b>研究里最常见的进步不是「我的方法更好」，而是「我换了约束条件，于是最优点挪了位」。
+        </figcaption>
+      </figure>
+      <p>上图的右边那半个结论，原文有明确的依据：「<b>code size 32 …… This is the maximum code size that we can achieve real-time results with in our SLAM system.</b>」——注意这句话的措辞：不是「32 够用」，而是「32 是实时的上限」。这是一个非常诚实、也非常工程化的表述。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>上一节的 CodeSLAM 说 code size 在 128 处精度饱和（再大收益极少），而这一节的 DeepFactors 却只用了 32 维。最准确的解释是哪个？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。原文报告 code 更低并不等于精度更高——恰恰相反，原文把「平坦纹理墙场景输给 CNN-SLAM」明确归因于 32 维太小、难以表示完全平坦的深度。降低 code 是付出精度代价换来速度。" onclick="lessonKit.answer(this,'q0056a')">因为天然是 32 的效果更好</button>
+          <button data-correct="yes" data-explanation="对。原文的原话是「This is the maximum code size that we can achieve real-time results with in our SLAM system」——32 是加进「实时」这个约束之后的可行上限，不是精度最优点。CodeSLAM 报的 128 饱和，是在没有实时约束的目标下测出来的。约束变了，最优点就挪了位。" onclick="lessonKit.answer(this,'q0056a')">因为多了一个实时约束，最优解位置变了</button>
+          <button data-correct="no" data-explanation="不对。原文没有声称新网络结构让 32 维能表达 128 维的信息。实际上它是同一族网络架构的改进（增加了显式 code 预测路径、改用无跳连 U-Net），并没有给出这种「压缩率提升」的论断。" onclick="lessonKit.answer(this,'q0056a')">因为新网络结构更省参数了</button>
+        </div>
+        <div class="quiz-feedback" id="q0056a"></div>
+      </div>
+
+      <h3>4.3 还有一个「初始化」的小改进</h3>
+      <p>上一节说 CodeSLAM 用「全零 code」当默认初始化。DeepFactors 发现这在真实相机上不够好，于是<b>额外加了一个编码器，直接从图像预测一个 code</b>（原文 Fig. 5 显示这样比零 code 初始化更好）。它同时说明，为了让预测的 code 落在与学到的 code 相同的空间里，对这个预测也施加了同样的潜在损失。</p>
+
+      <h3>4.4 还有一件必须做的事：把 code 拉住</h3>
+      <p>因为训练时通过变分损失让 code 流形「靠近零均值高斯」，所以在优化过程中必须用 <b>zero-code 先验因子（zero-code prior）</b>把它正则化住，否则优化可能把 code 推到流形之外——那样解码出来的深度就不可信了。<b>这就是「学习先验进概率框架」的具体形态：先验不是一句口号，而是一个实实在在挂在图上的因子。</b></p>
+      <p>另外原文还明确指出一个实现约束：由于因子是为「单向 warp」设计的，一对关键帧之间需要<b>加两个因子</b>才能同时优化两者的 code/深度。</p>
+    </section>
+
+    <section class="section-card" id="realtime">
+      <h2>5. 实时是靠什么换来的</h2>
+      <p>这一节把「实时」这件事拆开看，因为它的答案里有一条非常值得记住的教训。</p>
+
+      <h3>5.1 四个来源</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 低维 code（32）</h4>
+          <p>直接压低优化变量的数量</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 线性解码器 → 雅可比可预计算</h4>
+          <p>延续上一节的取舍：让 $\mathbf{J}$ 只依赖图像，每关键帧算一次</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ iSAM2 增量求解</h4>
+          <p>原文把批 MAP 问题的求解交给 iSAM2：它「stores a factorisation of the batch Jacobian in the form of a Bayes Tree」，新增变量时只对受影响的因子重新线性化与重分解，因此能在探索型运动下做到近常数时间更新</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ GPU / CPU 分工 + 跟踪与建图交替</h4>
+          <p>稠密 warp、优化、跟踪交给 GPU（CUDA）；重投影与稀疏几何因子在 CPU 上算；同时让跟踪与建图步骤交替执行，以跟上不断到来的图像</p>
+        </div>
+      </div>
+
+      <h3>5.2 一个必须讲清的数字：340 ms 里只有 16 ms 是网络</h3>
+      <p>这是本节我最想让你记住的一个数字，因为它打破了一个常见直觉——「用了神经网络所以慢」。</p>
+      <p>原文在性能一节给出：每初始化一个新关键帧，需要约 <b>340 ms</b>，其中<b>只有 16 ms 花在网络前向传播上</b>，其余全部花在<b>用 <code>tf.gradients</code> 计算雅可比</b>上。原文对这个现象的解释很坦诚：这是「backward-mode auto-differentiation based implementation」的低效所致——那套实现是为「标量函数的梯度」优化的（机器学习的常见需求），而这里需要的是「每个输出像素对潜在表示（code）的导数」，于是不得不在网络上跑大量遍。</p>
+      <div class="callout">
+        <h4>原文的预测：这个 340 ms 里有巨大的优化空间</h4>
+        <p>原文明确写下：「This time can be <b>drastically reduced</b> with engineering effort and we predict it should be possible to reduce the overall time required to run the network to around <b>30 ms</b>.」</p>
+        <p>请注意这个比例：<b>340 ms → 预计 30 ms，是把「网络相关的开销」压掉约 90%</b>。这条说明了一个在深度学习 + 机器人里反复出现的教训：<b>真正的瓶颈往往不在模型本身，而在你「向模型要梯度」的方式。</b>这个坑，任何把网络嵌进优化器的人都会遇到。</p>
+      </div>
+      <p>跟踪速度则是另一回事：原文报告当前帧与最新关键帧的跟踪约 <b>250 Hz</b>——因为跟踪只做 SE(3) 的全图 Lucas-Kanade（原文用的就是这个名字：standard direct whole-image SE3 Lucas-Kanade），不涉及网络。</p>
+
+      <h3>5.3 一个「性能随场景切换」的实用结论</h3>
+      <p>原文还说明了一个很有意思的取舍：系统的整体性能「varies greatly」取决于四个因素——关键帧之间的连接数量、启用了哪些因子、iSAM2 里被重新线性化的因子数量、以及是否发生回环。因此作者给出了两条使用建议：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>探索型运动</h4>
+          <p>相机快速移动时，<b>只开光度 + 重投影因子</b>，先把速度保住。原文原话：通常是「we typically limit our system to only use the photometric and reprojection error to allow it to keep up with the fast camera movement」</p>
+        </div>
+        <div class="mini-card">
+          <h4>局部重建（桌面 AR / 房间尺度）</h4>
+          <p>运动不那么激进时，<b>可以打开几何因子</b>换取更好的重建质量</p>
+        </div>
+      </div>
+      <p>这种「按场景切换因子」的设计，在写论文时是个软肋（不够「一劳永逸」），但在工程上非常实在。</p>
+
+      <h3>5.4 一个细节：回环为什么只加重投影因子</h3>
+      <p>原文在回环一节写了一句很值得琢磨的话：因为<b>光度误差的收敛域（convergence basin）通常更小</b>，所以在闭合一个<b>全局回环</b>时，<b>只加重投影因子</b>。</p>
+      <p>把这句话讲成白话：全局回环意味着「两个关键帧的位姿初值可能差得挺远」。光度误差要生效，需要初值已经把两张图对齐得差不多（因为它是逐像素比灰度的，差一点就完全对不上）；而重投影误差基于<b>特征点匹配</b>，对「差得远」更宽容。所以在这种「初值不好」的场合，用重投影因子更稳妥。</p>
+      <p>这条与现代 SLAM 系统的普遍做法一致，也呼应了第二季 <b>0019</b> 讲过的「不同残差有不同的吸引域」这件事。</p>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>6. 实验、口径与代价</h2>
+
+      <h3>6.1 训练配置</h3>
+      <p>ScanNet 数据集的一个片段（按官方训练/测试划分），因为该数据的深度来自真实传感器、含缺失值，原文还从官方提供的 PLY 模型渲染深度图并与原始传感器数据合并。<b>总计约 140 万张图像</b>。网络训练 <b>13 个 epoch</b>，学习率 $10^{-4}$，图像尺寸 $256\times192$，<b>code size 32</b>。</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepFactors/87d79f9e393f07f8f7aae3f43980735c7082b36bc961674a52adffdab270ae05.jpg" alt="DeepFactors network architecture">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Network architecture. The bottom path is a U-Net depth auto-encoder without skip connections that learns the optimisable compact code c. Its encoder and decoder are conditioned on image features concatenated from the Feature Network. The top part of the network learns to predict optimal code $c_{pred}$ from the input RGB image that is decoded into a mono depth prediction. The depth decoder is shared between the two networks (light blue).（网络结构。下方路径是一个不带跳连的 U-Net 深度自编码器，用来学习可优化的紧凑 code c；它的编码器与解码器都被来自特征网络的图像特征（通过拼接）条件化。上方部分学习从输入 RGB 图像预测最优 code $c_{pred}$，再解码为单目深度预测。深度解码器在两个网络之间共享（浅蓝色）。）<br>
+          <b>怎么看这张图：</b>与上一节 CodeSLAM 的 Fig. 3 对照着看最有效。三个关键差异：① 自编码器<b>不带跳连</b>；② 多了一条「顶部」的显式 code 预测路径（对应初始化方式的改进）；③ 深度解码器<b>被两条路径共享</b>——也就是说，「预测的 code」和「优化的 code」走的是同一个解码器，这保证了两者落在同一个空间里。<br>
+          <b>要记住的一句话：</b>上一节是「一个网络学一个表示」，这一节是「一个表示、两个入口」——一个给初值，一个给优化。
+        </figcaption>
+      </figure>
+
+      <h3>6.2 重建精度：与 CNN-SLAM 的正面对比（Table II）</h3>
+      <p>这是本节最有说服力的一组数字。「正确深度百分比」（pc110，估计深度落在真值 10% 以内的像素占比，越大越好）：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>平均值</h4>
+          <p>本文 <b>27.10%</b> ／ CNN-SLAM <b>19.77%</b> ／ LSD-BS 3.44% ／ Laina 14.62%</p>
+        </div>
+        <div class="mini-card">
+          <h4>本文更好的序列</h4>
+          <p>icl/office0 <b>30.17</b> vs 19.41 ／ icl/living0 20.44 vs 12.84 ／ icl/living1 20.86 vs 13.04 ／ tum/seq1 <b>29.33</b> vs 12.48 ／ tum/seq3 <b>51.85</b> vs 27.40</p>
+        </div>
+        <div class="mini-card">
+          <h4>本文输掉的序列（诚实必读）</h4>
+          <p>icl/office1 <b>20.16</b> vs 29.15 ／ tum/seq2 <b>16.92</b> vs 24.08。原文给的解释是：后者相机看到的是一面<b>平坦的纹理墙</b>，而「due to the small code size (32) used in our system we are typically not able to represent fully flat depth easily」</p>
+        </div>
+      </div>
+      <p>另外原文明确交代了评测口径：因为系统是单目的、不产生「到真实尺度」的轨迹与重建，<b>它用 TUM benchmark 脚本算出的最优尺度对轨迹与深度同时缩放</b>（和 [11] 等工作的做法一致）。这一点必须说，否则「绝对轨迹误差」这个词会误导——它是缩放后的结果。</p>
+
+      <h3>6.3 轨迹精度（Table III）</h3>
+      <p>ATE RMSE（米，越小越好），对比对象是 CNN-SLAM、DeepTAM（带 `*` 标记＝非实时性能）、CodeSLAM（带 `*`）：</p>
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;margin-top:.8rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:left">序列</th>
+            <th style="padding:.45rem .6rem;border:1px solid #d7ccc8">本文</th>
+            <th style="padding:.45rem .6rem;border:1px solid #d7ccc8">CNN-SLAM</th>
+            <th style="padding:.45rem .6rem;border:1px solid #d7ccc8">DeepTAM*</th>
+            <th style="padding:.45rem .6rem;border:1px solid #d7ccc8">CodeSLAM*</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem .6rem;border:1px solid #d7ccc8">fr1/360</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.142</b></td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.500</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.116</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.165</td></tr>
+          <tr><td style="padding:.45rem .6rem;border:1px solid #d7ccc8">fr1/desk</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.119</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.095</b></td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.078</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.654</td></tr>
+          <tr><td style="padding:.45rem .6rem;border:1px solid #d7ccc8">fr1/desk2</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.091</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.115</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.055</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.181</td></tr>
+          <tr><td style="padding:.45rem .6rem;border:1px solid #d7ccc8">fr1/rpy</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center"><b>0.047</b></td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.261</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.052</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.078</td></tr>
+          <tr><td style="padding:.45rem .6rem;border:1px solid #d7ccc8">fr1/xyz</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.064</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.206</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.054</td><td style="padding:.45rem .6rem;border:1px solid #d7ccc8;text-align:center">0.170</td></tr>
+        </tbody>
+      </table>
+      <p>原文的结论：<b>在全部序列上优于 CodeSLAM，除一个之外优于 CNN-SLAM，多数情况下与 DeepTAM 相当，而且保持实时。</b>特别留意 <code>fr1/rpy</code> 那一行——这正是一个以纯旋转为主的序列，也就是 <b>0054 CNN-SLAM</b> 里讲过的那个几何法死区，本文把它从 CNN-SLAM 的 0.261 降到 0.047。</p>
+      <div class="callout">
+        <h4>⚠️ 但表格下面还有一行小字，必须读</h4>
+        <p>Table III 的说明里写着：<b>CNN-SLAM 是在「关闭位姿图优化」的情况下跑的</b>，而<b>本文是在「关闭回环」的情况下跑的</b>；另外「in order to limit computation we have disabled the geometric factor for the evaluation」（为限制计算量，评测时关闭了几何因子）。原文还说明 room 与 plant 两个序列被<b>剔除</b>了，因为它们含大量丢帧、可能歪曲结果。</p>
+        <p>请记住这个细节的意义：<b>当你在论文里看到一张「我们赢了」的表格时，值得花三十秒去找它的脚注。</b>这篇论文把口径都写出来了，这是值得肯定的做法；但读者仍要知道，这个对比并不是「双方都开到最强」的对比。</p>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepFactors/32c28aa08af13d1a15ab80f1653603ab2da57ead3848d52ed8f4190f7ae89d97.jpg" alt="ScanNet reconstructions">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Example reconstructions on selected scenes from the validation set of the ScanNet dataset. The specular lighting in the 3D visualisation has been exaggerated to better highlight structure. Best viewed on a computer screen.（在 ScanNet 数据集验证集上选定场景的重建示例。三维可视化中的高光反射被夸大了，以更好地突出结构。建议在电脑屏幕上查看。）<br>
+          <b>怎么看这张图：</b>这是「表示能用」的直观证据。请注意原文的一个小细节：<b>高光是被"夸大"过的</b>——目的是让你更容易看出表面结构（否则在默认光照下，几何的细节不容易分辨）。这在可视化论文里是很常见的诚实说明，读的时候别把它当真实渲染效果。<br>
+          <b>要记住的一句话：</b>稠密几何的价值就在于它「看起来像东西」——这正是稀疏特征地图做不到、而 AR / 机器人交互需要的。
+        </figcaption>
+      </figure>
+
+      <h3>6.4 该讲清的代价</h3>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>平坦纹理墙表达不了</h4>
+          <p>这是最硬的一条局限，而且原文自己指名道姓地报告了：tum/seq2 输给 CNN-SLAM，原因是 32 维 code「typically not able to represent fully flat depth easily」。<b>「更大的 code 更能表达」与「更小的 code 更能实时」在这里正面撞上了。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>单目仍需「最优尺度」</h4>
+          <p>评测时用了 benchmark 脚本算出的最优尺度来缩放。也就是说：<b>它没有从根上解决单目尺度问题</b>——这一点与我们第一条暗线上的其他方法一致，最终还是要靠 IMU 或双目（这正是后面 VIO 模块要讲的事）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>探索型运动必须牺牲几何因子</h4>
+          <p>如 5.3 所述，快速运动时只能开光度 + 重投影，几何因子得关掉。这意味着<b>存在一个"运动速度—重建质量"的取舍曲线</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>雅可比计算的实现效率</h4>
+          <p>340 ms 里 324 ms 花在求雅可比上。原文自己也把「更快地获得网络雅可比」与「更好的几何因子 GPU 实现」列为未来工作。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <h4>本节小结：这个模块给出了一个「分工模板」</h4>
+        <p>把这个模块三节课连起来看，你会看到一条很清晰的思路演化：</p>
+        <p><b>0054 CNN-SLAM</b>：网络给出深度 → 只用不确定度把它<b>融合</b>进来（网络是「外部输入」）。<br>
+        <b>0055 CodeSLAM</b>：网络给出一个<b>可优化的低维流形</b> → 深度成为可求导的变量（网络是「参数化工具」）。<br>
+        <b>0056 DeepFactors</b>：同一个流形装进<b>标准的概率因子图</b> → 稠密 SLAM 拿到了和稀疏 SLAM 同等规格的后端（网络是「先验提供者」）。</p>
+        <p>原文对最后这一步的意义说得很明确：用标准框架让「不同传感器模态的概率融合」成为可能，而这在过去的稠密 SLAM 公式里做不到。用一句话概括这三节的分工模板：<b>让网络负责「提供先验」，让概率推断负责「一致性与不确定性」，让因子图负责「可扩展与可组合」。</b></p>
+        <p>这条路线也会在后面阶段继续长出来——第一季 <b>0015</b> 讲过的 3D 高斯泼溅，走的正是「可微渲染 + 梯度优化」这条同源的路。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="drill">
+      <h2>7. 巩固练习</h2>
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>CodeSLAM 有三条短板，本节分别怎么补的？请逐条对应写出。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① 「不是一个完整 SLAM」（缺回环与重定位）→ 加了<b>局部与全局回环检测与闭合</b>，以及<b>重定位</b>（跟踪丢失时对全部关键帧做低分辨率对齐）；② 「不实时」→ 把 code 降到 32 维、用线性解码器让雅可比可预计算、用 iSAM2 做增量求解、GPU/CPU 分工并让跟踪与建图交替；③ 「不泛化到真实手持场景」→ 改用真实的 ScanNet 数据（约 140 万张图）训练，并用真实序列做评测，同时明确承认平坦纹理墙上是弱点。</p>
+            </div></details>
+          </li>
+          <li>三种因子里，哪一种「对轨迹影响更强」、哪一种「对重建影响更强」？原文是怎么解释这两个不同作用的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>重投影因子对<b>轨迹</b>影响更强，几何因子对<b>重建</b>影响更强。</p>
+              <p>原文的解释是：重投影项因为显式地用到了特征匹配（BRISK），所以能「improve local minima avoidance and increases convergence rate」，从而给系统增加鲁棒性；而几何项引入的是「世界上只观测到一张表面」这个先验，它把各帧独立的深度图「pins together to form a single reconstruction」，特别在<b>缺乏光度信息的无纹理区域</b>起关键作用。三个一起用效果最好。</p>
+            </div></details>
+          </li>
+          <li>为什么在闭合<b>全局</b>回环时只加重投影因子，而不加光度因子？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文的理由是<b>光度误差的收敛域（convergence basin）通常更小</b>。全局回环意味着两个关键帧之间的位姿初值偏差可能较大；光度误差是逐像素比较灰度的，需要在图像已经大致对齐的前提下才有梯度可循，初值差得多就很容易掉进错误的局部极小。而重投影误差建立在特征点匹配之上，对初值偏差更宽容。因此在这种「初值不好」的场合，用重投影因子更稳。</p>
+            </div></details>
+          </li>
+          <li>原文报告初始化一个关键帧要 340 ms，其中只有 16 ms 是网络前向。剩下的时间花在哪？作者预计能压到多少？这说明什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>剩下约 324 ms 花在<b>用 <code>tf.gradients</code> 计算雅可比</b>上——因为需要求「每个输出像素对潜在 code 的导数」，而 backward-mode 自动微分的实现是为「标量函数梯度」优化的，于是不得不在网络上跑很多遍。原文预计通过工程努力可以把整体网络相关时间压到<b>约 30 ms</b>。</p>
+              <p>说明两件事：第一，把网络嵌入优化器时，<b>真正的瓶颈常常不是模型推理，而是「向模型要梯度」的方式</b>；第二，一个「看起来很慢」的深度学习系统，可能只是实现没调好——340 ms 里 95% 是可以优化掉的开销（当然这仍是作者的预测，不是已实现的结果）。</p>
+            </div></details>
+          </li>
+          <li>为什么 deep factors 要把 code 从 128 降到 32？这是「退步」吗？代价体现在哪里？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不是退步，而是<b>目标函数变了</b>。CodeSLAM 报告 128 处精度饱和，那是在「以重建精度为主要目标」下的最优；DeepFactors 引入<b>实时约束</b>后，原文明确说 32 是「the maximum code size that we can achieve real-time results with」——是实时上限，不是精度最优。</p>
+              <p>代价在实验里就能看到：在 tum/seq2（fr3_nostructure_texture_near_withloop）这个相机对着平坦纹理墙的序列上，本文只拿到 16.92% 的正确深度，输给 CNN-SLAM 的 24.08%。原文归因就是「code 太小，难以表示完全平坦的深度」。这提醒我们：<b>任何「压缩表示」都有它表达不了的东西，而那个东西会在特定场景里变成失败模式。</b></p>
+            </div></details>
+          </li>
+          <li>本节为什么强调「用标准因子图软件（GTSAM）」是一个重要选择？它对「稠密 SLAM」这个领域意味着什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文说这带来了「straightforward probabilistic integration of different sensor modalities which was not possible with the previous formulations of dense SLAM」。</p>
+              <p>含义是：过去的稠密 SLAM 为了速度，通常自己做一套简化的、位姿与地图交替优化的流程，很难把新传感器（IMU、GNSS 等）作为标准因子加进去。改用标准因子图后，稠密 SLAM 的后端规格就<b>与稀疏 SLAM 对齐了</b>——只要把新观测写成一个因子挂上去即可。这也是原文自我定位里「a unified SLAM framework」的一部分：让稠密/稀疏、学习/模型这两对曾经对立的路线，在同一套概率框架里共存。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0055-CodeSLAM2018-把稠密场景压成一个码.html">← CodeSLAM（2018）：把稠密场景压成一个码</a>
+        <a class="next" href="0057-VINS-Mono上-四模块管线与联合初始化.html">VINS-Mono（上）：四模块管线与联合初始化 →</a>
+      </div>
+      <p class="foot-note">「学习式稠密 SLAM」这个模块到这里收尾：从「借深度」到「压成 code」再到「进因子图」，网络在系统里的位置一步步从输入变成了先验。下一节换赛道——开始学视觉惯性的主干系统 📷➕📈</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

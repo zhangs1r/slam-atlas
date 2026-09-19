@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>回环检测综述（2022）：指标与假阳性铁律 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0014</div>
+      <h1>回环检测综述（2022）：指标与假阳性铁律</h1>
+      <p class="subtitle">导语 🔁 上节课（0013）说"鲁棒图优化出现后，错回环没那么可怕了"。但 2022 年的这篇回环检测综述却斩钉截铁地说"一个假阳性就能让 SLAM 彻底崩"。两篇论文打架了吗？本课带你拆开回环检测流水线的真实结构，并把这个<strong>随后端鲁棒性演进而改变的认知对照</strong>讲透。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：视觉回环检测的系统结构、特征谱系与评测指标</span>
+        <span>👥 作者：Konstantinos A. Tsintotas, Loukas Bampis, Antonios Gasteratos</span>
+        <span>📅 2022 · <i>The Revisiting Problem in SLAM: A Survey on Visual Loop Closure Detection</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 三件常被混为一谈的事</a>
+        <a href="#b">2. 顶层结构：流水线四段（纠正常见误记）</a>
+        <a href="#c">3. 特征提取二维交叉表与描述子选型</a>
+        <a href="#d">4. 指标精确定义与"假阳性代价"</a>
+        <a href="#e">5. 与 0013 的跨课对照 + 开放问题</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>把 image classification、image retrieval、visual loop closure detection 三件事彻底分清，并理解回环检测为什么"只在机器人自己录过的图里找老地方"。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>0013 的 VPR tutorial 是回环检测的"上游"——回环检测本质就是"在单 session、在线、自己比自己"的 VPR。本课从 SLAM 视角把它落到具体系统结构。</p></div>
+      </div>
+
+      <h2>1. 三件常被混为一谈的事</h2>
+      <p>原文以"tutorial + position paper"自居，并声明自己 <em>"formulates a solution based solely on appearance input data"</em>（只基于外观输入数据给出方案）。在正式拆结构前，它先划清了三条常被混淆的界限：</p>
+      <ul>
+        <li><strong>Image classification（图像分类）</strong>：把查询图归到有限个已知类别之一。</li>
+        <li><strong>Image retrieval（图像检索）</strong>：解决"最近邻搜索"问题，在一个<strong>不必然相关的大库</strong>里找相似图——比如冬天路面的图，检索目标可能是"雪的样本"。</li>
+        <li><strong>Visual loop closure detection（视觉回环检测）</strong>：只在机器人<strong>自己此前录过的图像集</strong>里找"同一地点"。</li>
+      </ul>
+      <div class="callout"><h4>关键差异（原文原话）</h4><p><em>"sensory data representations, though appropriate for image retrieval, may not perform effectively in visual loop closure detection and vice versa."</em> 翻译：适合图像检索的表示，未必适合回环检测，反之亦然。<strong>原因</strong>在于两者操作的集合不同——图像检索面向"宽泛、未必相关"的大型数据库，目标是搜出相似物体（可能和原图不是同一地点）；而回环检测只在"机器人自己走过的图"里找同一地点。所以一个图像检索模块通常只是回环检测流水线的第一部分，但两者的根本目标不同。</p></div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LoopClosure-Survey/9950c848fbc76427a021a7cbfcbb2b58bec4dc3fd0005e1d33d06891fb9cb6d0.jpg" alt="Fig. 1 回环检测下的位姿图示例">
+        <figcaption>
+          <strong>原图注（Fig. 1）：</strong> A representative example of a pose graph constructed under a visual loop closure detection mechanism: map as generated initially (left) and subsequently a loop closure detection (right) in the New College dataset. When loops are detected, the system's accumulated drift error and pose uncertainty are bounded, allowing consistent map generation.（视觉回环检测机制下位姿图的典型示例：左为初始生成的地图，右为随后发生一次回环检测后的地图（New College 数据集）。检测到回环后，累积漂移误差与位姿不确定性被约束住，回环两侧的地图被大幅校正。）<br>
+          <strong>怎么看这张图：</strong> 左图里机器人绕一圈后两端没接上，留下一道弯弯的"累积漂移"；右图一旦回环检测把两端认成同一地点，绿色轨迹被"拉直"，整张地图的误差都跟着校正。这就是回环检测存在的根本意义——<strong>兜住里程计的累积误差</strong>。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 顶层结构：流水线四段（纠正常见误记）</h2>
+      <div class="callout"><h4>⚠️ 纠正常见误记</h4><p>很多人以为回环检测的顶层分类是"基于外观 / 基于几何 / 基于学习"三派。但<strong>原文根本不是这样分的</strong>。它的顶层是<strong>流水线四段（Fig. 5）</strong>：① 特征提取（Sec. V）→ ② 环境表示 / Looking Behind（Sec. VI）→ ③ 位置索引（Sec. VI-B）→ ④ 决策（Sec. VII）。"学习型 / 手工型"只是<strong>特征提取</strong>这一段的两种属性；"几何"只作为<strong>决策阶段</strong>的验证子模块（fundamental/essential matrix + RANSAC）。务必按"四段流水线"来理解本文结构。</p></div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LoopClosure-Survey/d71330a807581d9b208f2e6bc0dad056fc138e288157502c9158c9d17baac25a.jpg" alt="Fig. 5 回环检测系统结构">
+        <figcaption>
+          <strong>原图注（Fig. 5）：</strong> Schematic structure depicting the essential parts of a visual loop closure detection system. The image is processed to extract the visual representation (trained data like visual bag of words, or not), the database is constructed incrementally, and when a query arrives its representation is compared against the database to decide whether the robot revisits a known area.（回环检测系统基本组成部分的结构示意图：图像被处理以提取视觉表示（用训练好的视觉词袋或不用），数据库随新数据增量构建；查询到来时，其表示与数据库比较，以判断机器人是否重访已知区域。）<br>
+          <strong>怎么看这张图：</strong> 它把上面说的"四段"画成了一条流水线：相机图像 → 提取表示（特征提取）→ 增量维护数据库（环境表示 + 位置索引）→ 查询图与库比较并决策。注意"数据库随新图像<strong>增量</strong>更新"——因为回环是稀疏事件，大部分时候新图只是被加进库里。这张图就是理解全文结构的"地图"。
+        </figcaption>
+      </figure>
+
+      <p>逐段快速定位（方便你回原文跳读）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 特征提取（Sec. V）</h4><p>手工全局/局部 + 学习型四范式，见第 3 节。</p></div>
+        <div class="mini-card"><h4>② 环境表示 / Looking Behind（Sec. VI）</h4><p>single-image-based vs sequence-of-images-based；子图划分有固定长度 vs 动态（co-visibility / 特征一致性 / 时序模型 / 粒子滤波）。</p></div>
+        <div class="mini-card"><h4>③ 位置索引（Sec. VI-B）</h4><p>滑动窗抑制"刚看过的近邻图"以防假阳性；inverted indexing vs exhaustive search。</p></div>
+        <div class="mini-card"><h4>④ 决策（Sec. VII）</h4><p>image-to-image vs sequence-to-sequence；SAD / 投票密度 / 欧氏·余弦距离；进阶概率化（Gehrig 二项分布、Dempster-Shafer、Bayesian filtering）；外加时序一致性约束与几何验证（fundamental/essential matrix + RANSAC + 最小内点数；双目用 ICP）。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 特征提取二维交叉表与描述子选型</h2>
+      <p>原文的 Table I 把特征提取刻画成一个<strong>二维交叉表</strong>：行是 6 类特征，列是"单图表示 / 图像序列表示"。先记行：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>手工全局特征</h4><p>Gist（Gabor 滤波图像梯度）、BRIEF-Gist、WI-SURF、HOG、PHOG、颜色直方图、PCA 全局描述子、visual BoW（配 TF-IDF 加权；Fisher Kernels、VLAD 为其改进）。</p></div>
+        <div class="mini-card"><h4>手工局部特征</h4><p>SIFT（DoG 检测 + HOG 描述）、SURF、CenSurE、KAZE，以及二进制族 BRIEF / LDB / ORB / BRISK / FREAK / M-LDB。</p></div>
+        <div class="mini-card"><h4>学习型四范式</h4><p>①整图入网取末层隐层激活（对遮挡/剧烈视角变化脆弱）；②输入特定区域再聚合（更抗视角变化但依赖外部 landmark detector、算力贵）；③整图入网按卷积响应检测最显著区域（兼顾视角与外观）；④整图入网同时预测全局与局部描述子（显著省运行时）。</p></div>
+        <div class="mini-card"><h4>代表方法</h4><p>整图/区域：<strong>NetVLAD、SPE-VLAD</strong>；区域类 VLASE、WASABI、R-MAC、SP-Grid、DELF、SuperPoint、D2-net、LoST、R-VLAD；联合全局+局部 <strong>HF-Net、DELG</strong>。</p></div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LoopClosure-Survey/6862a7139f3f9dacff52e8d6219acd76edc27823f5302b1c9404e9cbb808fa8e.jpg" alt="Fig. 6 手工特征描述子实例">
+        <figcaption>
+          <strong>原图注（Fig. 6）：</strong> Instances of hand-crafted feature descriptors, both (a) global (based on the entire image) and (b) local (based on regions-of-interest). (a) Whole image descriptors process each block regardless of context, e.g., HOG. (b) Local features like SURF are indicated in salient parts and subsequently described.（手工特征描述子实例：(a) 全局（整图），如 HOG；(b) 局部（基于感兴趣区域），如 SURF。）<br>
+          <strong>怎么看这张图：</strong> (a) 把整张图压成一个向量，简单高效但怕遮挡、怕视角变化；(b) 只挑图像里"显著"的斑块（如 SURF 角点）各自描述，天然带几何信息、抗局部遮挡。一句话：全局快但脆，局部慢但稳——这决定了不同场景该选谁。
+        </figcaption>
+      </figure>
+
+      <p>这里必须讲清一个术语：<strong>视觉词袋（BoW, Bag of visual Words）</strong>。它借鉴文本处理——把局部特征（如 SURF）量化到一本"视觉词典"里，每张图表示成"各视觉词出现频次"的向量。由于某些词出现得更频繁，原文用 <strong>TF-IDF</strong>（词频-逆文档频率）给每个视觉词加权：在单张图里出现多（TF 高）但整本词典里很常见（IDF 低）的词会被压低权重，稀有的判别性词被抬高。Fisher Kernels、VLAD 都是 BoW 的改进版。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LoopClosure-Survey/69f39e3009289e0a6ecd7610b907f6ba2344fd26a6c4b57b223e4aaf04e6db40.jpg" alt="Fig. 7 视觉词袋模型">
+        <figcaption>
+          <strong>原图注（Fig. 7）：</strong> The visual bag of words model based on a previously trained visual vocabulary. SURF descriptors are assigned to the most similar "visual word", outputting a 1×N vector of word frequencies.（基于预训练视觉词典的视觉词袋模型：SURF 描述子被指派到最相似的"视觉词"，输出 1×N 向量表示各视觉词出现频次。）<br>
+          <strong>怎么看这张图：</strong> 左边是一张真实图像里提取出的若干 SURF 斑块；中间是把每个斑块描述子"投票"到词典里最像的那个视觉词；右边那根长条就是这张图的 BoW 表示——第 k 个格子的高度 = 第 k 个视觉词在这张图里出现了几次。回环检测时就比这两根长条的相似度。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 指标精确定义与"假阳性代价"</h2>
+      <p>评测三件套：数据集、<strong>布尔型真值矩阵</strong>（行列是不同时刻的观测 (i,j)，1 表示 i 与 j 之间发生回环）、评价指标。四类标签：</p>
+      <ul>
+        <li><strong>TP（真正例）</strong>＝算法识别出的、位于查询位置<strong>小半径内</strong>的数据库条目。</li>
+        <li><strong>FP（假正例）</strong>＝落在小半径<strong>之外</strong>的错误检测。</li>
+        <li><strong>FN（假负例）</strong>＝本该检出却没检出。</li>
+        <li><strong>TN（真负例）</strong>＝正确拒绝。</li>
+      </ul>
+
+      <div class="formula-box">
+        $$ \mathrm{Precision} = \frac{\mathrm{True\text{-}positives}}{\mathrm{True\text{-}positives} + \mathrm{False\text{-}positives}} $$
+        $$ \mathrm{Recall} = \frac{\mathrm{True\text{-}positive}}{\mathrm{True\text{-}positive} + \mathrm{False\text{-}negatives}} $$
+      </div>
+      <p class="foot-note">📝 OCR 勘误：原文 Eq. 1 的拼写是 "Presicion"（漏了 c），这是原论文自己的笔误；本课按正确形式 <strong>Precision</strong> 书写，特此注明。</p>
+
+      <p>PR 曲线靠改变"接受正匹配的参数"（典型是回环假设阈值）扫出；<strong>AUC</strong>（PR 曲线下面积）取值 0–1，但<strong>不保留曲线形状信息</strong>，包括"precision 是否曾达到 100%"；<strong>Average Precision</strong> 把曲线压成单值；<strong>R<sub>P100</sub>（recall at 100% precision）</strong> 原文称 "the most common performance indicator"，表示零假阳性下的最高召回，<strong>缺陷是曲线达不到 100% precision 时该指标不可定义</strong>；<strong>EP（extended precision）</strong> = (P<sub>R0</sub> + R<sub>P100</sub>)/2；另有 <strong>recall at 95% precision</strong>（因为少量误检可由 SLAM 后端优化验证剔除）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LoopClosure-Survey/afdd7a0e4c2497e466eff842d327a521d6f82bcf6aca2ed4e3d6b7387a23e9d6.jpg" alt="Fig. 11 两条假设 PR 曲线">
+        <figcaption>
+          <strong>原图注（Fig. 11）：</strong> An illustrative example of two hypothetical precision-recall curves. The highest possible recall for a perfect precision (R<sub>P100</sub>) is shown by the red and green circles. The precision at minimum recall (P<sub>R0</sub>) is depicted by the black circle, while the gray areas denote AUC. The red curve is better than the green one, even though the green curve's AUC is larger.（两条假设 PR 曲线示例。红/绿圈标出"完美 precision 下的最高 recall"（R<sub>P100</sub>）；黑圈为"最小 recall 处的 precision"（P<sub>R0</sub>）；灰色区域为 AUC。红曲线更优，尽管绿曲线的 AUC 更大。）<br>
+          <strong>怎么看这张图（整节指标章节的封面）：</strong> 红曲线在 R<sub>P100</sub>（红圈）约 0.6、绿曲线约 0.4——红的"零假阳性召回"更高，所以红更好。但注意绿曲线的 AUC（灰面积）反而更大！这说明<strong>只看 AUC 会误导</strong>，必须用 R<sub>P100</sub>、EP 等能反映"precision 能否到顶"的指标来补。这正是回环检测最看重的维度。
+        </figcaption>
+      </figure>
+
+      <div class="callout"><h4>🔥 "假阳性代价"原文原话（三类直接引用）</h4>
+        <ol>
+          <li>Sec. I：<em>"Since an erroneous loop closure detection might turn out to be fatal for any SLAM framework, a reliable pipeline should detect a small number or preferably zero false-positives while still avoiding false-negatives."</em>（错误回环对 SLAM 可能是致命的，可靠流水线应检测极少、最好零个假阳性，同时避免假阴性。）</li>
+          <li>Sec. VIII-A：R<sub>P100</sub> "is a critical indicator since <strong>a single false-positive detection can, in many cases, cause a total failure for SLAM</strong>."（单个假阳性在许多情况下就能让 SLAM 彻底失败。）</li>
+          <li>机制解释：SLAM <strong>前端</strong>负责产生约束，<strong>假阳性的回环剔除被分配给后端（outlier rejection）</strong>；后端若剔不掉，错约束会把整张图拉歪。</li>
+          <li>漏检代价较小（Sec. VII-B）：<em>"Most pipelines pay a high price for indicating a loop closure, but there is minor harm if one is missed since many chances in the following images are afforded due to the existing temporal continuity."</em>（多数流水线为"指认一次回环"付出高代价，但漏掉一次危害很小，因为时序连续性会提供后续很多补救机会。）</li>
+        </ol>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在回环检测里，相比"漏掉一次真实回环（FN）"，"错误地指认了一次回环（FP）"通常哪个代价更高？依据是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="FP 代价更高。原文 Sec.I 说错误回环对 SLAM '可能是致命的'，Sec.VIII-A 更说'单个假阳性就能让 SLAM 彻底失败'；而漏检（FN）因时序连续性危害很小（Sec.VII-B）。" onclick="lessonKit.answer(this,'q0014a')">FP 代价更高，因为错回环能拉歪整张图</button>
+          <button data-correct="no" data-explanation="错。恰恰相反：漏检只是少一条约束，后端还能靠时序连续性补救；假阳性若没被后端剔除，会把整张位姿图拉歪。" onclick="lessonKit.answer(this,'q0014a')">FN 代价更高，因为漏掉真实回环更糟</button>
+          <button data-correct="no" data-explanation="错。两者代价严重不对称，原文明确把'避免假阳性'列为铁律，漏检则被视为可容忍。" onclick="lessonKit.answer(this,'q0014a')">两者代价差不多</button>
+        </div>
+        <div class="quiz-feedback" id="q0014a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某方法的 PR 曲线 precision 最高只到 0.92，永远到不了 100%。此时 R<sub>P100</sub> 还能算出来吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不能。R_P100 要求'precision=1（零 FP）时的最大 recall'；曲线到不了 100% precision，就不存在这样的点，指标无定义。应改用 99%/95% precision 下的最大 recall。" onclick="lessonKit.answer(this,'q0014b')">不能，此时 R_P100 无定义</button>
+          <button data-correct="no" data-explanation="错。R_P100 的定义硬性要求 precision=1；到不了 1 就该退化到 99%/95% precision，而不是拿 0.92 顶替。" onclick="lessonKit.answer(this,'q0014b')">能，取 precision=0.92 时的 recall 即可</button>
+          <button data-correct="no" data-explanation="错。AUC 是另一条指标（曲线下面积），与 R_P100 无定义无关；R_P100 仍因 precision 不到顶而无定义。" onclick="lessonKit.answer(this,'q0014b')">能，用 AUC 代替就行</button>
+        </div>
+        <div class="quiz-feedback" id="q0014b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 与 0013 的跨课对照 + 开放问题</h2>
+
+      <div class="callout"><h4>🪞 全季最精彩的"认知随时间改变"案例（请并排看这两句引文）</h4>
+        <p><strong>0013（2024 VPR tutorial）：</strong> "since the advent of robust graph optimization techniques for SLAM [33], the avoidance of wrong loop closures has become less relevant. With robust graph optimization, it is more important to find enough correct loop closures (TP) than to avoid wrong loop closures (FP)."（鲁棒图优化出现后，避免错回环已不那么重要；找到足够多正确的回环比避免错的更关键。）</p>
+        <p><strong>0014（2022 回环检测综述）：</strong> "a single false-positive detection can, in many cases, cause a total failure for SLAM."（单个假阳性在许多情况下就能让 SLAM 彻底失败。）</p>
+        <p><strong>助教解读：</strong> 两篇并不矛盾，而是<strong>指标选择随后端鲁棒性演进而改变</strong>。2022 年这篇写于"鲁棒图优化尚未普及时"的语境，把"零假阳性"当铁律；2024 年 tutorial 则站在"鲁棒后端已能剔除部分错回环"的肩膀上，主张用 multimatch 多找正确回环、宁可容忍些许 FP。所以——<strong>读论文时务必看它写于哪一年、假设了什么样的 SLAM 后端</strong>。</p>
+      </div>
+
+      <p><strong>结论与开放问题（Sec. X）：</strong> 回环检测是 SLAM 最难的课题之一，是地图一致性的前提；手工特征时代的方法在复杂动态环境下表现不足，<strong>CNN 表示更有前景</strong>。但深度方法<strong>算力代价高</strong>（Sec. IX-D 原话：<em>"although impressive outcomes have been achieved by utilizing deep learning, such approaches are yet computationally costly"</em>）。三条未来方向：① 面向动态环境 + 变化条件 + 动态场景的流水线；② 剧烈视角变化下的性能提升；③ 数据库管理改进以支撑长期建图。另加一条展望：把<strong>人类中心的语义信息（human-centered semantics）</strong>纳入回环机制。</p>
+
+      <div class="callout"><h4>📝 本课的 OCR 勘误</h4>
+        <ul>
+          <li><strong>首段严重崩坏：</strong> md 写作 "OOP closure detection, which has long been acknowlneous… localization…"，应为 <strong>"LOOP closure detection, which has long been acknowledged … in simultaneous localization (SLAM)…"</strong>（回环检测长期被视为 SLAM 中最具挑战的任务之一）。</li>
+          <li><strong>Eq. 1 拼写错误 "Presicion"</strong> → 应为 Precision（原论文笔误，引用时已按正确形式并注明）。</li>
+          <li><strong>TABLE I / II / III 在 md 中列错位或丢行</strong>：本课 Table I 的六行两列内容以正文文字转述，未直接引用具体数字行，以免复制错位数据。</li>
+          <li><strong>指标符号被拆散：</strong> md 把 R<sub>P100</sub> 识别成 <code>R_{P l 0 0}</code>、P<sub>R0</sub> 同理；本课已还原为正确下标。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用一句话说明 image retrieval 与 visual loop closure detection 的根本区别。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>图像检索在一个不必然相关的大库里找相似物体（可能和原图不是同一地点）；回环检测只在机器人自己此前录过的图像集里找"同一地点"。原文："sensory data representations, though appropriate for image retrieval, may not perform effectively in visual loop closure detection and vice versa."</div></details>
+        </li>
+        <li>回环检测的顶层结构是"基于外观/几何/学习"三分类吗？正确的顶层是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不是。正确顶层是流水线四段：① 特征提取（Sec. V）② 环境表示 / Looking Behind（Sec. VI）③ 位置索引（Sec. VI-B）④ 决策（Sec. VII）。"学习/手工"只是特征提取段的两种属性，几何只是决策段的验证子模块。</div></details>
+        </li>
+        <li>写出 Precision 与 Recall 的定义式，并解释 R<sub>P100</sub> 何时无定义、EP 如何补。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>Precision = TP/(TP+FP)，Recall = TP/(TP+FN)。R_P100 是"零假阳性（precision=1）下的最大 recall"，若整条 PR 曲线 precision 都到不了 1 则无定义。EP = (P_R0 + R_P100)/2，把"最小 recall 处的 precision"和"完美 precision 下的最大 recall"压缩成一个值，规避 AUC 不保留曲线形状的缺陷。</div></details>
+        </li>
+        <li>把 0014 的 "a single false-positive … total failure for SLAM" 与 0013 的 "robust graph optimization … avoidance of wrong loop closures has become less relevant" 放在一起，说明为何二者不矛盾。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>二者反映不同时代的 SLAM 后端假设：2022 综述默认后端不够鲁棒，故把"零假阳性"当铁律；2024 tutorial 站在鲁棒图优化已能剔除部分错回环的肩膀上，主张多找正确回环（TP）、容忍些许 FP。指标偏好随后端鲁棒性演进而改变，并非真矛盾。</div></details>
+        </li>
+        <li>为什么本文认为深度学习方法在回环检测里"算力代价高"？这对实际部署意味着什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>原文 Sec. IX-D："although impressive outcomes have been achieved by utilizing deep learning, such approaches are yet computationally costly"——网络越大，训练与推理的算力和存储消耗越高，难以满足机器人实时/机载约束。意味着实际系统常需模型压缩、 hierarchical 结构或 GPU 加速来折中精度与实时性。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0013-视觉场景识别教程2024-评测协议的坑.html">← 视觉场景识别教程（2024）</a>
+        <a class="next" href="0015-3D高斯泼溅全景2025.html">3D 高斯泼溅全景（2025）→</a>
+      </div>
+      <p class="foot-note">零假阳性是旧铁律，多找正确回环是新共识——读论文，永远先看它站在哪一年的后端肩膀上 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

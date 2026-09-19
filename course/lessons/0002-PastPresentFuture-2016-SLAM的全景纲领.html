@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SLAM 的全景纲领（2016）— SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0002</div>
+      <h1>SLAM 的全景纲领：Toward the Robust-Perception Age</h1>
+      <p class="subtitle">这是这个领域最值得先读的一篇。它一边给出"今天的事实标准形式化"，一边冷静地回答两个在机器人会议上吵了很多年的问题：<b>机器人到底需不需要 SLAM？SLAM 解决了吗？</b>读完它，你脑子里就有了一张能用一整年的地图。🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：SLAM 的标准形式化 + 三十年史 + 开放问题</span>
+        <span>👥 Cadena, Carlone, Carrillo, Latif, Scaramuzza, Neira, Reid, Leonard</span>
+        <span>📅 2016 · 同时是 position paper 与 tutorial</span>
+      </div>
+      <div class="toc">
+        <a href="#why">为什么先读它</a>
+        <a href="#ages">三个时代</a>
+        <a href="#formal">事实标准形式化</a>
+        <a href="#loop">回环改变了什么</a>
+        <a href="#map">地图表示的光谱</a>
+        <a href="#open">两个大问题与四个方向</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 用一句话说清 SLAM 的标准数学形式；② 说清"前端 / 后端"各管什么；③ 说清回环检测为什么不是"可选优化项"而是定义级要素；④ 回答"SLAM 解决了吗"。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节是第 0001 课导览的直接延续：导览告诉你"有哪些阶段"，本节告诉你"这些阶段共享同一套语言"。后面所有课程（视觉主干、激光主干、高斯、事件相机）用的符号与术语，基本都源于这篇文章。📚</p>
+        </div>
+      </div>
+
+      <h2>1. 为什么这篇要放在最前面</h2>
+      <p>原文开篇就交代了自己的双重身份：它<b>既是一篇 position paper（立场文章），又是一篇 tutorial（教程）</b>。这意味着它不只罗列文献，还明确表达了作者们对领域走向的判断——包括一些不太客气的话。</p>
+      <p>它的行文结构是这样的：先给出"今天大家默认接受的 SLAM 标准形式化"，然后围绕<b>鲁棒性与可扩展性、度量与语义表示、理论性能保证、主动 SLAM 与探索、以及其他新前沿</b>这几个主题综述相关工作，最后带着批判眼光列出尚未解决的开放挑战。</p>
+      <div class="callout">
+        <h4>一句话定位</h4>
+        <p>它是这个领域的"宪法"：如果你想引用一句关于"SLAM 是什么"的权威表述，多半会引它。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="ages">
+      <h2>2. 三十年：三个时代</h2>
+      <p>原文把 SLAM 三十年的发展分成三个时期，这个分期本身就是一张极好的认知地图。请注意最后一个时代的命名——<b>robust-perception age（鲁棒感知时代）</b>，而论文标题里的 "Toward the Robust-Perception Age" 就是在说：我们正在走向它，但还没到。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 古典时代（classical age）</h4>
+          <p>核心贡献是<b>把 SLAM 问题形式化</b>：概率滤波（EKF-SLAM）、粒子滤波、最大似然估计。这个时代的遗产是"状态 + 协方差 + 递归估计"这一套语言。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 算法分析时代（algorithmic-analysis age）</h4>
+          <p>开始研究方法的<b>内在性质</b>：可观测性、一致性（consistency）、收敛性，以及稀疏性与可扩展性。这个时代的遗产是"为什么不收敛""为什么会漂"这类问题的理论答案。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 鲁棒感知时代（robust-perception age）</h4>
+          <p>关注点转向<b>在真实、恶劣、长期变化的环境里活下来</b>：鲁棒的数据关联、语义理解、资源感知、任务驱动的推理。这正是当下研究的主战场。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>为什么这个分期有用</h4>
+        <p>因为它解释了"为什么老论文看起来在纠结一些今天已经没人提的问题"。比如整个古典时代都在争滤波 vs 优化，而算法分析时代给出了部分答案。你在读一篇 2007 年的论文时，只有把它放回那个时代，才能理解它当时为什么这么做。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="formal">
+      <h2>3. 事实标准形式化：从 MAP 到非线性最小二乘</h2>
+      <p>这是本节最"硬"的部分，但也是回报最高的部分。<b>理解了这四行公式，你就理解了 80% 的 SLAM 后端论文在干什么。</b></p>
+
+      <h3>第一步：SLAM 要估计什么</h3>
+      <p>原文设定：要估计一个未知变量 $\mathcal{X}$。在 SLAM 中，$\mathcal{X}$ 通常包含<b>机器人的轨迹</b>（一串离散位姿）与<b>环境中路标的位置</b>。给定量测集合 $Z=\{z_k: k=1,\dots,m\}$，每个量测可以写成变量的函数：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$z_k = h_k(\mathcal{X}_k) + \epsilon_k$$</div>
+      </div>
+      <p>其中 $\mathcal{X}_k \subseteq \mathcal{X}$ 是变量集的一个子集，$h_k(\cdot)$ 是已知的<b>观测模型</b>，$\epsilon_k$ 是随机量测噪声。请注意这个式子的含义：<b>每个量测只依赖于一小部分变量</b>——这句话后面会变成"稀疏性"，而稀疏性是所有高效后端算法的根基。</p>
+
+      <h3>第二步：最大后验（MAP）估计</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{X}^{\star} \doteq \operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X}\mid Z) = \operatorname*{argmax}_{\mathcal{X}} p(Z\mid \mathcal{X})\,p(\mathcal{X}) \tag{1}$$</div>
+      </div>
+      <p>等号来自贝叶斯定理。$p(Z\mid\mathcal{X})$ 是似然，$p(\mathcal{X})$ 是先验。原文特别点出两件事，都值得记住：</p>
+      <ul>
+        <li><b>先验可以被丢掉。</b>如果没有任何先验知识，$p(\mathcal{X})$ 退化为均匀分布，对优化没有影响，此时 MAP 退化为最大似然估计（MLE）。</li>
+        <li><b>MAP 与卡尔曼滤波的一个关键差别：</b>MAP 不需要显式区分"运动模型"和"观测模型"——两者都被当作<b>因子（factor）</b>无缝地塞进同一个估计过程里。这是它比滤波框架更"通用"的原因。</li>
+      </ul>
+
+      <h3>第三步：假设量测相互独立 → 因式分解</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{X}^{\star} = \operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X})\prod_{k=1}^{m}p(z_k\mid \mathcal{X}) = \operatorname*{argmax}_{\mathcal{X}} p(\mathcal{X})\prod_{k=1}^{m}p(z_k\mid \mathcal{X}_k) \tag{2}$$</div>
+      </div>
+      <p>右边那一步很关键：$z_k$ 只依赖 $\mathcal{X}_k$（一小撮变量），所以这个乘积形式天然写成了一张<b>图</b>。</p>
+
+      <h3>第四步：高斯噪声 → 非线性最小二乘</h3>
+      <p>假设量测噪声是零均值高斯，信息矩阵为 $\Omega_k$（协方差矩阵的逆），则似然变成：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p(z_k\mid \mathcal{X}_k) \propto \exp\!\left(-\tfrac{1}{2}\left\| h_k(\mathcal{X}_k) - z_k \right\|_{\Omega_k}^{2}\right), \qquad \|e\|_\Omega^2 = e^{\mathsf{T}}\Omega e \tag{3}$$</div>
+      </div>
+      <p>"最大化后验"等价于"最小化负对数后验"，于是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{X}^{\star} = \operatorname*{argmin}_{\mathcal{X}} \sum_{k=1}^{m}\left\| h_k(\mathcal{X}_k) - z_k \right\|_{\Omega_k}^{2} \tag{4}$$</div>
+      </div>
+      <p><b>这就是一个非线性最小二乘问题。</b>至此，SLAM 从"概率推断"翻译成了"优化"，而优化有成熟的求解器（高斯-牛顿、列文伯格-马夸尔特，以及后面的 g2o / Ceres）。</p>
+
+      <!-- QA-PATCH id="q0002-map" date="2026-09-17" src="第 II-A 节 (1)–(4) 式" -->
+      <details class="qa-patch" id="q0002-map" open>
+        <summary>❓ 追问：这四行公式我推不动（很久没碰数学了），能不能拆开讲一遍<span class="qa-badge">就地答疑</span></summary>
+        <div class="qa-body">
+          <p><b>你的疑问：</b>上面 (1)–(4) 四式，每一行都知道汉字，但连起来就不知道在干什么了；想知道每一步凭什么成立，最好还能手算一个例子。</p>
+          <span class="qa-verdict"><b>结论：</b>这四行只做一件事——<b>把"挑最可信的真相"一步步化简成"找加权平方和最小"</b>。(1) 用贝叶斯把后验拆成"似然 × 先验"并扔掉分母；(2) 用"量测独立"把联合似然拆成连乘；(3) 代入高斯噪声，让每条证据变成一个 $\exp(-\frac12\|h-z\|^2_\Omega)$；(4) 取负对数、扔掉常数，"找最大"就翻成了"找最小"。</span>
+          <p><b>为什么不是四件事：</b>四行里没有一行是"新方法"，每一行都只是<b>一次化简</b>——扔掉不含未知量的常数（分母 $p(Z)$、$\frac{1}{\sqrt{2\pi}\sigma}$、$\frac12$）、把乘积换成求和（$e^a\cdot e^b=e^{a+b}$）、用单调性去掉 $e$ 与 $\ln$、用负号把 max 翻成 min。所有"看不懂"的地方，几乎都卡在"凭什么可以扔 / 凭什么可以换"上。</p>
+          <p><b>该怎么记（四句话）：</b>① 我们要的答案是后验最大的那个 $\mathcal{X}$；② 每条量测是独立证据，可信度相乘；③ 每条证据的可信度由它的 $\Omega$ 决定（越准罚得越狠）；④ 于是"找最可信" = "找加权平方和最小"，剩下的交给最小二乘求解器。</p>
+          <p><b>想看完整的推导与算例：</b>见独立答疑页 <a href="../qa/qa-0002-MAP到非线性最小二乘.html">《追问答疑：从 MAP 到非线性最小二乘》</a>——那一页把贝叶斯、高斯、取 log、argmax→argmin 这些零件从零补齐，并用走廊里的一台机器人把 $x^\star=13.2$ m 手算了一遍（含 7 张自绘图）。<b>（答疑页独立放在 <code>course/qa/</code>，不占用主线课号。）</b></p>
+          <p class="qa-meta">📍 本条补丁插入位置：第 3 节「事实标准形式化」，紧跟 (4) 式与"这就是一个非线性最小二乘问题"之后；依据：原文第 II-A 节 (1)–(4) 式。可直接回 <code>md/2016_Past__Present__and_Future_of_Simultaneous_Localization_a.md</code> 复核。</p>
+        </div>
+      </details>
+      <!-- /QA-PATCH -->
+
+      <div class="callout">
+        <h4>原文在这里埋了三个"考眼力"的点</h4>
+        <p>① 上面第 (4) 式的前提是<b>高斯分布噪声</b>。换分布就换代价函数——若噪声服从拉普拉斯分布，$\ell_2$ 范数就变成 $\ell_1$ 范数。<br>
+        ② 为抵抗外点，常把平方项换成<b>鲁棒损失函数</b>（Huber、Tukey）。这一句会在后面讲动态 SLAM 时反复用到。<br>
+        ③ (4) 式与 SfM 中的 <b>Bundle Adjustment</b> 长得几乎一样。但原文指出 SLAM 有两点独特：<b>因子不局限于投影几何</b>（还可以是 IMU、轮速计、GPS 等异构传感器），而且<b>必须增量式求解</b>——随着机器人移动，新量测不断到来。</p>
+      </div>
+
+      <h3>因子图：把 (2) 式画出来</h3>
+      <p>原文说，问题 (2) 可以解释为<b>在因子图上的推断</b>：变量是图的节点，$p(z_k\mid\mathcal{X}_k)$ 与先验 $p(\mathcal{X})$ 称为<b>因子</b>，它们编码了节点子集上的概率约束。</p>
+      <p>因子图解释有两个好处：一是<b>可视化</b>（一眼看出哪些变量被哪些约束连着），二是<b>通用性</b>（能建模异构变量与因子、任意连接的复杂推断问题）。而"连接的稠密程度"直接决定了 SLAM 问题的<b>稀疏性</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Past__Present__and_Future_of_Simultaneous_Localization_a/f4595acd82dd54cd42b4ee929e0b51eb9e19bab4fe844f4e0899f1e2788fb4b2.jpg" alt="SLAM as a factor graph">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>SLAM as a factor graph — 蓝圈是连续时刻的机器人位姿 $(x_1,x_2,\dots)$，绿圈是路标位置 $(l_1,l_2,\dots)$，红圈是与内参标定相关的变量 $(K)$；黑色方块是因子："u" 表示里程计约束、"v" 表示相机观测、"c" 表示回环、其余表示先验因子。
+          <br><b>怎么看这张图：</b>这是全课最重要的一张"语法图"。记住三件事就够了——<span style="color:#a85d42">圆圈 = 未知量</span>，<span style="color:#a85d42">方块 = 约束</span>，<b>一个方块只连它真正涉及的那几个圆圈</b>。因为每个量测只涉及极少数变量，这张图总是稀疏的，所以后端才能算得动。
+        </figcaption>
+      </figure>
+
+      <h3>前端与后端：系统的两半</h3>
+      <p>原文给出的系统架构很简洁：<b>前端（front end）把传感器数据抽象成适合估计的模型；后端（back end）对前端产出的抽象数据做推断。</b></p>
+      <p>前端里有一个<b>数据关联（data association）模块</b>，又分两块：<b>短期数据关联</b>负责在连续量测间找对应（比如"这两帧里的两个像素在拍同一个三维点"）；<b>长期数据关联（即回环检测）</b>负责把新量测关联到<b>更早</b>的路标上。原文还特别强调：<b>后端通常会把信息反馈给前端</b>，例如支持回环的检测与验证。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Past__Present__and_Future_of_Simultaneous_Localization_a/6776d55824d50e174ad1c163fac2cf55543bfc4949e55c82e82ecb8baf38c99f.jpg" alt="Front end and back end in a typical SLAM system">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Front end and back end in a typical SLAM system. The back end can provide feedback to the front end for loop closure detection and verification.
+          <br><b>怎么看这张图：</b>注意那条<b>从后端指回前端的箭头</b>——这是很多人第一次读会忽略的地方。它意味着 SLAM 不是一个单向流水线，而是一个<b>带反馈的闭环系统</b>：后端算出的地图会反过来帮前端判断"这个新观测到底是不是一个真回环"。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="loop">
+      <h2>4. 回环到底改变了什么：一条永远走不完的走廊</h2>
+      <p>原文用一问一答的方式，把"为什么不能只要拓扑、不要度量"讲得非常漂亮。这是我很推荐你逐字读的一段。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Past__Present__and_Future_of_Simultaneous_Localization_a/cb48ee1239cccfda63e9393b1d16de9dd23aec9f5f23886deceecab8423d816c.jpg" alt="Left: map built from odometry. Right: map built from SLAM">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>左：仅由里程计建出的地图，同伦等价于一条从起点 A 通往终点 B 的长走廊；现实中很接近的点（如 B 与 C）在里程计地图里可能相距任意远。右：由 SLAM 建出的地图，利用回环把环境的<b>真实拓扑</b>估计出来，并在图中"发现"了捷径。
+          <br><b>怎么看这张图：</b>左右是<b>同一个房间、同一条行走路线</b>。左图里机器人以为自己一直在往新地方走；右图里那些闪光的连线告诉你：它其实又走回了老地方。差别不在"精度高一点"，而在<b>对世界的理解完全不同</b>——左边以为世界是一根无穷长的线，右边知道世界是一个环。
+        </figcaption>
+      </figure>
+
+      <p>原文的逻辑链条是这样的：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$
+        \text{只做里程计，不回环}
+        \Rightarrow
+        \text{世界被理解成"无限走廊"}
+        \Rightarrow
+        \text{永远在"探索新区域"}
+        $$</div>
+      </div>
+      <p>然后它自己提出一个很尖锐的反问：<b>既然"拿到正确拓扑"才是目的，那为什么不干脆丢掉度量信息，只做地点识别？</b></p>
+
+      <div class="callout">
+        <h4>作者的回答（这一段建议背下来）</h4>
+        <p>因为<b>度量信息让地点识别变得简单和鲁棒得多</b>：度量重建能告诉机器人"哪里还有回环机会"，并且<b>允许剔除虚假回环</b>。原文承认，从原理上说 SLAM 可能是"冗余"的——一个完美的地点识别模块就足以做拓扑建图；但 SLAM 提供了一个针对<b>错误数据关联</b>与<b>感知混叠（perceptual aliasing）</b>的天然防线：当两处看起来一样、实际是不同地点时，度量地图能提供校验依据。用原文的话说，SLAM 地图提供了一种<b>"预测并验证未来量测"</b>的机制，而这个机制是鲁棒运行的关键。</p>
+      </div>
+
+      <p>这段论述之所以重要，是因为它提前回答了你在第 0014 课（回环检测综述）会遇到的争论：<b>"假回环的代价有多大"</b>。2016 年这篇的立场是——度量信息是防线；而后面的课程会告诉你，随着后端鲁棒优化技术的成熟，这条防线的必要性在减弱。这正是"认知会随技术演进而改变"的绝佳案例。</p>
+    </section>
+
+    <section class="section-card" id="map">
+      <h2>5. 地图表示的光谱：从稀疏点到稠密几何</h2>
+      <p>原文对地图表示做了一次很有用的划分。<b>大多数 SLAM 方法把场景表示为一组稀疏的三维路标</b>，对应环境中有区分度的特征（线、角点）。它们被称为<b>基于路标（landmark-based）或基于特征（feature-based）</b>的表示。</p>
+      <p>与之相对的是<b>稠密表示（dense representations）</b>：试图给出三维几何的高分辨率模型，更适合<b>避障、可视化与渲染</b>。稠密表示里又有细分：最原始的是"原始表示"（点云、多边形汤），稍复杂的是 <b>surfel 地图</b>（把几何编码成一组圆盘）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Past__Present__and_Future_of_Simultaneous_Localization_a/20f9466aa632d1d6dc456f7d2adc5518d774ac5cbb0b9b6254d2eef327a512a3.jpg" alt="Left: feature-based map of a room. Right: dense map of a desktop.">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>左：由 ORB-SLAM 生成的房间<b>特征点地图</b>；右：由 DTAM 生成的桌面<b>稠密地图</b>。
+          <br><b>怎么看这张图：</b>左边你只能看到一撮一撮的点——它够用来定位，但你<b>没法拿它避障</b>（点与点之间的空白并不代表那里能走）。右边你几乎能"看见"桌面，但它要存的数据量大得多。这一对图就是后面第 0004 课"landmark 不适合避障"那句结论的图证。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>原文点出的一条重要局限</h4>
+        <p>稠密表示虽然视觉上讨喜，但通常很笨重（需要存储大量数据），而且给出的是<b>低层次的几何描述</b>——它忽略了障碍物的<b>拓扑结构</b>（比如"这张椅子是空心的、可以搬开"）。这句话直接指向了下一节的语义问题。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="open">
+      <h2>6. 语义：为什么它"还在婴儿期"</h2>
+      <p>原文对语义 SLAM 的判断很不客气：<b>把语义信息纳入 SLAM 这件事"in its infancy"（还在婴儿期）</b>，而且与度量 SLAM 不同，它<b>尚且缺少一个内聚的统一定式（cohesive formulation）</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Past__Present__and_Future_of_Simultaneous_Localization_a/65d00e1aef6ef21e34fc0ca7ea1c63c7a8cbe0c4fa5d2974ba7a9e27e668ae90.jpg" alt="Semantic understanding allows humans to predict changes in the environment">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>语义理解让人能预测环境在不同时间尺度上的变化。比如在这个工地里，人会考虑吊车的运动、预期那辆吊车卡车在近期不会移动；同时我们又能预测工地未来的样貌，从而在施工结束后照样定位。这是因为人类能对环境中实体的<b>功能属性与相互关系</b>进行推理。给机器人加上类似能力，是语义 SLAM 的开放问题。
+          <br><b>怎么看这张图：</b>这张图讲的是一个非常深刻的对比——<b>人类靠"理解"来做长期定位，机器目前靠"记住像素"</b>。前者能容忍世界大变（工地盖完了），后者不能。所以语义 SLAM 的目标不是"多一个标签"，而是"获得推理与预测能力"。
+        </figcaption>
+      </figure>
+
+      <h2>7. 优化并不保证收敛：一个必须知道的残酷事实</h2>
+      <p>大多数 SLAM 算法基于迭代非线性优化，而原文提醒：<b>SLAM 是非凸问题，迭代优化只能保证局部收敛。</b>当算法收敛到一个局部极小值时，它给出的估计通常<b>完全错误、根本无法用于导航</b>。</p>
+      <p>更糟的是：原文指出，当时最先进的求解器在<b>相对较小的噪声水平</b>下就会无法收敛到全局最优。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Past__Present__and_Future_of_Simultaneous_Localization_a/6480eb9ab32a8fa80aae91bcf7f85b3137015faa3f3c89db99c7106c5bf6aa8b.jpg" alt="Backbone of most SLAM algorithms is the MAP estimation">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>大多数 SLAM 算法的骨架是对机器人轨迹的 MAP 估计，通过非凸优化计算。图中给出两个仿真基准问题（sphere-a 与 torus，机器人在球面/环面上运动）的轨迹估计：<b>上行</b>是正确的轨迹估计（对应优化问题的全局最优），<b>下行</b>是收敛到局部极小值导致的错误轨迹估计。近期的理论工具已能检测错误收敛，为失败检测与恢复打开了道路。
+          <br><b>怎么看这张图：</b>上下两行的"输入数据是一模一样的"——差别只在于优化器落到了哪个坑里。这就是为什么"我的方法 ATE 更低"这句话本身并不足以说明方法更鲁棒：<b>它可能只是这次运气好，没掉进坏坑</b>。而"能检测出自己掉坑了"才是真正的工程价值。
+        </figcaption>
+      </figure>
+
+      <h2>8. 两个大问题：作者给的正面回答</h2>
+      <p>原文摘要在开头就点明了它要回答这两个问题，这也是它作为 position paper 最鲜明的部分。</p>
+
+      <div class="interactive-card">
+        <h3>问题一：机器人到底需不需要 SLAM？</h3>
+        <p>原文的答案是<b>不能一概而论</b>，它把讨论拆成几个层次：</p>
+        <ul>
+          <li><b>有些场景确实不需要</b>——如果环境已被充分改造（贴标记、布基站），或者任务只需要相对运动信息，那 SLAM 是多余的。</li>
+          <li><b>但对自主系统，SLAM 的价值不只在于"给出位姿"</b>——它提供了对环境拓扑的理解、对错误数据关联的校验、以及支撑长期运行的度量框架。</li>
+          <li>它也承认一个诚实的现实：<b>在受限条件（2D 室内 + 轮式机器人 + 激光）下，SLAM 基本已经解决</b>——原文给的量级是定位误差可以做到 10 cm 以下。</li>
+        </ul>
+      </div>
+
+      <div class="interactive-card">
+        <h3>问题二：SLAM 解决了吗？</h3>
+        <p>原文的答案很干脆：<b>没有。</b>它的推理是——<b>这个问题不能脱离"机器人 / 环境 / 性能要求"这个三元组来回答。</b>把它放宽到"任意机器人、任意环境、任意性能要求"，答案就是明确的不。虽然视觉惯性导航的漂移可以做到轨迹的 0.5% 以下，但一旦进入恶劣环境、长期变化、或资源受限平台，问题立刻重新打开。</p>
+      </div>
+
+      <h3>未解的四个方向</h3>
+      <p>原文最后收敛到四类仍需认真科学研究的挑战。请把这四条当成你未来选题时的检查清单：</p>
+      <table>
+        <thead><tr><th>方向</th><th>在问什么</th></tr></thead>
+        <tbody>
+          <tr><td><b>鲁棒的性能</b>（robust performance）</td><td>怎么在低纹理、动态、光照剧变、传感器退化的条件下不崩？</td></tr>
+          <tr><td><b>高层理解</b>（high-level understanding）</td><td>怎么从"一撮点"走到"理解环境在发生什么"？（就是上面 Fig. 5 的问题）</td></tr>
+          <tr><td><b>资源感知</b>（resource awareness）</td><td>怎么在算力、内存、功耗受限的平台上跑得动？</td></tr>
+          <tr><td><b>任务驱动的推断</b>（task-driven inference）</td><td>怎么让 SLAM 只算任务真正需要的部分，而不是"什么都建一遍"？</td></tr>
+        </tbody>
+      </table>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>有一篇论文声称：它在某个数据集上的定位精度超过了此前的所有方法。按本节 Fig. 6 给我们的教训，你最应该追问的是哪个问题？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。非凸优化可能落到不同的局部极小值，所以单次精度领先不足以说明方法更鲁棒。应该追问：它是否能检测出自己失败了？失败时的行为是什么？在噪声更大时还成立吗？" onclick="lessonKit.answer(this,'q0002a')">它掉进局部极小值时能不能检测出来？失败边界在哪？</button>
+          <button data-correct="no" data-explanation="不对。参数量是工程细节，不是这篇纲领文章提醒你的核心追问方向。" onclick="lessonKit.answer(this,'q0002a')">它的网络参数量是多少？</button>
+          <button data-correct="no" data-explanation="不对。用哪个数据集是必要信息，但"精度领先"本身就要被质疑——因为非凸优化下不同方法可能只是运气不同。" onclick="lessonKit.answer(this,'q0002a')">它用的是哪个公开数据集？</button>
+        </div>
+        <div class="quiz-feedback" id="q0002a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>再看一个：为什么"只要拓扑、不要度量"不行</h3>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。拓扑地图的问题恰恰是它丢掉了度量信息，无法用来导引机器人移动。" onclick="lessonKit.answer(this,'q0002b')">因为拓扑地图存储量太大</button>
+          <button data-correct="yes" data-explanation="对。原文的理由是：度量信息让地点识别更简单、更鲁棒，并且能用来剔除虚假回环——也就是对抗 perceptual aliasing。" onclick="lessonKit.answer(this,'q0002b')">因为度量信息能校验并剔除虚假回环</button>
+          <button data-correct="no" data-explanation="不对。这不是原文给出的理由；原文的论证集中在"对抗错误数据关联"上。" onclick="lessonKit.answer(this,'q0002b')">因为拓扑地图无法同时处理多个机器人</button>
+        </div>
+        <div class="quiz-feedback" id="q0002b"></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>
+            请用自己的话解释：为什么 (2) 式里"$z_k$ 只依赖于 $\mathcal{X}_k$"这一句话，会决定整个后端算法的效率？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>因为每个量测只涉及少数变量，所以把问题画成因子图后，每个因子只连着几个节点，整张图是稀疏的。这直接导致求解正规方程时的矩阵（信息矩阵 / Hessian）也是稀疏的，可以用稀疏分解、Schur 消元等手段把复杂度从"变量数的立方"量级降下来——这就是 BA 能在几百个相机上跑起来的原因。如果每个量测都跟所有变量相关，图就是全连接的，稀疏性消失，问题立刻变成不可解。</div>
+            </details>
+          </li>
+          <li>
+            原文说 MAP 与卡尔曼滤波在"线性高斯"情形下给出相同估计。那为什么今天的主流后端还是选优化而不是滤波？
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>关键在于"线性高斯"这个前提在真实 SLAM 里不成立。滤波框架需要显式地区分运动模型与观测模型、按时间递归更新，并且对历史状态做边缘化（一旦边缘化，旧信息就被压缩进协方差，无法回溯）。而优化框架把所有量测平等地写成因子，可以反复重线性化、可以增量求解、可以直接加入回环这种"跨越很长时间"的约束。回环优化是滤波框架最难处理的事情之一——这也解释了为什么现代 SLAM 后端普遍是因子图优化。</div>
+            </details>
+          </li>
+          <li>
+            本节提到"为抵抗外点，常把平方项换成鲁棒损失（Huber / Tukey）"。请说明这个改动在数学上等价于什么，以及它的代价。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>等价于把高斯噪声假设替换成"重尾分布"假设：高斯假设下负对数似然是平方项（$\ell_2$），而重尾分布对应增长更慢的损失函数（Huber 是二次-线性分段，Tukey 还会在外点处饱和）。效果是大残差的量测不再以平方的速度主导代价函数，从而被"降权"。代价是：代价函数不再是纯二次，不能再一步求解，需要迭代重加权（IRLS）或改用对应的鲁棒求解器；同时如果鲁棒核参数选错，真正的内点也可能被降权。</div>
+            </details>
+          </li>
+          <li>
+            "SLAM 在受限条件下基本已解决，但整体远未解决"——请指出这句话里最关键的那个限定词，并解释它为什么重要。
+            <details class="exercise-answer">
+              <summary>展开查看答案</summary>
+              <div>最关键是"受限条件"这一组限定：2D 场景 + 室内 + 轮式机器人 + 激光雷达。把它放宽到三维、室外、任意平台、任意传感器、长期运行中的任意一种，结论立刻反转。这提示我们在读任何"某问题已解决"的论断时，都要先问清楚它成立的前提集合——论文里的"解决"几乎总是带前提的。</div>
+            </details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0001-导览-255篇论文的阅读地图.html">← 导览：255 篇论文的阅读地图</a>
+        <a class="next" href="0003-SLAM综述2021-从滤波到优化的演进主线.html">SLAM 综述（2021）→</a>
+      </div>
+      <p class="foot-note">这一节是"宪法"。下一节我们看一篇更现代的综述，看这条演进主线在 2021 年又被总结成了什么样子 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

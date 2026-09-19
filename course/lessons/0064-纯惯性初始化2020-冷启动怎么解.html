@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>纯惯性初始化（2020）：冷启动怎么解 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0064</div>
+      <h1>纯惯性初始化（2020）：冷启动怎么解</h1>
+      <p class="subtitle">最开始连视觉都还没动，只用 IMU 怎么把重力与尺度定住？🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：纯惯性 MAP 初始化、冷启动、ORB-SLAM3 的初始化</span>
+        <span>👥 作者：C. Campos, J. M. M. Montiel, J. D. Tardós（萨拉戈萨大学，即 ORB-SLAM3 团队）</span>
+        <span>📅 2020 · <i>Inertial-Only Optimization for Visual-Inertial Initialization</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">★ 它专攻「冷启动」</a>
+        <a href="#b">★ 方案：只用 IMU 的 MAP</a>
+        <a href="#c">它怎么并进 ORB-SLAM3</a>
+        <a href="#d">实验数字</a>
+        <a href="#e">局限</a>
+        <a href="#f">收尾与悬念偿还</a>
+      </div>
+    </header>
+
+    <main>
+      <section class="section-card" id="a">
+        <h2>1. ★ 它专攻「冷启动」</h2>
+        <div class="lead-grid">
+          <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「冷启动」难在哪；复述「把视觉轨迹当常数、只优化惯性量」这个反直觉操作；写出待估变量与惯性残差形式；讲清它如何成为 ORB-SLAM3 的初始化；并指出它的盲区。</p></div>
+          <div class="callout"><h4>和前面课程怎么接</h4><p>这是<b>第二季悬念⑤</b>的最后一块拼图。第二季 <b>0029/0030 预积分</b> 讲 ΔR/Δv/Δp 时，原文<b>没有初始化章节</b>；本季 <b>0057 VINS-Mono</b> 给的是「视觉先动起来之后再做松对齐」四步；而本节场景更极端——<b>最开始连可靠的视觉几何都还没有，只有 IMU 在动</b>。它和 <b>0045 ORB-SLAM3</b>（Atlas 多地图、重定位）同源同作者。</p></div>
+        </div>
+
+        <p>视觉-惯性 SLAM 有个死规定：<b>不初始化，就根本跑不起来</b>。原文第 11 行说得直白——「as long as IMU is not initialized, visual-inertial SLAM cannot be performed」。问题在「冷启动」那几秒：</p>
+        <ul>
+          <li>相机刚开机，还没积累足够视差，<b>视觉几何（三角化、尺度）根本建不起来</b>；</li>
+          <li>这空档里，<b>只有 IMU 在提供信息</b>——它在以几百赫兹测加速度和角速度；</li>
+          <li>而单目尺度在匀速运动下本来不可观，若前几秒运动太「乖」（接近常速），尺度更解不出。</li>
+        </ul>
+        <p>既往方法要么解代数方程、忽略 IMU 噪声（Martinelli / Kaiser），要么分步最小二乘、忽略相关性、还要等 15 秒（ORB-SLAM-VI），要么假设偏置为零（VINS-Mono 的 1–2 秒版）。本文的野心：<b>一次性联合优化所有惯性量，并且把 IMU 的概率模型（噪声）也算进去</b>（第 19–27 行）。</p>
+
+        <div class="callout"><h4>本课定位（必须显式记住）</h4><p>第二季 <b>0029/0030</b> 讲预积分时明确「没有初始化章节」；本季 <b>0057</b> VINS-Mono 给了视觉先动、再做松对齐的四步；而本节是更底层的「冷启动」——<b>最开始连视觉都还没可靠几何，只有 IMU 在动</b>。它把「怎么开局」这件事推到了最极端的起点。</p></div>
+      </section>
+
+      <section class="section-card" id="b">
+        <h2>2. ★ 方案：只用 IMU 的 MAP</h2>
+        <p>核心思路一句话：<b>视觉轨迹先跑起来、当作已知常数钉死；然后只用 IMU 测量去做优化</b>，联合估计重力、尺度、速度、偏置。下面这张图解释「为什么只靠 IMU 也能定出重力方向与尺度」——这是全文最反直觉的一步。</p>
+
+        <figure class="figure">
+          <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+               font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+            <text x="450" y="26" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">为什么只靠 IMU 也能定出重力方向与尺度</text>
+            <!-- panel 1: still -->
+            <rect x="30" y="55" width="250" height="280" fill="#fff" stroke="#b0bec5" stroke-width="1.5" rx="6"/>
+            <text x="155" y="80" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">① 静止时</text>
+            <rect x="135" y="150" width="40" height="60" fill="#cfd8dc" stroke="#546e7a" stroke-width="2" rx="4"/>
+            <text x="155" y="230" fill="#37474f" font-size="11" text-anchor="middle">手持设备</text>
+            <line x1="155" y1="210" x2="155" y2="290" stroke="#c62828" stroke-width="3"/>
+            <polygon points="155,298 149,286 161,286" fill="#c62828"/>
+            <text x="200" y="260" fill="#c62828" font-size="12" text-anchor="start" font-weight="700">读数 = 重力</text>
+            <!-- panel 2: moving -->
+            <rect x="325" y="55" width="250" height="280" fill="#fff" stroke="#b0bec5" stroke-width="1.5" rx="6"/>
+            <text x="450" y="80" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">② 运动起来</text>
+            <rect x="430" y="150" width="40" height="60" fill="#cfd8dc" stroke="#546e7a" stroke-width="2" rx="4"/>
+            <line x1="450" y1="210" x2="450" y2="290" stroke="#c62828" stroke-width="3"/>
+            <polygon points="450,298 444,286 456,286" fill="#c62828"/>
+            <line x1="450" y1="210" x2="520" y2="150" stroke="#1565c0" stroke-width="3"/>
+            <polygon points="520,150 510,152 516,160" fill="#1565c0"/>
+            <line x1="450" y1="210" x2="518" y2="285" stroke="#2e7d32" stroke-width="3" stroke-dasharray="5 3"/>
+            <polygon points="518,285 510,278 520,276" fill="#2e7d32"/>
+            <text x="465" y="135" fill="#1565c0" font-size="11" text-anchor="start">运动加速度</text>
+            <text x="455" y="312" fill="#2e7d32" font-size="11" text-anchor="start">合成读数</text>
+            <!-- panel 3: optimize -->
+            <rect x="620" y="55" width="250" height="280" fill="#fff" stroke="#b0bec5" stroke-width="1.5" rx="6"/>
+            <text x="745" y="80" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">③ 优化分离</text>
+            <line x1="745" y1="150" x2="745" y2="230" stroke="#c62828" stroke-width="3"/>
+            <polygon points="745,238 739,226 751,226" fill="#c62828"/>
+            <text x="760" y="200" fill="#c62828" font-size="12" text-anchor="start" font-weight="700">重力</text>
+            <rect x="640" y="200" width="14" height="70" fill="#ef6c00" stroke="#e65100" stroke-width="1.5"/>
+            <text x="700" y="240" fill="#e65100" font-size="12" text-anchor="start" font-weight="700">尺度</text>
+            <text x="745" y="270" fill="#37474f" font-size="11" text-anchor="middle">重力被分离出来</text>
+            <text x="745" y="290" fill="#37474f" font-size="11" text-anchor="middle">尺度一起解出</text>
+          </svg>
+          <figcaption>
+            <b>这张图在画什么：</b>一台手持设备从静止被拿起，三格连环画。① 静止时，加速度计读数只有重力（红色向下箭头）；② 运动起来后，读数变成「重力 + 运动加速度」的合成（红+蓝合成绿虚线）；③ 用一段时间的读数做优化，把重力方向和尺度一起解出来（橙尺=尺度，红箭头=分离出的重力）。<br>
+            <b>怎么看这张图：</b>① 加速度计永远测「总加速度 = 重力 + 运动加速度」；② 静止时运动加速度为零，所以读数纯是重力；③ 一旦动起来，重力被「混」进总读数里——但只要运动足够丰富，优化就能把它从总读数里<b>分离</b>出来，同时顺带定出尺度。<br>
+            <b>要记住的一句话：</b>重力，是从加速度里「分离」出来的那个固定成分；而尺度，是让视觉轨迹与 IMU 预积分对得上的那个缩放因子。
+          </figcaption>
+        </figure>
+
+        <h3>2.1 待估量与目标函数</h3>
+        <p>把视觉轨迹钉死为常数后，待估的惯性量只有四个（原文第 68 行）：</p>
+        <div class="formula-box"><div class="flow-formula">
+          $$X_k = \{\, s,\ R_{wg},\ b,\ \bar v_{0:k} \,\}$$
+          $$\text{（尺度 } s\ \text{、重力方向 } R_{wg}\ \text{、偏置 } b\ \text{、up-to-scale 速度 } \bar v \text{）}$$
+        </div></div>
+        <p>MAP 后验与目标函数（第 80、98 行）：</p>
+        <div class="formula-box"><div class="flow-formula">
+          $$p(X_k \mid T) \propto p(T \mid X_k)\, p(X_k)$$
+          $$X_k^* = \arg\min\!\Big( \lVert r_p \rVert^2_{\Sigma_p} + \sum_i \lVert r_{T_{i-1,i}} \rVert^2_{\Sigma_{T_i}} \Big)$$
+        </div></div>
+        <p>其中惯性残差就是我们在 <b>0030 预积分</b> 见过的 ΔR/Δv/Δp 形式（第 112–120 行）：</p>
+        <div class="formula-box"><div class="flow-formula">
+          $$r_{\Delta R} = \mathrm{Log}\!\big(\Delta R(b^g)^{\!T} R_i^T R_j\big)$$
+          $$r_{\Delta v} = R_i^T\!\big(s\bar v_j - s\bar v_i - R_{wg} g_I \Delta t_{ij}\big) - \Delta v$$
+          $$r_{\Delta p} = R_i^T\!\big(s\bar p_j - s\bar p_i - s\bar v_i\Delta t - \tfrac12 R_{wg} g_I \Delta t^2\big) - \Delta p$$
+        </div></div>
+        <p>偏置先验（第 141 行）：当加速度偏置不可观时，用 $r_p=\lVert b^a\rVert^2_{\Sigma_p}$ 把它拉回 0，避免和重力方向耦合混淆。</p>
+
+        <h3>2.2 为什么「只用惯性」的目标函数可解（最反直觉的一步）</h3>
+        <div class="callout"><h4>原文原话（第 39 行）</h4><p>「The uncertainty of visual SLAM trajectory is much smaller than the IMU uncertainties and can be ignored while obtaining a first solution for the IMU variables. So, we perform inertial-only MAP estimation, taking the up-to-scale visual SLAM trajectory as constant.」</p></div>
+        <p>翻译成人话：视觉 SLAM 给出的轨迹，<b>不确定度远小于 IMU 的不确定度</b>，所以求第一版惯性量时，可以把视觉轨迹<b>当常数忽略掉它的噪声</b>。这样一来——</p>
+        <ul>
+          <li>未知量只剩 $\{s,\ \text{重力方向},\ \text{偏置},\ \text{速度}\}$，维数很低；</li>
+          <li>而且 IMU 残差对尺度 $s$、速度 $\bar v$ <b>近似线性</b>，优化很顺；</li>
+          <li>因为视觉没有数据关联错误，连鲁棒核（Huber）都不需要（第 103 行）。</li>
+        </ul>
+        <p>结果就是：这一步纯惯性优化，<b>只要约 5 毫秒</b>就能出种子。下面这张图把「冷启动」和「等其他初始化」做个时间轴对比。</p>
+
+        <figure class="figure">
+          <svg viewBox="0 0 900 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+               font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+            <text x="450" y="26" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">「冷启动」与其他初始化的时间轴三联</text>
+            <!-- panel 1 -->
+            <rect x="30" y="55" width="260" height="250" fill="#fff" stroke="#b0bec5" stroke-width="1.5" rx="6"/>
+            <text x="160" y="80" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">① 只有 IMU 的几秒</text>
+            <rect x="80" y="160" width="60" height="45" fill="#eceff1" stroke="#b0bec5" stroke-width="2" rx="4"/>
+            <line x1="110" y1="160" x2="110" y2="138" stroke="#b0bec5" stroke-width="2"/>
+            <line x1="100" y1="142" x2="120" y2="142" stroke="#b0bec5" stroke-width="2"/>
+            <text x="160" y="135" fill="#78909c" font-size="11" text-anchor="middle">相机打叉</text>
+            <circle cx="200" cy="182" r="22" fill="#fff3e0" stroke="#ef6c00" stroke-width="2.5"/>
+            <text x="200" y="187" fill="#e65100" font-size="13" text-anchor="middle" font-weight="700">IMU</text>
+            <text x="160" y="270" fill="#37474f" font-size="11" text-anchor="middle">IMU 高亮，在提供信息</text>
+            <!-- panel 2 -->
+            <rect x="320" y="55" width="260" height="250" fill="#fff" stroke="#b0bec5" stroke-width="1.5" rx="6"/>
+            <text x="450" y="80" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">② 视觉有足够视差</text>
+            <rect x="420" y="160" width="60" height="45" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2.5" rx="4"/>
+            <line x1="450" y1="160" x2="450" y2="138" stroke="#2e7d32" stroke-width="2.5"/>
+            <line x1="440" y1="142" x2="460" y2="142" stroke="#2e7d32" stroke-width="2.5"/>
+            <text x="450" y="135" fill="#1b5e20" font-size="11" text-anchor="middle">相机亮起</text>
+            <circle cx="530" cy="182" r="22" fill="#fff3e0" stroke="#ef6c00" stroke-width="2.5"/>
+            <text x="530" y="187" fill="#e65100" font-size="13" text-anchor="middle" font-weight="700">IMU</text>
+            <text x="450" y="270" fill="#37474f" font-size="11" text-anchor="middle">视觉能三角化、建几何</text>
+            <!-- panel 3 -->
+            <rect x="610" y="55" width="260" height="250" fill="#fff" stroke="#b0bec5" stroke-width="1.5" rx="6"/>
+            <text x="740" y="80" fill="#37474f" font-size="14" text-anchor="middle" font-weight="700">③ 联合优化完成</text>
+            <text x="740" y="150" fill="#2e7d32" font-size="22" text-anchor="middle" font-weight="700">✓</text>
+            <line x1="740" y1="175" x2="740" y2="215" stroke="#c62828" stroke-width="3"/>
+            <polygon points="740,223 734,211 746,211" fill="#c62828"/>
+            <rect x="700" y="225" width="12" height="45" fill="#ef6c00" stroke="#e65100" stroke-width="1.5"/>
+            <text x="740" y="295" fill="#37474f" font-size="11" text-anchor="middle">重力 + 尺度都用上了</text>
+          </svg>
+          <figcaption>
+            <b>这张图在画什么：</b>时间轴三联。① 冷启动那几秒：相机还打叉（无可靠几何），只有 IMU 高亮在工作；② 等视觉积累出足够视差，相机亮起、能三角化；③ 两者联合优化完成，打勾并带上重力箭头与尺度尺子。<br>
+            <b>怎么看这张图：</b>① 第①格就是「冷启动」——别的方法要等第②格才开局，本文在第①格就用纯 IMU 把重力与尺度定住；② 第③格说明「先把重力与尺度定住，视觉一来就能立刻用上」，不用再等。<br>
+            <b>要记住的一句话：</b>冷启动的聪明处，是「不等视觉」，先用 IMU 把最难的尺度/重力钉住。
+          </figcaption>
+        </figure>
+
+        <div class="interactive-card">
+          <h3>互动判断</h3>
+          <p>为什么「把视觉轨迹当常数、只优化惯性量」是可行的？</p>
+          <div class="quiz-options">
+            <button data-correct="yes" data-explanation="因为视觉轨迹的不确定度远小于 IMU 的不确定度，可忽略；钉死后未知量只剩 {尺度,重力方向,偏置,速度}，且 IMU 残差对尺度/速度近似线性，约 5ms 即可解。" onclick="lessonKit.answer(this,'q0064a')">视觉轨迹太准可忽略，惯性量维度低且近线性</button>
+            <button data-correct="no" data-explanation="恰恰相反：视觉轨迹被钉死当常数，未知量里没有视觉位姿；优化的是惯性量，不是「视觉也不准」。" onclick="lessonKit.answer(this,'q0064a')">因为视觉也不准，所以两者一起随便猜</button>
+          </div>
+          <div class="quiz-feedback" id="q0064a"></div>
+        </div>
+      </section>
+
+      <section class="section-card" id="c">
+        <h2>3. 它怎么并进 ORB-SLAM3</h2>
+        <p>这篇论文的作者 Campos、Montiel、Tardós，<b>正是 ORB-SLAM3 的同一团队</b>。所以本文不是孤立方法，而是<b>ORB-SLAM3 的初始化模块</b>。把它和第 45 课学的 ORB-SLAM3 接起来看：</p>
+        <div class="grid-2">
+          <div class="callout"><h4>Atlas 多地图之前，先要好初始化</h4><p>ORB-SLAM3 的 Atlas 能管理多张子地图、能做重定位（<b>0045</b> 学过）。但在建第一张地图前，必须先把尺度、重力、速度、偏置定准——本文就是干这个的「第一棒」。</p></div>
+          <div class="callout"><h4>本文即其初始化，且不止于初始化</h4><p>原文第 210 行还提到：它不仅能初始化，也能在 SLAM 运行中<b>低成本精修</b>尺度/惯性量；且容易改成立体版（去掉尺度即可）。</p></div>
+        </div>
+        <p>换句话说，第二季悬念⑤「IMU 初始化怎么做」，由本篇与 <b>0057 VINS-Mono</b> 共同填补：VINS-Mono 是「视觉先动、再做松对齐」四步（约 1–2 秒但假设偏置为零、尺度误差约 22%）；本文是更极端的「冷启动」——视觉还没动就先用纯 IMU 把重力/尺度钉住，尺度误差仅约 5.3%。</p>
+
+        <figure class="figure">
+          <img src="../../md/images/2020_Inertial-Only_Optimization_for_Visual-Inertial_Initializ/fb21efcf33c64aa82342bad4a25e683b081f55ee8a4af0b1c49f9072d6a2fd84.jpg" alt="Inertial-only optimization graph Fig 1">
+          <figcaption>
+            <b>原图注（Fig. 1）：</b>Underlying graph representation of the inertial-only optimization (left) and the first visual-inertial Bundle Adjustment (right). Yellow boxes represent IMU residuals, red boxes stand for reprojection error, while the purple one represents prior information for accelerometer bias. Dashed lines point out fixed variables (keyframe poses for inertial-only optimization).<br>
+            <b>怎么看这张图：</b>① 左图是「纯惯性优化」：黄色=IMU 残差，紫色=加速度偏置先验，<b>虚线表示关键帧位姿被钉死（固定）</b>——这就是「视觉当常数」；② 右图是首轮 VI-BA：红色=重投影误差，视觉终于参与；③ 左图直观回答了「为什么只优化惯性」——视觉位姿不动，只有惯性量在滑。
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="section-card" id="d">
+        <h2>4. 实验数字</h2>
+        <p>在 EuRoC 上，每 0.5 秒发起一次初始化，共 <b>2248 次</b>（第 162 行）。关键数字（第 172–182 行，原文口径）：</p>
+        <div class="summary-grid">
+          <div class="mini-card"><h4>平均初始化</h4><p>＜ <b>4 秒</b>；平均尺度误差 <b>5.29%</b>；轨迹用时约 <b>2.16 秒</b>。</p></div>
+          <div class="mini-card"><h4>对比联合法 [3]</h4><p>联合法需要 <b>13 秒</b>总时间；本文（纯惯性 5 ms + VI-BA 132 ms）快得多。</p></div>
+          <div class="mini-card"><h4>对比 VINS-Mono</h4><p>VINS-Mono 约 <b>22%</b> 尺度误差；本文在 2.15 秒时仅 <b>4.25%</b>。</p></div>
+          <div class="mini-card"><h4>救活难序列</h4><p>接 ORB-SLAM-VI 后，V1_01 尺度 0.4% / ATE 0.023；<b>V1_03 原先初始化失败、现在能跑</b>。</p></div>
+        </div>
+
+        <figure class="figure">
+          <img src="../../md/images/2020_Inertial-Only_Optimization_for_Visual-Inertial_Initializ/4002bb12dc1a16bf49282141f1d44d3889c297cdcf5380cb6296c353dcb601e2.jpg" alt="Scale factor distribution Fig 2">
+          <figcaption>
+            <b>原图注（Fig. 2）：</b>Experimental distribution of the scale factor (ratio between estimated and true scales) obtained by the different initialization methods along all sequences of the EuRoC dataset, before and after visual-inertial BA. A total of 2248 initializations have been launched.<br>
+            <b>怎么看这张图：</b>① 横轴是「估计尺度 / 真值尺度」，越靠近 1 越好；② 本文方法（VI-BA 前后）的分布在 1 附近最集中、方差最小；③ 2248 次大规模实验说明结果稳定，不是偶然。
+          </figcaption>
+        </figure>
+
+        <figure class="figure">
+          <img src="../../md/images/2020_Inertial-Only_Optimization_for_Visual-Inertial_Initializ/0b4792d3a64c2014541a7840941a81b54ad38da0fda6570f93c8ec9ba79a1f91.jpg" alt="Scale factor distribution Fig 2 variant">
+          <figcaption>
+            <b>原图注（Fig. 2，另一版，按原文顺序推断）：</b>同上——不同初始化方法在 EuRoC 各序列上的尺度因子分布（视觉-惯性 BA 前后），共 2248 次初始化。<br>
+            <b>怎么看这张图：</b>① 与上一图同为 Fig.2 的尺度分布，可对照看各方法在 BA 前后的收敛；② 重点是本文方法的峰值紧贴 1、且尾部更短，说明尺度误差小且稳定；③ 两张图共同支撑「5.29% 平均尺度误差」的结论。
+          </figcaption>
+        </figure>
+
+        <figure class="figure">
+          <svg viewBox="0 0 900 378" width="100%" xmlns="http://www.w3.org/2000/svg"
+               font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+            <text x="450" y="26" fill="#37474f" font-size="16" text-anchor="middle" font-weight="700">初始化耗时对比（示意，数值取自原文口径）</text>
+            <line x1="120" y1="310" x2="860" y2="310" stroke="#37474f" stroke-width="1.5"/>
+            <text x="120" y="335" fill="#37474f" font-size="12" text-anchor="middle">0</text>
+            <!-- bar: pure inertial <4s -->
+            <rect x="160" y="250" width="120" height="60" fill="#2e7d32"/>
+            <text x="220" y="240" fill="#1b5e20" font-size="12" text-anchor="middle">纯惯性 ＜4s</text>
+            <text x="220" y="345" fill="#37474f" font-size="12" text-anchor="middle">本文</text>
+            <!-- bar: VINS-Mono 1-2s but 22% -->
+            <rect x="340" y="232" width="120" height="78" fill="#ef6c00"/>
+            <text x="400" y="222" fill="#e65100" font-size="12" text-anchor="middle">约1-2s</text>
+            <text x="400" y="345" fill="#37474f" font-size="12" text-anchor="middle">VINS-Mono</text>
+            <text x="400" y="285" fill="#fff" font-size="11" text-anchor="middle">22%尺度误差</text>
+            <!-- bar: joint [3] 13s -->
+            <rect x="520" y="120" width="120" height="190" fill="#1565c0"/>
+            <text x="580" y="110" fill="#0d3c75" font-size="12" text-anchor="middle">13s</text>
+            <text x="580" y="345" fill="#37474f" font-size="12" text-anchor="middle">联合法[3]</text>
+            <!-- bar: ORB-SLAM-VI 15s -->
+            <rect x="700" y="92" width="120" height="218" fill="#8e24aa"/>
+            <text x="760" y="82" fill="#6a1b9a" font-size="12" text-anchor="middle">约15s</text>
+            <text x="760" y="345" fill="#37474f" font-size="12" text-anchor="middle">ORB-SLAM-VI</text>
+            <text x="450" y="358" fill="#78909c" font-size="11" text-anchor="middle">示意：条形高度按原文给出的耗时量级绘制，非逐秒精确值</text>
+          </svg>
+          <figcaption>
+            <b>这张图在画什么：</b>四种初始化方法的耗时量级对比（示意）。本文纯惯性优化总初始化＜4 秒；VINS-Mono 约 1–2 秒但带约 22% 尺度误差；联合法 [3] 约 13 秒；ORB-SLAM-VI 约 15 秒。<br>
+            <b>怎么看这张图：</b>① 本文在「尺度误差低」和「耗时短」之间取得了最好平衡；② VINS-Mono 虽快，但代价是偏置假设为零、尺度误差大；③ 注意这是<b>示意</b>图，条形高度按原文给出的量级绘制，具体数字以正文为准。<br>
+            <b>要记住的一句话：</b>冷启动的价值不是「最快」，而是「又快又把尺度/重力定得最准」。
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="section-card" id="e">
+        <h2>5. 局限</h2>
+        <p>原文自己划了边界（第 148、156、177 行），要诚实看待：</p>
+        <ul>
+          <li><b>常速 / 近常速不可观</b>：若平均加速度小于重力的 0.5%，这段测量会被直接丢弃——因为此时尺度真的解不出。</li>
+          <li><b>依赖单目 SLAM 先给好种子</b>：它要先跑纯单目 SLAM 得到 up-to-scale 轨迹；若困难序列视觉初始化本身失败，会拖慢总时长。</li>
+          <li><b>需要三个初始尺度猜测</b>：用 1 / 4 / 16 米三种中位深度各跑一遍，取残差最小的——本质是「多猜几个再择优」，不是单发必中。</li>
+        </ul>
+        <div class="callout"><h4>和小结对照</h4><p>对比 <b>0063 DM-VIO</b>：DM-VIO 用延迟边缘化去「事后修正」尺度，本文用纯惯性优化去「事前定住」尺度——一个是冷启动的钉，一个是运行中的修，正好互补。</p></div>
+      </section>
+
+      <section class="section-card" id="f">
+        <h2>6. 收尾与悬念偿还</h2>
+        <p>到这一节，第二季留下的「悬念⑤：IMU 初始化怎么做」终于被彻底偿还：</p>
+        <ul>
+          <li><b>0029/0030 预积分</b>：给了 ΔR/Δv/Δp 与协方差，但<b>没有初始化章节</b>；</li>
+          <li><b>0057 VINS-Mono</b>：视觉先动、再做松对齐四步（约 1–2 秒，偏置假设零，约 22% 尺度误差）；</li>
+          <li><b>本篇（0064）</b>：更极端的冷启动，视觉还没动就只用 IMU 把重力/尺度钉住（＜4 秒，约 5.3% 尺度误差），并成为 ORB-SLAM3 的初始化。</li>
+        </ul>
+        <p>而 <b>0063 DM-VIO</b> 则把尺度问题推到「运行中的事后修正」。三者连起来，就是本季 VIO 主干对「尺度何时可解、怎么解、解错了怎么修」的完整回答。</p>
+        <div class="interactive-card">
+          <h3>互动判断</h3>
+          <p>本篇纯惯性初始化，最反直觉的一点是什么？</p>
+          <div class="quiz-options">
+            <button data-correct="yes" data-explanation="反直觉在「视觉轨迹当常数钉死、只优化惯性量」也能解——因为视觉不确定度远小于 IMU，且 IMU 残差对尺度/速度近似线性，约 5ms 出种子。" onclick="lessonKit.answer(this,'q0064b')">视觉钉死当常数，只优化惯性量也能解</button>
+            <button data-correct="no" data-explanation="本文恰恰不假设偏置为零（还用先验把加速度偏置拉回 0），也从未说「不需要 IMU 噪声模型」——它正是把 IMU 概率模型算进去才准。" onclick="lessonKit.answer(this,'q0064b')">因为它假设偏置为零、忽略 IMU 噪声</button>
+          </div>
+          <div class="quiz-feedback" id="q0064b"></div>
+        </div>
+      </section>
+
+      <section class="exercise-box" id="x">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用三句话向同学解释「冷启动」为什么难，以及本文怎么破局。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① 冷启动那几秒相机还没积累足够视差，视觉几何（三角化、尺度）建不起来，只有 IMU 在提供信息；② 而单目尺度在匀速运动下不可观，前几秒运动太乖就更解不出；③ 本文破局：先把视觉轨迹跑出来当常数钉死，只用 IMU 做 MAP 优化，把重力方向与尺度定住，约 5ms 出种子，＜4s 完成初始化。</p>
+            </div></details>
+          </li>
+          <li>写出待估变量 $X_k$，并说明为什么优化时「视觉位姿」不出现在未知量里。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>$X_k = \{s,\ R_{wg},\ b,\ \bar v_{0:k}\}$（尺度、重力方向、偏置、up-to-scale 速度）。视觉位姿不出现，是因为纯单目 SLAM 已经先给出了 up-to-scale 轨迹，本文<b>把它当作已知常数冻结</b>（原图 Fig.1 里虚线即表示固定变量），所以优化只动惯性量。</p>
+            </div></details>
+          </li>
+          <li>为什么「只用惯性」的目标函数可解？引用原文第 39 行的论证。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>原文：视觉 SLAM 轨迹的不确定度远小于 IMU 的不确定度，因此求第一版惯性量时可以忽略视觉噪声、把视觉轨迹当常数。于是未知量只剩 {尺度,重力方向,偏置,速度}，且 IMU 残差对尺度/速度近似线性、维数低，约 5ms 即可解；又因视觉无数据关联错误，连 Huber 核都不需要。</p>
+            </div></details>
+          </li>
+          <li>对比本篇与 VINS-Mono 的初始化：一个冷启动、一个视觉先动，各自的代价与收益？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>VINS-Mono（0057）</b>：视觉先动、再做松对齐四步，约 1–2 秒，但假设偏置为零、尺度误差约 22%。收益是快；代价是初值假设强、尺度误差大。<br>
+              <b>本篇（0064）</b>：更极端的冷启动，视觉还没动就只用 IMU 钉住重力/尺度，＜4s、约 5.3% 尺度误差，还能救活 V1_03 这类原先失败难序列。收益是准、且能处理「视觉尚未就绪」；代价是依赖单目 SLAM 先给好种子、常速段仍不可观。<br>
+              一句话：VINS-Mono 用「视觉先动」换速度，本篇用「纯 IMU 先钉」换准度与冷启动能力。</p>
+            </div></details>
+          </li>
+          <li>本文的三个局限里，哪一条本质上和「单目尺度不可观」是同一件事？为什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>「常速 / 近常速不可观（平均加速度＜0.5% 重力就丢弃）」本质就是单目尺度不可观的具象化：当运动激励不足时，尺度这一不可观量根本没有被观测到，优化没有信息来源，只能丢弃这段测量。另两条（依赖视觉种子、三个尺度猜测）是工程实现限制，不是不可观本身。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+
+      <footer class="section-card">
+        <div class="nav-links">
+          <a href="0063-DM-VIO2022-延迟边缘化.html">← DM-VIO（2022）：延迟边缘化</a>
+          <a class="next" href="0065-GVINS2022-把GNSS放进因子图.html">GVINS（2022）：把 GNSS 放进因子图 →</a>
+        </div>
+        <p class="foot-note">冷启动的钉子钉好后，下一节 GVINS 要把另一个外部传感器——GNSS——也塞进因子图里，去解大尺度户外的全局位姿 🛰️</p>
+        <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>

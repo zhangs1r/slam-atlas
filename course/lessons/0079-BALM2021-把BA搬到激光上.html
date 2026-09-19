@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BALM（2021）：把 BA 搬到激光上 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 D · 激光主干 / Lesson 0079</div>
+      <h1>BALM（2021）：把 BA 搬到激光上</h1>
+      <p class="subtitle">🧱 这一课解决一个疑问：视觉 BA 那套「一起优化特征点和位姿」，为什么也能用在稀疏的激光点云上？</p>
+      <div class="hero-meta">
+        <span>🎯 主题：激光后端 Bundle Adjustment</span>
+        <span>👥 作者：Liu, Zhang（HKU）</span>
+        <span>📅 2021 · <i>BALM: Bundle Adjustment for Lidar Mapping</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先区分两个 BALM</a>
+        <a href="#b">核心见解</a>
+        <a href="#c">协方差特征值</a>
+        <a href="#d">二阶闭式雅可比</a>
+        <a href="#e">二阶导爆炸</a>
+        <a href="#f">实验数字</a>
+        <a href="#g">局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能说清 BALM 为什么能把 BA 搬上激光、平面/边缘参数为什么能被解析消掉、协方差特征值怎么判断几何类型，以及它和第二季 0022 课的关系。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 接第二季 <b>0019</b>（Schur 消元：把平面/边缘参数闭式消掉＝同一条线）；② 接第二季 <b>0022</b>（点云 BA、点到面残差、特征参数闭式消元、NEES 一致性——但 <b>0022 是 2.0，本篇是 1.0，必须区分</b>）；③ 接第二季 <b>0020</b>（BA 即稠密节点-边优化）。</p></div>
+      </div>
+
+      <h2>1. ★ 先区分：本篇 BALM（2021）≠ 第二季 0022 的 BALM2.0</h2>
+      <p>开宗明义，避免混淆：你在第二季 <b>0022</b> 课学过的是 <b>BALM2.0</b>（<i>Efficient and Consistent Bundle Adjustment on Lidar Point Clouds</i>, 2023），同一个团队 Liu &amp; Zhang 的后续版本。<b>本篇（2021）是原始 BALM，也叫 1.0 版，是 2.0 的前身</b>。两者关系：同一团队先后版本，2.0 在 1.0 基础上加了「一致性（NEES）自适应体素化」等。</p>
+      <p>本篇（2021）的核心贡献有五条：(1) 把激光 BA 写成「特征点到其匹配边/面的距离最小化」；(2) 证明平面/边缘参数可<b>闭式解析求解并消去</b>，BA 仅依赖扫描位姿；(3) 推导代价函数到二阶的闭式导数；(4) 自适应体素化高效搜对应；(5) 作为 LOAM 后端，20 帧滑动窗近 10 Hz 实时，显著降低 LOAM 漂移。</p>
+      <p><b>一句话定位：</b>证明激光 BA 可行且能吃满稠密平面/边缘特征——核心是「平面/边缘参数可解析消元，BA 只剩扫描位姿」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_BALM/91e545a12489fc04b91883b13e38b72067630eef6689be6aa3e7e7fea1cf7461.jpg" alt="Comparison of BA formulations">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Comparison of BA formulations: (a) visual BA constrains feature points to locate at the same point; (b) our proposed lidar BA constrains feature points to lie on the same edge or plane.（BA 形式对比：视觉 BA 把特征点约束到同一点；激光 BA 把特征点约束到同一条边或同一个面。）
+          <br><b>怎么看这张图：</b>(a) 视觉 BA 里多个视角看到同一个点，优化目标是让它们重合到一点；(b) 激光 BA 里点不必重合，而是被「压」到同一条边或同一个面上。这就是把 BA 思想从「点」换成「边/面」的关键一步，也是后面能做闭式消元的伏笔。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ★ 核心见解：为什么 BA 能搬上激光</h2>
+      <p>视觉 BA 要同时解「特征点位置」和「相机位姿」两组变量。搬到激光上遇到麻烦：激光点云稀疏、非重复，没法做精确点-点对应。作者的突破是——<b>不要求点-点精确对应，而是最小化「特征点到其所属边/面」的距离</b>；而边/面的参数，可以由点协方差矩阵的特征值<b>直接写出来</b>。</p>
+      <p>于是「内层对特征参数 (n,q) 的最小化」被闭式化成特征值问题，BA 退化为「仅关于扫描位姿、最小化特征值」，特征参数被彻底消去。这正是第二季 <b>0019</b> 课 Schur 消元、以及第二季 <b>0022</b> 课特征参数闭式消元的<b>同一条思想线</b>：用解析消元降低优化维度。区别只是：视觉 BA 用 Schur 补消去 landmark，激光 BA 用特征值闭式消掉平面/边缘参数。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_BALM/cbe1f6e6f37a27fa970a1a735ab09d5823dbe42fdbe716b08c78d3e572bd7fe1.jpg" alt="A feature in space and corresponding feature points">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>A feature in space and the corresponding feature points drawn from multiple scans: (a) plane feature; (b) edge feature.（空间中的特征及其在多次扫描中抽出的特征点：平面特征 / 边缘特征。）
+          <br><b>怎么看这张图：</b>同一个几何特征（一面墙或一条棱）被多帧扫描从不同位置观测到，散成一簇点。(a) 这簇点摊平在一个平面上，(b) 这簇点排成一条线。BALM 要做的，就是让这些点到「它们所属的面/线」的距离之和最小——而面/线的参数可以闭式求出来。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 用点云协方差矩阵的特征值判断：这是平面还是边缘</h2>
+      <p>怎么知道一小簇点是「面」还是「线」？BALM 算这簇点的协方差矩阵（Eq.3）：</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ A=\frac{1}{N}\sum_{i}(p_i-\bar p)(p_i-\bar p)^T $$
+      </div></div>
+      <p>对 $A$ 做特征值分解，得到三个特征值 $\lambda_1\ge\lambda_2\ge\lambda_3$（对应三根主轴方向）。<b>三根箭头的长度比</b>就决定几何类型：</p>
+      <ul>
+        <li><b>平面：</b>一根极短、另两根长（即 $\lambda_3\ll\lambda_2\approx\lambda_1$）——点摊在一个二维平面上；</li>
+        <li><b>边缘：</b>一根极长、另两根短（即 $\lambda_1\gg\lambda_2\approx\lambda_3$）——点排成一条一维线。</li>
+      </ul>
+      <p>闭式消元的结果（Eq.2 平面、Eq.4 边缘）：</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ \text{平面:}\;\min\frac{1}{N}\sum (n^T(p_i-q))^2 \;\Rightarrow\; \min\lambda_1,\; n^*=u_1,\; q^*=\bar p $$
+      </div></div>
+      <div class="formula-box"><div class="flow-formula">
+      $$ \text{边缘:}\;\min\|(I-nn^T)(p_i-q)\|^2 \;\Rightarrow\; \min(\lambda_2+\lambda_3),\; n^*=u_1 $$
+      </div></div>
+      <p>也就是说，平面/边缘的参数 $(n^*,q^*)$ 直接由特征向量写出，不需要迭代优化——这正是能「消掉」它们的原因。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 450" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="410" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <text x="450" y="48" text-anchor="middle" font-size="18" font-weight="700" fill="#243049">墙角近看：三根主轴箭头的长短决定「面」还是「线」</text>
+          <!-- 墙角（俯视：一面墙+一条垂直棱） -->
+          <polygon points="120,120 360,120 360,360 120,360" fill="#eef2f8" stroke="#8a93a8" stroke-width="1.5"/>
+          <line x1="360" y1="120" x2="360" y2="360" stroke="#5b6f9c" stroke-width="3"/>
+          <text x="240" y="110" text-anchor="middle" font-size="13" fill="#5b6f9c">一面墙</text>
+          <text x="372" y="245" text-anchor="middle" font-size="13" fill="#5b6f9c">垂直棱</text>
+          <!-- 放大簇点 -->
+          <circle cx="320" cy="300" r="3" fill="#2f7a4b"/>
+          <circle cx="335" cy="290" r="3" fill="#2f7a4b"/>
+          <circle cx="345" cy="305" r="3" fill="#2f7a4b"/>
+          <circle cx="330" cy="315" r="3" fill="#2f7a4b"/>
+          <circle cx="350" cy="295" r="3" fill="#2f7a4b"/>
+          <circle cx="340" cy="320" r="3" fill="#2f7a4b"/>
+          <!-- 三根主轴箭头 -->
+          <line x1="335" y1="305" x2="430" y2="305" stroke="#2f7a4b" stroke-width="3"/>
+          <polygon points="430,305 420,300 420,310" fill="#2f7a4b"/>
+          <text x="455" y="309" text-anchor="middle" font-size="12" fill="#2f7a4b">长（面内方向1）</text>
+          <line x1="335" y1="305" x2="335" y2="220" stroke="#2f7a4b" stroke-width="3"/>
+          <polygon points="335,220 330,230 340,230" fill="#2f7a4b"/>
+          <text x="300" y="210" text-anchor="middle" font-size="12" fill="#2f7a4b">中（面内方向2）</text>
+          <line x1="335" y1="305" x2="335" y2="345" stroke="#b4453b" stroke-width="3"/>
+          <polygon points="335,345 330,335 340,335" fill="#b4453b"/>
+          <text x="350" y="370" text-anchor="middle" font-size="12" fill="#b4453b">短（法向，极点）</text>
+          <!-- 右侧说明 -->
+          <rect x="560" y="120" width="300" height="80" rx="8" fill="#dff0e4" stroke="#2f7a4b" stroke-width="1.5"/>
+          <text x="710" y="150" text-anchor="middle" font-size="14" font-weight="700" fill="#1f5636">平面：一根极短、另两根长</text>
+          <text x="710" y="178" text-anchor="middle" font-size="13" fill="#1f5636">λ3 ≪ λ2 ≈ λ1 → 最小化 λ1</text>
+          <rect x="560" y="230" width="300" height="80" rx="8" fill="#fcd9d4" stroke="#b4453b" stroke-width="1.5"/>
+          <text x="710" y="260" text-anchor="middle" font-size="14" font-weight="700" fill="#7a241c">边缘：一根极长、另两根短</text>
+          <text x="710" y="288" text-anchor="middle" font-size="13" fill="#7a241c">λ1 ≫ λ2 ≈ λ3 → 最小化 λ2+λ3</text>
+          <text x="450" y="430" text-anchor="middle" font-size="13" fill="#555">三根箭头的长度比，决定了这里像「面」还是像「线」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一处真实的墙角（一面墙 + 一条垂直棱），把墙角附近的点云放大，画出这一小簇点的三根主轴箭头（长、中、短）。右侧对照：一根极短、另两根长 → 平面；一根极长、另两根短 → 边缘。
+          <br><b>怎么看这张图：</b>① 红色最短箭头是平面的法向（沿墙厚方向，点几乎不散开，所以特征值最小）；② 两根绿色长/中箭头躺在墙面上（面内方向，点散得开，特征值大）；③ 把这三根箭头的长度比和 λ1/λ2/λ3 对应起来，就得到「面」还是「线」的判断。
+          <br><b>要记住的一句话：</b>协方差矩阵的特征值，就是点云这簇点「摊成面」还是「排成线」的尺子。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. ★ 二阶闭式雅可比与 Hessian 的稀疏结构</h2>
+      <p>消元之后，BA 只关于扫描位姿 $T$。代价函数对位姿的导数可以闭式写出。定理 1（一阶，Eq.6）：</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ \frac{\partial\lambda_k}{\partial p_i}=\frac{2}{N}(p_i-\bar p)^T u_k u_k^T $$
+      </div></div>
+      <p>定理 2（二阶，Eq.7）含</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ F_{m,n}^{p_j}=\frac{(p_j-\bar p)^T}{N(\lambda_n-\lambda_m)}\bigl(u_m u_n^T+u_n u_m^T\bigr),\quad m\neq n\;\text{否则为}\;0 $$
+      </div></div>
+      <p>点-位姿雅可比 $D=\partial p/\partial T\in\mathbb{R}^{3N\times 6M}$（Eq.11–12）。关键在稀疏性：<b>每个点只依赖它来源的那一帧扫描位姿</b>，所以 $D$ 极稀疏；位姿层 Hessian $\bar H=D^T H D$（Eq.13）是块稀疏的。这就是 BALM 能吃满稠密特征却仍快的原因——优化维度被压到只剩位姿。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="20" y="20" width="860" height="360" fill="#fbfcfe" stroke="#c8cfdd" stroke-width="1.5"/>
+          <text x="450" y="48" text-anchor="middle" font-size="18" font-weight="700" fill="#243049">「消掉参数」：把平面/边缘参数那栏整栏划掉</text>
+          <!-- 两栏 -->
+          <rect x="120" y="100" width="200" height="200" rx="8" fill="#e8edf6" stroke="#5b6f9c" stroke-width="2"/>
+          <text x="220" y="130" text-anchor="middle" font-size="15" font-weight="700" fill="#243049">位姿变量 T</text>
+          <rect x="200" y="160" width="40" height="30" rx="4" fill="#ffffff" stroke="#243049" stroke-width="1.5"/>
+          <rect x="200" y="200" width="40" height="30" rx="4" fill="#ffffff" stroke="#243049" stroke-width="1.5"/>
+          <rect x="200" y="240" width="40" height="30" rx="4" fill="#ffffff" stroke="#243049" stroke-width="1.5"/>
+          <text x="220" y="295" text-anchor="middle" font-size="12" fill="#243049">每帧一个</text>
+          <rect x="560" y="100" width="200" height="200" rx="8" fill="#fbe9c8" stroke="#c9962f" stroke-width="2"/>
+          <text x="660" y="130" text-anchor="middle" font-size="15" font-weight="700" fill="#7a5a14">平面/边缘参数 (n,q)</text>
+          <rect x="640" y="160" width="40" height="30" rx="4" fill="#ffffff" stroke="#c9962f" stroke-width="1.5"/>
+          <rect x="640" y="200" width="40" height="30" rx="4" fill="#ffffff" stroke="#c9962f" stroke-width="1.5"/>
+          <rect x="640" y="240" width="40" height="30" rx="4" fill="#ffffff" stroke="#c9962f" stroke-width="1.5"/>
+          <text x="660" y="295" text-anchor="middle" font-size="12" fill="#7a5a14">每特征一个</text>
+          <!-- 耦合连线 -->
+          <line x1="320" y1="190" x2="560" y2="190" stroke="#8a93a8" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="320" y1="230" x2="560" y2="230" stroke="#8a93a8" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="440" y="165" text-anchor="middle" font-size="12" fill="#6b7488">耦合</text>
+          <!-- 闭式消元箭头划掉参数栏 -->
+          <line x1="560" y1="100" x2="760" y2="100" stroke="#2f7a4b" stroke-width="3"/>
+          <polygon points="760,100 750,95 750,105" fill="#2f7a4b"/>
+          <text x="660" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="#2f7a4b">闭式消元</text>
+          <line x1="560" y1="100" x2="760" y2="300" stroke="#b4453b" stroke-width="4"/>
+          <text x="640" y="340" text-anchor="middle" font-size="13" font-weight="700" fill="#b4453b">整栏划掉</text>
+          <text x="450" y="380" text-anchor="middle" font-size="13" fill="#555">这一步不需要迭代，可以直接算出来——所以比朴素做法快很多</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把「位姿变量」与「平面/边缘参数」画成左右两栏，连线表示两者耦合；一根「闭式消元」箭头把参数那栏整栏划掉，只留下位姿栏。
+          <br><b>怎么看这张图：</b>① 左栏是真正要优化的位姿（每帧一个）；② 右栏的 (n,q) 看似也要解，但特征值闭式给出，所以用红色斜杠整栏划掉；③ 底部点明：这一步不需要迭代就能算出来，正是 BALM 比朴素做法快的根本。
+          <br><b>要记住的一句话：</b>解析消元＝把「特征参数」这栏直接划掉，优化只剩位姿。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 二阶导数「爆炸」怎么处理（原文贡献之一）</h2>
+      <p>朴素做法（如文献 [32]）用梯度下降，收敛慢。BALM 的贡献之一是用<b>闭式二阶导 + LM（Levenberg-Marquardt）</b>替代低效梯度下降：</p>
+      <div class="formula-box"><div class="flow-formula">
+      $$ (\bar H+\mu I)\,\delta T^* = -\bar J^T $$
+      </div></div>
+      <p>其中 $\bar H$ 是位姿层 Hessian、$\bar J$ 是闭式一阶导、$\mu$ 是 LM 阻尼。这样几步就能收敛。另外 <b>Remark 2</b> 处理退化：当遇到<b>重特征值</b>（$\lambda_i=\lambda_k$，即退化体素，比如一根柱子上的点同时像面又像线）时，直接跳过该体素，避免 $F$ 里除以 $(\lambda_n-\lambda_m)=0$ 而数值爆炸。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实验数字与局限</h2>
+      <p><b>传感器：</b>Velodyne VLP-16 / Livox Horizon / Livox MID-40；滑动窗 20 帧，里程计 10 Hz，地图精化每 5 帧触发（2 Hz）；CPU i7-10750H。</p>
+      <ul>
+        <li><b>Livox Horizon（817 m）：</b>LOAM 平移误差 6.228 m（0.762%）vs <b>BALM 0.31 m（0.038%）</b>；高程误差 3.98 m vs 0.27 m。</li>
+        <li><b>VLP-16（LeGO-LOAM 数据，210 m）：</b>LOAM 56.8 cm、LeGO-LOAM 38.5 cm、<b>BALM 28.0 cm</b>。</li>
+        <li><b>运行时间：</b>20 帧局部 BA 多数 &lt; 100 ms ⇒ 近 10 Hz 实时（Fig.9b）。</li>
+      </ul>
+      <p><b>原文承认的局限（逐条）：</b>① 体素化依赖好的初始位姿对齐（结论第 241 行）；② 前端是简单 scan-to-map，<b>未补偿运动畸变、未用运动模型</b>；③ 时间滑动窗内相邻帧重叠大、信息冗余（未来用关键帧）；④ Remark 2 对退化（重特征值）体素直接跳过，损失部分约束。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_BALM/eb7333d6ee6ecbf42872bb8badba4b7b2987f85e1d584b04366c85afbad4a4f8.jpg" alt="Results of outdoor walking dataset">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Results of outdoor walking dataset: (a) the overall map built by BALM, (b) the map built by LOAM. (c) and (d) show the side view near to the start/end point...（室外步行数据集：BALM 建的图 / LOAM 建的图；起终点附近的侧视图。）
+          <br><b>怎么看这张图：</b>对比 (a) BALM 与 (b) LOAM 的整体地图，以及起终点附近的侧视特写。BALM 的地图更贴近真实、起终点闭合更紧——对应正文 0.31 m vs 6.228 m 的精度差距。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_BALM/3a3eeb5c5920ce80b8598d2a7ad9a58b5135372303631316e3b95d39f02a3077.jpg" alt="Time for scan to map alignment and local BA">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>(a) Time for scan to map alignment in LOAM and our method; (b) The number of voxels and computation time for a local BA over 20 scans.（扫描到地图对齐耗时对比；20 帧局部 BA 的体素数与计算时间。）
+          <br><b>怎么看这张图：</b>(b) 显示 20 帧局部 BA 的计算时间多数落在 100 ms 以内，即近 10 Hz 实时——证明「闭式消元 + LM」这套设计真的把 BA 搬到了在线激光 SLAM 上。
+        </figcaption>
+      </figure>
+
+      <p>顺带一个读原文时会绊人的小坑：<b>原文 Fig. 7 的图注把方法名写成了「BLAM」，那是论文自己的笔误</b>（不是 OCR 错误），正确缩写是 BALM。看到那个词不必怀疑自己在读另一篇论文。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 小结：本篇在模块里的位置</h2>
+      <p>BALM（2021）是模块里「后端精化」这一支：它不像 2019 LIO 或 LIO-SAM 那样做前端里程计，而是<b>作为 LOAM 的后端，用局部 BA 把地图精化、把漂移压下去</b>。它的核心思想——特征参数闭式消元——和第二季 0019（Schur 消元）、0022（点云 BA 特征消元）一脉相承，但本篇是 1.0，0022 是加了一致性（NEES）自适应体素化的 2.0。记住这个区分，下一季再碰到 BALM2.0 时就不会混。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>把 BA 搬到激光上的关键，是平面/边缘的参数可以怎么做？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确。点协方差矩阵的特征值把平面/边缘参数 (n,q) 闭式给出，于是内层对参数的最小化被解析消掉，BA 只剩扫描位姿，不需要迭代——这是 BALM 比朴素做法快的根本。" onclick="lessonKit.answer(this,'q0079a')">被解析消元不用迭代</button>
+          <button data-correct="no" data-explanation="不对。若只能靠梯度下降迭代求参数，BA 维度高、收敛慢，正是 BALM 想避免的朴素做法。本文的贡献正是用闭式二阶导+LM 替代它。" onclick="lessonKit.answer(this,'q0079a')">只能迭代梯度下降求</button>
+        </div>
+        <div class="quiz-feedback" id="q0079a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>本篇（2021）和第二季 0022 课学的 BALM，是同一篇吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确。0022 课是 BALM2.0（2023），同一团队后续版，加了 NEES 一致性自适应体素化；本篇是原始 BALM（1.0，2021），是 2.0 的前身，必须区分清楚。" onclick="lessonKit.answer(this,'q0079b')">不是同一篇，0022才是2.0</button>
+          <button data-correct="no" data-explanation="不对。两者是同一团队先后版本，不是同一篇。本篇 2021 是 1.0，0022 课讲的是 2023 的 2.0，混淆会导致把 2.0 的贡献错安到 1.0 头上。" onclick="lessonKit.answer(this,'q0079b')">是同一篇，0022也是1.0</button>
+        </div>
+        <div class="quiz-feedback" id="q0079b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么视觉 BA 不能直接搬上稀疏激光点云？BALM 怎么绕过这个点？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>激光点云稀疏、非重复，难做精确点-点对应，而视觉 BA 依赖多视角同一点重合。BALM 不要求点-点对应，改为最小化「特征点到其所属边/面」的距离，而边/面参数可由点协方差特征值闭式给出，从而把 BA 退化成只关于位姿的最小化。</div></details>
+        </li>
+        <li>协方差矩阵的三个特征值 λ1≥λ2≥λ3，怎么区分平面和边缘？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>平面：一根极短、另两根长（λ3≪λ2≈λ1），点摊在平面上，最小化最小特征值 λ1，法向 n*=u1、一点 q*=p̄。边缘：一根极长、另两根短（λ1≫λ2≈λ3），点排成线，最小化 λ2+λ3。三根主轴箭头的长度比就是判断尺子。</div></details>
+        </li>
+        <li>用方块图解释「特征参数被解析消元」，并说明它接第二季哪两课。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>把「位姿变量 T」和「平面/边缘参数 (n,q)」画成两栏、用连线表示耦合，再把参数栏整栏划掉（闭式消元），优化只剩位姿。这接第二季 0019 的 Schur 消元（用解析消元降维）和 0022 的特征参数闭式消元——同一条思想线，只是视觉 BA 消去 landmark、激光 BA 消去面/线参数。</div></details>
+        </li>
+        <li>BALM 怎么处理「二阶导数计算量爆炸」？重特征值时怎么办？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>用闭式二阶导 + LM 替代 [32] 的低效梯度下降：(H̄+μI)δT*=-J̄^T，几步收敛。遇到重特征值（退化体素，λ_i=λ_k）时，按 Remark 2 直接跳过该体素，避免 F 中除以 (λ_n-λ_m)=0 而数值爆炸，代价是损失这部分约束。</div></details>
+        </li>
+        <li>Livox Horizon 数据集上，BALM 的平移误差相对 LOAM 提升多少？实时性如何？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>LOAM 平移误差 6.228 m（0.762%），BALM 仅 0.31 m（0.038%），约 20 倍提升；高程误差 3.98 m→0.27 m。20 帧局部 BA 多数&lt;100 ms，近 10 Hz 实时。原文承认的四条局限也一并记住：①体素化依赖好的初始位姿对齐；②前端简单 scan-to-map，未补偿运动畸变、未用运动模型；③时间滑动窗内相邻帧重叠大、信息冗余（未来用关键帧）；④Remark 2 对退化（重特征值）体素直接跳过，损失部分约束。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0078-LIO-SAM2020-四类因子的因子图.html">← LIO-SAM（2020）：四类因子装进一张图</a>
+        <a class="next" href="0080-MULLS2021-三种度量一起算.html">MULLS（2021）：三种度量一起算 →</a>
+      </div>
+      <p class="foot-note">闭式消元是 BA 上激光的点睛之笔：把特征参数那栏划掉，优化只剩位姿 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>课程术语表 — SLAM 论文精读课</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../lessons/assets/slam-course.css">
+<style>
+  .term-group { margin: 1.4rem 0 0; }
+  .term { font-weight: 700; color: #a85d42; }
+  .en { color: #7a6a62; font-style: italic; font-size: .92em; }
+  table { font-size: .93rem; }
+  .toc { margin-top: 1rem; }
+  .note { color:#7a6a62; font-size:.9rem; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="hero">
+    <div class="eyebrow">参考资料 · Reference</div>
+    <h1>课程术语表</h1>
+    <p class="subtitle">跨课程的中英对照术语与关键概念入口。指标、缩写、专有名词都收在这里，读课时遇到不认识的词可以回来查。词汇表按主题分组，全部来自各节课所读论文的正文表述。</p>
+    <div class="hero-meta">
+      <span>📖 收录 80+ 条</span>
+      <span>🗂️ 8 个主题分组</span>
+      <span>🔗 每节新课都会增补</span>
+    </div>
+    <div class="toc">
+      <a href="#s1">1. 框架与系统</a>
+      <a href="#s2">2. 数学与优化</a>
+      <a href="#s3">3. 视觉前端</a>
+      <a href="#s4">4. 激光与点云</a>
+      <a href="#s5">5. 回环与位置识别</a>
+      <a href="#s6">6. 学习式方法</a>
+      <a href="#s7">7. 前沿表示（隐式 / 高斯 / 事件）</a>
+      <a href="#s8">8. 评测与工程</a>
+      <a href="#s9">9. 后端与优化（阶段 B）</a>
+      <a href="#s10">10. 惯性与连续时间（阶段 B）</a>
+      <a href="#s11">11. 空间表示与神经隐式（阶段 B）</a>
+      <a href="#s12">12. 架构与系统（阶段 C）</a>
+      <a href="#s13">13. 直接法与光度（阶段 C）</a>
+      <a href="#s14">14. 真实世界与长期运行（阶段 C）</a>
+      <a href="#s15">15. GNSS / 动态环境 / 线特征与神经隐式（阶段 C 收尾）</a>
+      <a href="#s16">16. 激光 SLAM 全家桶（阶段 D）</a>
+    </div>
+  </header>
+
+  <main class="section-card">
+    <section class="term-group" id="s1">
+      <h2>1. 框架与系统</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">同时定位与建图</td><td class="en">SLAM</td><td>一边估计自己在哪，一边把环境模型建出来——两个问题互相依赖，因此必须一起解。</td><td>0001</td></tr>
+          <tr><td class="term">里程计</td><td class="en">Odometry</td><td>只做"相对自身运动"的估计，不建全局地图。最前面的一层，误差会持续累积。</td><td>0002</td></tr>
+          <tr><td class="term">视觉里程计</td><td class="en">Visual Odometry (VO)</td><td>用相机做里程计。原文定义：因果式、实时地同时确定每帧相机位姿与三维特征位置。</td><td>0004</td></tr>
+          <tr><td class="term">视觉惯性里程计</td><td class="en">VIO</td><td>相机 + IMU 的里程计。IMU 补上单目缺失的尺度与快速运动信息。</td><td>0002</td></tr>
+          <tr><td class="term">激光惯性里程计</td><td class="en">LIO</td><td>激光 + IMU 的里程计。第 0006 课给了它的松/紧耦合判据。</td><td>0006</td></tr>
+          <tr><td class="term">前端</td><td class="en">Front end</td><td>把传感器数据抽象成适合估计的模型（特征、对应关系）。</td><td>0002</td></tr>
+          <tr><td class="term">后端</td><td class="en">Back end</td><td>对前端的抽象数据做推断（优化）。通常会把结果反馈给前端做回环验证。</td><td>0002</td></tr>
+          <tr><td class="term">数据关联</td><td class="en">Data association</td><td>把量测与地图中已有元素对应起来，并判断这个量测是不是外点。</td><td>0004</td></tr>
+          <tr><td class="term">短期 / 长期数据关联</td><td class="en">Short-term / Long-term</td><td>短期＝相邻帧之间的对应；长期＝当前量测与很久以前的路标对应，也就是回环。</td><td>0002</td></tr>
+          <tr><td class="term">被绑架机器人问题</td><td class="en">Kidnapped robot</td><td>在没有先验位置信息的情况下确定机器人在图中的位姿（被搬走、跟踪丢失之后）。</td><td>0004</td></tr>
+          <tr><td class="term">主动 SLAM</td><td class="en">Active SLAM</td><td>不只想"我在哪"，还要决定"我该往哪走"才能让定位与建图最有效。</td><td>0002</td></tr>
+          <tr><td class="term">终身建图</td><td class="en">Lifelong / long-term mapping</td><td>让地图能跨天、跨季节长期维护（学习、遗忘、记住三件事）。</td><td>0004</td></tr>
+          <tr><td class="term">多机协同建图</td><td class="en">Multi-robot / cooperative SLAM</td><td>多台机器人各自建图再合并；核心难点是"如何识别大家到过同一个地方"。</td><td>0013</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s2">
+      <h2>2. 数学与优化</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">最大后验估计</td><td class="en">MAP</td><td>把"求最可能的位姿与地图"写成求后验概率最大的赋值。第 0002 课式 (1)。</td><td>0002 ＋答疑页</td></tr>
+          <tr><td class="term">最大似然估计</td><td class="en">MLE</td><td>没有先验时的 MAP，等价于只看似然。</td><td>0002 ＋答疑页</td></tr>
+          <tr><td class="term">因子图</td><td class="en">Factor graph</td><td>变量画成圆圈、约束画成方块，一个方块只连它真正涉及的那几个变量。稀疏性由此而来。</td><td>0002 ＋答疑页</td></tr>
+          <tr><td class="term">信息矩阵</td><td class="en">Information matrix</td><td>协方差矩阵的逆。在因子图里它决定每个因子"说话的份量"。读法：Ω 大＝这个传感器越准＝权重越大。</td><td>0002 ＋答疑页</td></tr>
+          <tr><td class="term">加权最小二乘</td><td class="en">Weighted least squares</td><td>把每条量测的残差按信息矩阵 Ω 加权后平方相加，再求最小值。Ω 越大＝越准＝罚得越狠。无先验、且观测模型是线性恒等时，解就是各读数的<b>加权平均</b>（各读数乘以自身权重求和、再除以权重之和）。答疑页《从 MAP 到非线性最小二乘》里用 13.2 m 的算例手算过一遍。</td><td>答疑页</td></tr>
+          <tr><td class="term">捆绑调整</td><td class="en">Bundle Adjustment (BA)</td><td>同时优化相机位姿与三维点，最小化重投影误差。</td><td>0002 / 0003</td></tr>
+          <tr><td class="term">鲁棒核 / 鲁棒损失</td><td class="en">Huber, Tukey loss</td><td>把平方项换成增长更慢的损失，让大残差（外点）不再主导代价函数。</td><td>0002</td></tr>
+          <tr><td class="term">高斯-牛顿法</td><td class="en">Gauss–Newton</td><td>对非线性最小二乘做逐次线性化，用正规方程闭式求解增量。</td><td>0002</td></tr>
+          <tr><td class="term">列文伯格-马夸尔特</td><td class="en">Levenberg–Marquardt (LM)</td><td>在高斯牛顿与梯度下降之间折中，工程上最常用。</td><td>0002</td></tr>
+          <tr><td class="term">非凸 / 局部极小</td><td class="en">Nonconvex / local minimum</td><td>迭代优化只保证局部收敛；落到坏坑里会给出"完全错误但看起来正常"的解。</td><td>0002</td></tr>
+          <tr><td class="term">扩展卡尔曼滤波</td><td class="en">EKF</td><td>用一阶泰勒展开线性化的卡尔曼滤波。代价：线性化误差 + 协方差矩阵平方级膨胀。</td><td>0003</td></tr>
+          <tr><td class="term">Rao-Blackwellized 粒子滤波</td><td class="en">RBPF</td><td>把"位姿 + 地图"联合估计拆成"先估位姿、再在已知位姿下估地图"。</td><td>0003</td></tr>
+          <tr><td class="term">粒子耗尽</td><td class="en">Particle depletion</td><td>重采样导致粒子多样性丢失，所有粒子退化成同一个。</td><td>0003</td></tr>
+          <tr><td class="term">位姿图优化</td><td class="en">Pose graph optimization</td><td>以位姿为节点、相对位姿约束为边，做全局一致的重排。</td><td>0003</td></tr>
+          <tr><td class="term">RANSAC</td><td class="en">RANSAC / PROSAC</td><td>鲁棒估计器：估计全局关系的同时把数据分成内点与外点。匹配链条的最后一道防线。</td><td>0004</td></tr>
+          <tr><td class="term">扫描匹配</td><td class="en">Scan matching</td><td>用两帧（或帧与地图）点云的配准来求相对位姿。</td><td>0008</td></tr>
+          <tr><td class="term">点到点 / 面到面配准</td><td class="en">ICP / GICP</td><td>ICP 最小化点到点距离；GICP 最小化面到面距离。</td><td>0005</td></tr>
+          <tr><td class="term">正态分布变换</td><td class="en">NDT</td><td>把点云表示成概率分布再匹配，通过最大化概率密度来估计相对变换。</td><td>0005</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s3">
+      <h2>3. 视觉前端</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">检测器</td><td class="en">Detector</td><td>决定"在哪里取特征"（Harris、FAST、DoG、MSER 等）。</td><td>0004</td></tr>
+          <tr><td class="term">描述子</td><td class="en">Descriptor</td><td>决定"特征长什么样"（SIFT 128 维、SURF、BRIEF、ORB 等）。不变性决定匹配成败。</td><td>0004</td></tr>
+          <tr><td class="term">ORB</td><td class="en">ORB</td><td>二进制描述子 + 旋转不变 + 抗噪。ORB-SLAM 与 DBoW2 词袋的技术基础。</td><td>0004</td></tr>
+          <tr><td class="term">归一化互相关</td><td class="en">NCC</td><td>短基线匹配里效果最好的相关性度量，对均匀亮度变化不变。</td><td>0004</td></tr>
+          <tr><td class="term">最近邻距离比</td><td class="en">Nearest Neighbor Distance Ratio (NNR)</td><td>把阈值加在"最近邻 ÷ 次近邻"的比值上——唯一会"因为不够确信而拒绝匹配"的判据。</td><td>0004</td></tr>
+          <tr><td class="term">极线约束</td><td class="en">Epipolar constraint</td><td>把对应点搜索从整幅图压缩到一条线；对极几何最基本的用途。</td><td>0004</td></tr>
+          <tr><td class="term">感知混叠</td><td class="en">Perceptual aliasing</td><td>两个不同地点被认成同一个，是回环检测最致命的错误来源。</td><td>0004</td></tr>
+          <tr><td class="term">单目尺度歧义</td><td class="en">Monocular scale ambiguity</td><td>单目只测方向不测距离，只能恢复"形状对但尺寸任意"的结构。</td><td>0003</td></tr>
+          <tr><td class="term">运动畸变 / 去畸变</td><td class="en">Motion distortion / de-skewing</td><td>激光一次扫描耗时较长，帧内点在不同位姿下采到，必须对齐到同一时刻。</td><td>0006</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s4">
+      <h2>4. 激光与点云</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">扫描到扫描 / 扫描到地图</td><td class="en">scan-to-scan / scan-to-map</td><td>前者易实现但误差快速累积；后者更鲁棒，但地图无法完美一致，仍需回环。</td><td>0008</td></tr>
+          <tr><td class="term">松耦合</td><td class="en">Loosely coupled</td><td>额外传感器只在预处理/初值阶段起作用，量测没进统一误差模型。</td><td>0006</td></tr>
+          <tr><td class="term">紧耦合</td><td class="en">Tightly coupled</td><td>额外传感器的量测被直接写进状态估计的优化/滤波模型里共同求解。</td><td>0006</td></tr>
+          <tr><td class="term">退化环境</td><td class="en">Degenerative environment</td><td>几何约束不足（隧道、长走廊）。根因是<b>信息缺失</b>，不是算法不好。</td><td>0006</td></tr>
+          <tr><td class="term">降质环境</td><td class="en">Degraded environment</td><td>传感器感知被干扰（雨雪雾、玻璃反射）。与"退化"是两回事。</td><td>0006</td></tr>
+          <tr><td class="term">机械式 / 扫描固态 / flash</td><td class="en">Mechanical / scanning solid-state / flash</td><td>三类成像机制。机械靠旋转、固态靠 MEMS/OPA/棱镜、flash 一次出整幅深度图。</td><td>0007</td></tr>
+          <tr><td class="term">脉冲 TOF / AMCW / FMCW</td><td class="en">pulsed ToF / AMCW / FMCW</td><td>三种测距原理。FMCW 额外能测<b>径向速度</b>，是抑制退化的关键。</td><td>0007</td></tr>
+          <tr><td class="term">非重复扫描</td><td class="en">Non-repetitive scanning</td><td>每帧光束路径不同（如 Risley 棱镜的莲花状轨迹），累积后更密但帧间配准更难。</td><td>0007</td></tr>
+          <tr><td class="term">面片地图</td><td class="en">Surfel map</td><td>把几何编码成一组圆盘，介于点云与网格之间。</td><td>0008</td></tr>
+          <tr><td class="term">ikd-Tree</td><td class="en">ikd-Tree</td><td>增量式 k-d 树，支持动态插入与重平衡。FAST-LIO2 用它换掉了特征提取。</td><td>0006</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s5">
+      <h2>5. 回环与位置识别</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">回环检测</td><td class="en">Loop closure detection</td><td>识别"我已经来过这里"，产生一条跨越很长时间的约束。</td><td>0014</td></tr>
+          <tr><td class="term">词袋 / 视觉词典</td><td class="en">BoW / visual vocabulary</td><td>把描述子指派到"视觉词"，用词频向量表示整张图，从而快速检索相似图。</td><td>0014</td></tr>
+          <tr><td class="term">TF-IDF</td><td class="en">TF-IDF</td><td>给每个视觉词加权：在本图中常见、在整个集合里罕见的词更有区分度。</td><td>0014</td></tr>
+          <tr><td class="term">视觉场景识别</td><td class="en">Visual Place Recognition (VPR)</td><td>"基于图像认出此前见过的地方"。回环与重定位的第一步。</td><td>0013</td></tr>
+          <tr><td class="term">精确率 / 召回率</td><td class="en">Precision / Recall</td><td>P = TP/(TP+FP)，R = TP/(TP+FN)。在第 0013、0014 课它们是主角。</td><td>0013 / 0014</td></tr>
+          <tr><td class="term">R@100P（R_P100）</td><td class="en">Recall at 100% precision</td><td>零假阳性下的最高召回。缺陷：precision 从未达到 1 时该指标<b>无定义</b>。</td><td>0013 / 0014</td></tr>
+          <tr><td class="term">AUPRC / AUC</td><td class="en">AUPRC / AUC</td><td>PR 曲线下面积。注意：AUC 更大<b>不代表</b>方法更好，它丢掉了曲线形状信息。</td><td>0014</td></tr>
+          <tr><td class="term">软真值</td><td class="en">GT^soft</td><td>真值的"膨胀版"：既有少量视觉重叠的图对允许被匹配但不强制，从而不惩罚正确行为。</td><td>0013</td></tr>
+          <tr><td class="term">单会话 / 多会话</td><td class="en">single-session / multisession</td><td>查询集是否就是数据库自身。决定评测真值怎么标、哪些方法能用。</td><td>0013</td></tr>
+          <tr><td class="term">Scan Context</td><td class="en">Scan Context</td><td>不做直方图、免训练的三维结构描述子，对转向不变。激光回环的常用方案。</td><td>0005</td></tr>
+          <tr><td class="term">外点剔除</td><td class="en">Outlier rejection</td><td>后端负责把错误的回环约束剔掉——这是"假阳性代价"能否承受的关键。</td><td>0014</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s6">
+      <h2>6. 学习式方法</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">端到端学习</td><td class="en">End-to-end learning</td><td>从图像直接回归位姿，跳过"特征提取 + 匹配 + 几何求解"。</td><td>0010</td></tr>
+          <tr><td class="term">自监督</td><td class="en">Self-supervised</td><td>不依赖真值标签：用"新视角合成"当训练信号，把重建误差反传回网络。</td><td>0010 / 0011</td></tr>
+          <tr><td class="term">混合方法</td><td class="en">Hybrid approach</td><td>几何/物理先验 + 学习。原文结论：<b>现阶段它才是赢家</b>，比纯端到端更准。</td><td>0010</td></tr>
+          <tr><td class="term">新视角合成</td><td class="en">Novel view synthesis</td><td>用估计的深度与位姿把源图投影到目标视角，比较光度误差来监督网络。</td><td>0010</td></tr>
+          <tr><td class="term">模块化学习</td><td class="en">Modular learning</td><td>在经典管线内孤立地学单个模块；融合有额外成本，整体性能最多等于单个模块水平。</td><td>0011</td></tr>
+          <tr><td class="term">联合学习</td><td class="en">Joint learning</td><td>多个量一起学（真正被联合优化过的只有 depth / optical flow / ego-motion）。</td><td>0011</td></tr>
+          <tr><td class="term">置信度学习</td><td class="en">Confidence learning</td><td>学"我有多确定"——不确定性降减与不确定性估计。</td><td>0011</td></tr>
+          <tr><td class="term">光流</td><td class="en">Optical flow</td><td>逐像素在图像平面上的位移矢量场。经典方法只能处理小位移。</td><td>0011</td></tr>
+          <tr><td class="term">场景坐标回归</td><td class="en">Scene coordinate regression</td><td>直接预测像素对应的三维场景坐标，再用 PnP + RANSAC 求位姿。</td><td>0010</td></tr>
+          <tr><td class="term">黑箱 / 可解释性</td><td class="en">Black box / explainability</td><td>网络内部学到的项缺乏明确的数学模型，出问题时难以从特征层面诊断。</td><td>0011</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s7">
+      <h2>7. 前沿表示：隐式 / 高斯 / 事件</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">神经辐射场</td><td class="en">NeRF</td><td>用位置与视角条件的神经网络表示场景，沿光线稠密采样做体渲染。</td><td>0015</td></tr>
+          <tr><td class="term">隐式 vs 显式表示</td><td class="en">Implicit vs explicit</td><td>隐式要"查询网络 + 采样点"；显式（高斯）直接存几何、用光栅化渲染，因此快。</td><td>0015</td></tr>
+          <tr><td class="term">3D 高斯泼溅</td><td class="en">3D Gaussian Splatting (3DGS)</td><td>用一堆各向异性椭球表示场景，投影到屏幕后按深度排序做 alpha 合成。</td><td>0015</td></tr>
+          <tr><td class="term">协方差分解</td><td class="en">Σ = R S Sᵀ Rᵀ</td><td>把高斯协方差拆成旋转与缩放，保证优化过程中协方差始终半正定。</td><td>0015</td></tr>
+          <tr><td class="term">可微光栅化</td><td class="en">Differentiable rasterization</td><td>按 16×16 像素块排序 + alpha 合成，整个渲染过程可反传梯度。</td><td>0015</td></tr>
+          <tr><td class="term">自适应密度控制</td><td class="en">Adaptive density control</td><td>3DGS 原作里按梯度与不透明度增删高斯的机制（本篇综述只作引用，未展开）。</td><td>0015</td></tr>
+          <tr><td class="term">球谐</td><td class="en">Spherical Harmonics (SH)</td><td>用一组基函数表示"颜色随视角变化"，也就是高斯的视角相关外观。</td><td>0015</td></tr>
+          <tr><td class="term">事件相机 / 动态视觉传感器</td><td class="en">Event camera / DVS</td><td>不等固定帧率，而是<b>逐像素异步</b>测量亮度变化并输出事件流。</td><td>0016</td></tr>
+          <tr><td class="term">事件</td><td class="en">Event e_k = (x, y, t, p)</td><td>一个事件只含二值增减信息（极性 ON/OFF），不含绝对亮度。</td><td>0016</td></tr>
+          <tr><td class="term">时间对比阈值</td><td class="en">Contrast threshold C</td><td>亮度变化超过 C 才触发事件；DVS 通常可设 10%–50%。</td><td>0016</td></tr>
+          <tr><td class="term">时间表面 / 体素网格 / IWE</td><td class="en">Time surface / voxel grid / IWE</td><td>把异步事件整理成"类图像"的几种表示，用来喂给常规或学习式算法。</td><td>0016</td></tr>
+          <tr><td class="term">对比度最大化</td><td class="en">Contrast Maximization (CMax)</td><td>通过最大化事件对齐的锐利度来求运动——事件域最经典的运动补偿思路。</td><td>0016</td></tr>
+          <tr><td class="term">事件塌缩</td><td class="en">Event collapse</td><td>事件被映射到空间中一个点或一条线，优化收敛到比期望解更大的局部最优。</td><td>0016</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s8">
+      <h2>8. 评测与工程</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">绝对轨迹误差</td><td class="en">ATE</td><td>估计轨迹与真值轨迹之间的整体偏差。</td><td>0009</td></tr>
+          <tr><td class="term">相对轨迹误差</td><td class="en">RTE / RPE</td><td>指定时间区间上的相对位姿误差，反映局部漂移。</td><td>0006</td></tr>
+          <tr><td class="term">起点到终点误差</td><td class="en">Start-to-End Error</td><td>专门放大长期漂移——正是回环与后端优化要解决的问题。</td><td>0006</td></tr>
+          <tr><td class="term">占用栅格地图</td><td class="en">Occupancy grid map</td><td>把空间显式标注为占据/空闲，因此可以用于避障。</td><td>0004</td></tr>
+          <tr><td class="term">TSDF</td><td class="en">Truncated Signed Distance Function</td><td>截断的有向距离场，能在截断带内做加权融合，是稠密建图的主流表示。</td><td>0004</td></tr>
+          <tr><td class="term">干净细节 / 脏细节</td><td class="en">Dirty details</td><td>真实系统里真正杀人的工程琐事：传感器掉线、时间戳、CPU 争用、尘埃、参数整定。</td><td>0009</td></tr>
+          <tr><td class="term">桌面级 GPU 代价</td><td class="en">Desktop-class GPU cost</td><td>很多语义方法需要桌面级 GPU，限制了在真实机器人平台上的部署。</td><td>0012</td></tr>
+          <tr><td class="term">数据集偏见</td><td class="en">Dataset bias</td><td>训练集的分类标准会变成系统的先验偏见（如把显示器标成 TV）。</td><td>0012</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ═══════════════ 阶段 B · 后端与优化 ═══════════════ -->
+    <section class="term-group" id="s9">
+      <h2>9. 后端与优化（阶段 B）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">联合最优</td><td class="en">Jointly optimal</td><td>BA 的定义核心：结构与相机参数<b>同时</b>达到最优，而不是各自最优再拼。</td><td>0018</td></tr>
+          <tr><td class="term">独立模型法</td><td class="en">Independent model methods</td><td>先做局部重建再合并、不把内部结构回传。BA 与它正相反。</td><td>0018</td></tr>
+          <tr><td class="term">重投影误差</td><td class="en">Reprojection error</td><td>把三维点投到图像上、与实测像素位置之差。视觉 BA 的残差就是它。</td><td>0018 / 0027</td></tr>
+          <tr><td class="term">规范自由度</td><td class="en">Gauge freedom</td><td>坐标系整体变换不改变几何——所以正规方程<b>天然欠定</b>，必须固定一个 gauge。这就是"协方差没有绝对含义"的根源。</td><td>0019</td></tr>
+          <tr><td class="term">S 变换</td><td class="en">S-transform</td><td>沿 gauge 轨道把结果推到另一种 gauge 的变换。</td><td>0019</td></tr>
+          <tr><td class="term">失望矩阵</td><td class="en">Dispersion matrix</td><td>用 Hessian 的逆刻画不确定性的嵌套椭球；注意 $H^{-1}$ <b>总是稠密</b>，无论 $H$ 多稀疏。</td><td>0019</td></tr>
+          <tr><td class="term">总分布</td><td class="en">Total distribution</td><td>把内点与外点建成<b>一个</b>分布，让 ML 估计天然鲁棒——原文认为这比"先把外点剔掉"更正确。</td><td>0019</td></tr>
+          <tr><td class="term">Schur 补</td><td class="en">Schur complement</td><td>分块矩阵消元的产物 $\bar D=D-CA^{-1}B$。在 BA 里用来消掉结构参数、留下约化相机系统。</td><td>0019</td></tr>
+          <tr><td class="term">约化相机系统</td><td class="en">Reduced camera system</td><td>只含相机参数的正规方程。成立前提：结构子矩阵<b>块对角</b>，所以能按点独立求和、不需要真求逆。</td><td>0019 / 0027</td></tr>
+          <tr><td class="term">填充</td><td class="en">Fill-in</td><td>稀疏矩阵分解时新产生的非零元。变量排序的唯一目的就是压住它——而全局最小化是 NP-complete。</td><td>0019</td></tr>
+          <tr><td class="term">最小度 / 反向 Cuthill-McKee / 嵌套剖分</td><td class="en">Minimum degree / RCM / Nested dissection</td><td>三类常用的变量排序启发式：自底向上、适合链状、自顶向下递归切分。</td><td>0019</td></tr>
+          <tr><td class="term">图-可嵌入最小二乘</td><td class="en">Graph-embeddable least squares</td><td>g²o 的统一视角：节点＝待优化变量，边＝两节点之间的成对观测。SLAM 与 BA 都落在这一类里。</td><td>0021</td></tr>
+          <tr><td class="term">块结构＝邻接矩阵</td><td class="en">Block structure = adjacency matrix</td><td>H 的非零块模式就是图的邻接矩阵——所以非零块数与边数同阶，天然稀疏。</td><td>0021</td></tr>
+          <tr><td class="term">符号分解复用</td><td class="en">Symbolic decomposition reuse</td><td>H 的稀疏模式在迭代中恒定，所以第一次算出的符号分解可以一直复用。</td><td>0021</td></tr>
+          <tr><td class="term">直接法 / 迭代法求解器</td><td class="en">Direct (Cholesky) / Iterative (PCG)</td><td>两组正交的选择：直接法稳但吃内存，迭代法省但收敛依赖初值。<b>没有万能的求解器</b>。</td><td>0021</td></tr>
+          <tr><td class="term">点簇</td><td class="en">Point cluster</td><td>把"同一特征上的所有点"压成一个 $4\times4$ 对称矩阵。刚体变换与合并都退化成矩阵乘法/加法，于是复杂度与点数无关。</td><td>0022</td></tr>
+          <tr><td class="term">特征消元</td><td class="en">Feature elimination</td><td>点云 BA 里用特征值/特征向量把平面或边缘参数<b>闭式解出</b>再代回，只剩位姿待优化。</td><td>0022</td></tr>
+          <tr><td class="term">NEES</td><td class="en">Normalized Estimation Error Squared</td><td>检验估计量"一致性"的指标：归一化后<b>贴近 1</b> 才叫一致。比"精度高"更严格——它要求系统知道自己错多少。</td><td>0022 / 0029</td></tr>
+          <tr><td class="term">点云库</td><td class="en">PCL</td><td>点云处理的标准件仓库（filters / features / segmentation / registration / surface 等九块）。激光论文里的 ICP / GICP / NDT 基线多来自它。</td><td>0023</td></tr>
+          <tr><td class="term">感知处理图</td><td class="en">PPG / nodelet</td><td>把感知任务拆成可连接的积木；nodelet 让它们同进程多线程运行、避免点云序列化开销。</td><td>0023</td></tr>
+          <tr><td class="term">近似最近邻</td><td class="en">FLANN / ANN</td><td>PCL 底层的 k-NN 用近似算法。为什么激光 SLAM 后来需要"能动态插入删除"的树，正是从这个"近似"开始的。</td><td>0023</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ═══════════════ 阶段 B · 惯性与连续时间 ═══════════════ -->
+    <section class="term-group" id="s10">
+      <h2>10. 惯性与连续时间（阶段 B）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">多状态约束卡尔曼滤波</td><td class="en">MSCKF</td><td>状态里只放"相机位姿的历史副本"，不放三维路标——于是状态维度不随特征数增长。</td><td>0028</td></tr>
+          <tr><td class="term">零空间投影</td><td class="en">Null space projection</td><td>把 $2M\times3$ 的特征雅可比乘上它的左零空间基，就把"特征点坐标"这个未知量从方程里抹掉——与 Schur 消元是同一招的滤波版。</td><td>0028</td></tr>
+          <tr><td class="term">延迟线性化</td><td class="en">Delayed linearization</td><td>等一个路标的所有观测都到手了再处理。代价是必须延迟，好处是信息用得更足。</td><td>0028 / 0029</td></tr>
+          <tr><td class="term">误差状态</td><td class="en">Error state</td><td>滤波器真正维护的"小增量"状态。姿态要用 3 维最小表示，否则协方差矩阵会奇异。</td><td>0028</td></tr>
+          <tr><td class="term">预积分</td><td class="en">Preintegration</td><td>把两个关键帧之间的几百条 IMU 测量压成一个<b>与状态无关</b>的量，使优化迭代时不必重新积分。</td><td>0029 / 0030</td></tr>
+          <tr><td class="term">重复积分</td><td class="en">Reintegration</td><td>标准 IMU 积分以首帧状态为初值，所以优化一改首帧位姿、整段积分全部作废。这就是预积分要消除的痛点。</td><td>0029</td></tr>
+          <tr><td class="term">预积分 IMU 因子</td><td class="en">Preintegrated IMU factor</td><td>图里连接两个关键帧的一条 <b>9 维</b>边（旋转/速度/位置残差），外加偏置随机游走因子。</td><td>0030</td></tr>
+          <tr><td class="term">偏置随机游走</td><td class="en">Bias random walk</td><td>把 IMU 偏置建模成缓慢漂移的量；偏置变化只需一阶修正，雅可比可预计算。</td><td>0030</td></tr>
+          <tr><td class="term">指数映射 / 右雅可比</td><td class="en">Exp / Right Jacobian $J_r$</td><td>旋转不能直接相加：流形上的小扰动是"右乘一个 Exp"。$J_r$ 把切空间里的加法翻译成流形上的乘法。</td><td>0029 / 0030</td></tr>
+          <tr><td class="term">流形上的增量</td><td class="en">$\boxplus$ operator</td><td>把"状态更新"与"增量参数化"分离的算子。2D 的 SE(2) 不需要它，3D 必须用。</td><td>0020 / 0021</td></tr>
+          <tr><td class="term">固定延迟平滑</td><td class="en">Fixed-lag smoothing</td><td>只估一个常长时间窗内的状态，窗外的旧状态被<b>边缘化</b>成一个高斯先验因子。比滤波准、比全平滑省。</td><td>0032</td></tr>
+          <tr><td class="term">边缘化</td><td class="en">Marginalization</td><td>用 Schur 补把旧状态消掉、同时保留它携带的信息。同一数学的第二个用途（第一个是 BA 消点）。</td><td>0032</td></tr>
+          <tr><td class="term">B 样条</td><td class="en">B-spline</td><td>连续时间轨迹的标准表示：控制点 + 阶数 + 局部支撑，任意时刻可采样、导数解析可得。</td><td>0031 / 0032</td></tr>
+          <tr><td class="term">时间偏移</td><td class="en">Time offset</td><td>相机与 IMU 之间几十毫秒的硬件不同步。连续时间表示可以把它当成一个待估参数联合优化。</td><td>0031 / 0032</td></tr>
+          <tr><td class="term">地图中心 / 轨迹中心</td><td class="en">Map-centric / trajectory-centric</td><td>分别靠<b>形变地图</b>与<b>位姿图</b>闭合回环。地图中心不可逆（丢历史数据）、有累积形变。</td><td>0032</td></tr>
+          <tr><td class="term">弹性（地图）</td><td class="en">Elasticity</td><td>注意：指<b>地图可以被拉拽</b>（非刚性形变），不是"轨迹有弹性"。实现载体是形变图。</td><td>0032</td></tr>
+          <tr><td class="term">直接式 / 组合式连续时间</td><td class="en">Direct / composition</td><td>直接优化样条控制点 vs 保留离散位姿、只优化低频修正量。后者每轮从零出发、无奇异性，反而更准。</td><td>0032</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ═══════════════ 阶段 B · 空间表示与神经隐式 ═══════════════ -->
+    <section class="term-group" id="s11">
+      <h2>11. 空间表示与神经隐式（阶段 B）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">截断符号距离场</td><td class="en">TSDF</td><td>每个体素存"沿射线的投影距离"，正=自由空间、负=表面背后、零=表面。只在表面附近<b>截断</b>内有效。</td><td>0033</td></tr>
+          <tr><td class="term">加权滑动平均</td><td class="en">Weighted running average</td><td>为什么融合能 O(1) 增量更新：因为最小化那个 $L_2$ 目标的解可以随数据项增加而增量获得。权重封顶后还能容忍场景中有物体移动。</td><td>0033</td></tr>
+          <tr><td class="term">光线投射</td><td class="en">Raycasting</td><td>从 TSDF 渲染出预测深度与法向图，供 ICP 用，同时供显示用——它把 tracking 与 mapping 闭成了回路。</td><td>0033</td></tr>
+          <tr><td class="term">体素块哈希</td><td class="en">Voxel hashing</td><td>只给表面附近分配 $8^3$ 的体素块，用空间哈希表索引。<b>同一套 TSDF 数学，换一个容器</b>，尺度就从一间房到 30 米。</td><td>0034</td></tr>
+          <tr><td class="term">哈希冲突 / 桶链</td><td class="en">Collision / bucket chaining</td><td>多个世界坐标映射到同一个表项。GPU 上处理它的难点是竞态、原子锁与链表指针维护。</td><td>0034 / 0038</td></tr>
+          <tr><td class="term">流式重建</td><td class="en">Streaming</td><td>把离开相机视锥的体素块搬到主机内存、按块搬回来，从而在有限显存里重建大场景。</td><td>0034</td></tr>
+          <tr><td class="term">欧氏符号距离场</td><td class="en">ESDF</td><td>存"到最近障碍的<b>欧氏</b>距离"，覆盖整个工作空间且有梯度——所以规划器用它是为了拿到"往哪边让"。</td><td>0035</td></tr>
+          <tr><td class="term">波前传播</td><td class="en">Wavefront propagation</td><td>从表面向外一圈圈传播距离、增量更新 ESDF；全量重算会被它甩开一个数量级。</td><td>0035</td></tr>
+          <tr><td class="term">固定带</td><td class="en">Fixed band</td><td>表面附近一层 ESDF 体素直接取共址 TSDF 值且锁死——取代了原算法里的 occupied/free 二值状态。</td><td>0035</td></tr>
+          <tr><td class="term">神经辐射场</td><td class="en">NeRF</td><td>把整个场景压进一个 MLP 的权重里：输入 5D（位置 + 方向），输出颜色 + 体密度。<b>隐式表示</b>的奠基作。</td><td>0036</td></tr>
+          <tr><td class="term">体密度 / 透射率</td><td class="en">Volume density $\sigma$ / transmittance $T$</td><td>$\sigma$ 是"光线在这里终止的微分概率"，$T$ 是"走到这里还剩多少光"。想象成半透明玻璃层层叠加。</td><td>0036</td></tr>
+          <tr><td class="term">位置编码</td><td class="en">Positional encoding</td><td>把标量坐标升频展开成一组 sin/cos。<b>为什么不加就不行</b>：网络有谱偏置，天生偏向低频函数，只给低频原料画不出细纹。</td><td>0037</td></tr>
+          <tr><td class="term">谱偏置</td><td class="en">Spectral bias</td><td>深度网络偏向学习低频函数。这是位置编码必需性的理论依据。</td><td>0037</td></tr>
+          <tr><td class="term">分层采样</td><td class="en">Hierarchical / importance sampling</td><td>先用粗网络给出"该往哪里多采样"的概率密度，再抽细网络的点。两级网络不是"粗结果 + 细结果"。</td><td>0037</td></tr>
+          <tr><td class="term">多分辨率哈希编码</td><td class="en">Multiresolution hash encoding</td><td>把可训练特征存进一张小哈希表，多层独立查表插值后拼接。<b>不处理冲突、让梯度自己平均</b>——重要样本的梯度幅值大，自然主导。</td><td>0038</td></tr>
+          <tr><td class="term">drop-in replacement</td><td class="en">Drop-in replacement</td><td>能直接替换原模块。Instant NGP 的自评——对需要<b>在线训练</b>的 SLAM 特别重要。</td><td>0038</td></tr>
+          <tr><td class="term">球谐函数</td><td class="en">Spherical harmonics</td><td>定义在球面上的正交基，像"球面上的傅里叶级数"。低阶=平滑（朗伯），高阶=高频（镜面）。</td><td>0039</td></tr>
+          <tr><td class="term">全变差正则</td><td class="en">Total variation (TV)</td><td>惩罚相邻体素之间的差异。只有几十张图却要定上千万个体素值时，靠它补上缺失的信息。</td><td>0039</td></tr>
+          <tr><td class="term">梯度稀疏</td><td class="en">Gradient sparsity</td><td>显式表示能快的结构性原因：训练一两分钟后，只有不到 10% 的体素还有非零梯度。</td><td>0039</td></tr>
+          <tr><td class="term">欠定逆问题</td><td class="en">Underdetermined inverse problem</td><td>观测数远少于未知数。任何这类问题都<b>必然有伪影</b>，只是伪影形态取决于模型与正则引入的先验。</td><td>0039</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s12">
+      <h2>12. 视觉主线的架构与系统（阶段 C）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">单目尺度不可观</td><td class="en">scale unobservability</td><td>单目只能给出方向，位姿只能恢复到某个尺度因子之内；这一季有六个系统用六种完全不同的方式回应它</td><td>0040 / 0024</td></tr>
+          <tr><td class="term">协方差椭球</td><td class="en">covariance ellipsoid</td><td>用椭圆大小表示路标位置的不确定度；MonoSLAM 里路标之间也有互相关连线，这就是协方差 O(N²) 的来源</td><td>0041</td></tr>
+          <tr><td class="term">主动视觉 / 主动搜索</td><td class="en">active search</td><td>系统自己决定「下一步该看哪」：只在角点附近的小窗口做匹配，而不是全图搜索</td><td>0041</td></tr>
+          <tr><td class="term">双线程架构</td><td class="en">parallel tracking and mapping</td><td>把跟踪（每帧几十 Hz）与建图（可以慢工出细活）拆成两个线程，各自按自己的节奏跑</td><td>0042</td></tr>
+          <tr><td class="term">关键帧</td><td class="en">keyframe</td><td>不是每一帧都进地图，只挑信息量足够的少数帧作为地图的骨架</td><td>0042 / 0043</td></tr>
+          <tr><td class="term">共视图</td><td class="en">covisibility graph</td><td>节点是关键帧，边连接「共同看到过同一处场景」的帧，线的粗细＝共视特征数</td><td>0043</td></tr>
+          <tr><td class="term">本质图</td><td class="en">essential graph</td><td>共视图的稀疏版：只保留位姿图优化真正需要的那一小部分边</td><td>0043</td></tr>
+          <tr><td class="term">视觉词袋</td><td class="en">bag of words (BoW)</td><td>把一张图量化为「视觉单词」的直方图，用来快速检索「这张图像我去过的哪里」</td><td>0043</td></tr>
+          <tr><td class="term">倒排索引</td><td class="en">inverted index</td><td>从「单词」反查「哪些帧用过它」，让检索变成查表而不是遍历全部历史图像</td><td>0043</td></tr>
+          <tr><td class="term">重定位</td><td class="en">relocalization</td><td>跟丢之后靠识别已有地图重新找到自己的位置，而不是从零重建</td><td>0043</td></tr>
+          <tr><td class="term">相似变换 sim(3)</td><td class="en">similarity transform</td><td>在旋转加平移之外多一个尺度 s，专门用来吸收单目的尺度漂移</td><td>0043 / 0047</td></tr>
+          <tr><td class="term">网格化均匀化</td><td class="en">grid bucketing</td><td>把图像切成网格、每格只取前 N 个特征，防止特征全挤在纹理丰富的那一角</td><td>0043</td></tr>
+          <tr><td class="term">Atlas 多地图</td><td class="en">Atlas / multi-map</td><td>跟踪失败不重置而是新建一张地图；一旦识别到与旧地图共视的区域，就把两块地图合并</td><td>0045</td></tr>
+          <tr><td class="term">焊接窗口</td><td class="en">welding window</td><td>地图合并之后必须一起做的那次局部 BA，把两块地图的接缝对齐</td><td>0045</td></tr>
+          <tr><td class="term">视差</td><td class="en">disparity</td><td>同一物体在左右相机图像上的水平位置差；视差越大＝越近，深度与视差近似成反比</td><td>0044</td></tr>
+          <tr><td class="term">近点 / 远点</td><td class="en">close / far points</td><td>视差大于基线某个倍数算近点（深度可信）；否则算远点（方向仍有用，所以几乎不清除）</td><td>0044</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s13">
+      <h2>13. 直接法与光度（阶段 C）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">光度误差</td><td class="en">photometric error</td><td>把一块像素图案按深度与位姿搬到另一帧，比较对应像素的灰度值之差；用上了图像里几乎全部信息</td><td>0046</td></tr>
+          <tr><td class="term">重投影误差</td><td class="en">reprojection error</td><td>比较 3D 点的投影位置与观测到的像素位置之差；只用位置信息，完全不看灰度</td><td>0046</td></tr>
+          <tr><td class="term">逆深度</td><td class="en">inverse depth</td><td>用「深度的倒数」代替深度本身；好处是沿极线的采样变成均匀的，且远处点的数值行为更好</td><td>0046 / 0047</td></tr>
+          <tr><td class="term">代价体</td><td class="en">cost volume</td><td>把同一像素在多帧下的匹配代价沿极线堆叠起来，最小值所在处就是最优深度</td><td>0046</td></tr>
+          <tr><td class="term">原始对偶算法</td><td class="en">primal-dual</td><td>一种求解「非凸数据项 + 凸正则项」的分裂方法（DTAM 用的就是这一类）</td><td>0046</td></tr>
+          <tr><td class="term">半稠密</td><td class="en">semi-dense</td><td>只对梯度足够大的那些像素做估计；介于「全部像素」与「少量特征点」之间</td><td>0047</td></tr>
+          <tr><td class="term">深度图的高斯表示</td><td class="en">Gaussian depth map</td><td>每个像素的深度不是一个数，而是一个高斯分布（均值加方差），随新观测逐步收窄</td><td>0047</td></tr>
+          <tr><td class="term">尺度漂移</td><td class="en">scale drift</td><td>单目估计出的尺度会随时间缓慢偏移，即使轨迹形状是对的</td><td>0047</td></tr>
+          <tr><td class="term">光度标定</td><td class="en">photometric calibration</td><td>把「曝光时间 / 镜头暗角 / 相机响应函数」三件事分离出来；不做这一步，直接法会被亮度变化直接带偏</td><td>0048</td></tr>
+          <tr><td class="term">暗角</td><td class="en">vignetting</td><td>镜头边缘比中心暗的物理现象，会让同一块表面在同图像里明暗不同</td><td>0048</td></tr>
+          <tr><td class="term">相机响应函数</td><td class="en">camera response function</td><td>把真实的辐照度压成 8 位灰度的那条非线性映射曲线</td><td>0048</td></tr>
+          <tr><td class="term">仿射亮度模型</td><td class="en">affine brightness (a, b)</td><td>让每一帧自带一个增益 a 与偏移 b，用来吸收曝光变化；这就是「不用先标定也能扛住曝光跳变」的原因</td><td>0048</td></tr>
+          <tr><td class="term">First Estimate Jacobians</td><td class="en">FEJ</td><td>把雅可比固定在「第一次估计」的线性化点上，避免滤波器或优化变得过度自信</td><td>0048 / 0061</td></tr>
+          <tr><td class="term">稠密 / 稀疏 × 直接 / 间接</td><td class="en">dense/sparse × direct/indirect</td><td>两个正交的轴，共四种组合。关键结论：<b>「直接」不等于「稠密」</b>——DSO 就是直接但不稠密</td><td>0048</td></tr>
+          <tr><td class="term">半直接</td><td class="en">semi-direct</td><td>用直接对齐来求运动，特征之间的对应关系是它的副产品；只有关键帧才需要提一次特征</td><td>0050</td></tr>
+          <tr><td class="term">概率深度滤波</td><td class="en">probabilistic depth filter</td><td>把深度表示成「高斯 + 均匀」两成分混合，逐帧递归贝叶斯更新；方差够小就落成一个 3D 点</td><td>0050</td></tr>
+          <tr><td class="term">逆合成 LK</td><td class="en">inverse compositional Lucas-Kanade</td><td>一种把雅可比预先算好的图像对齐变体，因此每帧只需重新计算残差，跑得更快</td><td>0050</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s14">
+      <h2>14. 真实世界与长期运行（阶段 C）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">边缘化</td><td class="en">marginalization</td><td>用 Schur 补把旧状态消掉、压成一个先验因子；代价是那批变量的线性化点被固定住了</td><td>0049 / 0032</td></tr>
+          <tr><td class="term">动态边缘化</td><td class="en">dynamic marginalization</td><td>同时维护多个边缘化先验，当尺度估计跑远时就换一个来用，避免旧先验把尺度钉死</td><td>0049</td></tr>
+          <tr><td class="term">度量系 / 尺度归一系</td><td class="en">metric frame / DSO frame</td><td>光度误差在尺度归一的 DSO 系里算（与尺度、重力无关），惯性误差必须在有物理单位的度量系里算</td><td>0049</td></tr>
+          <tr><td class="term">熵比</td><td class="en">entropy ratio</td><td>用权重分布熵的变化，同时判断「该不该建新关键帧」与「是不是发生了回环」——一个指标两个用途</td><td>0051</td></tr>
+          <tr><td class="term">t 分布鲁棒核</td><td class="en">t-distribution kernel</td><td>用重尾分布抑制粗差，权重随残差自适应下降。注意：这篇用的是 t 分布，<b>不是 Huber</b></td><td>0051</td></tr>
+          <tr><td class="term">测地邻域</td><td class="en">geodesic neighborhood</td><td>回环候选只从「沿轨迹相邻」的帧里选，而不是随机抽远处的帧——这样连出来的线才符合物理可达性</td><td>0052</td></tr>
+          <tr><td class="term">环境测量模型</td><td class="en">EMM</td><td>用一个概率模型描述「在某个位姿下应该观测到什么」，用来校验回环候选是不是真的</td><td>0052</td></tr>
+          <tr><td class="term">八叉树占据地图</td><td class="en">OctoMap / occupancy octree</td><td>用概率表示每个体素「被占据 / 自由 / 未知」，内存随表面增长而不是随体积增长</td><td>0052</td></tr>
+          <tr><td class="term">短期 / 工作 / 长期记忆</td><td class="en">STM / WM / LTM</td><td>RTAB-Map 的三级记忆模型：只有被回环命中用到的节点，才会从「库房」调回「桌上」</td><td>0053</td></tr>
+          <tr><td class="term">回环概率</td><td class="en">loop-closure probability</td><td>用 TF-IDF 似然加贝叶斯滤波更新「当前是不是回环」的概率（公式出自 2013 年原始论文，本课那篇未重述）</td><td>0053</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s15">
+      <h2>15. GNSS / 动态环境 / 线特征与神经隐式（阶段 C 收尾）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">伪距</td><td class="en">pseudorange</td><td>把「信号从卫星飞到接收机花了多久」乘光速得到的距离。粗略、有各种误差，但最容易测，精度到米级</td><td>0065</td></tr>
+          <tr><td class="term">接收机钟差</td><td class="en">receiver clock bias</td><td>接收机的钟远不如卫星上的原子钟准，所以用伪距定位时<b>必须把这个钟差当成未知数一起估</b>，否则四颗卫星的方程解不开</td><td>0065</td></tr>
+          <tr><td class="term">多普勒频移</td><td class="en">Doppler shift</td><td>卫星与接收机相对运动造成的频率偏移，能直接给出速度信息</td><td>0065</td></tr>
+          <tr><td class="term">载波相位</td><td class="en">carrier phase</td><td>不去数「信号飞了多久」，而是直接量载波在接收时刻的相位。刻度极细，但带来一个整周未知数</td><td>0066</td></tr>
+          <tr><td class="term">相位模糊度</td><td class="en">phase ambiguity</td><td>载波相位里那个「到底是第几个整周」的未知整数。你只知道自己在波形上的小数位置，不知道前面绕了多少圈</td><td>0066</td></tr>
+          <tr><td class="term">精密单点定位</td><td class="en">PPP (precise point positioning)</td><td>不依赖基站差分的单机高精度定位，靠外部的精密星历与钟差产品把误差压下去</td><td>0066</td></tr>
+          <tr><td class="term">非视距 / 多路径</td><td class="en">NLOS / multipath</td><td>卫星信号被楼挡住，改从墙面反射绕到天线。这条绕路比直线长，于是伪距凭空多出一段——室外定位最麻烦的误差源</td><td>0065</td></tr>
+          <tr><td class="term">动态掩码</td><td class="en">dynamic mask</td><td>标出「哪些像素属于会动的物体」的掩码，让这些像素不参与建图或降权参与</td><td>0068 / 0072</td></tr>
+          <tr><td class="term">最大一致集</td><td class="en">PCM (pairwise consistent measurement set maximization)</td><td>在一堆互相矛盾的回环候选里，找出「彼此之间都自洽」的那一个最大子集。这是第一季那条假阳性铁律的系统级实现</td><td>0062</td></tr>
+          <tr><td class="term">首次估计雅可比</td><td class="en">FEJ (first-estimates Jacobian)</td><td>把雅可比的线性化点<b>钉死在第一次估计</b>上，不再随状态更新而变动。用来防止滤波器变得过度自信</td><td>0061</td></tr>
+          <tr><td class="term">过度自信 / 不一致</td><td class="en">overconfident / inconsistent</td><td>滤波器报告的协方差比真实误差还小——它以为自己很准，其实不是。这是滤波派的核心病症</td><td>0061</td></tr>
+          <tr><td class="term">线特征</td><td class="en">line feature</td><td>用「线段」而不是「点」当几何基元。白墙检不出角点，但门框、踢脚线、窗框这些边仍然在</td><td>0069</td></tr>
+          <tr><td class="term">消失点</td><td class="en">vanishing point</td><td>图像里所有<b>互相平行</b>的长直线汇聚到的那个点。走廊方向的线与横向的线会汇聚到不同的消失点</td><td>0070</td></tr>
+          <tr><td class="term">Plücker 坐标</td><td class="en">Plücker coordinates</td><td>一种表示「无限长三维直线」的参数化方式。注意：并不是所有线特征方法都用它，DPL-SLAM 就没有用</td><td>0070</td></tr>
+          <tr><td class="term">神经隐式 SLAM</td><td class="en">neural implicit SLAM</td><td>把 NeRF 式表示当作在线地图的 SLAM。位姿与场景在同一个<b>可微渲染闭环</b>里被一起优化，这是它与离线 NeRF 的分水岭</td><td>0071</td></tr>
+          <tr><td class="term">延迟边缘化</td><td class="en">delayed marginalization</td><td>再维护第二张「晚 d 帧才删帧」的因子图，于是可以撤销部分边缘化、把新信息回溯注入。<b>它与「动态边缘化」不是同一个东西</b></td><td>0063</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="term-group" id="s16">
+      <h2>16. 激光 SLAM 全家桶（阶段 D）</h2>
+      <table>
+        <thead><tr><th>中文</th><th>英文 / 缩写</th><th>一句话解释</th><th>课次</th></tr></thead>
+        <tbody>
+          <tr><td class="term">扫描的运动畸变</td><td class="en">motion distortion / deskew</td><td>机械旋转激光转一圈要时间，这期间车已经开了——于是同一帧里不同时刻采到的点，不在同一个坐标系里。不去掉它，笔直的墙会被拉成弧</td><td>0074</td></tr>
+          <tr><td class="term">扫描对扫描</td><td class="en">scan-to-scan</td><td>拿当前帧点云直接和上一帧对齐。实现简单，但它既低估运动、又会把误差一帧帧累积下去，是 LOAM 要绕开的做法</td><td>0074</td></tr>
+          <tr><td class="term">扫描对地图</td><td class="en">scan-to-map</td><td>拿当前帧去和为整张地图配准（而不是和上一帧）。约束更强、漂移更小，代价是地图大时算得慢</td><td>0074 / 0008</td></tr>
+          <tr><td class="term">边缘点 / 平面点</td><td class="en">edge point / planar point</td><td>激光 SLAM 的两类特征：落在一条棱上的点（墙角、桌沿）和落在一个面上的点（墙、地面）。前者配到线，后者配到面</td><td>0074</td></tr>
+          <tr><td class="term">点到线残差</td><td class="en">point-to-line residual</td><td>点与一条直线的垂直距离。几何上等于「两个向量叉积的模（平行四边形面积）除以底边长（高）」</td><td>0074</td></tr>
+          <tr><td class="term">点到面残差</td><td class="en">point-to-plane residual</td><td>点与一个平面的垂直距离。几何上等于「体积除以底面积」：先叉积得到法向，再点乘得到平行六面体体积，最后除以法向模长</td><td>0074 / 0022</td></tr>
+          <tr><td class="term">两步优化</td><td class="en">two-step optimization</td><td>LOAM 的骨架：先用高频低精度的里程计估速度并去掉运动畸变，再用低频高精度的建图做精细配准。两者频率差约一个数量级</td><td>0074</td></tr>
+          <tr><td class="term">位姿融合</td><td class="en">transform integration</td><td>把里程计的高频结果与建图的低频高精度结果合成为最终输出</td><td>0074</td></tr>
+          <tr><td class="term">k-d 树</td><td class="en">k-d tree</td><td>一种把空间递归二分的最近邻搜索结构。经典实现插入新点要重建整棵树，这是激光 SLAM 的一个著名瓶颈</td><td>0074 / 0023</td></tr>
+          <tr><td class="term">鲁棒核 / 权重函数</td><td class="en">robust kernel / bisquare weight</td><td>给每个残差一个权重，残差小的时候权重接近 1，残差过大就直接归零（把离群点踢掉）</td><td>0074 / 0019</td></tr>
+          <tr><td class="term">点云分割</td><td class="en">point cloud segmentation</td><td>在提特征之前先把点云按「连成一片的点有多少」聚类，小簇（如少于 30 点）整团丢掉，用来滤掉草叶与树叶这种不稳定的小目标</td><td>0075</td></tr>
+          <tr><td class="term">距离图像</td><td class="en">range image</td><td>把环形扫描展开成一张规则的长方形图像（每个像素存距离）。是 LeGO-LOAM 做分割与地面提取的前提</td><td>0075</td></tr>
+          <tr><td class="term">地面约束的三自由度</td><td class="en">ground-constrained 3 DOF</td><td>无限大的平地只能约束竖直平移、横滚、俯仰三个自由度；前后左右平移与航向它完全无感（怎么滑都还是同一块平地）</td><td>0075</td></tr>
+          <tr><td class="term">标签匹配</td><td class="en">label matching</td><td>只让「同类的点」互相配：地面点只找地面平面片，非地面边缘点只找非地面边缘线。候选范围变小，也不会产生无意义的配对</td><td>0075</td></tr>
+          <tr><td class="term">正态分布变换</td><td class="en">NDT (Normal Distributions Transform)</td><td>把空间切成格子，每个格子里的点用一个高斯分布表示。配准＝调整位姿让所有点落在各自分布里的似然最大。不需要挑特征</td><td>0076 / 0005</td></tr>
+          <tr><td class="term">加权 NDT</td><td class="en">weighted NDT</td><td>给 NDT 的两类额外权重：距离权重（越远的点对角度误差越敏感，权重越大）与维数权重（越像平面的格子越可信）</td><td>0076</td></tr>
+          <tr><td class="term">Scan2Key</td><td class="en">scan-to-keyframe</td><td>当前帧不去和上一帧配，而是和最近的关键帧配。原文实测比 Scan2Scan 的平均误差几乎减半</td><td>0076</td></tr>
+          <tr><td class="term">松耦合</td><td class="en">loosely coupled</td><td>各传感器各算各的位姿，最后加权平均。IMU 只用来去畸变与给初值就属于这一类</td><td>0077 / 0006</td></tr>
+          <tr><td class="term">紧耦合</td><td class="en">tightly coupled</td><td>所有传感器进入同一个优化问题或同一张因子图一起解。IMU 不只是给初值，而是作为约束参与求解，才算紧耦合</td><td>0077 / 0006</td></tr>
+          <tr><td class="term">固定滞后平滑</td><td class="en">fixed-lag smoothing</td><td>只在一个固定长度的滑动窗内做优化，窗外的最老状态被边缘化掉。兼顾精度与实时性</td><td>0077</td></tr>
+          <tr><td class="term">边缘化</td><td class="en">marginalization</td><td>把不想再估的变量从优化问题里消掉，同时把它的信息压成一个「先验」留给剩下的变量。数学上就是 Schur 补</td><td>0077 / 0032</td></tr>
+          <tr><td class="term">因子图</td><td class="en">factor graph</td><td>用「节点＝待估变量、边＝约束」表示整个优化问题。回环、GPS 这类约束可以随时挂上去，这是它比滤波更适合做全局一致的核心原因</td><td>0078</td></tr>
+          <tr><td class="term">IMU 预积分因子</td><td class="en">IMU preintegration factor</td><td>把两关键帧之间的上千条 IMU 测量压成一条约束。第二季 0029/0030 课学过的预积分，在 LIO-SAM 里就是这一类边</td><td>0078</td></tr>
+          <tr><td class="term">激光里程计因子</td><td class="en">LiDAR odometry factor</td><td>把两帧之间的 scan-to-map 匹配结果变成一条相对位姿约束</td><td>0078</td></tr>
+          <tr><td class="term">iSAM2</td><td class="en">incremental smoothing and mapping 2</td><td>增量式平滑与建图。位姿图变大时只重解受影响的部分，而不是每次全解</td><td>0078</td></tr>
+          <tr><td class="term">激光 BA</td><td class="en">bundle adjustment for LiDAR</td><td>把视觉 BA 那套「特征与位姿一起优化」搬到激光点云上。前提是平面/边缘的参数能被解析地消掉</td><td>0079</td></tr>
+          <tr><td class="term">特征值判形状</td><td class="en">eigenvalue-based shape test</td><td>对一小簇点求协方差矩阵的三个特征值：一根极短、另两根长 → 像平面；一根极长、另两根短 → 像边缘。用三个主方向箭头的长度比就能看出来</td><td>0079</td></tr>
+          <tr><td class="term">自适应体素化</td><td class="en">adaptive voxelization</td><td>按点云的局部结构自动细分体素（平面处用大格子、细节处用小格子），是 BALM 一系用来分块管理点云的方式</td><td>0079 / 0022</td></tr>
+          <tr><td class="term">多度量配准</td><td class="en">multi-metric registration</td><td>同一个优化里同时使用点-点、点-面、点-线三种误差，让不同几何结构各用最合身的度量</td><td>0080</td></tr>
+          <tr><td class="term">子地图</td><td class="en">submap</td><td>把大场景按空间切成若干块，只在需要时加载与优化相关的那些块</td><td>0081 / 0092</td></tr>
+          <tr><td class="term">关键帧</td><td class="en">keyframe</td><td>不是每帧都参与优化，而是挑出有代表性的少数帧。挑选依据通常是位移、转角或时间阈值</td><td>0081 / 0078</td></tr>
+          <tr><td class="term">迭代扩展卡尔曼滤波</td><td class="en">IEKF (iterated EKF)</td><td>在同一个测量上反复线性化——每次都把观测方程在当前估计处重新展开，直到收敛。比只做一次线性化的普通 EKF 更准</td><td>0083</td></tr>
+          <tr><td class="term">新卡尔曼增益公式</td><td class="en">new Kalman gain form</td><td>FAST-LIO 的核心贡献：把增益写成需要求逆的矩阵只与状态维度（18 维）有关的形式，而不是与测量维度（上千个特征点）有关</td><td>0083</td></tr>
+          <tr><td class="term">直接配准</td><td class="en">direct registration</td><td>不提取特征，把原始点直接配到地图上。对非重复扫描与开放场景更友好，也不会因为「挑特征」而丢掉有效点</td><td>0084</td></tr>
+          <tr><td class="term">增量式 k-d 树</td><td class="en">ikd-Tree</td><td>支持动态插入与删除的 k-d 树。四件事凑成：点插入带树上下采样、懒惰删除（只打标记，物理删除推迟）、部分重建（只动违反平衡的子树）、双线程并行重建</td><td>0084</td></tr>
+          <tr><td class="term">懒惰删除</td><td class="en">lazy deletion</td><td>删除时不立刻从内存里拿掉，只置一个标记；真正的物理删除推迟到重建时一起做。可以大幅摊薄删除的开销</td><td>0084</td></tr>
+          <tr><td class="term">部分重建</td><td class="en">partial rebuild</td><td>树不平衡时只重建那棵违反平衡准则的子树，而不是整棵树。「书架歪了只扶歪的那一层」</td><td>0084</td></tr>
+          <tr><td class="term">五邻域平面拟合</td><td class="en">5-nearest-neighbour plane fitting</td><td>直接配准时找每个点的 5 个最近邻，拟合出一个小平面（法向＋面上一点），然后算点到面的距离作为残差</td><td>0084</td></tr>
+          <tr><td class="term">增量式稀疏体素</td><td class="en">iVox (incremental voxel)</td><td>用体素哈希替代树结构：空间切成体素、哈希表直接定位、每个体素只存固定数量的点。查询从对数时间降到常数时间，且天然可并行</td><td>0085</td></tr>
+          <tr><td class="term">逐点更新</td><td class="en">point-by-point update</td><td>每来一个点就更新一次状态，而不是攒成一帧再更新。好处是帧内运动畸变自然消失，带宽可以推到很高</td><td>0086</td></tr>
+          <tr><td class="term">退化</td><td class="en">degeneracy</td><td>不是「数据变少了」，而是「数据里缺少某些方向上的信息」。例如均质隧道每一段都一样，激光测得出墙但测不出自己前进了多少。数学上表现为 Hessian 在某些方向的特征值趋于零</td><td>0076 / 0091 / 0006</td></tr>
+          <tr><td class="term">自适应协方差</td><td class="en">adaptive covariance</td><td>让激光的协方差不固定，而是随「检测到多少特征」变化：特征越少，协方差越大，融合时就越不听激光的。是一把连续的信任旋钮，而不是开关</td><td>0076</td></tr>
+          <tr><td class="term">GICP</td><td class="en">Generalized ICP</td><td>分布到分布的配准：每个点不只代表自己，还带着一个局部协方差（形状），配准时让两个「分布」对齐，比点到点或点到面更宽容</td><td>0087 / 0023</td></tr>
+          <tr><td class="term">法向估计</td><td class="en">normal estimation</td><td>算出一小块点「朝哪边」。它是点到面残差的前提，所以在 LIO 里必须实时、增量地维护</td><td>0087</td></tr>
+          <tr><td class="term">面片</td><td class="en">surfel (surface element)</td><td>用一片带朝向与大小的椭圆代替一个孤立的点。数据量小得多，但保留了几何信息，还能挂上语义标签</td><td>0082 / 0089</td></tr>
+          <tr><td class="term">语义动态剔除</td><td class="en">semantic dynamic removal</td><td>用 2D 语义分割的结果给点打标签，把「会动的物体」（车、行人）上的点在配准中降权或剔除。目的不是「看懂场景」，而是「知道哪些东西不该信」</td><td>0082</td></tr>
+          <tr><td class="term">运动补偿</td><td class="en">motion compensation</td><td>把一帧扫描里不同时刻的测量折算到同一参考时刻。离散做法是按匀速模型线性插值，连续时间做法是把轨迹写成一个函数再按时间采样</td><td>0074 / 0089</td></tr>
+          <tr><td class="term">反射强度</td><td class="en">reflectance intensity</td><td>激光返回的第二条通道：除了「有多远」，还有「有多亮」。它可以当图像做直接法，也可以把强度突变处当「线特征」，还可以用来识别材质</td><td>0090 / 0007</td></tr>
+          <tr><td class="term">多路径 / 鬼影</td><td class="en">multipath / ghost</td><td>雷达波打到玻璃幕墙等反射面上，经多次反射才回到接收机，于是测出一个不存在的虚假目标。4D 雷达特有的麻烦</td><td>0094 / 0065</td></tr>
+          <tr><td class="term">初始化</td><td class="en">initialization</td><td>系统正式跑起来之前必须先定下来的几件事：重力朝哪、一米有多长、时间偏移多少、外参是多少。第二季 0029 课那篇原文明确没有这一章，是后来才补上的</td><td>0090 / 0057 / 0064</td></tr>
+          <tr><td class="term">分支定界</td><td class="en">branch and bound</td><td>一种「知道哪些不用算」的搜索加速：先用代价的下界把整片不可能的候选剪掉，再在剩下的小范围里细找。Cartographer 用它做 2D 回环搜索</td><td>0092</td></tr>
+          <tr><td class="term">视觉词袋</td><td class="en">BoW (Bag of Words)</td><td>把图像里提取的局部特征聚类成「词」，于是一张图变成一张「词频表」。检索时比词频表而不是比原图，快得多。3D 版本叫 BoW3D</td><td>0092 / 0043</td></tr>
+          <tr><td class="term">3D 词袋</td><td class="en">BoW3D</td><td>把词袋思想搬到三维点云：用线性关键点（LinK3D）做描述子，离线聚成词典，检索时查词取交集。原文主打实时性</td><td>0092</td></tr>
+          <tr><td class="term">线性关键点</td><td class="en">LinK3D</td><td>用一条线段（连同两端的方向）来描述一个局部结构，比一个孤立的点更能认出同一个地方。免训练、轻量</td><td>0092</td></tr>
+          <tr><td class="term">旋转平移不变描述子</td><td class="en">roto-translation invariant descriptor</td><td>对「机器人怎么转、怎么平移」都不变的描述子。它比的不是「点的坐标」，而是「点与点之间的关系」（如成对距离构成的 Gram 矩阵）</td><td>0093</td></tr>
+          <tr><td class="term">Gram 矩阵</td><td class="en">Gram matrix</td><td>把所有点对之间的关系排成一张方表格。RING++ 用它构造描述子，于是同一个地点无论从哪个方向回来，这张表都一样</td><td>0093</td></tr>
+          <tr><td class="term">全局地点识别</td><td class="en">global localization / place recognition</td><td>不是「我相对上一帧动了多少」，而是「我在整张地图的哪里」。回环与地图合并都依赖它</td><td>0093 / 0092</td></tr>
+          <tr><td class="term">4D 成像雷达</td><td class="en">4D imaging radar</td><td>输出的每个点带「距离＋方位＋仰角＋多普勒速度」四个量。点比激光稀疏得多、也更噪，但不怕雨雪雾、成本更低，还额外给速度</td><td>0094</td></tr>
+          <tr><td class="term">自速度预积分因子</td><td class="en">ego-velocity pre-integration factor</td><td>把 4D 雷达测到的多普勒速度当成一种测量，预积分成因子放进位姿图，用来约束相邻时刻的运动</td><td>0094</td></tr>
+          <tr><td class="term">非重复扫描</td><td class="en">non-repetitive scanning</td><td>固态激光雷达的一种扫描方式：不沿固定环线重复扫，而是把探测点铺满整个视场。它让「按扫描线组织点云」这套做法失效，也是 FAST-LIO2 走向「不提特征」的原因之一</td><td>0007 / 0084</td></tr>
+          <tr><td class="term">体素降采样</td><td class="en">voxel downsampling</td><td>把空间切成体素，每个体素只保留一个代表点（通常取离中心最近的）。用来在保留几何形状的同时大幅减少点数</td><td>0081 / 0023</td></tr>
+          <tr><td class="term">平面/边缘参数闭式消元</td><td class="en">closed-form elimination of plane/edge parameters</td><td>BA 里那些「平面法向、面上一点」之类的参数，可以在一步之内解析地算出来，不需要迭代。这正是激光 BA 可行的原因</td><td>0079 / 0019 / 0022</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div class="paper-divider"></div>
+    <p class="note">
+      几点说明：① 本表术语顺序不等于课程顺序，按主题分组便于查阅；② 每一条都可以在对应课次里找到更详细的解释与原文出处；③ 第 9–11 组是第二季（阶段 B 打地基）新增的，第 12–15 组是第三季（阶段 C 视觉主干）新增的，<b>第 16 组是第四季（阶段 D 激光主干）新增的</b>；随着后续阶段（E 多传感器融合……）的课程加入，本表会继续增补；
+      ④ 若你在某节课里发现术语用法与这里不一致，以该节课引用的论文正文为准。
+    </p>
+  </main>
+
+  <footer class="section-card">
+    <div class="nav-links">
+      <a href="../index.html">← 返回课程馆</a>
+      <a class="next" href="路线图总览.html">11 阶段路线图总览 →</a>
+    </div>
+    <p class="foot-note">术语是共同语言，先把语言统一，再谈理解 🙂</p>
+  </footer>
+</div>
+</body>
+</html>

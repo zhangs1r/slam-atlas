@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>线特征与光照鲁棒（上）：点线融合的三条路 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 C · 视觉主干 / Lesson 0069</div>
+      <h1>线特征与光照鲁棒（上）：点线融合的三条路</h1>
+      <p class="subtitle">📏 白墙上没有角点，但有边——为什么「线」是弱纹理与光照变化场景里的救命稻草</p>
+      <div class="hero-meta">
+        <span>🎯 主题：线特征为何有用 + 三条融合路线</span>
+        <span>👥 作者：EPLF-VINS / AirVO / AirSLAM 三篇团队</span>
+        <span>📅 2023–2025 · 三篇英文题名见正文</span>
+      </div>
+      <div class="toc">
+        <a href="#a">课程定位</a>
+        <a href="#b">线为什么比点稳</a>
+        <a href="#c">线特征的三个麻烦</a>
+        <a href="#d">EPLF-VINS</a>
+        <a href="#e">AirVO</a>
+        <a href="#f">AirSLAM</a>
+        <a href="#g">光照鲁棒靠什么</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「弱纹理场景下线为什么比点稳」、记住线特征的三个经典麻烦，并区分 EPLF-VINS / AirVO / AirSLAM 三篇各自怎么把线用进 SLAM。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>① 本季 <b>0041–0045</b> 讲了 ORB 点特征（角点、描述子、匹配）——本节是它们的<b>补充与对照</b>：点不够用时，线来补。② 第二季 <b>0024–0025</b> VO 教程的「特征法 vs 直接法」——EPLF 的线光流本质是线特征上的对齐。③ 第一季 <b>0016</b> 事件相机与本节 AirVO 的「学习式特征扛光照」是两条不同路线。</p></div>
+      </div>
+      <h2>1. 课程定位：先讲清「线为什么有用」，再讲三篇的解法</h2>
+      <p>这一节和上一节不同：上一节是五篇横向横评，这一节是<b>先把一个概念讲透</b>——「线特征为什么有用、难在哪」，再讲 EPLF-VINS、AirVO、AirSLAM 三篇各走的一条路。它们的共同点：都知道「只靠点不够」，于是把<b>线</b>也拉进 SLAM。</p>
+      <p>三篇分别是：<b>EPLF-VINS</b>（2023，IEEE letter）、<b>AirVO</b>（2023，IEEE 系）、<b>AirSLAM</b>（2025，IEEE 期刊）。其中 AirSLAM 是 AirVO 的期刊续作（同一团队、同一脉），这点下文明说，避免你误以为它们是两篇无关工作。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 为什么弱纹理场景下「线」比「点」稳</h2>
+      <p>先回到本季 <b>0041–0045</b> 讲过的 ORB 点特征：它找的是「角点」——图像里亮度在多个方向都剧烈变化的小块，比如桌角、墙角。问题是：<b>点是一个「位置」</b>。在一面纯色的白墙上，亮度几乎到处一样，根本没有角点可检——点特征直接「饿死」。</p>
+      <p>而<b>线是一条「长条边缘」</b>：门框、踢脚线、窗框、车道线，这些在纯色墙面上<b>依然存在</b>。它们不需要局部有角，只要有一条颜色/亮度突变的边界就能被检出来。所以弱纹理（白墙、走廊、天空下的地平线）场景里，点稀、线密，线比点稳得多。下面这张自绘图把这件事画成同一面墙的左右对比。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="28" font-size="18" font-weight="700" fill="#1f2937">同一面墙：点特征 vs 线特征</text>
+          <rect x="30" y="50" width="400" height="260" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+          <text x="44" y="74" font-size="13" fill="#475569">只看「点」：白墙上一片空白</text>
+          <circle cx="120" cy="210" r="5" fill="#ef4444"/>
+          <circle cx="360" cy="120" r="5" fill="#ef4444"/>
+          <circle cx="320" cy="240" r="5" fill="#ef4444"/>
+          <text x="44" y="300" font-size="13" fill="#b91c1c">点特征：只有门框角、窗角等寥寥几个</text>
+
+          <line x1="470" y1="50" x2="470" y2="310" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4 4"/>
+          <rect x="490" y="50" width="380" height="260" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+          <text x="504" y="74" font-size="13" fill="#475569">加上「线」：边都成线段</text>
+          <rect x="560" y="120" width="90" height="150" fill="none" stroke="#1d4ed8" stroke-width="4"/>
+          <line x1="520" y1="290" x2="850" y2="290" stroke="#1d4ed8" stroke-width="4"/>
+          <rect x="700" y="100" width="100" height="80" fill="none" stroke="#1d4ed8" stroke-width="4"/>
+          <text x="504" y="300" font-size="13" fill="#1d4ed8">线特征：门框、踢脚线、窗框全都成线</text>
+          <text x="300" y="340" font-size="14" font-weight="700" fill="#1f2937">白墙没有角点，但有边——这就是线存在的理由</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是「只检点」的同一面墙，大片白墙上几乎没点（只有门框角、窗角几个红点）；右格加上「线」后，门框、踢脚线、窗框都变成蓝色线段。<br>
+          <b>怎么看这张图：</b>① 左格红点稀疏，白墙区域一个点都没有；② 右格蓝色线段密集，覆盖左格根本没有特征的区域；③ 这正是弱纹理场景下「点饿死、线还活着」的对比。<br>
+          <b>要记住的一句话：</b>点是位置，线是边缘；白墙没有角点，但有边。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 线特征的三个经典麻烦（理解全组的钥匙）</h2>
+      <p>线好用，但比点更难伺候。读这三篇之前，必须先记住线特征的三个经典麻烦——它们正是每篇论文要绕开或解决的靶子。</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>① 端点不确定</h4><p>线段两头在哪常常说不准：遮挡、断裂、检测抖动都会让端点乱跳。而点的「位置」就是它自己，线却没有干净的端点。</p></div>
+        <div class="mini-card"><h4>② 匹配歧义</h4><p>一条长线，和它的一半、或旁边的平行线，很容易搞混——到底该和哪条匹配？匹配错了，约束就全错。</p></div>
+        <div class="mini-card"><h4>③ 参数化麻烦</h4><p>一条无限长的直线，怎么用有限个数表示？既要编码「朝向」又要编码「离相机多近、怎么歪」，不是存两个端点就能解决的。</p></div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="28" font-size="18" font-weight="700" fill="#1f2937">线特征的三个麻烦</text>
+          <rect x="20" y="50" width="280" height="270" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="160" y="74" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">① 端点不确定</text>
+          <line x1="60" y1="200" x2="260" y2="150" stroke="#1d4ed8" stroke-width="4"/>
+          <ellipse cx="60" cy="200" rx="18" ry="12" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
+          <ellipse cx="260" cy="150" rx="18" ry="12" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 3"/>
+          <rect x="150" y="160" width="55" height="80" fill="#fde68a" opacity="0.6"/>
+          <text x="160" y="300" font-size="12" fill="#475569" text-anchor="middle">端点说不准，还被椅子挡住一半</text>
+
+          <rect x="310" y="50" width="280" height="270" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="450" y="74" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">② 匹配歧义</text>
+          <line x1="330" y1="130" x2="570" y2="130" stroke="#1d4ed8" stroke-width="3"/>
+          <line x1="330" y1="170" x2="570" y2="170" stroke="#1d4ed8" stroke-width="3"/>
+          <line x1="330" y1="210" x2="570" y2="210" stroke="#1d4ed8" stroke-width="3"/>
+          <circle cx="450" cy="130" r="4" fill="#ef4444"/>
+          <path d="M 450 135 L 450 168" stroke="#ef4444" stroke-width="2" marker-end="url(#a2)"/>
+          <path d="M 450 135 L 450 208" stroke="#ef4444" stroke-width="2" marker-end="url(#a2)"/>
+          <text x="450" y="300" font-size="12" fill="#475569" text-anchor="middle">这条该匹配上面还是下面？</text>
+
+          <rect x="600" y="50" width="280" height="270" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="740" y="74" font-size="13" font-weight="700" fill="#334155" text-anchor="middle">③ 参数化麻烦</text>
+          <line x1="600" y1="280" x2="880" y2="110" stroke="#1d4ed8" stroke-width="4"/>
+          <text x="700" y="250" font-size="12" fill="#475569">无限长直线</text>
+          <text x="700" y="300" font-size="12" fill="#475569" text-anchor="middle">两端在哪？怎么用几个数表示？</text>
+          <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#ef4444"/></marker></defs>
+          <text x="20" y="350" font-size="13" fill="#475569">三个麻烦正是 EPLF / AirVO / AirSLAM 各自要绕开或解决的靶子。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三联小图分别画「端点不确定」「匹配歧义」「参数化麻烦」。左格线段两端画成雾状散开、还被椅子挡住一半；中格三条平行线（百叶窗感），红箭头表示「到底匹配哪条」的困惑；右格一条无限延伸直线，问「两端在哪」。<br>
+          <b>怎么看这张图：</b>① 端点不确定＝端点说不准＋会被遮挡；② 匹配歧义＝相邻/半截线易混；③ 参数化麻烦＝无限长直线没法用端点干净表示。<br>
+          <b>要记住的一句话：</b>点有干净的位置，线没有；这三个麻烦是线特征工程的全部难点。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. EPLF-VINS：线光流 + 端点无关残差</h2>
+      <p>EPLF-VINS 是单目 VIO，把线特征做成「光流式」跟踪。它的两个关键招式正好对着上面的麻烦①和③：</p>
+      <p><b>招式一：线光流 LOFT（Line Optical Flow Tracking）。</b>传统做法（如 PL-VINS）先检线（LSD）、再算线描述子（LBD）、再匹配，又慢又易错。EPLF 把整条线像光流点一样<b>直接跟踪</b>：基于灰度不变假设 + 共线性约束，单帧检测、多帧跟踪，丢弃了 LSD+LBD 组合。线检测+跟踪线程 16.98 ms，比 PL-VINS 的 25.30 ms 快 32.9%。</p>
+      <p><b>招式二：与端点无关的残差。</b>它不用线段端点，而是用「观测线所在平面」与「重投影线所在平面」的<b>法向量夹角</b>定义残差 $r=1-(n\cdot\tilde n)/(\|n\|\|\tilde n\|)$。端点怎么抖、线长怎么变，只要线的方向不变，残差就不受影响——<b>这正是对麻烦①「端点不确定」的绕开</b>。它受 PL-SLAM 启发。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_EPLF-VINS__Real-Time_Monocular_Visual-Inertial_SLAM_With/6ad17dd27ee7ba7b0a4763df20b16779c1842864c10f8ff4c5e6cdedf9ba15c6.jpg" alt="EPLF line flow trajectory">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The historical trajectory of line flow visualization. The magic cube appears from the left… We pick the bottom line of a Rubik's Cube to trace… The red lines are the historical tracks traced in successive frames.
+          <br><b>怎么看这张图：</b>这是「线流」的直观演示——魔方底边被连续多帧追踪，红线是它的历史轨迹。一眼能看出「一条线被跨帧追踪成轨迹」，正是 LOFT 连续性的证明。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 340" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="20" y="28" font-size="18" font-weight="700" fill="#1f2937">EPLF 的「端点无关残差」</text>
+          <text x="60" y="90" font-size="13" fill="#334155">同一空间直线，端点变了但方向不变</text>
+          <line x1="80" y1="130" x2="300" y2="200" stroke="#1d4ed8" stroke-width="4"/>
+          <circle cx="80" cy="130" r="5" fill="#ef4444"/>
+          <circle cx="300" cy="200" r="5" fill="#ef4444"/>
+          <line x1="80" y1="170" x2="300" y2="240" stroke="#60a5fa" stroke-width="4" stroke-dasharray="6 4"/>
+          <circle cx="80" cy="170" r="4" fill="#94a3b8"/>
+          <circle cx="300" cy="240" r="4" fill="#94a3b8"/>
+          <text x="90" y="290" font-size="12" fill="#475569">蓝实线 / 蓝虚线 = 同一线在不同帧</text>
+          <text x="90" y="308" font-size="12" fill="#475569">端点不同，但方向一致</text>
+
+          <text x="560" y="90" font-size="13" fill="#334155">残差 = 两平面法向量夹角</text>
+          <line x1="560" y1="200" x2="700" y2="120" stroke="#16a34a" stroke-width="3" marker-end="url(#b2)"/>
+          <line x1="560" y1="200" x2="710" y2="180" stroke="#f59e0b" stroke-width="3" marker-end="url(#b2)"/>
+          <path d="M 610 168 A 30 30 0 0 1 640 178" fill="none" stroke="#ef4444" stroke-width="2"/>
+          <text x="575" y="250" font-size="12" fill="#475569">n：观测平面法向</text>
+          <text x="700" y="230" font-size="12" fill="#475569">n~：重投影平面法向</text>
+          <text x="600" y="290" font-size="12" fill="#b91c1c">夹角 = 残差（与端点无关）</text>
+          <defs><marker id="b2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#334155"/></marker></defs>
+          <text x="20" y="325" font-size="13" fill="#475569">只要线的方向不变，端点怎么抖都不影响这条残差——这是 EPLF 绕开「端点不确定」的核心。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边画同一条空间直线在前后两帧里端点不同、但方向一致；右边画「观测平面法向 n」与「重投影平面法向 n~」之间的夹角，这个夹角就是 EPLF 的线残差。<br>
+          <b>怎么看这张图：</b>① 左图说明「端点会变，但线的方向（朝向）稳定」；② 右图说明残差只用法向量夹角，根本不碰端点。<br>
+          <b>要记住的一句话：</b>端点无关残差 = 用线的方向（两个平面的法向夹角）代替端点的位置，从而无视端点不确定。
+        </figcaption>
+      </figure>
+      <p><b>实验与局限：</b>在 EuRoC / TUM VI / KAIST VIO 上，无回环比 VINS-Mono 提升 35.83%、比 PL-VINS 28.54%。它<b>没有专门的光照鲁棒机制</b>——仅靠线本身比点稳，依赖 VINS-Mono 框架。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. AirVO：让线「搭上」强点的便车</h2>
+      <p>AirVO 是双目 VO，它的光照鲁棒思路非常巧妙，也最容易被人误读。先说清楚：<b>它并不是让线自己变强</b>。</p>
+      <p>它的做法是——点的特征用<b>学习式特征</b> SuperPoint 提取 + SuperGlue（CNN+GNN）匹配，这俩天然抗光照；然后线的处理是「<b>通过点到线的距离，把线关联到点；线可以借用相关点的匹配与三角化结果来做匹配和三角化</b>」。换句话说：<b>线「搭」上了已经很鲁棒的点</b>，点稳、线就跟着稳。线自己既没有光度归一化，也没有专属的描述子去扛光照。</p>
+      <p>另外 AirVO 把 LSD 检出的短线段按角度/中点/端点距离<b>合并</b>成长线，滤掉过短的；并在嵌入式上做加速（CNN/GNN 改 16-bit、CPU/GPU 双线程并行）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_AirVO__An_Illumination-Robust_Point-Line_Visual_Odometry/0cc5c7f54f3d441d50ea16579eb65cf0600337eb201f5c6cece999ffce21655b.jpg" alt="AirVO line matching">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Line matching of AirVO in challenging scenes. Matched lines are drawn in the same color. Circles on a line are the points associated with the line.
+          <br><b>怎么看这张图：</b>同色线＝同一条线，线上的圆＝关联的点。这正是「线借点的匹配结果」的可视化——线能匹配上，靠的是上面挂的点被 SuperPoint+SuperGlue 稳稳匹配了。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_AirVO__An_Illumination-Robust_Point-Line_Visual_Odometry/909454704cb2e735779965dbdb85a4f596a28fca53a50e7306f04f4ce9ffcd2a.jpg" alt="AirVO line merge">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Lines detected by LSD (left) and by AirVO (right). We merge unstable short lines into stable longer lines.
+          <br><b>怎么看这张图：</b>左是 LSD 检出的碎短线，右是 AirVO 合并后的长线。对着第 3 节「端点不确定」的麻烦看——把短线段合并成长线，正是工程上缓解端点抖动的常用手段。
+        </figcaption>
+      </figure>
+      <p><b>实验与局限：</b>OIVIO 多数序列最佳（MN_015_GV_01 0.0537 vs OKVIS 0.0663），UMA-VI 平均 0.2479（是 PL-SLAM 的 6.7%）。加线平均降平移误差 58.2%。速度 Jetson AGX Xavier ~15 Hz。原文自承<b>无回环、无重定位、无地图复用</b>，长期会漂移。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. AirSLAM：AirVO 的续作与完整化</h2>
+      <p>AirSLAM（2025）是 AirVO 的期刊扩展版，<b>已核实是同一团队（Kuan Xu 等）的同一脉后续</b>（原文明确「extends our conference paper, AirVO」）。所以它不是凭空一篇新工作，而是在 AirVO 上加东西：</p>
+      <ul>
+        <li><b>PLNet 统一检点线</b>：用一个网络同时检点 + 线（wireframe parsing 法检结构线，而非 AirVO 的 SuperPoint+LSD 分离检测），更稳；</li>
+        <li><b>LightGlue 替 SuperGlue</b>做匹配；</li>
+        <li>支持 <b>stereo-only 与 stereo-inertial</b>（AirVO 仅 VO）；</li>
+        <li>补上 <b>回环检测 + 地图优化 + 全局 BA + 多级重定位</b>，成为<b>完整 SLAM</b>；</li>
+        <li><b>多级重定位</b>：基于点+线+结构图，单张图即可在已有地图里鲁棒定位，解决 day/night 长期光照。</li>
+      </ul>
+      <p>诚实地说：PLNet 统一检测与多级重定位是<b>真新模块</b>，但整体属于「把 VO 升级成完整 SLAM + 工程部署（TensorRT）」的<b>整合型工作</b>，并非新理论。光照鲁棒核心思想继承自 AirVO（学习特征 + 结构线 + 7 种光度增强 + 结构图重定位）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_AirSLAM__An_Efficient_and_Illumination-Robust_Point-Line/78ced2416ef27902373881f5e84a2d42e03a126aa2598f58ee890ede71927e00.jpg" alt="AirSLAM system">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Proposed system consists of three main parts: Online stereo VO/VIO, offline map optimization, and online relocalization.
+          <br><b>怎么看这张图：</b>和 AirVO 最大的区别就在这三块——AirVO 只有在线 VO，AirSLAM 多了「离线地图优化」和「在线重定位」，这正是它从 VO 升级为完整 SLAM 的结构证据。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_AirSLAM__An_Efficient_and_Illumination-Robust_Point-Line/248a36843e9c1fccc1c4d158cff37a037ba71f5789a2121f2e2558d5fe736a31.jpg" alt="AirSLAM feature map">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>We visualize the feature map… detected keypoints… and the detected structural lines… The overlap of keypoints and junctions… inspire the design of our PLNet.
+          <br><b>怎么看这张图：</b>右下的红色结构线 + 绿点（端点/节点）正是 PLNet 要检的目标。它检的是「结构线」（门框、墙角这类），而不是墙上的花纹梯度线——这正是它抗光照的关键设计来源。
+        </figcaption>
+      </figure>
+      <p><b>实验与局限：</b>OIVIO 平均 0.058（vs ORB-SLAM3 0.065、Basalt 0.192）。速度 73 Hz（PC）/ 40 Hz（Jetson Orin）。局限性隐含：重定位依赖<b>离线预建图</b>，实时性依赖 TensorRT 部署。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>AirVO 让线在光照变化下也变得鲁棒，靠的是什么机制？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。AirVO 用 SuperPoint+SuperGlue 的学习式点特征扛光照，线通过点到线距离「搭上」强点的匹配与三角化结果，并非线自己有光度归一化。" onclick="lessonKit.answer(this,'q0069a')">让线搭上强点的便车</button>
+          <button data-correct="no" data-explanation="不对。原文明确线没有专属的光度归一化，靠的是关联点的鲁棒匹配，不是线自己做光度归一化。" onclick="lessonKit.answer(this,'q0069a')">给线单独做光度归一化</button>
+        </div>
+        <div class="quiz-feedback" id="q0069a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 收束：光照鲁棒到底靠什么（三篇如实对照）</h2>
+      <p>三篇都面对「弱纹理 / 光照变化」，但机制各不相同，按原文如实抄：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>EPLF-VINS</h4><p><b>无专门光照机制</b>。它主要靠「线本身比点稳」+ 线光流 + 端点无关残差，没有针对光照设计任何模块，依赖 VINS-Mono 框架。</p></div>
+        <div class="mini-card"><h4>AirVO</h4><p><b>学习式点特征（SuperPoint+SuperGlue）+ 点线关联</b>。线借点的鲁棒性，没有线专属光照机制。</p></div>
+        <div class="mini-card"><h4>AirSLAM</h4><p><b>学习点（LightGlue）+ 结构线 PLNet + 7 种光度增强 + 结构图重定位</b>。多层面：特征、结构、重定位阶段共同扛光照。</p></div>
+      </div>
+      <p>一句话：<b>不要笼统说成「用了深度学习就鲁棒」</b>。EPLF 几乎没用深度学习扛光照；AirVO/AirSLAM 扛光照的是「学习式点特征（和线靠点）」，不是线自己。这正好对照第一季 0016 事件相机——事件相机靠传感器 HDR，AirVO 靠学习特征，是两条不同的光照鲁棒路线。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3><p>在弱纹理的白墙走廊里，为什么「线」比「点」更可能还检得出特征？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。点是局部角点，纯色墙面上没有角点可检；线是一条长边（门框、踢脚线、窗框），纯色墙上依然有亮度突变的边界，所以线还在。" onclick="lessonKit.answer(this,'q0069b')">线是长边，白墙上依然存在</button>
+          <button data-correct="no" data-explanation="不对。检测快慢和「能不能检得出」是两回事；白墙上点检不出是因为没有角点，不是因为慢。" onclick="lessonKit.answer(this,'q0069b')">线比点检测速度更快</button>
+        </div>
+        <div class="quiz-feedback" id="q0069b"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用一句话 + 一张草图说明：为什么纯色白墙上点特征会「饿死」而线特征还在？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>点是一个局部角点，白墙亮度均匀没有角点可检；线是一条长边（门框/踢脚线/窗框），只要有亮度突变边界就能检，白墙上依然有这些边界。草图见本节第 2 节自绘图。</div></details>
+        </li>
+        <li>线特征的三个经典麻烦是什么？EPLF-VINS 的「端点无关残差」主要解决了哪一个？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>三个麻烦：端点不确定、匹配歧义、参数化麻烦。EPLF 的端点无关残差（用法向量夹角代替端点位置）主要绕开了「端点不确定」——端点怎么抖、线长怎么变，只要方向不变残差就不变。</div></details>
+        </li>
+        <li>AirVO 的线在光照变化下变鲁棒，是靠线自己的机制还是别的？请准确表述。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>靠「搭上」已经很鲁棒的学习式点特征（SuperPoint+SuperGlue）。线通过点到线距离关联到这些点，借用点的匹配与三角化结果来做匹配和三角化，线自己没有光度归一化，也没有专属扛光照的描述子。</div></details>
+        </li>
+        <li>AirSLAM 和 AirVO 是什么关系？它相比 AirVO 主要「加」了什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>AirSLAM 是 AirVO 的期刊续作（同一团队、同一脉，原文自承 extends AirVO）。相比 AirVO 主要加了：PLNet 统一检点线、LightGlue 匹配、stereo-inertial 支持、回环/全局 BA/多级重定位，从而从 VO 升级为完整 SLAM。属整合型工作，PLNet 与多级重定位是真新模块。</div></details>
+        </li>
+        <li>三篇里，谁的「光照鲁棒机制」最直接针对光照？谁几乎没有专门机制？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>最直接针对光照的是 AirSLAM（学习点 + 结构线 PLNet + 7 种光度增强 + 结构图重定位）。几乎没专门机制的是 EPLF-VINS，它只靠线本身比点稳，依赖 VINS-Mono 框架。AirVO 则是靠关联点的鲁棒性间接扛光照。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0068-动态环境视觉惯性2022-五篇横向对比.html">← 0068 动态环境视觉惯性五篇横评</a>
+        <a class="next" href="0070-线特征与光照鲁棒下-消失点与工程鲁棒.html">0070 线特征与光照鲁棒（下） →</a>
+      </div>
+      <p class="foot-note">线不是点的替代品，而是弱纹理与光照场景里的补丁——理解它为什么难，才懂这三篇的巧思 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

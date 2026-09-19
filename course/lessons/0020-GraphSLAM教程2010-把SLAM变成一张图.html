@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>把 SLAM 变成一张图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 B · 打地基 / Lesson 0020</div>
+      <h1>把 SLAM 变成一张图</h1>
+      <p class="subtitle">上一节（BA）从摄影测量的角度讲了同一套最小二乘；这一节换一个入口——从机器人 SLAM 的角度，把问题画成一张图，并从零把公式推一遍 🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：图优化 SLAM 的完整推导</span>
+        <span>👥 作者：Grisetti, Kümmerle, Stachniss, Burgard</span>
+        <span>📅 2011 · <i>A Tutorial on Graph-Based SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 滤波还是平滑</a>
+        <a href="#b">2. 节点、边与前后端</a>
+        <a href="#c">3. 从概率到最小二乘</a>
+        <a href="#d">4. 泰勒展开与线性系统</a>
+        <a href="#e">5. 流形上的增量</a>
+        <a href="#f">6. 回环与真实实验</a>
+        <a href="#g">7. 局限与衔接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：把 full SLAM 后验一步步推到「高斯-牛顿线性系统」；说清节点、边、前端、后端分别是什么；讲明白为什么 3D 必须在流形上做增量、为什么线性系统是稀疏的。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>接 0002（因子图：把问题画成图）、0003（滤波→优化主线）、0019（稀疏结构 + reduced system；式(15) 欠定＝上一节的 gauge freedom，固定一个节点就是它的工程版）。下一节 0021 的 g²o 只讲工程实现，<b>不再重复推导</b>，所以这条推理链今天必须走通。</p></div>
+      </div>
+
+      <h2>1. 滤波还是平滑：SLAM 的两条路线</h2>
+      <p>原文一上来就把 SLAM 的解法做了分类（§I，原话要记牢）：这类方法「<b>classified either as filtering or smoothing</b>」（要么归为滤波，要么归为平滑）。这是理解整篇论文的钥匙，也正好是 0003 课那条「滤波 → 优化」主线的机器人版本。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>滤波 filtering</h4>
+          <p>把问题建模成 <b>on-line state estimation</b>（在线状态估计）：状态只包括「当前机器人位姿 + 当前地图」。新测量来了就增量地修正估计。代表作是 <b>Kalman and information filters</b>、<b>particle filters</b>。因为一路递推，也叫 <b>on-line SLAM</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>平滑 smoothing</h4>
+          <p>估计的是 <b>整条轨迹</b>（机器人的全部历史位姿），处理的是 <b>full SLAM problem</b>，典型手段是 <b>least-square error minimization</b>（最小二乘误差最小化）。它不再只盯着「此刻」，而是回头把整张图一起校正。</p>
+        </div>
+      </div>
+      <p>各自的软肋原文也点明了：滤波只在「当前状态」附近做线性化，因此<b>不是最优</b>的；平滑要面对完整轨迹，<b>计算代价高</b>。图优化的 SLAM 属于平滑这一支——它把整条轨迹当作一个整体去最小化误差。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2010_GraphSLAM-Tutorial/07edef182e273fffcca343c95496d86cd3a5d9a267d87618447322800681dc46.jpg" alt="FIG 4 Dynamic Bayesian Network of the SLAM process">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b><i>The dynamic Bayesian network for the SLAM problem…</i>（SLAM 问题的动态贝叶斯网络。白圈是隐变量：轨迹 $\mathbf{x}_{1:T}$ 与地图 $\mathbf{m}$；蓝/灰节点是观测 $\mathbf{z}_{1:T}$、$\mathbf{u}_{1:T}$。）</p>
+          <p><b>怎么看这张图：</b>它把每个时刻的位姿、地图、观测画成一条「时间链」，箭头表示「谁依赖于谁」——这种画法突出的是<b>时间结构</b>。正因为强调时间顺序，它特别适合滤波那种「一步步递推」的思路（原文：expressing SLAM as a DBN <i>highlights its temporal structure</i>）。</p>
+        </figcaption>
+      </div>
+
+      <p>那有没有一种画法，不突出时间、而突出「空间关系」呢？这就是下一节的图形式。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 节点、边与前后端：SLAM 究竟被拆成了什么</h2>
+      <p>原文给了一个更契合「平滑」的表示：<b>graph-based formulation</b>，它「<i>highlights the underlying spatial structure</i>」（突出底层的空间结构）。在这张图里：</p>
+      <ul>
+        <li><b>节点（node）</b>：机器人的一个个位姿（也可以外加路标 landmark）。简单说就是「我们在哪儿」。</li>
+        <li><b>边（edge）</b>：两个位姿之间的<b>空间约束</b>。相邻位姿之间的边来自<b>里程计</b>（odometry）；其余跳着连的边，来自「同一个环境被多次观测」——也就是<b>回环</b>（loop closure）。</li>
+      </ul>
+      <div class="figure">
+        <img src="../../md/images/2010_GraphSLAM-Tutorial/68301f980edc611b64b837a1647fef6bd4f352f7bfdfd46d6c5272ba4db92a58.jpg" alt="FIG 6 A pose-graph representation of a SLAM process">
+        <figcaption>
+          <p><b>原图注（Fig. 6）：</b><i>Every node in the graph corresponds to a robot pose. Nearby poses are connected by edges that model spatial constraints… Edges between consecutive poses model odometry measurements, while the other edges represent spatial constraints arising from multiple observations of the same part of the environment.</i>（每个节点=机器人位姿；相邻节点的边=里程计约束，其他边=同一环境多次观测产生的空间约束。）</p>
+          <p><b>怎么看这张图：</b>节点就是「我们在哪儿」，边就是「这段约束有多紧」。注意两种边的<b>来源不同</b>——顺着时间连的是里程计，跨时间跳着连的才是回环。回环之所以关键，是因为它能把误差累积「拉回来」。</p>
+        </figcaption>
+      </div>
+
+      <p>图优化把整个问题拆成两件独立的事（§I，这是现代 SLAM 架构的基本分工）：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>前端 front-end</h4>
+          <p>= graph construction（建图）。它把原始传感器数据变成「节点 + 边」。这部分<b>依赖传感器</b>（激光、相机各不相同），脏活累活都在这里。</p>
+        </div>
+        <div class="mini-card">
+          <h4>后端 back-end</h4>
+          <p>= graph optimization（优化）。它面对的是已经抽象好的「节点 + 边」，<b>与传感器无关（sensor agnostic）</b>。只要给我一张图，我就帮你把位姿调得最自洽。本节的算法就是后端。</p>
+        </div>
+      </div>
+
+      <p>那么一条「边」在数学上到底长什么样？下图把右边的抽象边，画成了左边具体的数学量。</p>
+      <div class="figure">
+        <img src="../../md/images/2010_GraphSLAM-Tutorial/75bb24d34020eaa268071e0f86669620f725498961254f606b7ebf0aa151f5ef.jpg" alt="FIG 7 Elements of an edge connecting vertex x_i and x_j">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b><i>…the edge is fully characterized by the error function and the information matrix…</i>（连接 $x_i,x_j$ 的边源自测量 $z_{ij}$；从两节点相对位姿能算出期望测量 $\hat z_{ij}$，误差取决于两者之差；一条边由<b>误差函数</b>与<b>信息矩阵</b> $\boldsymbol\Omega_{ij}$ 完全刻画。）</p>
+          <p><b>怎么看这张图：</b>这就是「图里的边」如何变成数学。蓝色那个误差函数 $\mathbf{e}_{ij}$ 加上权重 $\boldsymbol\Omega_{ij}$，就是一条边的<b>全部信息</b>。后端优化时，其实只认这两个量，不关心它来自激光还是相机——这正是后端「与传感器无关」的原因。</p>
+        </figcaption>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 从概率到最小二乘：把 SLAM 写成一个代价函数</h2>
+      <p>现在开始推公式（§II、§IV）。先写最原始的概率目标——<b>full SLAM 后验</b>：</p>
+      <div class="formula-box flow-formula">
+        $$p(\mathbf{x}_{1:T}, \mathbf{m} \mid \mathbf{z}_{1:T}, \mathbf{u}_{1:T}, \mathbf{x}_0)$$
+      </div>
+      <p>这里 $\mathbf{x}_{1:T}$ 是机器人在 $1$ 到 $T$ 时刻的全部位姿，$\mathbf{m}$ 是地图，$\mathbf{z}$ 是观测，$\mathbf{u}$ 是里程计。原文特别提醒：$\mathbf{x}_0$ 只是用来<b>定义地图的摆放位置</b>（「defines the position of the map」），可以<b>任意选</b>——后面为省事就把它省略了。这其实就是「地图没有绝对坐标系」的另一种说法。</p>
+      <p>在「数据关联已知 + 噪声局部高斯」的假设下，求最大后验等价于求<b>最大似然</b>，进而等价于最小化负对数似然。一条边 $i,j$ 的对数似然是（式2）：</p>
+      <div class="formula-box flow-formula">
+        $$l_{ij} \propto \bigl[\mathbf{z}_{ij} - \hat{\mathbf{z}}_{ij}(\mathbf{x}_i,\mathbf{x}_j)\bigr]^{\top}\boldsymbol{\Omega}_{ij}\bigl[\mathbf{z}_{ij} - \hat{\mathbf{z}}_{ij}(\mathbf{x}_i,\mathbf{x}_j)\bigr]$$
+      </div>
+      <p>其中 $\mathbf{z}_{ij}$ 是这条虚拟测量的均值，$\hat{\mathbf{z}}_{ij}$ 是在当前位姿下「应该」观测到的值，$\boldsymbol\Omega_{ij}$ 是<b>信息矩阵</b>（协方差矩阵的逆，衡量这条约束有多可信）。把误差单独提出来（式3）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{e}_{ij}(\mathbf{x}_i,\mathbf{x}_j) = \mathbf{z}_{ij} - \hat{\mathbf{z}}_{ij}(\mathbf{x}_i,\mathbf{x}_j)$$
+      </div>
+      <p>把所有边的误差平方加起来，就得到总代价（式4–5）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{F}(\mathbf{x}) = \sum_{\langle i,j\rangle\in\mathcal{C}} \mathbf{e}_{ij}^{\top}\boldsymbol{\Omega}_{ij}\mathbf{e}_{ij},\qquad \mathbf{x}^* = \underset{\mathbf{x}}{\operatorname{argmin}}\,\mathbf{F}(\mathbf{x})$$
+      </div>
+      <p>$\mathcal{C}$ 是所有「有约束的边」的集合。一句话概括：<b>SLAM 后端 = 找一组位姿，让所有边的加权误差平方和最小</b>。这就是「图表示成最小二乘」的核心。注意它和 0019 课 BA 的目标函数长得一模一样——只是「边」的含义从「重投影误差」换成了「相对位姿误差」。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 一阶泰勒展开与线性系统：高斯-牛顿怎么走一步</h2>
+      <p>代价函数 $\mathbf{F}$ 是非线性的（因为 $\hat{\mathbf{z}}_{ij}$ 里有旋转）。标准做法是：在「当前猜测」$\breve{\mathbf{x}}$ 附近做<b>一阶泰勒展开</b>（式6–7）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{e}_{ij}(\breve{\mathbf{x}}+\Delta\mathbf{x}) \simeq \mathbf{e}_{ij} + \mathbf{J}_{ij}\Delta\mathbf{x}$$
+      </div>
+      <p>$\mathbf{J}_{ij}$ 是误差函数对全体变量的<b>雅可比</b>（Jacobian，也就是「误差随每个变量怎么变」的斜率矩阵）。把它代回单条边的平方误差，展开后能得到漂亮的二次型（式9–11）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{F}_{ij} \simeq \underbrace{\mathbf{e}_{ij}^{\top}\boldsymbol{\Omega}_{ij}\mathbf{e}_{ij}}_{\mathbf{c}_{ij}} + 2\underbrace{\mathbf{e}_{ij}^{\top}\boldsymbol{\Omega}_{ij}\mathbf{J}_{ij}}_{\mathbf{b}_{ij}}\Delta\mathbf{x} + \Delta\mathbf{x}^{\top}\underbrace{\mathbf{J}_{ij}^{\top}\boldsymbol{\Omega}_{ij}\mathbf{J}_{ij}}_{\mathbf{H}_{ij}}\Delta\mathbf{x}$$
+      </div>
+      <p>把每条边的 $\mathbf{c}_{ij},\mathbf{b}_{ij},\mathbf{H}_{ij}$ 全加起来，得到整张图的二次型 $\mathbf{F}\simeq \mathbf{c}+2\mathbf{b}^{\top}\Delta\mathbf{x}+\Delta\mathbf{x}^{\top}\mathbf{H}\Delta\mathbf{x}$。要最小化它，对 $\Delta\mathbf{x}$ 求导令其为零，就得到一个<b>线性系统</b>（式15–16）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{H}\Delta\mathbf{x}^* = -\mathbf{b},\qquad \mathbf{x}^* = \breve{\mathbf{x}} + \Delta\mathbf{x}^*$$
+      </div>
+      <p>这就是<b>高斯-牛顿（Gauss-Newton）</b>的一步：线性化 → 解 $\mathbf{H}\Delta\mathbf{x}=-\mathbf{b}$ → 把增量加回去 → 再线性化，迭代到收敛。$\mathbf{H}$ 在这里就是系统的信息矩阵。</p>
+
+      <div class="callout">
+        <h4>★ 必须记住的稀疏性原话</h4>
+        <p>原文说 $\mathbf{H}$ 是「<b>sparse by construction</b>, having non-zeros between poses connected by a constraint. <b>Its number of non-zero blocks is twice the number of constraints plus the number of nodes.</b>」（天生稀疏，只在被约束相连的位姿之间有非零块；非零块数 = 2×边数 + 节点数。）因此可用<b>稀疏 Cholesky</b> 分解求解，原文推荐 CSparse 库。</p>
+      </div>
+
+      <p>这正好和上一节 0019 的 BA 对照：BA 里 $\mathbf{H}$ 的稀疏来自「相机-点」的分块结构；这里来自「图的邻接结构」——<b>同一个事实的两种说法</b>。代价之所以能解，全靠这份稀疏。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>图优化后端里，信息矩阵 $\mathbf{H}$ 的非零块数量大约与什么同阶？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。若是满稠密，就和节点数的平方同阶，那才是灾难；正因为稀疏才解得动。" onclick="lessonKit.answer(this,'q0020a')">与节点数的平方同阶（满稠密）</button>
+          <button data-correct="yes" data-explanation="答对。原文原话：非零块数 = 2×边数 + 节点数，与边数同阶，所以每步线性系统都很稀疏。" onclick="lessonKit.answer(this,'q0020a')">与边数同阶（2×边数 + 节点数）</button>
+          <button data-correct="no" data-explanation="不对。约束来自边，不是只看节点；只数节点会漏掉所有连接信息。" onclick="lessonKit.answer(this,'q0020a')">就只等于节点数</button>
+        </div>
+        <div class="quiz-feedback" id="q0020a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 在流形上做增量：为什么 3D 必须用 ⊞</h2>
+      <p>上面那套推导默认「参数是欧氏空间」，但位姿里的<b>旋转</b>不是欧氏的。原文直言 Algorithm 1（直接把增量加到位姿上）「assumes… Euclidean, <b>which is not valid for SLAM and may lead to sub-optimal solutions</b>」（假设欧氏，对 SLAM 不成立，可能得到次优解）。解决办法是到<b>流形（manifold）</b>上做优化。</p>
+      <p>流形可以理解成：<b>全局不是平直空间，但局部可以当成欧氏空间来用</b>（就像地球表面是球面，但你脚下一小块可以当平面）。具体做法是把「增量」和「参数」分开：参数 $\mathbf{x}_i$ 用冗余表示（如四元数），增量 $\Delta\widetilde{\mathbf{x}}_i$ 用最小表示（如单位四元数的向量部分），二者通过一个非线性算子 $\boxplus$ 合成（Algorithm 2，式20、26–27）：</p>
+      <div class="formula-box flow-formula">
+        $$\check{\mathbf{e}}_{ij} \simeq \check{\mathbf{e}}_{ij} + \widetilde{\mathbf{J}}_{ij}\Delta\widetilde{\mathbf{x}},\qquad \widetilde{\mathbf{H}}\Delta\widetilde{\mathbf{x}}^* = -\widetilde{\mathbf{b}},\qquad \mathbf{x}^* = \breve{\mathbf{x}}\boxplus\Delta\widetilde{\mathbf{x}}^*$$
+      </div>
+      <p>3D 里 $\boxplus$ 的具体写法（式43）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{x}_i\boxplus\Delta\widetilde{\mathbf{x}}_i = \mathbf{x}_i\oplus\begin{pmatrix}\Delta\widetilde{\mathbf{t}}_i \\ \Delta\widetilde{\mathbf{q}}_i \\ \sqrt{1-\lVert\Delta\widetilde{\mathbf{q}}_i\rVert^2}\end{pmatrix}$$
+      </div>
+      <p>那个 $\sqrt{1-\lVert\Delta\widetilde{\mathbf{q}}_i\rVert^2}$ 就是在「补回」四元数的第四个分量，保证结果仍是合法的单位四元数。2D 的误差函数长这样（式30，SE(2)）：</p>
+      <div class="formula-box flow-formula">
+        $$\mathbf{e}_{ij} = \begin{pmatrix} \mathbf{R}_{ij}^{\top}\bigl(\mathbf{R}_i^{\top}(\mathbf{t}_j-\mathbf{t}_i)-\mathbf{t}_{ij}\bigr) \\ \theta_j-\theta_i-\theta_{ij}\end{pmatrix}$$
+      </div>
+      <p>原文的实用结论很干脆：<b>2D 的 SE(2) 不需要流形</b>（不过参数化、没有优势）；<b>3D 必须用流形</b>，而且两种参数化会收敛到同一解，差别只在<b>收敛速度</b>，不在单次迭代时间。下面这张图最能说明问题。</p>
+      <div class="figure">
+        <img src="../../md/images/2010_GraphSLAM-Tutorial/d1dd77e11c96feb1704d7349429be565d5fad672d78f36a1fe68d92c991e3b5b.jpg" alt="FIG 12 Evolution of the error F(x) for Euler angles and manifold linearization">
+        <figcaption>
+          <p><b>原图注（Fig. 12）：</b><i>Evolution of the error F(x) for Gauss-Newton optimization with Euler angles and with manifold linearization to the 3D sphere dataset.</i>（3D 球面数据集上，用 Euler 角与流形线性化的高斯-牛顿误差演化对比。）</p>
+          <p><b>怎么看这张图：</b>一种做法（Euler 角，直接加角度）前期误差下降、后期<b>发散</b>；另一种（流形线性化）稳定地<b>收敛</b>到真值。3D 里直接拿角度相加会撞上「奇异点」（比如万向锁），必须在流形上用 $\boxplus$ 做增量才能避开。</p>
+        </figcaption>
+      </div>
+      <div class="callout">
+        <h4>埋个伏笔</h4>
+        <p>这个「在流形上做增量」的写法，到 0029/0030 课的<b>预积分（pre-integration）</b>里会大量出现——那时我们要在 IMU 的流形上累积增量，用的正是同一套 $\boxplus$ 思路。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 回环到底怎么找候选，以及真实实验有多快</h2>
+      <p>回环是图优化的灵魂，但「该和谁连边」是个难题。原文明确说：拿当前扫描去和<b>所有历史扫描</b>匹配是「<i>extremely inefficient and error prone</i>」（极其低效又容易出错）的。那怎么办？做法是用当前位姿的 <b>3σ 边缘协方差</b>来挑候选。</p>
+      <p>这个协方差来自 <b>reduced Hessian</b> $\mathbf{H}_{\text{red}}$ 的逆的对角块；$\mathbf{H}_{\text{red}}$ 是把 $\mathbf{H}$ 里「新插入位姿」对应的行和列删掉后得到的，原文称它是「假设当前位置固定时，整条轨迹的信息矩阵」。注意这里又出现了 <b>reduced</b>——和上一节 0019 的 Schur 消元是<b>同一族思想</b>：都是「先消掉一部分变量，得到剩余变量的紧凑系统」。</p>
+
+      <div class="figure">
+        <img src="../../md/images/2010_GraphSLAM-Tutorial/fe30b65ec0f9f682ad88983825afb377bc82632e4f1595f484009c94b0d96397.jpg" alt="FIG 5 MIT Killian Court before and after optimization">
+        <figcaption>
+          <p><b>原图注（Fig. 5）：</b><i>…the MIT Killian Court data set. The left image shows the trajectory and map before optimization, the right image after optimization…</i>（MIT Killian Court 数据集，左为优化前、右为优化后，地图由按位姿渲染的激光扫描得到。）</p>
+          <p><b>怎么看这张图：</b>左图轨迹<b>重影</b>、地图散乱，那是里程计误差一路累积的结果；右图经过一次全局优化，轨迹闭合、地图对齐成一致的样子。这就是「回环闭合 + 全局最小二乘」最直观的魔法。</p>
+        </figcaption>
+      </div>
+
+      <p>真实数字（§V-A，请抄准）：在 <b>Intel Research Lab</b> 数据集上，最终图有 <b>1,802 个节点、3,546 条边</b>；在一台标准笔记本（<b>Intel Core2 @ 2.4 GHz</b>）上，一次优化只要 <b>100 ms</b>。机器人速度约 <b>1 m/s</b>——慢到「每加一个节点就优化一遍」也完全来得及。换句话说，图优化后端快得足以做准在线。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>「平滑」类图优化（本篇）和「滤波」类方法（0003 课）相比，主要区别是？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。那只估计当前位姿是滤波的做法；平滑估计的是整条轨迹。" onclick="lessonKit.answer(this,'q0020b')">只估计机器人当前这一刻的位姿</button>
+          <button data-correct="yes" data-explanation="答对。平滑处理 full SLAM problem，估计整条轨迹，靠最小二乘把整张图一起校正。" onclick="lessonKit.answer(this,'q0020b')">估计整条轨迹并一次性最小化全部误差</button>
+          <button data-correct="no" data-explanation="不对。滤波同样处理噪声，而且图优化也需要好的初值，并非更不怕噪声。" onclick="lessonKit.answer(this,'q0020b')">它不需要任何初始猜测</button>
+        </div>
+        <div class="quiz-feedback" id="q0020b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 局限与衔接：这节课为 0021 铺好了路</h2>
+      <p>原文坦诚地列出了边界（务必记住，幻觉常出在这里）：</p>
+      <ul>
+        <li><b>数据关联已知</b>（§IV）：本文不做关联，只保留「最可能的拓扑」。原文提到 spectral clustering、joint compatibility branch and bound、backtracking，但<b>本文不涉及</b>。多模态会让复杂度组合爆炸，所以不加鲁棒核。</li>
+        <li><b>依赖好初值</b>：高斯-牛顿从 $\breve{\mathbf{x}}$ 出发，初值差可能不收敛。</li>
+        <li><b>欧氏参数化不成立</b>：前面讲过，3D 必须在流形上做增量。</li>
+        <li><b>式(15) 是欠定的</b>：因为「整体刚体变换」下误差不变（平移旋转整张图，误差不变）。所以<b>必须固定一个节点</b>——要么给 $\mathbf{H}_{[11]}$ 加上单位矩阵 $\mathbf{I}$，要么删掉第 $k$ 个块行块列。</li>
+      </ul>
+      <div class="callout">
+        <h4>和 0019 串起来</h4>
+        <p>「固定一个节点」正是上一节 <b>gauge freedom</b>（规范自由度）的工程版：SLAM/BA 里绝对位姿不可观，必须钉死一个自由度。钉法不同，本质一样。</p>
+      </div>
+      <p>到这里，我们走完了「概率 → 最小二乘 → 线性系统 → 稀疏求解 → 流形增量」的完整链条。<b>下一节 0021 的 g²o 只讲工程怎么落地，不再重复推导</b>——所以今天这些公式，就是下节课的代码骨架。</p>
+    </section>
+
+    <section class="section-card">
+      <div class="exercise-box">
+        <h3>课后练习</h3>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 1：写出 full SLAM 后验并解释 $\mathbf{x}_0$</summary>
+          <div>
+            <p>后验为 $p(\mathbf{x}_{1:T}, \mathbf{m} \mid \mathbf{z}_{1:T}, \mathbf{u}_{1:T}, \mathbf{x}_0)$。$\mathbf{x}_0$ 只用来<b>决定地图被摆在坐标系的哪个位置</b>，可以任意选取；它没有可观测性，所以论文随后把它省略。这和「固定一个节点」解决 gauge freedom 是同一件事的两面。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 2：展开 $\mathbf{F}_{ij}$ 的二次型</summary>
+          <div>
+            <p>由 $\mathbf{e}_{ij}(\breve{\mathbf{x}}+\Delta\mathbf{x})\simeq\mathbf{e}_{ij}+\mathbf{J}_{ij}\Delta\mathbf{x}$ 代入平方误差并展开：</p>
+            <p>$\mathbf{F}_{ij}\simeq\mathbf{e}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{e}_{ij} + 2\mathbf{e}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{J}_{ij}\Delta\mathbf{x} + \Delta\mathbf{x}^{\top}\mathbf{J}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{J}_{ij}\Delta\mathbf{x}$。</p>
+            <p>于是 $\mathbf{c}_{ij}=\mathbf{e}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{e}_{ij}$，$\mathbf{b}_{ij}=\mathbf{e}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{J}_{ij}$，$\mathbf{H}_{ij}=\mathbf{J}_{ij}^{\top}\boldsymbol\Omega_{ij}\mathbf{J}_{ij}$。全图累加得 $\mathbf{b}=\sum\mathbf{b}_{ij}$、$\mathbf{H}=\sum\mathbf{H}_{ij}$。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 3：为什么式(15) 欠定？两种固定节点的做法</summary>
+          <div>
+            <p>因为把整条轨迹做同一个刚体变换（平移+旋转），所有边的误差都不变，所以 $\mathbf{H}\Delta\mathbf{x}^*=-\mathbf{b}$ 有无穷多解（欠定）。两种钉法：①给第 $k$ 个对角块加上单位矩阵 $\mathbf{I}$（软约束）；②直接从线性系统里删掉第 $k$ 个块行与块列（硬约束）。论文 Algorithm 1 固定第一个节点 $\mathbf{x}_1$。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 4：2D 与 3D 在参数化上的根本区别</summary>
+          <div>
+            <p>2D 旋转是 1 个角，可直接用欧氏参数化、用 $\boxplus$ 退化为普通加法，<b>无需流形</b>（论文明说无优势）。3D 旋转是 SO(3)，用四元数/旋转矩阵是<b>过参数化</b>，直接相加会破坏约束、撞上奇异点，所以必须用 $\boxplus$ 在流形上施加最小增量。两者收敛到同一解，差别只在收敛速度。</p>
+          </div>
+        </details>
+
+        <details class="exercise-answer">
+          <summary>展开查看答案 · 练习 5：回环候选为何用 3σ 边缘协方差，而非匹配全部历史</summary>
+          <div>
+            <p>和所有历史扫描匹配「极其低效又易错」（原文原话）。用当前位姿的 3σ 边缘协方差圈定候选，等于「只在当前最可能所在的附近去找回环」，既快又准。这个协方差来自 reduced Hessian $\mathbf{H}_{\text{red}}$（删掉新位姿行列后的 $\mathbf{H}$）之逆的对角块——又是一次「先消元、再得剩余变量系统」的 reduced 思想，与 Schur 同族。</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0019-BA下-Schur消元与鲁棒核.html">← 上一课：BA（下）· Schur 消元与鲁棒核</a>
+        <a class="next" href="0021-g2o优化库2011-因子图求解器的工程实现.html">下一课：g²o（2011）· 因子图求解器的工程实现 →</a>
+      </div>
+      <p class="foot-note">把 SLAM 画成一张图，数学就安静地排好队了 🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

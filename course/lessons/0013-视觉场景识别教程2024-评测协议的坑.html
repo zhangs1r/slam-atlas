@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视觉场景识别教程（2024）：评测协议的坑 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 A · 建立坐标系 / Lesson 0013</div>
+      <h1>视觉场景识别教程（2024）：评测协议的坑</h1>
+      <p class="subtitle">导语 🗺️ 你以为"图像检索"和"在地图里认出老地方"是一回事？这篇 2024 年的 VPR 首篇 tutorial 会告诉你：它们很像，但差之毫厘、评测谬以千里。本课带你把 VPR 的"问题定义—流水线—相似度矩阵—软真值—指标—常见坑"一条线捋顺，尤其是那些<strong>连老手都会踩的评测陷阱</strong>。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：视觉场景识别（VPR）的问题定义与评测方法论</span>
+        <span>👥 作者：Stefan Schubert, Peer Neubert, Sourav Garg, Michael Milford, Tobias Fischer</span>
+        <span>📅 2024 · <i>Visual Place Recognition: A Tutorial</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">1. 什么是 VPR 与"同一地点"的两种定义</a>
+        <a href="#b">2. 流水线四步与五大用例</a>
+        <a href="#c">3. 相似度矩阵 S 的长相由轨迹决定</a>
+        <a href="#d">4. 反直觉的软真值 GT^soft</a>
+        <a href="#e">5. 指标、公式与十大常见坑</a>
+        <a href="#f">6. 开放挑战</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>搞清 VPR 到底是什么、本教程采用的"同一地点"定义是什么，以及这个定义如何直接决定评测真值怎么标。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>0012 讲动态环境下的视觉 SLAM 几何/语义主线；本课是更底层的"地图里怎么认出老地方"——它是回环检测与重定位的入口，也是 0014 回环检测综述的姊妹篇。</p></div>
+      </div>
+
+      <h2>1. 什么是 VPR 与"同一地点"的两种定义</h2>
+
+      <p><strong>VPR（Visual Place Recognition，视觉场景识别）</strong>就是"仅凭图像，认出当前看到的地方此前是否见过"的能力。原文定义得很直白：它是 <em>the ability to recognize previously seen places in the world based solely on images</em>。本质上，它是一个<strong>图像检索（image retrieval）问题</strong>——给定查询图像，去数据库里找最像的。但它又<strong>不是普通的图像检索</strong>：上下文额外提供了结构和信息，比如车载相机连续拍的帧在空间上是相邻的。换句话说，VPR 占了"我大致知道相机是怎么运动的"这个便宜，因而能在剧烈外观/视角变化下把同一地点认出来。</p>
+
+      <p>判断两幅图是不是"同一个地方"，是整篇教程最关键的一个约定。请盯紧下面这句话——</p>
+
+      <div class="callout"><h4>本教程的定义（必须记住）</h4><p>两幅图<strong>必须有视觉重叠（visual overlap）</strong>，即共享图像内容（比如同一栋楼、同一段路），才算"拍于同一地点"。这样匹配成功后才能去估计两图之间的相机变换（位姿）。</p></div>
+
+      <p>而另一派（文献 [9]）的定义是：<strong>只按位置（position）判定两地点是否相同，不考虑朝向、也不考虑视觉重叠</strong>。两派定义差别看似抠字眼，实则"牵一发而动全身"——<strong>它直接决定评测里的"真值（ground truth）"该怎么标</strong>。如果用位置派的定义，那么"同一 GPS 坐标但朝向不同、画面毫无共同点"的图对会被标成"真匹配"；用本教程的视觉重叠派，这种图对就不是匹配。后续所有指标都建立在真值之上，所以第一步定义错了，后面全错。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>机器人夏天从左往右拍了一段路，冬天又从右往左拍了同一段路（同一 GPS 走廊，但画面朝向相反、重叠很少）。按本教程的"视觉重叠"定义，这两组图算"同一地点"吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对的。只要两组图共享图像内容（同一段路的视觉内容），就有视觉重叠，本教程就判为同一地点；朝向和季节不同不影响这一判定。" onclick="lessonKit.answer(this,'q0013a')">算，因为有视觉重叠</button>
+          <button data-correct="no" data-explanation="错。仅凭'位置相同'判定是文献[9]那派的定义，不是本教程采用的定义。本教程要求视觉重叠。" onclick="lessonKit.answer(this,'q0013a')">不算，因为朝向不同</button>
+          <button data-correct="no" data-explanation="错。是否'同一地点'取决于视觉重叠，而不是采集季节。季节不同但画面内容重叠，仍算同一地点。" onclick="lessonKit.answer(this,'q0013a')">不算，因为夏天和冬天外观差太多</button>
+        </div>
+        <div class="quiz-feedback" id="q0013a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 流水线四步与五大用例</h2>
+
+      <p>一个通用的 VPR 流水线就四步（原文 Fig. 1，也是全课骨架）：</p>
+
+      <div class="flow-formula">
+        <span>① 逐图算描述子 d</span> → <span>② 两两比较描述子</span> → <span>③ 构成相似度矩阵 S</span> → <span>④ 做匹配决策</span>
+      </div>
+
+      <p>输入是两组图像：<strong>数据库 DB</strong>（已知地点的"地图"，常在最理想条件下、或由另一平台采集）和<strong>查询集 Q</strong>（"实时视角"，可能隔了几天到几年才拍）。最终目标是：对每张查询图，决定它和哪些数据库图是同一地点。描述子（descriptor）一般是一个数值向量（如 128 维、4096 维），同一地点的描述子应相近，不同地点的应相远。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/fc51c6dc07871497cb2a5ae4fbcbe433eb04dc3fae15cffc2a5b92014f8cf6d8.jpg" alt="FIGURE 1 VPR 关键步骤与组件">
+        <figcaption>
+          <strong>原图注（Fig. 1）：</strong> This figure illustrates the key steps and components of VPR as outlined in the “Introduction” section. Historically, the matching decisions in step 4 were used for loop closure in SLAM.（这张图展示了"引言"中所述 VPR 的关键步骤与组件。历史上第 4 步的匹配决策被用于 SLAM 的闭环。）<br>
+          <strong>怎么看这张图：</strong> 从左到右就是上面那四步的具象化：先给每张图提取一个向量描述子，再把查询图和数据库图两两比对得相似度，聚成相似度矩阵 S，最后由阈值/几何验证得出"哪些图对是同一地点"。注意右下角的小字——第 4 步的匹配决策正是 SLAM 里做回环闭环的来源，所以 VPR 和 SLAM 是"父子"关系。
+        </figcaption>
+      </figure>
+
+      <p>VPR 的问题可以按<strong>三个维度</strong>切分（原文 Table 1）：</p>
+      <ul>
+        <li><strong>输入维</strong>：single-session VPR（Q 与 DB 是同一集合，自己比自己） vs multisession VPR（DB 与 Q 是两个不相交集合）。</li>
+        <li><strong>数据处理维</strong>：online VPR（Q 图像递增到来，集合不断变大） vs batch VPR（Q、DB 一开始就全知道、都是常量）。</li>
+        <li><strong>输出维</strong>：single-best-match（每张查询图只返回一个最像的库图） vs multimatch（找出查询图对应的<em>所有</em>库图）。</li>
+      </ul>
+
+      <p>这三维组合出五种典型用例：① 6-DoF 视觉定位的候选选择（multisession + online + 固定 DB）；② 在线 SLAM 的回环检测与重定位（single-session + online）；③ 建图（mapping）的回环（single-session + batch）；④ 多 session 建图（multisession + batch）；⑤ 多机器人建图的共享地点检测（multisession + online + 增长 DB）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/dfb804b04acaeb18158c1d6a6fa16970f359dcb600b98e73fc0758d81882d848.jpg" alt="FIGURE 2(a)">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/2e0c7b978927c576342056b399cc51ae4be3ee16007d86342562c5589bf4deec.jpg" alt="FIGURE 2(b)">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/e45ba4948d48528e3f966fb38d4f8d2d220f69af849757065a2b028a0569e55f.jpg" alt="FIGURE 2(c)">
+        <figcaption>
+          <strong>原图注（Fig. 2）：</strong> An overview of VPR use cases. (a) VPR selects candidate images from the database for visual (re-)localization, then runs expensive 6-DoF pose estimation. (b) VPR detects loop closures in SLAM (green arrows) or relocalizes after mislocalization / the kidnapped robot. (c) In multisession / multirobot mapping, VPR finds shared places to merge maps.（VPR 用例总览：(a) 为视觉（重）定位先选候选图，再做昂贵的 6-DoF 位姿估计；(b) 在 SLAM 中做闭环检测或"被绑架机器人"重定位；(c) 在多 session/多机器人建图中批量或在线地找共享地点以合并地图。）<br>
+          <strong>怎么看这三张图：</strong> (a) 是"先粗筛候选、再精算位姿"的省钱套路——VPR 当过滤器，把整个数据库里最像的几张挑出来，才交给昂贵的 6-DoF 算法；(b) 绿箭头就是回环：机器人绕一圈又回到老地方，VPR 把它认出来，把累积误差"拉直"；(c) 则是把两台机器人各自建的图，靠"都去过的地方"拼接成一张大图。三张图合起来说明：VPR 是几乎所有建图/定位系统的公共前置组件。
+        </figcaption>
+      </figure>
+
+      <div class="callout"><h4>描述子选型的场景相关结论（原文原话级）</h4><p>原文写道：<em>"CNN-based holistic descriptors like AlexNet-conv3 [15] perform well in situations with low or negligible viewpoint changes but perform poorly with large viewpoint changes. On the other hand, VLAD-based descriptors like NetVLAD [29] tend to perform better in settings with large viewpoint changes."</em> 翻译过来就是：<strong>基于 CNN 的整体描述子（如 AlexNet-conv3）在小视角变化下好用，大视角变化下拉胯；而基于 VLAD 的描述子（如 NetVLAD）更抗大视角变化</strong>。所以选描述子不是"越深越好"，而是"看场景的视角变化有多大"。</p></div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 相似度矩阵 S 的长相由轨迹决定</h2>
+
+      <p>把所有"查询图 × 数据库图"的相似度排成一个矩阵 S，本教程说它<strong>长什么样完全取决于相机采集 DB 和 Q 时的轨迹</strong>。这一节是全教程独有、也最值得教学的地方——看 S 的纹理，就能反推机器人怎么走的。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/e1384bb1456614e9ba2f1a6ff6c78921e079d87a12677734b0c4fac7d1da8a74.jpg" alt="FIGURE 3 相似度矩阵 S 与轨迹关系">
+        <figcaption>
+          <strong>原图注（Fig. 3）：</strong> The relation between the similarity matrix S and the trajectory during the database and query run. Green/orange cameras depict DB/Q images; green/orange lines indicate images recorded as video along a trajectory. (b.i) rabbit/turtle = fast/slow; (b.iii) traffic lights = stops in Q (T=2), DB (T=3), or both (T={2,4}).（相似度矩阵 S 与数据库/查询采集轨迹的关系。绿/橙相机=DB/Q 图像；绿/橙线表示沿轨迹像视频一样连续采集。(b.i) 兔子/乌龟表示快/慢；(b.iii) 红绿灯表示在 Q、DB 或两者处停车 T 个时间步。）<br>
+          <strong>怎么看这张图：</strong> 把每一小格当成"某张查询图 vs 某张数据库图"的相似度（亮=像）。(a) 无序采集时 S 一团乱麻，没有规律；(b) 沿轨迹连续采集时，亮线沿对角线出现——这就是"时空序列"结构。(b.i) 同速时亮线是 45° 斜线，速度不同斜率就变；(b.ii) 查询地点不在 DB 里时亮线断开；(b.iii) 用红绿灯表示停车：DB 停车→同一列竖直亮线，Q 停车→同一行水平亮线，两边都停→亮块。看懂这些花纹，你就能从 S 里读出机器人的运动。
+        </figcaption>
+      </figure>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>无序采集</h4><p>S 里没有任何可见模式（典型：全局地理定位）。</p></div>
+        <div class="mini-card"><h4>沿轨迹连续采集</h4><p>出现连续高相似线；同速则 45° 斜率，速度不同斜率变化。</p></div>
+        <div class="mini-card"><h4>查询地点不在 DB</h4><p>高相似线<strong>断开</strong>。</p></div>
+        <div class="mini-card"><h4>DB 中停车</h4><p>同一列出现<strong>竖直</strong>高相似线。</p></div>
+        <div class="mini-card"><h4>查询中停车</h4><p>同一行出现<strong>水平</strong>高相似线。</p></div>
+        <div class="mini-card"><h4>两边都停</h4><p>出现高相似<strong>块</strong>。</p></div>
+        <div class="mini-card"><h4>DB 中有回环</h4><p>单个查询出现<strong>多个匹配 DB 图</strong>，且这些匹配图在图像集中<strong>不连续</strong>。</p></div>
+      </div>
+      <p class="foot-note">📌 关键判据：DB 中"停车"造成的是<strong>同一列连续</strong>的多个匹配；而 DB 中"回环"造成的是<strong>不连续</strong>的多个匹配——这是把"停车"和"回环"在 S 上区分开来的依据。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 反直觉的软真值 GT^soft</h2>
+
+      <p>评测前要有一张<strong>真值矩阵 GT</strong>，标记哪些图对是同一地点（gt<sub>ij</sub>=true）。但问题来了：有些图对只有<strong>一点点视觉重叠</strong>——你<em>不应该</em>指望算法非认出它们不可（否则太苛刻），可万一算法真的把它们认出来了，你也不该罚它。于是教程引入了 <strong>GT^soft（软真值）</strong>，它是 GT 的"膨胀版"。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/1f4457f1ca899079f2cfa32177e38b72708f36b73b72cf86c8356a74342d28f9.jpg" alt="FIGURE 4(a) 查询图">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/24beebf763b98b3f791f33e5da10ff0c913c2677bff4c4506c34971d13bff89c.jpg" alt="FIGURE 4(b)">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/74e5cade2e536c048faf46ab38535e11cca6b0ec15e68238c2c176b1d2ab7ba2.jpg" alt="FIGURE 4(c)">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/3324c72a8b00243c85c99301ed2cbaae37ca8fa8132524b187ea661436e1ba96.jpg" alt="FIGURE 4(d)">
+        <figcaption>
+          <strong>原图注（Fig. 4）：</strong> (a) Query image. (b) Same location, high visual overlap, gt=true, gt^soft=true. (c) Same location, small visual overlap, gt=false, gt^soft=true. (d) Different location, no visual overlap, gt=false, gt^soft=false.（(a) 查询图；(b) 同地点高重叠，gt=true, gt^soft=true；(c) 同地点小重叠，gt=false, gt^soft=true；(d) 不同地点零重叠，gt=false, gt^soft=false。）<br>
+          <strong>怎么看这四张图：</strong> (b) 完全重合、毫无争议，gt 和 gt^soft 都为真；(c) 是核心——同一地点但只重叠一小块，本教程认为"不该强求算法认出它"，所以 gt=false，但若算法偏偏认出来了也不算错，于是 gt^soft=true；(d) 完全不重叠、不同地点，两者都为假。GT^soft 多出来的那些 true，正是给"模糊重叠对"留的免罚名额。
+        </figcaption>
+      </figure>
+
+      <p>把 GT^soft 的三条使用规则（原文 Eq. 5–7）记牢：</p>
+      <div class="formula-box">
+        $$ \mathbf{GT} = \mathrm{true} \quad\Rightarrow\quad \text{图对【必须】被匹配} \tag{5} $$
+        $$ \neg\mathbf{GT} \land \mathbf{GT}^{\mathrm{soft}} = \mathrm{true} \quad\Rightarrow\quad \text{图对【可以但不必须】被匹配（评测时通常忽略）} \tag{6} $$
+        $$ \mathbf{GT}^{\mathrm{soft}} = \mathrm{false} \quad\Rightarrow\quad \text{图对【绝对不能】被匹配} \tag{7} $$
+      </div>
+      <p>一句话总结：<strong>GT^soft 是 GT 的膨胀版本，多出的 true 对应"有少量视觉重叠"的图对，目的是不惩罚模型对这类模糊对的匹配</strong>。评测时，满足 Eq. 6 的"可匹配可不匹配"对通常被直接忽略，不计入 TP/FP。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某算法把一对"只有很小视觉重叠"的图（gt=false, gt^soft=true）匹配上了。按本教程评测协议，这算 false positive（FP，错误匹配）吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不算。因为 gt^soft=true 属于 Eq.6 的'可匹配可不匹配'情形，评测时这类对通常被忽略，不计入 FP，目的正是'不惩罚'这种模糊对的匹配。" onclick="lessonKit.answer(this,'q0013b')">不算，应忽略、不计入 FP</button>
+          <button data-correct="no" data-explanation="错。gt=false 只是说'不该强求认出'，但由于 gt^soft=true，认出来并不算错，不能当 FP。" onclick="lessonKit.answer(this,'q0013b')">算，因为 gt=false</button>
+          <button data-correct="no" data-explanation="错。只有当 gt^soft=false（Eq.7）时，匹配才被绝对禁止并计为 FP。这里 gt^soft=true。" onclick="lessonKit.answer(this,'q0013b')">算，因为它违反 Eq.7</button>
+        </div>
+        <div class="quiz-feedback" id="q0013b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 指标、公式与十大常见坑</h2>
+
+      <p>给定相似度矩阵 S（或二值匹配 M）和真值 GT（及可选的 GT^soft），VPR 用一组检索指标衡量好坏。先上公式（符号已按原文修正，见下方"OCR 勘误"）：</p>
+
+      <div class="formula-box">
+        $$ P = \frac{\#\mathrm{TP}}{\#\mathrm{TP}+\#\mathrm{FP}},\qquad R = \frac{\#\mathrm{TP}}{\#\mathrm{GTP}} $$
+        $$ \#\mathrm{TP} = \sum_{\forall i,j}\{1,\ \text{if } gt_{ij}\land m_{ij};\ 0,\ \text{otherwise}\} $$
+        $$ \#\mathrm{FP} = \sum_{\forall i,j}\{1,\ \text{if } \neg gt_{ij}\land m_{ij};\ 0,\ \text{otherwise}\} $$
+        $$ s_{ij} = \frac{\mathbf{d}_i^{T}\cdot\mathbf{d}_j}{\|\mathbf{d}_i\|\cdot\|\mathbf{d}_j\|}\ (\text{余弦相似度});\qquad s_{ij} = -\|\mathbf{d}_i-\mathbf{d}_j\|\ (\text{负欧氏距离}) $$
+      </div>
+      <p>其中：<strong>TP</strong>（true positive，真正例）= 实际匹配、且被正确判为匹配的图对数；<strong>FP</strong>（false positive，假正例）= 实际不匹配、却被误判为匹配的图对数；<strong>GTP</strong>（ground-truth positives）= 真值里"应匹配"的总数。PR 曲线靠扫阈值得到：对每个阈值 θ<sub>k</sub>，凡 s<sub>ij</sub> ≥ θ<sub>k</sub> 就判匹配，再统计 TP<sub>k</sub>：</p>
+      <div class="formula-box">
+        $$ \#\mathrm{TP}_k = \sum_{\forall i,j}\{1,\ \text{if } gt_{ij}\land(s_{ij}\ge\theta_k);\ 0,\ \text{otherwise}\} $$
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Visual_Place_Recognition__A_Tutorial__Tutorial_/4497ff2095e63e354241fec3f113a35bcfab6fadc9699a3f8bd02aec4f555d04.jpg" alt="FIGURE 5 multimatch VPR 评测流水线">
+        <figcaption>
+          <strong>原图注（Fig. 5）：</strong> The evaluation pipeline for multimatch VPR, including the precision-recall curve and the AUPRC. Given S, GT and GT^soft, a range of thresholds θ_k is applied to obtain binary matching decisions M_k, labeled as TP/FP/FN/TN, then converted into a PR curve and AUPRC.（multimatch VPR 的评测流水线：给定 S、GT、GT^soft，用一列阈值 θ_k 从 min(S) 扫到 max(S)，得到每个阈值的二值匹配决策 M_k，配合真值标注 TP/FP/FN/TN，转成 PR 曲线与 AUPRC。）<br>
+          <strong>怎么看这张图：</strong> 这是整节"评测"的主流程图。左边绿色是相似度矩阵 S，右边一列阈值像"水龙头"一样从松到紧；每拧到一个 θ_k，就得到一张二值匹配图 M_k，再拿真值去贴标签（TP/FP/FN/TN），点出一个 PR 点。把所有 θ_k 连起来就是 PR 曲线，曲线下绿色面积就是 AUPRC。记住：你看到的一条 PR 曲线，本质是"阈值扫出来的"。
+        </figcaption>
+      </figure>
+
+      <p>原文列出的指标全家福：<strong>Precision、Recall、PR 曲线、AUPRC、R@100P（maximum recall at 100% precision）、recall@K</strong>，外加 mean / best-case / worst-case 三种报告方式。</p>
+
+      <div class="callout"><h4>🚨 原文逐条强调的"常见坑"（每条都有出处）</h4><ol>
+        <li><strong>算法不同、问题不同，不能直接比。</strong>原文："not address the same VPR problem"——请求的输出图数等不同，方法根本不在比同一件事。</li>
+        <li><strong>小重叠图对不该被惩罚。</strong>必须用 GT^soft（见第 4 节）。</li>
+        <li><strong>TN 通常不评估。</strong>VPR 是"typically imbalanced classification problem"，#TN ≫ #TP、#FP、#FN。</li>
+        <li><strong>R@100P 会失效。</strong>若 precision 从未达到 1，该指标<strong>无定义</strong>，需退化为 99% / 95% precision 下的最大 recall。</li>
+        <li><strong>recall@K 的适用边界。</strong>它要求"每张查询图在 DB 中至少有一个匹配"，<strong>做 mapping 时该指标无定义</strong>（因为存在新地点）。</li>
+        <li><strong>无探索定位场景下</strong>，recall@1 与 precision at 100% recall 是同一个数。</li>
+        <li><strong>single-session VPR 必须抑制刚拍过的近邻图。</strong>独立 VPR 系统"often use heuristics"，完整 SLAM 靠运动模型。</li>
+        <li><strong>在线（递增集合）会禁用一批方法</strong>，如基于全体描述子统计量的 descriptor standardization、similarity matrix decomposition。</li>
+        <li><strong>单指标不足以说明问题</strong>，应报告多数据集上的 mean / best-case / worst-case。</li>
+        <li><strong>R@100P 的历史地位已变（原文原话，极重要）：</strong> "In the past, this metric was important to evaluate VPR methods for loop closure detection in SLAM. Keeping the precision at P = 1 avoids the wrong loop closures and, consequently, mapping errors. <strong>However, since the advent of robust graph optimization techniques for SLAM [33], the avoidance of wrong loop closures has become less relevant. With robust graph optimization, it is more important to find enough correct loop closures (TP) than to avoid wrong loop closures (FP).</strong> Therefore, using multimatch VPR to identify all loop closures should be preferred over tuning the R@100P for such applications." —— 翻译：过去为了 SLAM 闭环，必须 precision=1 以避免错误回环；<strong>但鲁棒图优化出现后，避免错回环已不那么重要，找到足够多正确的回环（TP）比避免错的（FP）更关键</strong>，所以这类应用应优先用 multimatch 找出所有回环，而不是去死磕 R@100P。</li>
+      </ol></div>
+
+      <div class="callout"><h4>📝 本课的 OCR 勘误（PDF→Markdown 转换引入的错误，已修正）</h4>
+        <ul>
+          <li><strong>Eq. 1 多出一个 σ：</strong> md 原文写作 <code>σ_{Sij} = −dist_ij</code>，但原图应为 <code>s_{ij} = −dist_{ij}</code>——OCR 把字母 s 误识别成希腊字母 σ。本课公式已按正确的 <code>s_{ij}</code> 书写。</li>
+          <li><strong>Eq. 11 / Eq. 12 花括号错位、丢分支：</strong> md 中两个求和式的大括号只开了没闭合，缺 <code>0, otherwise</code> 分支；本课已补全为正规的 <code>{1, if…; 0, otherwise}</code> 形式。</li>
+          <li><strong>上标 ^soft 被识别成 ^{50ħ} / ^{5 0 †}：</strong> md 多处把"软真值"的上标识别错乱，本课统一用正确的 <code>^soft</code>。</li>
+          <li><strong>标题缺空格：</strong> "CHALLENGES AND COMMON WAYS OFADDRESSING THEM" 应为 "OF ADDRESSING"（md 第 397 行）。</li>
+          <li><strong>孤儿图片提示：</strong> md 中的 <code>49129818b7…</code> 其实是 TABLE 1 的版式原图裁剪件，并非独立图表；本课 TABLE 1 内容以正文文字转述，未引用该图以免误导。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 开放挑战</h2>
+      <p>教程在结论中点名了四项开放挑战：<strong>system integration（系统集成）、enriched reference maps（更丰富的参考地图）、view synthesis（视角合成）、design of a "one-fits-all" solution（通用统一方案）</strong>，并声明本教程不展开。原文也坦承范围限制——<em>"the integration of VPR methods into a complete SLAM or relocalization system are beyond the scope of this tutorial"</em>（把 VPR 集成进完整 SLAM/重定位系统，超出了本教程范围）。配套代码仓库见 https://github.com/stschubert/VPR_Tutorial。</p>
+      <p class="foot-note">🧭 一句话收尾：VPR 看似只是"图像检索"，但"同一地点怎么定义、S 矩阵怎么读、GT^soft 怎么用、R@100P 何时失效"这四件事，决定了你能不能公平地评价和比较一个方法。下一课（0014）我们会从"回环检测综述"的角度，再来看同一批指标，那时你会看到一个和本课第 10 条坑<strong>看似矛盾、实则随时间演进</strong>的精彩对照。</p>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用一句话区分 single-session VPR 与 multisession VPR，并各举一个用例。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>single-session：Q 与 DB 是同一集合、自己比自己（如 online SLAM、mapping 的回环检测）。multisession：DB 与 Q 是两个不相交集合、不同时刻/平台采集（如 6-DoF 视觉定位的候选选择、多机器人建图）。</div></details>
+        </li>
+        <li>本教程对"同一地点"的定义是什么？它与文献 [9] 的定义差异会如何影响真值标注？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>本教程要求两图有"视觉重叠"（共享图像内容）才算同一地点；[9] 只按位置判定、不顾朝向与视觉重叠。差异在于：位置派会把"同坐标但无视觉重叠"的图对标成真匹配，视觉重叠派不会——这直接决定了 GT 怎么标、后续指标怎么算。</div></details>
+        </li>
+        <li>在相似度矩阵 S 中，如何区分"DB 中停车"与"DB 中有回环"？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>DB 中停车→同一列出现<strong>连续</strong>的竖直高相似线；DB 中有回环→单个查询出现多个匹配 DB 图，且这些匹配图在图像集中<strong>不连续</strong>。是否"连续"是二者的判据。</div></details>
+        </li>
+        <li>为什么 R@100P 在 precision 从未达到 1 时无定义？此时应退化成什么指标？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为 R@100P 的定义是"precision=1（即零 FP）时的最大 recall"，如果整条 PR 曲线 precision 都到不了 1，就不存在这样的点，故无定义。原文建议退化为 99% 或 95% precision 下的最大 recall。</div></details>
+        </li>
+        <li>为什么做 mapping（含新地点）时 recall@K 无定义？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>recall@K 要求"每张查询图在 DB 中至少有一个匹配"，这是无探索定位场景的假设；而 mapping 中会有新地点（查询图在 DB 中根本没有匹配），该假设破产，指标无定义。若强行忽略无匹配查询图，则等于没测"探索新地点"的能力。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0012-动态环境视觉SLAM综述2024-从几何到语义.html">← 动态环境视觉 SLAM 综述（2024）</a>
+        <a class="next" href="0014-回环检测综述2022-指标与假阳性铁律.html">回环检测综述（2022）→</a>
+      </div>
+      <p class="foot-note">认定义、读 S 矩阵、懂 GT^soft，你就能看穿大多数 VPR 论文的评测话术了 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>
