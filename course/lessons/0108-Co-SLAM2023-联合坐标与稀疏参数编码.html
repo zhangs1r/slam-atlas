@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Co-SLAM（2023）：联合坐标与稀疏参数编码 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0108</div>
+      <h1>Co-SLAM（2023）：联合坐标与稀疏参数编码</h1>
+      <p class="subtitle">一个编码不可能既平滑又锐利，那就把「低频」和「高频」两个一起用 🔀</p>
+      <div class="hero-meta">
+        <span>🎯 主题：one-blob 坐标编码 · hash 网格 · 全局 BA</span>
+        <span>👥 作者：H. Wang 等（伦敦大学学院）</span>
+        <span>📅 2023 · <i>Co-SLAM: Joint Coordinate and Sparse Parametric Encodings for Neural Real-Time SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#errata">语料库勘误（必读）</a>
+        <a href="#oneblob">one-blob 编码是什么</a>
+        <a href="#joint">联合编码：低频 vs 高频</a>
+        <a href="#gba">全局 BA</a>
+        <a href="#speed">速度数字</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="errata">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 one-blob 编码和 hash 网格各自管什么频段；解释「并联」而非「二选一」的动机；讲清全局 BA 与前几篇局部 BA 的区别；报出它的实时速度数字。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>Co-SLAM 的 hash 编码与第二季 <b>0038</b> Instant NGP 的多分辨率哈希<b>直接同族</b>——它明确用了 Instant NGP 的 hash 编码。区别在于 Instant NGP 是离线、可整场先训，而 Co-SLAM 是<b>在线一边建一边训</b> + 并联 one-blob 补其「不会补洞」的短板。</p>
+        </div>
+      </div>
+
+      <h2>1. 语料库勘误（本节必读，如实说明）</h2>
+
+      <div class="callout">
+        <h4>一个必须说清的语料库问题</h4>
+        <p>路线图把「Co-SLAM」与「Co-SLAM 期刊版」列成两行，但<b>语料库里这两行指向的是同一篇论文的重复录入</b>（正文词数完全相同），且<b>语料库里没有期刊版</b>。另外，按文件名模糊匹配会误命中 <b>2022_DiSCo-SLAM.md</b>——那是<b>多机器人激光 SLAM</b>，与 Co-SLAM 完全无关（拼写相近但差一个字母，内容天差地别）。</p>
+        <p>因此本节<b>只使用 2023_Co-SLAM.md</b> 这一份，并明确声明：上文提到的「期刊版」在本语料库中为重复条目，不做区分处理。这是核对源文件后的如实结论，不是疏漏。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="oneblob">
+      <h2>2. one-blob 编码是什么：为什么不直接用 hash</h2>
+
+      <p>Co-SLAM 的地图由两路并联组成。要理解它，先要理解「为什么需要两路」。</p>
+
+      <ul>
+        <li><b>纯坐标 MLP（iMAP 那一路）</b>：平滑、连贯，能<b>补洞</b>（没看见的地方会合理猜测），但<b>慢</b>、易遗忘；</li>
+        <li><b>纯参数网格（NICE 那一路）</b>：<b>快</b>、记细节好，但<b>不会补洞、缺连贯性</b>（原文 Figure 2 直接展示）。</li>
+      </ul>
+
+      <p>于是 Co-SLAM 想：<b>别二选一，两个都留。</b>它用 one-blob 坐标编码 \(\gamma(x)\) 提供<b>低频连贯 / 补洞</b>的先验，用<b>多分辨率 hash 特征网格</b> \(V_\alpha\) 提供<b>高频局部 / 快收敛</b>。one-blob 是作者对多频正弦位置编码的一种替换设计——它把坐标映射成一段平滑的「blob」（钟形）基，专门负责大块、连贯的形状，而不是去硬记高频细节。</p>
+
+      <p>为什么要 one-blob 而不是直接上 hash？因为<b>只有 hash 会「快但不补洞」</b>。把坐标编码那一路并进来，正是为了补 hash 的这块短板。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">两种编码「并联」：一个管平滑、一个管锐利</text>
+
+          <!-- 同一 3D 点 -->
+          <circle cx="120" cy="240" r="8" fill="#e53935"/>
+          <text x="120" y="270" text-anchor="middle" font-size="12" fill="#c62828">同一</text>
+          <text x="120" y="288" text-anchor="middle" font-size="12" fill="#c62828">3D 点</text>
+          <path d="M132 240 L260 200" stroke="#37474f" stroke-width="1.8"/>
+          <path d="M132 240 L260 290" stroke="#37474f" stroke-width="1.8"/>
+
+          <!-- 低频支路 -->
+          <rect x="260" y="150" width="280" height="100" rx="10" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1.4"/>
+          <text x="400" y="176" text-anchor="middle" font-size="13" font-weight="700" fill="#2e7d32">低频：one-blob 坐标编码</text>
+          <!-- 缓慢起伏曲线 -->
+          <path d="M280 240 Q 330 200, 380 230 T 480 225 T 530 228" fill="none" stroke="#2e7d32" stroke-width="2.4"/>
+          <text x="400" y="236" text-anchor="middle" font-size="11" fill="#2e7d32">缓慢起伏</text>
+          <text x="400" y="252" text-anchor="middle" font-size="11" fill="#2e7d32">擅长大块平滑表面</text>
+
+          <!-- 高频支路 -->
+          <rect x="260" y="280" width="280" height="100" rx="10" fill="#fff3e0" stroke="#ffa726" stroke-width="1.4"/>
+          <text x="400" y="306" text-anchor="middle" font-size="13" font-weight="700" fill="#e65100">高频：hash 多分辨率网格</text>
+          <!-- 锯齿曲线 -->
+          <polyline points="280,340 300,330 320,348 340,328 360,346 380,330 400,348 420,328 440,346 460,330 480,346 500,332 520,344"
+                    fill="none" stroke="#e65100" stroke-width="2.4"/>
+          <text x="400" y="368" text-anchor="middle" font-size="11" fill="#e65100">细密锯齿</text>
+          <text x="400" y="384" text-anchor="middle" font-size="11" fill="#e65100">擅长细纹理</text>
+
+          <!-- 拼起来 -->
+          <path d="M540 200 L600 240" stroke="#37474f" stroke-width="1.8"/>
+          <path d="M540 330 L600 250" stroke="#37474f" stroke-width="1.8"/>
+          <rect x="600" y="200" width="120" height="90" rx="10" fill="#37474f"/>
+          <text x="660" y="236" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">小 MLP</text>
+          <text x="660" y="258" text-anchor="middle" font-size="11" fill="#cfd8dc">解 SDF/颜色</text>
+          <path d="M720 245 L800 245" stroke="#2e7d32" stroke-width="2"/>
+          <path d="M800 245 L792 240 L792 250 Z" fill="#2e7d32"/>
+          <text x="840" y="249" font-size="12" fill="#1b5e20">几何</text>
+
+          <text x="450" y="448" text-anchor="middle" font-size="12.5" fill="#5a4a42">两支特征拼接后一起喂解码器——不是加权求和，而是「并联」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个三维点，分成两支编码，最后拼起来送进小网络。<br>
+          <b>怎么看这张图：</b>① 上支是 <b>one-blob 坐标编码</b>，画成一条缓慢起伏的曲线，擅长表达大块平滑表面、能补没看见的洞；② 下支是 <b>hash 高频编码</b>，画成细密锯齿，擅长表达砖缝、椅腿这类细纹理，但自己不会补洞；③ 两支<b>拼接</b>成一条向量，一起喂给小 MLP 解出几何与颜色——注意是「并联放进同一个向量」，不是各算各的再加权求和。<br>
+          <b>要记住的一句话：</b>一个编码不可能既平滑又锐利，那就两个一起用。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="joint">
+      <h2>3. 联合编码：低频与高频如何并联、各管什么</h2>
+
+      <p>查询某点时，两路各自产出特征，拼接后喂进解码器：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f_\tau(\gamma(x),V_\alpha(x))\mapsto (h,s),\qquad f_\phi(\gamma(x),h)\mapsto c$$</div>
+      </div>
+
+      <p>其中 \(\gamma(x)\) 是 one-blob 坐标编码（低频、连贯、补洞），\(V_\alpha(x)\) 是多分辨率 hash 网格插值特征（高频、局部、快），两者拼接后先过几何解码器 \(f_\tau\) 出 SDF \(s\) 与中间量 \(h\)，再过颜色 MLP \(f_\phi\) 出颜色 \(c\)。</p>
+
+      <ul>
+        <li><b>低频支路（坐标编码）</b>：负责大块连贯形状、负责「没观测到的地方也能合理猜」；</li>
+        <li><b>高频支路（hash 网格）</b>：负责局部细节、负责快收敛；</li>
+        <li><b>并联</b>：两路特征拼成一条向量，一起进解码器——互补而非替代。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Co-SLAM/203b0cc0b8cfd14eac65764d37000bd494be20e00b6df126b555530cfcdba9fc.jpg" alt="Co-SLAM Figure 2 effect of encodings on completion">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>COORDINATE based encodings achieve hole filling but require long training times. PARAMETRIC encodings allow fast training, but fail to complete unobserved regions. JOINT coordinate and parametric encoding (Ours) allows smooth scene completion and fast training.<br>
+          <b>怎么看这张图：</b>这是「频段分工」最直观的一张。左：只用坐标编码——能补洞但慢；中：只用参数（hash）编码——快但不会补洞、缺连贯；右：<b>并联</b>——又快又补全。三栏对照把「为什么要两路并联」说尽了。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="gba">
+      <h2>4. 全局 BA：允许对所有关键帧做联合优化</h2>
+
+      <p>这是 Co-SLAM 相对前几篇的一个范式突破。前面 NICE-SLAM 的 BA 是<b>局部的</b>：只在「与当前帧有视觉重叠」的若干关键帧里做（因为 NICE 改一处牵动全局，只能小窗口）。Co-SLAM 因为用了 hash 网格（局部性好），可以放开手脚做<b>全局 BA</b>：</p>
+
+      <ul>
+        <li>mapping 阶段从<b>所有关键帧</b>的全局池里随机采样 \(N_g\) 条光线；</li>
+        <li>交替优化场景参数 θ 与累积位姿梯度（第 116–126 行）；</li>
+        <li>因此<b>不需要存储完整关键帧图像，也不需要关键帧选择</b>——每帧只存约 5% 像素。</li>
+      </ul>
+
+      <p>前几篇（iMAP / NICE）因为信息挤在全局结构里，只能做局部或窗口 BA，鲁棒性差；Co-SLAM 用「局部性好的 hash + 并联坐标编码」换来了「可以从整条轨迹取光线」的自由。下面这张图把「局部 BA 窗口」和「全局 BA 大池」画成对比。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">局部 BA（小窗口）vs 全局 BA（所有关键帧）</text>
+
+          <!-- 轨迹 -->
+          <path d="M70 360 Q 250 200, 450 280 T 830 180" fill="none" stroke="#90a4ae" stroke-width="2"/>
+          <g fill="#5c6bc0">
+            <circle cx="90" cy="350" r="7"/><circle cx="190" cy="290" r="7"/><circle cx="300" cy="250" r="7"/>
+            <circle cx="410" cy="268" r="7"/><circle cx="520" cy="250" r="7"/><circle cx="630" cy="220" r="7"/>
+            <circle cx="740" cy="190" r="7"/><circle cx="820" cy="180" r="7"/>
+          </g>
+
+          <!-- 局部窗口 -->
+          <rect x="360" y="215" width="120" height="100" rx="8" fill="#fff3e0" stroke="#ffa726" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <text x="420" y="332" text-anchor="middle" font-size="12" fill="#e65100">仅相邻关键帧</text>
+          <!-- 局部连线 -->
+          <g stroke="#e65100" stroke-width="1.6">
+            <line x1="410" y1="268" x2="460" y2="258"/><line x1="410" y1="268" x2="360" y2="262"/>
+          </g>
+
+          <!-- 全局池 -->
+          <rect x="60" y="60" width="780" height="300" rx="12" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1.4" stroke-dasharray="6 4" opacity="0.55"/>
+          <text x="450" y="356" text-anchor="middle" font-size="12" fill="#2e7d32">从所有关键帧随机取光线（大池子）</text>
+          <!-- 全局连线（粗细分表示约束强弱） -->
+          <g stroke="#2e7d32" stroke-width="1.4">
+            <line x1="90" y1="350" x2="450" y2="268" stroke-width="1.2"/>
+            <line x1="190" y1="290" x2="520" y2="250" stroke-width="2"/>
+            <line x1="300" y1="250" x2="630" y2="220" stroke-width="2.4"/>
+            <line x1="740" y1="190" x2="410" y2="268" stroke-width="1.6"/>
+            <line x1="820" y1="180" x2="520" y2="250" stroke-width="1.2"/>
+          </g>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一条轨迹上的关键帧，两种 BA 各自「从哪些帧取约束」。<br>
+          <b>怎么看这张图：</b>① 橙框是 NICE 式的<b>局部 BA 窗口</b>——只在相邻几个关键帧里取光线，窗口外的事不管；② 绿框是 Co-SLAM 的<b>全局 BA</b>——从整条轨迹的所有关键帧里随机取光线（虚线大池），连线的粗细表示约束强弱、分布更广；③ 前者易漂、后者因为参考了全轨迹而更鲁棒，也由此可以放弃「关键帧选择」这一步。<br>
+          <b>要记住的一句话：</b>局部性好的表示，才敢做全局 BA。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Co-SLAM/bd63efac809d2ee7a73cec91f504316c979e49830fbed969ff8465a6b7c23b9d.jpg" alt="Co-SLAM Figure 3 overview">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Overview of Co-SLAM. 1) Scene representation: using our new joint coordinate+parametric encoding … 2) Tracking … 3) Mapping: global bundle adjustment to jointly optimize the scene representation and camera poses taking rays sampled from all keyframes.<br>
+          <b>怎么看这张图：</b>它把「坐标编码 + hash 网格 → 两浅 MLP → RGB/SDF」与「track / map / 全局 BA」画全了。重点看 3) 那句「rays sampled from all keyframes」——这就是本节主角全局 BA 的原文出处。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="speed">
+      <h2>5. 速度数字：标题就强调 real-time</h2>
+
+      <p>Co-SLAM 的实时性是其卖点（标题与摘要都强调 real-time）。关键数字：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">Co-SLAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">对照（NICE）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>帧率（Replica）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>17.4 FPS</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">0.91 FPS</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>帧率（ScanNet / TUM）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">12–13 Hz</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">0.1–1 Hz</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>参数量</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">仅 0.26 M</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">17.4 M</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Replica Depth L1 (cm)</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1.51</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1.90</td></tr>
+        </tbody>
+      </table>
+
+      <p>相比 NICE，Co-SLAM 在精度相近或更好的前提下，速度提升了约 <b>10–20 倍</b>，参数量却只有零头（0.26 M vs 17.4 M）。它原文承认的局限：依赖 RGB-D、对光照变化与深度不准敏感；未做信息引导采样（仍随机像素）；<b>不做回环</b>（第 203 行）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Co-SLAM/692880f95ef34ec08a67251d63d2e4a73d5093edfec1d40726c57c8864d2fccf.jpg" alt="Co-SLAM Figure 1 overview title image">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We present Co-SLAM, a neural RGB-D SLAM method that performs online tracking and mapping in real time … joint coordinate and sparse-parametric encoding with global bundle adjustment … plausible hole-filling.<br>
+          <b>怎么看这张图：</b>这是标题图，点出了三个关键词——「并联编码」「全局 BA」「省内存」。把这张图和上面的 Fig. 2、Fig. 3 连起来看，整篇的骨架就清楚了。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Co-SLAM 为什么能放弃「关键帧选择」这一步、直接做全局 BA？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。hash 网格局部性好，改一处只影响附近，因此可以从「所有关键帧」的全局池随机取光线做 BA，而不会像 NICE 那样牵一发动全身。局部性好的表示，才敢做全局 BA——由此每帧只存约 5% 像素也能放弃关键帧选择。" onclick="lessonKit.answer(this,'q0108a')">hash 网格局部性好，敢取全轨迹光线</button>
+          <button data-correct="no" data-explanation="不对。Co-SLAM 仍是实时在线系统，并没有把整场先训好；它恰恰是「在线一边建一边训」。Instant NGP 才是离线、可整场先训的那一个，而 Co-SLAM 多出的硬约束正是「在线」。" onclick="lessonKit.answer(this,'q0108a')">因为它离线先把全场训好了</button>
+        </div>
+        <div class="quiz-feedback" id="q0108a"></div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么 Co-SLAM 不直接用 hash 网格、还要并联一路 one-blob 坐标编码？请结合 Fig. 2 说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>因为<b>只有 hash 会「快但不补洞、缺连贯」</b>。Fig. 2 三栏对照：坐标编码能补洞但慢、参数（hash）编码快但不补洞、并联两者又快又补全。</p>
+            <p>one-blob 坐标编码提供低频连贯先验与补洞能力，hash 提供高频细节与快收敛。两者<b>并联</b>拼接进解码器，正好互补——所以不是「二选一」，而是「两个都留」。</p>
+          </div></details>
+        </li>
+        <li>用一句话解释「联合编码（joint encoding）」里低频支路与高频支路各管什么频段。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p><b>低频支路</b>（one-blob 坐标编码）：管大块连贯形状、负责补未观测区；<b>高频支路</b>（hash 多分辨率网格）：管局部细节、负责快收敛。</p>
+            <p>查询点的特征 = 两路特征拼接后一起喂解码器，即 \(f_\tau(\gamma(x),V_\alpha(x))\mapsto(h,s)\)，再 \(f_\phi(\gamma(x),h)\mapsto c\)。注意是「并联进同一向量」，不是加权求和。</p>
+          </div></details>
+        </li>
+        <li>Co-SLAM 的「全局 BA」和 NICE-SLAM 的「局部 BA」在做法上有何本质区别？为什么前者更鲁棒？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>NICE 的 BA 只在「与当前帧有视觉重叠」的相邻关键帧窗口里做（因为单 MLP/稠密网格改一处牵动全局）；Co-SLAM 从<b>所有关键帧</b>的全局池随机采样光线做 BA，且不需要关键帧选择（每帧只存约 5% 像素）。</p>
+            <p>更鲁棒的原因：全局 BA 参考了整条轨迹的约束，不会像局部窗口那样因短期漂移累积而失准。敢这么做，根子在于 hash 网格<b>局部性好</b>——改一处只动附近，才允许从全轨迹取光线。</p>
+          </div></details>
+        </li>
+        <li>Co-SLAM 在速度上相对 NICE 提升多少？报出具体数字，并指出它仍没解决什么。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>Replica 上 <b>17.4 FPS</b> vs NICE 0.91 FPS（约 19 倍）；ScanNet/TUM 上 12–13 Hz vs 0.1–1 Hz。参数量仅 0.26 M（NICE 17.4 M）。</p>
+            <p>仍没解决：依赖 RGB-D、对光照/深度误差敏感、未做信息引导采样、<b>不做回环</b>（第 203 行）。回环这条债要等本季后半段才还。</p>
+          </div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0107-Vox-Fusion与ESLAM-八叉树与特征平面.html">← Vox-Fusion 与 ESLAM：八叉树与特征平面</a>
+        <a class="next" href="0109-Point-SLAM2023-把特征挂在点云上.html">Point-SLAM（2023）：把特征挂在点云上 →</a>
+      </div>
+      <p class="foot-note">Co-SLAM 把「平滑」和「锐利」拧成一股绳，还顺手把 BA 放大到全轨迹。下一节看表示怎么跟着数据本身走 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

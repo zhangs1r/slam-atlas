@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态场景三种打法 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0114</div>
+      <h1>动态场景三种打法</h1>
+      <p class="subtitle">当静态假设被打破，稠密地图长出的不是几个坏点，而是整块幽灵 👻</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态环境中的隐式 / 学习式 SLAM</span>
+        <span>👥 作者：DytanVO / RoDyn-SLAM / OVD-SLAM 各团队</span>
+        <span>📅 2023 / 2024 · <i>DytanVO / RoDyn-SLAM / OVD-SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#thesis">题眼：整块幽灵几何</a>
+        <a href="#dytan">DytanVO：掩码 VO</a>
+        <a href="#rodyn">RoDyn：动态掩码闸门</a>
+        <a href="#ovd">OVD：语义加权</a>
+        <a href="#framework">三层框架</a>
+        <a href="#table">横向对比与收束</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="thesis">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：讲清「在稠密 / 隐式表示里，动态物体的代价从『几个坏特征』升级成『整块幽灵几何』」这个题眼；用第三季 <b>0068</b> 的「判定 / 处理 / 代价」三层框架，逐篇拆解 DytanVO、RoDyn-SLAM、OVD-SLAM；并在结尾回应第一季 <b>0012</b> 的判断。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节的题眼直接承接第三季 <b>0068</b> 课（动态环境五篇，讲的是「稀疏特征被污染」）——本季代价升级了。收束处回应第一季 <b>0012</b> 课「没有任何单一方法被证明普遍更优」。OVD-SLAM 还接第四季 <b>0082</b> 课 SuMa++（语义剔动态）作为「特征点层面」的对应物。</p>
+        </div>
+      </div>
+
+      <h2>1. 题眼：动态物体在稠密地图里长出整块幽灵</h2>
+
+      <p>先立一个必须讲透的观点——它是本节的灵魂：</p>
+
+      <div class="callout">
+        <h4>★ 本节题眼</h4>
+        <p>在<b>稀疏特征</b> SLAM 里，一个移动的人只会污染「落在他身上的那几个特征点」——代价是局部的、有限的。但在<b>稠密 / 隐式</b>表示里，动态物体造成的不是「几个坏特征」，而是<b>整块「幽灵几何」</b>：因为地图是连续场，动的人会在他走过的每一处都留下一串半透明的残影，最终糊成一大片虚假结构。</p>
+      </div>
+
+      <p>第三季 <b>0068</b> 课讲的「动态环境五篇」还停留在稀疏特征被污染；本季进入稠密隐式，<b>代价升级了</b>——从「几个点不可信」变成「一整片几何在撒谎」。这正是为什么下面三篇要专门对付它。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">一个办公室：有人走动、椅子被推开</text>
+
+          <!-- 场景 -->
+          <rect x="40" y="48" width="540" height="300" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <!-- 墙与地 -->
+          <rect x="70" y="80" width="480" height="150" fill="#eef2f6" stroke="#b8c4d0" stroke-width="1"/>
+          <rect x="70" y="230" width="480" height="90" fill="#dfe6ec" stroke="#b8c4d0" stroke-width="1"/>
+          <text x="310" y="160" text-anchor="middle" font-size="12" fill="#8aa0b2">静的墙与地板（蓝色像素）</text>
+
+          <!-- 静的桌子 -->
+          <rect x="360" y="200" width="120" height="40" fill="#7fb0d6" stroke="#3b6e95" stroke-width="1.4"/>
+          <text x="420" y="225" text-anchor="middle" font-size="11" fill="#1f4a6b">桌子（静）</text>
+
+          <!-- 走动的人：红像素 -->
+          <g fill="#e74c3c">
+            <circle cx="150" cy="210" r="6"/><circle cx="165" cy="206" r="5"/><circle cx="180" cy="214" r="6"/><circle cx="195" cy="208" r="5"/>
+            <circle cx="160" cy="225" r="5"/><circle cx="178" cy="228" r="5"/><circle cx="192" cy="222" r="5"/>
+          </g>
+          <text x="175" y="255" text-anchor="middle" font-size="11" fill="#c0392b">走动的人（红色像素）</text>
+          <!-- 像素轨迹乱线 -->
+          <polyline points="120,205 150,210 180,214 205,206 175,228 145,222 200,216 165,230"
+                    fill="none" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="4 3"/>
+          <text x="175" y="278" text-anchor="middle" font-size="10.5" fill="#c0392b">像素轨迹（乱窜）</text>
+
+          <!-- 被推开的椅子：红 -->
+          <g fill="#e74c3c">
+            <rect x="270" y="215" width="34" height="26" rx="3"/><rect x="278" y="241" width="6" height="14"/><rect x="290" y="241" width="6" height="14"/>
+          </g>
+          <text x="287" y="278" text-anchor="middle" font-size="10.5" fill="#c0392b">被推开的椅子（红）</text>
+
+          <!-- 静态像素标注 -->
+          <g fill="#2e9e6b">
+            <circle cx="100" cy="160" r="4"/><circle cx="120" cy="170" r="4"/><circle cx="140" cy="150" r="4"/><circle cx="450" cy="180" r="4"/><circle cx="470" cy="160" r="4"/>
+          </g>
+          <text x="430" y="116" text-anchor="middle" font-size="10.5" fill="#2f6d51">静的像素（蓝绿）</text>
+
+          <!-- 右下：推断出的动态掩码 -->
+          <rect x="610" y="48" width="250" height="300" rx="10" fill="#fff" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="735" y="76" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">推断出的动态掩码</text>
+          <rect x="640" y="100" width="190" height="200" fill="#f4f6f8" stroke="#b8c4d0" stroke-width="1"/>
+          <!-- 红块被排除 -->
+          <g fill="#e74c3c" opacity="0.65">
+            <circle cx="690" cy="160" r="16"/><circle cx="710" cy="175" r="18"/>
+            <rect x="730" y="170" width="40" height="30" rx="4" opacity="0.65"/>
+          </g>
+          <text x="735" y="305" text-anchor="middle" font-size="11" fill="#c0392b">红色区域被排除在建图之外</text>
+          <text x="735" y="330" text-anchor="middle" font-size="11.5" fill="#5a4a42">静态假设一破，稠密</text>
+          <text x="735" y="348" text-anchor="middle" font-size="11.5" fill="#5a4a42">地图就长出整块幽灵</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是一个办公室——一个人在走动、一把椅子被推开。动的像素（红）与静的像素（蓝绿）用不同颜色标出，并画出<b>同一个像素在前后几帧的乱窜轨迹</b>（图里简写作「像素轨迹（乱窜）」）；右格是「推断出的动态掩码」，那些乱的像素被涂红、排除在建图之外。<br>
+          <b>怎么看这张图：</b>① 左格的重点是「动的人/椅上的像素」和「静地板/墙上的像素」被明确分开；② 那条虚线轨迹说明动态像素在后帧位置乱跳；③ 右格说明：把这些红色区域排除，就是要阻止它们污染地图。<br>
+          <b>要记住的一句话：</b>静态假设一旦破，稠密地图会长出整块幽灵——这就是本节题眼。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="dytan">
+      <h2>2. DytanVO：纯学习式 VO，动态 = 掩码</h2>
+
+      <p>DytanVO（2023，IROS）是三篇里最「激进」的一个：它是<b>纯学习式 VO，没有显式地图</b>。三个网络——匹配网络（PWC-Net 光流）、位姿网络（ResNet50）、运动分割网络（U-Net）——<b>迭代联合精化</b>，3 次迭代就够。</p>
+
+      <div class="callout">
+        <h4>★ 诚实标注</h4>
+        <p>DytanVO 是<b>纯学习式</b>、<b>没有显式地图</b>。它输出的是位姿序列 + 运动掩码，不是一张持久地图。所以它对付动态的方式是「<b>根本不建那块地图</b>」——直接把动态区域从位姿解算里屏蔽掉。</p>
+      </div>
+
+      <p>用 0068 的三层框架套：</p>
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">环节</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">DytanVO 怎么做的</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>判定依据</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">运动分割网络给出的「动态性概率掩码」</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>处理方式</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">掩码加权位姿（在「无动态运动」的光流上估位姿）+ 三者联合精化迭代</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>代价</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">分割 / 位姿联合损失；当前景运动占约 80% 且背景无纹理时会发散</td></tr>
+        </tbody>
+      </table>
+
+      <p>亮点：<b>zero-shot</b> 直接泛化到 KITTI / AirDOS-Shibuya（不微调），ATE 平均比次优 VO 提升 27.7%；RTX 2080 上 3 次迭代约 160 ms。它是「唯一在拥挤行人场景保持追踪的学习式 VO」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_DytanVO__Joint_Refinement_of_Visual_Odometry_and_Motion_/14ebd45a33a1a2814601e60a85d138b82a3faa1037baa9beb9d3fa60d6066ce6.jpg" alt="DytanVO Fig.1 overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>A overview of the DytanVO. (a) Input frame at t0 and t1; (b) Optical flow from matching network; (c) Motion segmentation after iterations; (d) Trajectory on AirDOS-Shibuya crowded scene. Ours is the only learning-based VO that keeps track.<br>
+          （中译：总览。(a) t0/t1 输入帧；(b) 匹配网络光流；(c) 迭代后运动分割；(d) AirDOS-Shibuya 拥挤场景轨迹，本文是唯一保持追踪的学习式 VO。）<br>
+          <b>怎么看这张图：</b>① (c) 的分割掩码就是「判定依据」的可视化；② (d) 在满街行人的场景里轨迹仍贴合，说明「动态 = 掩码」这条路在纯 VO 上走得通。注意：它<b>没有地图</b>，只输出位姿。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_DytanVO__Joint_Refinement_of_Visual_Odometry_and_Motion_/ba18bfe0a866a49fe3578bb48daa6818e8b94223f7cc47beeee35921c422152b.jpg" alt="DytanVO Fig.2 three-stage architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of our three-stage network architecture. A matching network estimates optical flow; a pose network estimates pose based on optical flow without dynamic movements; a motion segmentation network outputs a probability mask of the dynamicness. The matching network is forwarded only once while the pose and segmentation networks iterate.<br>
+          （中译：三阶段网络架构总览。匹配网络估光流；位姿网络在去掉动态运动的光流上估位姿；运动分割网络输出动态性概率掩码。匹配网络只前向一次，位姿与分割网络迭代。）<br>
+          <b>怎么看这张图：</b>这张图是「联合精化」的工程实现——光流只算一次，位姿和分割互相喂、迭代几次收敛。它是 0068 框架里「判定+处理」的端到端版本。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_DytanVO__Joint_Refinement_of_Visual_Odometry_and_Motion_/b68fd561a49ae0489b5d4984bab4d9fd812ae4f9a60db7f03ea48e537a078240.jpg" alt="DytanVO Fig.4 KITTI dynamic sequences">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Qualitative results on dynamic sequences in KITTI Odometry 01, 03, 04 and 10. First row: segmentation outputs of moving objects; second row: trajectory aligned with ground truth. Ours produces precise odometry given large dynamic areas.<br>
+          （中译：KITTI 01/03/04/10 动态序列定性结果。上排：移动物体分割；下排：与真值对齐的轨迹。本文在图像大面积动态时仍给出精确里程计。）<br>
+          <b>怎么看这张图：</b>即使大面积都是动态（红色分割），下排轨迹依然准——这是「掩码加权位姿」有效性的硬证据。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="rodyn">
+      <h2>3. RoDyn-SLAM：RGB-D NeRF 上的动态掩码闸门</h2>
+
+      <p>RoDyn-SLAM（2024，ICRA）是三篇里<b>唯一在隐式场层面去动态</b>的。它用 RGB-D 输入 + <b>NeRF 隐式地图（多分辨率哈希网格）</b>做稠密动态 SLAM。鲁棒性来自一道「动态掩码闸门」：让移动物体既不污染地图、也不拖垮位姿。</p>
+
+      <p>用 0068 框架套：</p>
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">环节</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">RoDyn-SLAM 怎么做的</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>判定依据</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">光流掩码 + 语义掩码<b>融合</b>成运动掩码（迭代优化光流掩码去噪）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>处理方式</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">只对在静态区域的光线采样 / 反向传播（动态光线被过滤）+ 分治位姿优化（关键帧 / 非关键帧分开）</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>代价</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">多损失加权（SDF/深度/颜色/edge warp）；语义掩码仅覆盖<b>预定义类别</b>，未定义类别动态漏检</td></tr>
+        </tbody>
+      </table>
+
+      <p>它在 BONN / TUM RGB-D 动态序列上优于基线，重建网格<b>无 floaters（漂浮物）</b>。这是本季模块「隐式 + 动态」的正面答案之一——和上一课 Orbeez（静态世界）正好对照：Orbeez 不处理动态，RoDyn 专门处理。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_RoDyn-SLAM__Robust_Dynamic_Dense_RGB-D_SLAM_With_Neural_/51827f29cbbc309b0d765c852b097aef1a21b5499564ffc69f0db5b92080b3f2.jpg" alt="RoDyn-SLAM Fig.1 schematic">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Schematic illustration of the proposed method. Given a series of RGB-D frames, we simultaneously construct the implicit map and camera pose via multi-resolution hash grid …<br>
+          （中译：方法示意。给定 RGB-D 帧序列，用多分辨率哈希网格同时构建隐式地图与相机位姿……）<br>
+          <b>怎么看这张图：</b>看它列出的全部监督损失（SDF / 深度 / 颜色 / edge warp），以及「动态掩码」在哪一步介入——它过滤掉打在动态物体上的无效采样光线。这正是「闸门」的位置。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_RoDyn-SLAM__Robust_Dynamic_Dense_RGB-D_SLAM_With_Neural_/e9c3ed10a9e19a93227d9047b492b0e7ce80216472db6428a30817999028f993.jpg" alt="RoDyn-SLAM Fig.2 motion mask generation">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Qualitative results of the generation motion mask. By iteratively optimizing the optical flow mask, the fused optical mask can be more precise without noises. The semantic mask can only identify dynamic objects within predefined categories. The best results are obtained with our method.<br>
+          （中译：运动掩码生成定性结果。迭代优化光流掩码后融合更准、无噪声；语义掩码只能识别预定义类别的动态物体；本文方法最佳。）<br>
+          <b>怎么看这张图：</b>① 看「迭代优化光流掩码 → 融合更准」；② 注意图注自己承认：<b>语义掩码只能识别预定义类别</b>——这是它的边界，未定义类别的动态会漏检。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_RoDyn-SLAM__Robust_Dynamic_Dense_RGB-D_SLAM_With_Neural_/d5b761228b62851619c4a4877afdc19658ede04a84d01a7c48ccc57b4dd2fd5f.jpg" alt="RoDyn-SLAM Fig.3 mesh comparison BONN TUM">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Visual comparison of the reconstructed meshes on the BONN and TUM RGB-D datasets. Our results are more complete and accurate without the dynamic object floaters.<br>
+          （中译：BONN 与 TUM RGB-D 数据集上重建网格的视觉对比。本文结果更完整准确，且无动态物体漂浮物。）<br>
+          <b>怎么看这张图：</b>「无 floaters」是它最核心的卖点——对照本章题眼「整块幽灵几何」，这张图证明它的闸门确实挡住了幽灵。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="ovd">
+      <h2>4. OVD-SLAM：特征点层面的语义加权（标题 OVD 实为 YOLOv5）</h2>
+
+      <p>OVD-SLAM（2023，IEEE Access）走的是第三条路：在经典 <b>ORB-SLAM3</b> 之上做动态鲁棒。它的地图是<b>显式稀疏点云</b>（不是隐式），给每个点加一个动态权重。</p>
+
+      <div class="callout">
+        <h4>★ 必须如实写：标题 OVD，正文只用 YOLOv5</h4>
+        <p>OVD 这个缩写通常暗示 <b>Open-Vocabulary Detection（开放词汇检测）</b>，但<b>正文实际只用 YOLOv5 固定类别检测器</b>（Fig.1/Fig.2 明确写「bounding boxes obtained by YOLOv5」）。<b>全篇未使用开放词汇检测</b>。标题有误导，讲解时必须向学生点明「名不副实」。</p>
+      </div>
+
+      <p>用 0068 框架套：</p>
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">环节</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">OVD-SLAM 怎么做的</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>判定依据</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">YOLOv5（语义）+ 深度聚类 + 光流，判定哪些框含动态物体</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>处理方式</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">对每点优化权重降动态影响 + <b>恢复移动物体上的静态点</b>（用平均重投影误差筛选）</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>代价</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">重投影误差；依赖 <b>YOLOv5 预定义类别</b>，未知类别动态漏检</td></tr>
+        </tbody>
+      </table>
+
+      <p>它在 TUM RGB-D、Bonn 动态序列上优于 ORB-SLAM3；真实高动态环境（Fig.7）ORB-SLAM3 明显漂移，本文贴近真值。和 RoDyn 形成「同目标两条技术路线」对照：<b>RoDyn 在隐式场层面去动态，OVD 在特征点层面去动态</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_OVD-SLAM__An_Online_Visual_SLAM_for_Dynamic_Environments/f56c14b1dec5d54d01bb7c10a092510d42b4723f59062c672f89095783cdc623.jpg" alt="OVD-SLAM Fig.1 framework">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Framework of OVD-SLAM. The RGB images pass through object detection network, and the depth images are divided into foreground and background. Then, we use optical flow and the result of foreground segmentation to determine boxes containing dynamic objects …<br>
+          （中译：OVD-SLAM 框架。RGB 过检测网络，深度图分成前景 / 背景，再用光流与前景分割结果判定含动态物体的框……）<br>
+          <b>怎么看这张图：</b>① 注意「object detection network」在这里是 <b>YOLOv5</b>，不是开放词汇检测；② 整条流程是「语义定框 → 光流定动态 → 权重降权 → 残点回收」，这是它 0068 框架的可视化。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_OVD-SLAM__An_Online_Visual_SLAM_for_Dynamic_Environments/bbee4aac8f97fa70972ea8a22afd4f9638cdba28a9d39df050aceac833655d53.jpg" alt="OVD-SLAM Fig.2 foreground background segmentation">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Results of foreground and background segmentation. First row: bounding boxes obtained by YOLOv5; second row: pixel-level clustering by our method.<br>
+          （中译：前后景分割结果。上排：YOLOv5 得到的边界框；下排：本文像素级聚类。）<br>
+          <b>怎么看这张图：</b>这张图再次坐实「标题写 OVD、正文只用 YOLOv5 固定类别」——上排框来自 YOLOv5，且只能识别预定义类别。这是理解本篇「名不副实」的关键证据。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_OVD-SLAM__An_Online_Visual_SLAM_for_Dynamic_Environments/0d8c4cdcd832a0583a86e697befd983b0c5f6459a05b20c4fb1288ee43674892.jpg" alt="OVD-SLAM Fig.3 point distribution comparison">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Comparison results of points distribution. ORB-SLAM3 / deleting all points in dynamic boxes directly / our method. Green points: outside dynamic boxes; yellow points: static points.<br>
+          （中译：点分布对比。ORB-SLAM3 / 直接删动态框内所有点 / 本文方法。绿点：动态框外；黄点：静态点。）<br>
+          <b>怎么看这张图：</b>① 中间「直接删动态框」太狠，会丢掉移动物体上的静态点；② 本文（右）更优——它<b>恢复移动物体上的静态附着点</b>，这正是它和「粗暴删框」的区别。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_OVD-SLAM__An_Online_Visual_SLAM_for_Dynamic_Environments/db80be90ef1da9d73160e0d18dac901341def2a476230d25d2686128ba38b405.jpg" alt="OVD-SLAM Fig.7 real high dynamic environment">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Top view of the experimental site and results of real highly dynamic environments. The trajectory of ORB-SLAM3 occurs obvious drift … our estimation trajectory is similar to the real trajectory.<br>
+          （中译：实验场地俯视图与真实高动态环境结果。ORB-SLAM3 轨迹明显漂移，本文估计轨迹接近真实轨迹。）<br>
+          <b>怎么看这张图：</b>这是它「在线、真实高动态」的招牌证据——ORB-SLAM3 漂了，本文压住了。再次说明：在特征点层面去动态，工程上非常实用。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>OVD-SLAM 标题里的「OVD」意味着它用了开放词汇检测吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。标题虽写 OVD（通常暗示开放词汇检测），但正文实际只用 YOLOv5 固定类别检测器，全篇未使用开放词汇检测。这是标题与正文不符，讲解时必须点明。" onclick="lessonKit.answer(this,'q0114a')">用了开放词汇检测</button>
+          <button data-correct="yes" data-explanation="对。正文只用 YOLOv5 固定类别；「OVD」在标题里是名不副实的——开放词汇检测根本没有用上。这是精读材料明确要求如实标注的纠偏点。" onclick="lessonKit.answer(this,'q0114a')">实际只用YOLOv5</button>
+        </div>
+        <div class="quiz-feedback" id="q0114a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="framework">
+      <h2>5. 三层框架：判定 → 处理 → 代价</h2>
+
+      <p>把三篇放进 0068 的同一个骨架里，差异就清楚了：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 390" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">动态处理的三层框架</text>
+
+          <!-- 输入 -->
+          <rect x="370" y="48" width="160" height="44" rx="8" fill="#eef2f6" stroke="#9bb0c4" stroke-width="1.4"/>
+          <text x="450" y="75" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">输入帧</text>
+
+          <!-- 判定：三个方块 -->
+          <text x="450" y="120" text-anchor="middle" font-size="13" font-weight="700" fill="#8f4a33">① 判定（依据）</text>
+          <g>
+            <rect x="70" y="132" width="200" height="52" rx="8" fill="#fdf6f3" stroke="#cc785c" stroke-width="1.4"/>
+            <text x="170" y="162" text-anchor="middle" font-size="12" fill="#a8563a">几何依据</text>
+            <rect x="350" y="132" width="200" height="52" rx="8" fill="#fdf6f3" stroke="#cc785c" stroke-width="1.4"/>
+            <text x="450" y="162" text-anchor="middle" font-size="12" fill="#a8563a">语义依据</text>
+            <rect x="630" y="132" width="200" height="52" rx="8" fill="#fdf6f3" stroke="#cc785c" stroke-width="1.4"/>
+            <text x="730" y="162" text-anchor="middle" font-size="12" fill="#a8563a">运动依据</text>
+          </g>
+
+          <!-- 处理：四种方式 -->
+          <text x="450" y="222" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 处理（方式）</text>
+          <g>
+            <rect x="40" y="234" width="195" height="52" rx="8" fill="#f2faf5" stroke="#2e9e6b" stroke-width="1.4"/>
+            <text x="137" y="264" text-anchor="middle" font-size="12" fill="#2f6d51">剔除</text>
+            <rect x="255" y="234" width="195" height="52" rx="8" fill="#f2faf5" stroke="#2e9e6b" stroke-width="1.4"/>
+            <text x="352" y="264" text-anchor="middle" font-size="12" fill="#2f6d51">降权</text>
+            <rect x="470" y="234" width="195" height="52" rx="8" fill="#f2faf5" stroke="#2e9e6b" stroke-width="1.4"/>
+            <text x="567" y="264" text-anchor="middle" font-size="12" fill="#2f6d51">单独跟踪</text>
+            <rect x="685" y="234" width="175" height="52" rx="8" fill="#f2faf5" stroke="#2e9e6b" stroke-width="1.4"/>
+            <text x="772" y="264" text-anchor="middle" font-size="12" fill="#2f6d51">单独建模</text>
+          </g>
+
+          <!-- 输出 -->
+          <path d="M450 286 L450 312" stroke="#9aa0a6" stroke-width="1.6"/>
+          <rect x="370" y="312" width="160" height="44" rx="8" fill="#eef2f6" stroke="#9bb0c4" stroke-width="1.4"/>
+          <text x="450" y="339" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">输出（地图/位姿）</text>
+
+          <text x="450" y="378" text-anchor="middle" font-size="11.5" fill="#5a4a42">三篇差别只在「判定用哪种依据、处理用哪种方式」；代价也随之不同</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把「动态处理」抽象成三层流水线——输入帧 → 判定（几何 / 语义 / 运动三种依据并列）→ 处理（剔除 / 降权 / 单独跟踪 / 单独建模四种方式）→ 输出。<br>
+          <b>怎么看这张图：</b>① 看第①层：DytanVO 偏「运动依据」，RoDyn 偏「语义+运动融合」，OVD 偏「语义+运动」；② 看第②层：DytanVO 是「降权（掩码）」，RoDyn 是「剔除（过滤光线）」，OVD 是「降权+残点回收」；③ 这张图就是 0068 框架的可视化，用来横向比对三篇。<br>
+          <b>要记住的一句话：</b>动态处理万变不离「判定 → 处理 → 代价」三层，差别只在具体手段。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>6. 横向对比与收束：回应 0012</h2>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.88rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">DytanVO</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">RoDyn-SLAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">OVD-SLAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>类型</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">纯学习式 VO（无地图）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">RGB-D 的 NeRF 隐式</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">传统特征 SLAM + 语义加权</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>判定依据</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">运动分割网络掩码</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">光流 + 语义掩码融合</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">YOLOv5 + 深度 + 光流</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>处理方式</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">掩码加权位姿 + 联合精化</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">过滤动态光线 + 分治位姿</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">权重降权 + 残点恢复</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>代价</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">~80% 前景无纹理时发散</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">语义仅预定义类别</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">仅 YOLOv5 固定类别</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>★ 收束：回应第一季 0012</h4>
+        <p>第一季 <b>0012</b> 课（动态环境视觉 SLAM）曾下判断：「<b>没有任何单一方法被证明普遍更优</b>。」本季回到这句话，给出我们的判断（<b>判断，非原文自评</b>）：</p>
+        <p>三篇恰恰印证了 0012——它们分别占据「无地图学习式 / 隐式场 / 显式点云」三种表示，<b>没有谁在所有场景通吃</b>。DytanVO 快且泛化好但无地图、依赖训练域；RoDyn 在隐式场去动态最干净但受 RGB-D 与预定义语义限制；OVD 工程实用但受 YOLOv5 类别束缚。所以 0012 的判断<b>在稠密 / 隐式时代依然成立</b>：动态鲁棒仍无单一最优解，选哪条路取决于传感器与场景。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>本节题眼说「动态物体在稠密地图里长出整块幽灵」。这和第三季 0068 讲的「稀疏特征被污染」有什么本质区别？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>0068 是稀疏特征时代：移动的人只污染落在他身上的几个特征点，代价是局部、有限的。本季进入稠密 / 隐式表示：地图是连续场，动态物体会在他走过的每一处都留下半透明残影，最终糊成一大片虚假结构——代价从「几个点不可信」升级成「整块几何在撒谎」。这就是题眼的核心。</p>
+            </div></details>
+          </li>
+          <li>DytanVO 是哪种类型的方法？它有没有显式地图？动态怎么处理？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它是<b>纯学习式 VO，没有显式地图</b>。输出位姿序列 + 运动掩码，不维护持久地图。动态处理：运动分割网络给出动态性概率掩码，位姿网络在「无动态运动」的光流上估位姿，三者联合精化迭代。本质是「根本不建那块动态地图」。</p>
+            </div></details>
+          </li>
+          <li>RoDyn-SLAM 在隐式场层面怎么去动态？它的掩码由什么融合而来？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它只在<b>静态区域的光线</b>上采样 / 反传，动态光线被「闸门」过滤；位姿用分治策略（关键帧 / 非关键帧分开优化）。运动掩码由<b>光流掩码 + 语义掩码融合</b>而来（迭代优化光流掩码去噪）。结果重建网格无 floaters。代价：语义掩码仅覆盖预定义类别。</p>
+            </div></details>
+          </li>
+          <li>OVD-SLAM 标题写「OVD」，但正文实际用了什么？为什么必须如实点明？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>正文实际只用 <b>YOLOv5 固定类别检测器</b>（Fig.1/Fig.2 写明 bounding boxes obtained by YOLOv5），<b>全篇未使用开放词汇检测</b>。OVD 通常暗示 Open-Vocabulary Detection，标题有误导。必须点明，是为了诚实——不能让学生被标题骗去以为它做了开放词汇检测。</p>
+            </div></details>
+          </li>
+          <li>第一季 0012 说「没有任何单一方法被证明普遍更优」。本季这三篇是否推翻了它？给出你的判断。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>我们的判断（非原文自评）：<b>没有推翻，反而印证了</b>。三篇分占「无地图学习式 / 隐式场 / 显式点云」三种表示，各有边界——DytanVO 受训练域限制、RoDyn 受 RGB-D 与预定义语义限制、OVD 受 YOLOv5 类别束缚。没有谁通吃所有场景，所以 0012 的判断在稠密 / 隐式时代依然成立：动态鲁棒仍无单一最优解，选择取决于传感器与场景。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0113-Orbeez-SLAM与NeurAR-轻量实时与不确定性.html">← Orbeez-SLAM 与 NeurAR：轻量实时与不确定性</a>
+        <a class="next" href="0115-DeepV2D2020-视频到深度的端到端.html">DeepV2D（2020）：视频到深度的端到端 →</a>
+      </div>
+      <p class="foot-note">静态假设一破，代价就从「几个点」升级成「整块幽灵」——这正是不隐式时代最该警惕的事 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

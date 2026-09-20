@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vox-Fusion 与 ESLAM：八叉树与特征平面 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0107</div>
+      <h1>Vox-Fusion 与 ESLAM：八叉树与特征平面</h1>
+      <p class="subtitle">特征网格的代价是内存，于是两条省内存的路：只在有东西的地方开格子 vs 用平面代替体素 📦→🪟</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稀疏八叉树体素 · 轴对齐特征平面</span>
+        <span>👥 Vox-Fusion（2022，ISMAR）/ ESLAM（2022，arXiv）</span>
+        <span>📅 2022 · 两篇同答「格子怎么摆才省内存」</span>
+      </div>
+      <div class="toc">
+        <a href="#frame">组课框架：格子怎么摆才省内存</a>
+        <a href="#vox">Vox-Fusion：八叉树</a>
+        <a href="#eslam">ESLAM：特征平面</a>
+        <a href="#compare">横向对比表</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="frame">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清 NICE-SLAM 的网格为什么占内存；讲清 Vox-Fusion 用八叉树「只在表面开盒子」的思路；讲清 ESLAM 用三张平面拍扁三维内存账的做法；并用一张表横向比较两篇。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>Vox-Fusion 的八叉树 + Morton 编码，和第二季 <b>0034</b> Voxel Hashing（体素块 + 哈希、懒惰/稀疏分配）是同族「稀疏 + 快速索引」思想，只是装的是<b>神经特征</b>而非 TSDF 标量。ESLAM 把第一季 <b>0033</b> KinectFusion 的 TSDF 当成<b>逐点监督信号</b>而非显式体素。两者都是对上一节 NICE-SLAM「稠密预分配、立方内存」的直接回应。</p>
+        </div>
+      </div>
+
+      <h2>1. 组课框架：两篇回答同一个问题——「格子」怎么摆才省内存</h2>
+
+      <p>NICE-SLAM 把单 MLP 换成三层特征网格，细节立起来了。但它留了一个代价：<b>网格是预先按整个场景稠密铺满的</b>。场景越大，格子数量按体积（边长的三次方）暴涨，而且很多格子落在空荡荡的空气里，白占内存。原文（Vox-Fusion 第 52 行、ESLAM 第 35/51 行）都点名了这个痛点。</p>
+
+      <p>于是这两篇走了两条不同的省内存之路，但问的是同一个问题：<b>特征网格的「格子」到底该怎么摆？</b></p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>Vox-Fusion（2022）</b>
+          <p><b>只在有东西的地方开格子。</b>用一棵<b>八叉树</b>动态分配稀疏体素：空旷处只留一个大块，家具表面才细分出小体素。格子仍是三维体素，但数量被压到最少。</p>
+        </div>
+        <div class="mini-card">
+          <b>ESLAM（2022）</b>
+          <p><b>用平面代替体素。</b>把三维信息拆到<b>三个互相垂直的特征平面</b>（tri-plane）上，内存从「体积 O(L³)」降到「三张面积 O(L²)」，还顺手去掉了预训练。</p>
+        </div>
+      </div>
+
+      <p>下面这张自绘图先把「全铺满」和「只在有东西处开格子」的差别画给你看。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">同一个房间：全铺满的格子 vs 只在实际有东西处开格子的八叉树</text>
+
+          <!-- 左：全铺满 -->
+          <rect x="40" y="60" width="380" height="360" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">稠密铺满：很多格子是空的</text>
+          <g fill="#efc9bd" stroke="#d7a892" stroke-width="0.8">
+            <rect x="70" y="110" width="22" height="22"/><rect x="96" y="110" width="22" height="22"/><rect x="122" y="110" width="22" height="22"/>
+            <rect x="70" y="136" width="22" height="22"/><rect x="96" y="136" width="22" height="22"/><rect x="122" y="136" width="22" height="22"/>
+            <rect x="70" y="162" width="22" height="22"/><rect x="96" y="162" width="22" height="22"/><rect x="122" y="162" width="22" height="22"/>
+            <rect x="200" y="200" width="22" height="22"/><rect x="226" y="200" width="22" height="22"/><rect x="200" y="226" width="22" height="22"/><rect x="226" y="226" width="22" height="22"/>
+            <rect x="300" y="300" width="22" height="22"/><rect x="326" y="300" width="22" height="22"/><rect x="300" y="326" width="22" height="22"/><rect x="326" y="326" width="22" height="22"/>
+          </g>
+          <g fill="none" stroke="#b0bec5" stroke-width="0.7" opacity="0.8">
+            <rect x="70" y="110" width="300" height="308"/>
+            <line x1="160" y1="110" x2="160" y2="418"/><line x1="250" y1="110" x2="250" y2="418"/><line x1="340" y1="110" x2="340" y2="418"/>
+            <line x1="70" y1="200" x2="370" y2="200"/><line x1="70" y1="290" x2="370" y2="290"/>
+          </g>
+          <text x="230" y="440" text-anchor="middle" font-size="12" fill="#a8563a">空气里也排满格子 → 白占内存</text>
+
+          <!-- 右：八叉树 -->
+          <rect x="480" y="60" width="380" height="360" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">八叉树：只在有东西的地方细分</text>
+          <!-- 空旷区一个大块 -->
+          <rect x="510" y="110" width="300" height="290" fill="none" stroke="#a5d6a7" stroke-width="1.6"/>
+          <text x="560" y="135" font-size="11" fill="#2e7d32">空区域：只留一个大方块</text>
+          <!-- 家具处细分 -->
+          <rect x="560" y="200" width="80" height="80" fill="none" stroke="#2e7d32" stroke-width="1.4"/>
+          <g fill="#66bb6a" stroke="#2e7d32" stroke-width="0.8">
+            <rect x="572" y="212" width="22" height="22"/><rect x="598" y="212" width="22" height="22"/>
+            <rect x="572" y="238" width="22" height="22"/><rect x="598" y="238" width="22" height="22"/>
+          </g>
+          <text x="600" y="305" font-size="11" fill="#2e7d32">家具处才长叶子</text>
+          <rect x="660" y="300" width="60" height="60" fill="none" stroke="#2e7d32" stroke-width="1.4"/>
+          <g fill="#66bb6a" stroke="#2e7d32" stroke-width="0.8">
+            <rect x="670" y="310" width="18" height="18"/><rect x="692" y="310" width="18" height="18"/>
+            <rect x="670" y="332" width="18" height="18"/><rect x="692" y="332" width="18" height="18"/>
+          </g>
+          <text x="670" y="440" text-anchor="middle" font-size="12" fill="#2f6d51">只在有东西的地方开格子</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间，两种铺格子的方式。<br>
+          <b>怎么看这张图：</b>① 左格是 NICE-SLAM 式的<b>稠密预分配</b>——无论空气还是家具，整面都排满小立方体，灰色的空格子白占内存；② 右格是 Vox-Fusion 的<b>八叉树</b>——空旷区域只保留一个大方块（不细分），只有家具表面那一小块才递归细分出小叶子；③ 这正是「<b>只在有东西的地方开格子</b>」：用最少数量的体素覆盖真实表面。<br>
+          <b>要记住的一句话：</b>省内存的第一条路——别把整个场景稠密占满，哪有东西哪才开盒子。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="vox">
+      <h2>2. Vox-Fusion：用八叉树「只在表面开盒子」</h2>
+
+      <p>Vox-Fusion 在 NICE-SLAM 的「网格」思路上做减法。它的核心设定：</p>
+
+      <ul>
+        <li><b>显式八叉树 + Morton 编码</b>：用一棵树管理体素，只在有表面的地方动态长出叶子，并能快速增删（第 52 行）；</li>
+        <li><b>体素顶点挂共享特征嵌入</b>：每个体素存一个 16 维 embedding，顶点被相邻体素<b>共享</b>以消除边界缝（第 75 行）；</li>
+        <li><b>只有一层体素网格</b>（边长 0.2 m，第 192 行），并不是 NICE 的三层；</li>
+        <li><b>解码成 SDF 而非占用</b>：过 SDF 解码 MLP 得到标量符号距离 \(s\) 与颜色。</li>
+      </ul>
+
+      <p>查询某点时，三线性插值取最近体素顶点的特征 \(e\)，再过 MLP \(F_\theta\) 得 \((c_i,s_i)\)。它同样做联合优化：tracking 锁网络只优 6-DoF 位姿；mapping 联合优化几何与位姿，用 RGB / 深度 / free-space / SDF 四类损失。关键帧按「会分配多少新体素」的比例选择（第 128 行）。</p>
+
+      <p>这一篇的卖点是<b>动态扩张</b>：场景边界未知时，它也能一边走一边往树上长新盒子，而不会像 NICE 那样被迫预先分配整场网格。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Vox-Fusion/2487e4704f4c32310b4571a09ec60091c1e543aef8bb161c97bd4833e6745c5f.jpg" alt="Vox-Fusion Figure 1 overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We present Vox-Fusion … incrementally reconstructs scenes … The current camera frame is in red and the camera trajectory is in green. Our method divides the scene into an explicit voxel grid representation (depicted as black bounding boxes) which is gradually built on-the-fly.<br>
+          <b>怎么看这张图：</b>黑框就是显式体素，红框是当前帧、绿线是轨迹。最直观地显示「只在真实有东西的地方开盒子」——盒子的分布跟着表面走，而不是铺满整个空间。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Vox-Fusion/f6820be69b8a1ab7bc1afbff8c0e5e3f638c8a5d9b49af339e84708d3e72badb.jpg" alt="Vox-Fusion Figure 4 hierarchical octree structure">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Example of our hierarchical octree structure. For simplicity we only show a four-level octree here.<br>
+          <b>怎么看这张图：</b>这就是「按需开盒子」的数据结构图：四层八叉树，叶节点=体素=场景基本单元。注意它不是一次性铺满，而是从根节点递归细分——哪里有细节哪里才往深里长。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="eslam">
+      <h2>3. ESLAM：用三张平面把三维拍扁</h2>
+
+      <p>ESLAM 走的是另一条更激进的路：<b>干脆不存三维体素，改成存三个互相垂直的二维特征平面</b>（tri-plane）。它把 NICE 的「三维体素网格」拍扁成平面，内存随场景边长从 O(L³) 变成 O(L²)。</p>
+
+      <p>具体存什么：</p>
+
+      <ul>
+        <li><b>粗 / 细各 3 张平面</b>（xy / xz / yz 三个朝向），几何 6 张 + 外观 6 张 = <b>共 12 张平面</b>，每张 32 通道；</li>
+        <li>粗平面分辨率几何/外观均 24 cm，细平面几何 6 cm、外观 3 cm（第 213 行）；</li>
+        <li>查询某 3D 点：把它<b>投影到三张平面</b>，各做双线性插值取 4 邻域 → 粗特征相加、细特征相加 → 拼接成 \(f_g(p)\)，过两层 MLP 解码 TSDF \(\phi_g(p)\)。</li>
+      </ul>
+
+      <p>这里 TSDF 的角色很特别——它既是渲染用的几何，也是<b>逐点监督信号</b>：free-space 逼 1、截断区内逼深度真值（式 7）。这比只靠渲染误差收敛快得多，也正好把第一季 <b>0033</b> KinectFusion 的 TSDF 思路「神经化」了。</p>
+
+      <p>另一大卖点：<b>免预训练</b>。NICE 的解码器是冻结先验，ESLAM 的解码器从头随机训，所以对新场景更灵活。代价是它<b>接受「遗忘换内存」</b>——更新特征适应新几何时会动到旧区域，靠保留关键帧 + 算力回放缓解（第 270 行）。</p>
+
+      <div class="callout">
+        <h4>ESLAM 的速度账</h4>
+        <p>Replica 上 FPT 仅 <b>0.18 s</b>，比 NICE 的 2.10 s、iMAP* 的 5.20 s <b>快约 10 倍</b>；内存增长 O(L²)：Replica 参数 6.79 M、ScanNet 17.63 M（表 4）。这就是「平面代替体素」省下来的账。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">ESLAM 的三个正交平面：与其存一个立方体，不如存三张平面图</text>
+
+          <!-- 空间里的点 -->
+          <rect x="40" y="60" width="260" height="360" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="170" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6d51">三维空间里的一个点</text>
+          <g stroke="#a5d6a7" stroke-width="0.8" opacity="0.7">
+            <line x1="40" y1="250" x2="300" y2="250"/><line x1="170" y1="60" x2="170" y2="420"/>
+          </g>
+          <circle cx="170" cy="250" r="7" fill="#e53935"/>
+          <text x="170" y="434" text-anchor="middle" font-size="11" fill="#c62828">查询点 P</text>
+
+          <!-- 三张平面 -->
+          <!-- xy 地面 -->
+          <rect x="340" y="300" width="180" height="100" fill="#e3f2fd" stroke="#90caf9" stroke-width="1.4"/>
+          <text x="430" y="412" text-anchor="middle" font-size="11" fill="#1565c0">xy 平面（俯视）</text>
+          <circle cx="430" cy="350" r="5" fill="#e53935"/>
+          <!-- xz 正面 -->
+          <rect x="340" y="70" width="180" height="120" fill="#fce4ec" stroke="#ef9a9a" stroke-width="1.4"/>
+          <text x="430" y="206" text-anchor="middle" font-size="11" fill="#c62828">xz 平面（正面）</text>
+          <circle cx="430" cy="120" r="5" fill="#e53935"/>
+          <!-- yz 侧面 -->
+          <rect x="560" y="180" width="120" height="180" fill="#fff3e0" stroke="#ffb74d" stroke-width="1.4"/>
+          <text x="620" y="378" text-anchor="middle" font-size="11" fill="#e65100">yz 平面（侧面）</text>
+          <circle cx="620" cy="270" r="5" fill="#e53935"/>
+
+          <!-- 拼起来 -->
+          <path d="M430 350 L430 320" stroke="#37474f" stroke-width="1.6"/>
+          <path d="M430 120 L520 250" stroke="#37474f" stroke-width="1.6"/>
+          <path d="M620 270 L650 250" stroke="#37474f" stroke-width="1.6"/>
+          <rect x="650" y="210" width="120" height="80" rx="10" fill="#37474f"/>
+          <text x="710" y="244" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">拼接</text>
+          <text x="710" y="264" text-anchor="middle" font-size="11" fill="#cfd8dc">+ 小 MLP</text>
+          <path d="M770 250 L830 250" stroke="#2e7d32" stroke-width="2"/>
+          <path d="M830 250 L822 245 L822 255 Z" fill="#2e7d32"/>
+          <text x="850" y="254" font-size="12" fill="#1b5e20">特征</text>
+
+          <text x="450" y="450" text-anchor="middle" font-size="12.5" fill="#5a4a42">点 P 投到三张平面各取一份特征 → 三层相加 → 拼成该点特征</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>空间里某一点 P，怎么用三张正交平面拼出它的特征。<br>
+          <b>怎么看这张图：</b>① 左格是三维空间里的一个红点 P；② 中上是 xz（正面）平面、中下是 xy（俯视）平面、右是 yz（侧面）平面，P 在每张平面上都「投下」一个对应位置（红点）；③ 在每张平面上取该位置的 4 邻域特征，<b>粗层相加、细层相加，再拼接</b>，送进小 MLP；④ 于是三维信息被拆到三张二维切片里存——<b>与其存一个立方体，不如存三张平面图</b>。<br>
+          <b>要记住的一句话：</b>把 O(L³) 的内存账，拍扁成 O(L²) 的三张纸。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_ESLAM/850648b055bb0c92cb904e30fc640b15ea93397e9acdd4a4732324369f5f4286.jpg" alt="ESLAM Figure 2 overview tri-plane and decoders">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The overview of ESLAM. … The symbol represents both geometry g and appearance a … At an estimated camera pose, we cast a ray for …<br>
+          <b>怎么看这张图：</b>这是唯一把「点投影到三平面 → 双线性插值 → 粗+细相加 → 拼接 → 解码」画全的图，必看。盯着中间那三条「投影到 xy / xz / yz」的箭头，那就是上一节自绘图的理论原版。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>4. 横向对比表</h2>
+
+      <p>两篇同答「格子怎么摆才省内存」，但手法完全不同。下表以原文自述项为准，未提及的填「未提及」。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">对比项</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">Vox-Fusion（2022）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .6rem;text-align:left">ESLAM（2022）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>省内存思路</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">八叉树稀疏体素：只在表面开盒子</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">tri-plane 拍扁：三张平面代替体素</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>信息存哪</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">体素顶点共享 16-D 嵌入（单层 0.2 m）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">12 张特征平面（粗/细 × xy/xz/yz × 几何/外观，32 通道）</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>解码目标</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">SDF（符号距离）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">TSDF（兼作逐点监督）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>是否需要预训练</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">解码 MLP 随场景训（未强调冻结）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>免预训练</b>，解码器从头训</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>内存增长</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">稀疏，随表面面积（未见 O(L²) 明示）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>O(L²)</b>（明文）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>速度</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">track 12 ms / map 55 ms（约 5 Hz / 2 Hz）</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">FPT 0.18 s，<b>快约 10×</b> 于 NICE</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>场景边界未知时</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">动态扩张八叉树，天然支持</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">未提及（平面分辨率预先定）</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .6rem"><b>原文承认短板</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">不抗动态；长时漂移；不做回环</td><td style="border:1px solid #e0d5c8;padding:.5rem .6rem">接受遗忘换内存；不做回环；平面过度压缩不利多面</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>我们的判断（非原文自评）</h4>
+        <p>Vox-Fusion 的八叉树是 NICE「稠密预分配」的<b>对立面</b>，保住了「局部更新 + 动态扩张」；ESLAM 则更彻底——用 tri-plane 把内存账从立方拍成平方，还去掉了预训练。两者共同前提是「别把整个场景稠密占满」，也为后面 Co-SLAM（哈希）与 Point-SLAM（点云）铺了路。ESLAM 的「遗忘换内存」取舍，正好引出下一节 Co-SLAM 的并联编码与 Point-SLAM 的点锚定。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>ESLAM 把三维体素网格换成三张正交特征平面。这最直接改变了下面哪一项？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。三维体素随边长按 O(L³) 增长，三张平面按 O(L²) 增长——这正是 ESLAM 省内存的核心账。它不靠「只在表面开盒子」省（那是 Vox-Fusion 的路），而是靠「降维」省。" onclick="lessonKit.answer(this,'q0107a')">内存随场景边长的增长阶</button>
+          <button data-correct="no" data-explanation="不对。ESLAM 仍用 SDF/TSDF 当几何目标，和 Vox-Fusion 一样是隐式解码，并没有退回显式点云。它改的是「怎么存特征」，不是「隐式还是显式」。" onclick="lessonKit.answer(this,'q0107a')">让地图变回显式点云</button>
+        </div>
+        <div class="quiz-feedback" id="q0107a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="summary">
+      <h2>5. 小结：两条省内存之路殊途同归</h2>
+
+      <p>把这两篇放回「地图里存什么」的整条线索看：iMAP 把一切塞进一个 MLP 权重，NICE-SLAM 拆成三层网格，而本节这两篇开始认真对付「网格的内存账」。它们手法不同，但<b>共同前提完全一致</b>——都拒绝「把整个场景稠密占满」：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>Vox-Fusion：靠「稀疏」省</b>
+          <p>八叉树只在有表面的地方细分体素，空旷处只留一个大块。它守住了「局部更新 + 动态扩张」，场景边界未知也能边走边长。</p>
+        </div>
+        <div class="mini-card">
+          <b>ESLAM：靠「降维」省</b>
+          <p>tri-plane 把三维体素拍成三张平面，内存从 O(L³) 降到 O(L²)，还去掉了预训练。代价是「遗忘换内存」。</p>
+        </div>
+      </div>
+
+      <p>这两条路都为后面的工作铺了台阶：Co-SLAM 用 hash 网格继续把参数压到极小，Point-SLAM 则把特征从「固定结构」彻底换成「跟随场景的点」。下一节先看 Co-SLAM 怎么把「低频连贯」与「高频锐利」并成一股绳。</p>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>NICE-SLAM 的网格为什么占内存？Vox-Fusion 与 ESLAM 各自用什么办法把这笔账降下来？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>NICE 的网格是<b>预先按整个场景稠密铺满</b>的，格子数随体积 O(L³) 暴涨，空气里的格子白占内存。</p>
+            <p><b>Vox-Fusion</b>：用八叉树<b>只在有表面的地方</b>动态细分体素，空旷处只留一个大块——靠「稀疏」省。</p>
+            <p><b>ESLAM</b>：用三张正交特征平面代替体素，内存从 O(L³) 降到 O(L²)——靠「降维」省。</p>
+          </div></details>
+        </li>
+        <li>Vox-Fusion 的八叉树 + Morton 编码，和第二季哪一节课的思想同族？它装的内容有何不同？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>同族于第二季 <b>0034</b> Voxel Hashing（体素块 + 哈希、懒惰/稀疏分配）——都是「稀疏 + 快速索引」。</p>
+            <p>不同在于：Voxel Hashing 装的是 <b>TSDF 标量</b>，而 Vox-Fusion 的体素顶点挂的是 <b>神经特征嵌入</b>，要过 MLP 解码 SDF。也就是说，数据结构一脉相承，承载的内容从「显式标量」换成了「隐式特征」。</p>
+          </div></details>
+        </li>
+        <li>ESLAM 里 TSDF 扮演了哪两个角色？为什么这让它比只靠渲染误差收敛更快？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>TSDF 既用于<b>渲染</b>（当几何），又作为<b>逐点监督信号</b>：free-space 逼 1、截断区内逼深度真值（式 7）。</p>
+            <p>只靠渲染误差时，信号要经过「渲染 → 比真图 → 反传」一长链，弱且慢；而 TSDF 监督是直接拿每个采样点的深度真值去逼它的符号距离，<b>点对点</b>地校正，所以收敛快得多。这也等于把第一季 0033 KinectFusion 的 TSDF 思路神经化了。</p>
+          </div></details>
+        </li>
+        <li>ESLAM 说「免预训练」，这相对 NICE-SLAM 的冻结解码器是优点还是新麻烦？请结合原文承认的局限谈。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>优点是<b>更灵活</b>：解码器从头随机训，不被预训练先验锁死，对新场景泛化更好（这正是 NICE 的短板）。</p>
+            <p>代价是它<b>接受「遗忘换内存」</b>：更新特征适应新几何时，会动到共用同一张平面的旧区域（第 270 行）。它靠保留关键帧 + 大量算力回放缓解，但这是真实存在的取舍。所以「免预训练」不是免费午餐，而是把 NICE 的「泛化上限」问题换成了「遗忘」问题。</p>
+          </div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0106-NICE-SLAM2022-多层级特征网格.html">← NICE-SLAM（2022）：多层级特征网格</a>
+        <a class="next" href="0108-Co-SLAM2023-联合坐标与稀疏参数编码.html">Co-SLAM（2023）：联合坐标与稀疏参数编码 →</a>
+      </div>
+      <p class="foot-note">两条省内存的路都走通了：一个靠稀疏、一个靠降维。下一节看怎么把「低频连贯」和「高频锐利」拧成一股绳 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

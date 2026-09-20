@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NICE-SLAM（2022）：多层级特征网格 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0106</div>
+      <h1>NICE-SLAM（2022）：多层级特征网格</h1>
+      <p class="subtitle">给 iMAP 的「单 MLP」拆成粗中细三层网格，细节不再糊成一团 🧱🧱🧱</p>
+      <div class="hero-meta">
+        <span>🎯 主题：分层特征网格 · 局部更新 · 预训练解码器</span>
+        <span>👥 作者：Z. Yan 等（伦敦大学学院 / 华为）</span>
+        <span>📅 2022 · <i>NICE-SLAM: Neural Implicit Scalable Encoding for SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">纯 MLP 的根本缺陷</a>
+        <a href="#grid">多层级特征网格</a>
+        <a href="#pretrain">预训练 vs 一起训练</a>
+        <a href="#vs">与 iMAP 的定量对比</a>
+        <a href="#limit">局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说出纯 MLP 为什么在大场景里「糊成一团」；讲清 NICE-SLAM 三层网格的分辨率与分工；解释「预训练解码器」为何等于几何先验；并用数字比较它相对 iMAP 的提升。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>直接接上一节 <b>0105</b> iMAP——它把整张地图塞进一个 MLP，代价是容量上限与「糊成一团」。NICE-SLAM 是把信息从「权重」挪到「网格」的第一篇，思想和第二季 <b>0038</b> Instant NGP 的多分辨率哈希同源（都是「把信息从权重挪到网格」），区别是它<b>必须在线一边建一边训</b>。</p>
+        </div>
+      </div>
+
+      <h2>1. 纯 MLP 的根本缺陷：原文怎么描述「糊成一团」</h2>
+
+      <p>iMAP 用一个全局 MLP 当唯一地图。NICE-SLAM 一上来就点出它的死穴（摘要第 9 行、第 22 行）：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「a key limiting factor … single MLP」（一个关键限制因素，就是那个单一的 MLP）</p>
+
+      <p>问题有两层：</p>
+
+      <ul>
+        <li><b>只能全局更新</b>：所有信息挤在一个网络的权重里，改一处牵动全身（上一节那张「牵一发动全身」的图），无法只针对某个局部微调；</li>
+        <li><b>容量有限、放大就 oversmoothed</b>：场景一大，1 MB 权重装不下，网络只能「平均」掉细节——砖缝、椅腿这种高频结构被抹平，原文管这叫 <b>oversmoothed（过平滑）</b>，也就是我们说的「糊成一团」。</li>
+      </ul>
+
+      <p>NICE-SLAM 的答案是：<b>别把信息塞进一个网络，改成塞进一组分层特征网格</b>。每个局部格子只管自己那块地盘，于是「改一处」就真的只动一处，容量也随格子数量自然扩展。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 460" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">同一面砖墙：单 MLP 糊成一团 vs 三层网格各管各的</text>
+
+          <!-- 左：单 MLP 全息胶片 -->
+          <rect x="40" y="60" width="380" height="350" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">单 MLP = 一张固定面积的全息胶片</text>
+          <!-- 墙轮廓 -->
+          <rect x="90" y="120" width="280" height="220" fill="#efe7e2" stroke="#bcaaa4" stroke-width="1.4"/>
+          <!-- 糊成一团：只有大块模糊 -->
+          <g fill="#c9a99a" opacity="0.85">
+            <rect x="110" y="140" width="60" height="40" rx="3"/><rect x="180" y="138" width="60" height="42" rx="3"/>
+            <rect x="250" y="142" width="60" height="40" rx="3"/><rect x="120" y="200" width="60" height="40" rx="3"/>
+            <rect x="190" y="202" width="60" height="40" rx="3"/><rect x="260" y="198" width="60" height="42" rx="3"/>
+            <rect x="130" y="262" width="60" height="40" rx="3"/><rect x="200" y="264" width="60" height="40" rx="3"/>
+            <rect x="270" y="260" width="50" height="42" rx="3"/>
+          </g>
+          <text x="230" y="372" text-anchor="middle" font-size="12" fill="#a8563a">场景越大，每角分到的像素越少 → 糊</text>
+          <text x="230" y="392" text-anchor="middle" font-size="12" fill="#a8563a">砖缝、椅腿全被抹平</text>
+
+          <!-- 右：三层网格 -->
+          <rect x="480" y="60" width="380" height="350" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">三层特征网格：粗 / 中 / 细 各管各的</text>
+          <rect x="530" y="120" width="280" height="220" fill="#ffffff" stroke="#a5d6a7" stroke-width="1.4"/>
+          <!-- coarse: 稀网格 -->
+          <g stroke="#90caf9" stroke-width="1.2">
+            <line x1="530" y1="180" x2="810" y2="180"/><line x1="530" y1="240" x2="810" y2="240"/><line x1="530" y1="300" x2="810" y2="300"/>
+            <line x1="610" y1="120" x2="610" y2="340"/><line x1="690" y1="120" x2="690" y2="340"/><line x1="770" y1="120" x2="770" y2="340"/>
+          </g>
+          <text x="560" y="135" font-size="11" fill="#1565c0">粗层：只给「墙大概在这」</text>
+          <!-- mid: 砖块 -->
+          <g fill="#a5d6a7" opacity="0.9">
+            <rect x="615" y="185" width="68" height="48" rx="2"/><rect x="695" y="183" width="68" height="50" rx="2"/>
+            <rect x="615" y="245" width="68" height="48" rx="2"/><rect x="695" y="243" width="68" height="50" rx="2"/>
+            <rect x="615" y="305" width="68" height="28" rx="2"/><rect x="695" y="303" width="68" height="30" rx="2"/>
+          </g>
+          <text x="560" y="356" font-size="11" fill="#2e7d32">中层：砖块位置</text>
+          <!-- fine: 砖缝残差 -->
+          <g stroke="#ef9a9a" stroke-width="2">
+            <line x1="649" y1="185" x2="649" y2="233"/><line x1="729" y1="183" x2="729" y2="233"/>
+            <line x1="649" y1="245" x2="649" y2="293"/><line x1="729" y1="243" x2="729" y2="293"/>
+            <line x1="649" y1="305" x2="649" y2="333"/><line x1="729" y1="303" x2="729" y2="333"/>
+          </g>
+          <text x="760" y="356" font-size="11" fill="#c62828">细层：砖缝</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一面砖墙，两种存法下的样子。<br>
+          <b>怎么看这张图：</b>① 左格是单 MLP——所有信息挤在一张固定面积的「胶片」上，场景越大每处分到的容量越少，于是砖缝、椅腿这种细节被平均掉，只剩模糊的大块（原文叫 oversmoothed）；② 右格是 NICE-SLAM 的三层网格：<b>粗层</b>用稀网格只标「墙大概在哪」、<b>中层</b>补上砖块位置、<b>细层</b>用残差补齐砖缝；③ 三层相加才得到精确墙面——这就是「多分辨率」的全部含义。<br>
+          <b>要记住的一句话：</b>把「一张胶片」换成「三张各管一段的网格」，信息就有了局部归宿，细节不再被全局平均抹平。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="grid">
+      <h2>2. 多层级特征网格：具体几层、每层分辨率</h2>
+
+      <p>NICE-SLAM 的地图不是一个网络，而是一组<b>体素特征网格</b>。几何用三层，颜色单独一层：</p>
+
+      <ul>
+        <li><b>几何</b>：三层特征网格 \(\phi^l\)，\(l\in\{0,1,2\}\) 对应 coarse / mid / fine；</li>
+        <li><b>颜色</b>：独立的一层网格 \(\psi_\omega\) 配上可联合训练的解码器。</li>
+      </ul>
+
+      <p>分辨率（原文：TUM 用 16/8 cm，Replica 用 2 m / 32 cm / 16 cm）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">层级</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">体素边长（Replica）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">它负责什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>coarse</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">2 m</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">大形、整体占用、未观测区外推</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>mid</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">32 cm</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">主体结构、物体占位</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>fine</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">16 cm</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">以残差叠加补细节、砖缝级</td></tr>
+        </tbody>
+      </table>
+
+      <p>查询某个三维点时，先在每层做三线性插值取出该层特征，再过一个<b>冻结的预训练 MLP</b>解码出占用。mid 给粗占用、fine 以残差叠加：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$o_p^1=f^1(p,\phi^1(p)),\quad \Delta o_p^1=f^2(p,\phi^1,\phi^2),\quad o_p=o_p^1+\Delta o_p^1$$</div>
+      </div>
+
+      <p>这正好对应上一节封面图里「粗层出大势、细层补残差」的画法。下面这张自绘图把「查询一个点时粗层与细层各出一个特征、拼起来送进小网络」画全。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">查询一个点：粗层与细层各出一个特征，拼起来送进小网络</text>
+
+          <!-- 砖墙 -->
+          <rect x="40" y="70" width="240" height="280" rx="8" fill="#efe7e2" stroke="#bcaaa4" stroke-width="1.4"/>
+          <g fill="#a5d6a7" opacity="0.95">
+            <rect x="60" y="100" width="90" height="60" rx="2"/><rect x="160" y="100" width="90" height="60" rx="2"/>
+            <rect x="60" y="180" width="90" height="60" rx="2"/><rect x="160" y="180" width="90" height="60" rx="2"/>
+            <rect x="60" y="260" width="90" height="60" rx="2"/><rect x="160" y="260" width="90" height="60" rx="2"/>
+          </g>
+          <text x="160" y="370" text-anchor="middle" font-size="12" fill="#6d4c41">同一面砖墙</text>
+
+          <!-- 查询点 -->
+          <circle cx="205" cy="210" r="6" fill="#e53935"/>
+          <text x="205" y="60" text-anchor="middle" font-size="11" fill="#c62828">查询点</text>
+
+          <!-- 粗层特征 -->
+          <rect x="320" y="90" width="120" height="70" rx="8" fill="#e3f2fd" stroke="#90caf9" stroke-width="1.4"/>
+          <text x="380" y="116" text-anchor="middle" font-size="12" font-weight="700" fill="#1565c0">粗层特征</text>
+          <text x="380" y="138" text-anchor="middle" font-size="11" fill="#1565c0">大势 / 低频</text>
+          <!-- 细层特征 -->
+          <rect x="320" y="250" width="120" height="70" rx="8" fill="#fce4ec" stroke="#ef9a9a" stroke-width="1.4"/>
+          <text x="380" y="276" text-anchor="middle" font-size="12" font-weight="700" fill="#c62828">细层特征</text>
+          <text x="380" y="298" text-anchor="middle" font-size="11" fill="#c62828">残差 / 高频</text>
+
+          <!-- 拼起来 -->
+          <path d="M440 125 L520 160" stroke="#37474f" stroke-width="1.8"/>
+          <path d="M440 285 L520 200" stroke="#37474f" stroke-width="1.8"/>
+          <rect x="520" y="150" width="120" height="80" rx="10" fill="#37474f"/>
+          <text x="580" y="184" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">小 MLP</text>
+          <text x="580" y="204" text-anchor="middle" font-size="11" fill="#cfd8dc">解码占用</text>
+
+          <!-- 输出 -->
+          <path d="M640 190 L720 190" stroke="#2e7d32" stroke-width="2"/>
+          <path d="M720 190 L712 185 L712 195 Z" fill="#2e7d32"/>
+          <rect x="720" y="172" width="130" height="36" rx="6" fill="#aed581"/>
+          <text x="785" y="195" text-anchor="middle" font-size="12" fill="#1b5e20">该点占用值</text>
+
+          <text x="450" y="410" text-anchor="middle" font-size="12.5" fill="#5a4a42">粗、细各出一个特征 → 拼成一条向量 → 小网络算出「这里有没有东西」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>当你想知道砖墙上红点（查询点）处有没有东西时，NICE-SLAM 怎么算。<br>
+          <b>怎么看这张图：</b>① 粗层从大片网格里取出一个「低频大势」特征；② 细层从更密的网格里取出一个「高频残差」特征；③ 两个特征<b>拼成一条向量</b>，送进那个很小的、权重冻结的解码 MLP，吐出该点的占用值；④ 注意做重活的是「网格」而不是「大网络」——大网络只当翻译官。<br>
+          <b>要记住的一句话：</b>这就是「多分辨率」的全部含义：粗层管大形、细层管残差，二者相加才是精确几何。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_NICE-SLAM/d289a1a74cd2582a97370739916dff1e35008ed28e00069d7c364bbf4c1db9ad.jpg" alt="NICE-SLAM Figure 2 system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System Overview. Our method takes an RGB-D image stream as input and outputs both the camera pose as well as a learned scene representation in form of a hierarchical feature grid.<br>
+          <b>怎么看这张图：</b>它把「分层特征网格 → 渲染深度颜色 → 反向传播联合优化」画全了，并点明 Mapping 只更新场景、Tracking 只更新位姿的交替结构。注意中间那一摞「coarse / mid / fine」网格，那就是本节的主角。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="pretrain">
+      <h2>3. 预训练特征 vs 一起训练：原文有没有讨论</h2>
+
+      <p>这是 NICE-SLAM 一个很关键的设定。它的几何解码 MLP 权重是<b>冻结的、预先在大量形状上训好的</b>——它不是一个跟着场景一起学的网络，而是一个「形状常识」的容器。原文把这个叫 <b>几何先验（geometry prior）</b>。</p>
+
+      <p>原文确实讨论了这件事：解码器在训练前就已经见过成千上万个形状，所以它「读」一个特征向量就能大致猜出「这应该是一块什么几何」。冻结它、只动它读的特征，有两个好处：</p>
+
+      <ul>
+        <li><b>收敛快、稳</b>：不用从零学「什么是墙、什么是桌」；</li>
+        <li><b>能外推到未观测区</b>：coarse 级先验让没看见的背面也能合理推测（见下 Fig. 7）。</li>
+      </ul>
+
+      <p>但它<b>不跟着当前场景联合训练</b>解码器本身——这既是优点也是后患。优点是不容易过拟合，缺点是「泛化上限被这个冻结先验锁死」，遇到和预训练分布差太远的新场景就力不从心。这正是 ESLAM（下一节）要拿掉的「免预训练」卖点，也是原文后续点名的一个局限。</p>
+
+      <div class="callout">
+        <h4>一个要记牢的对照</h4>
+        <p>iMAP：信息全在 <b>一个会变的 MLP 权重</b> 里。<br>NICE-SLAM：信息分在 <b>会变的网格特征</b> 里 + 一个 <b>不动的预训练解码器</b>。动的是「被查询的特征」，不动的是「翻译特征的小网络」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="vs">
+      <h2>4. 与 iMAP 的定量对比</h2>
+
+      <p>数字最能说明问题。在 Replica（表 1）和 TUM（表 2）上，NICE-SLAM 相对 iMAP 重实现（文中记作 iMAP*）全面领先：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">iMAP*</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">NICE-SLAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Replica Depth L1 (cm)</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">7.64</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>3.53</b></td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Replica 完成率 (%)</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">66.60</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>89.33</b></td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">TUM ATE fr1/desk (cm)</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">7.2</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>2.7</b></td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ScanNet ATE (cm)</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">36.67</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>9.63</b></td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">地图内存 (MB)</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1.04</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">12.02</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">FLOPs（相对 iMAP）</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">1×</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">约 1/4</td></tr>
+        </tbody>
+      </table>
+
+      <p>注意内存从 1.04 MB 涨到 12.02 MB——这是「用网格换细节」的代价，但换来的是精度与规模的大幅提升。速度上，tracking 约 47 ms、mapping 约 130 ms（表 4），比 iMAP 重实现快很多。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_NICE-SLAM/802de555397388235954708a947e114c73261d90928bb8553094905a9d0b7943.jpg" alt="NICE-SLAM Figure 1 multi-room apartment">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Multi-room Apartment 3D Reconstruction using NICE-SLAM. A hierarchical feature grid jointly encodes geometry and color information and is used for both mapping and tracking.<br>
+          <b>怎么看这张图：</b>这是正面回应 iMAP 失败场景的一张图——NICE-SLAM 能重建<b>多房间公寓</b>，而 iMAP* 和 DI-Fusion 直接失败。它把 iMAP 的「房间级上限」推到了「多房间室内」，但注意原文仍只验证室内。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_NICE-SLAM/c1859f5cfaefb22c621c264d66cc6ae05697eedfddce8b30c2a6364c0cb25e57.jpg" alt="NICE-SLAM Figure 7 geometry forecast and hole filling">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Geometry Forecast and Hole Filling. The white colored area is the region with observations, and cyan indicates the unobserved but predicted region.<br>
+          <b>怎么看这张图：</b>白色是观测到的区域，青色是<b>没观测但被预测出来</b>的区域。正是因为 coarse 级有预训练几何先验，NICE-SLAM 能把未观测区合理外推；而 iMAP* 没有这种先验，外推结果很噪。这就是「冻结解码器当几何先验」带来的直接好处。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>NICE-SLAM 用一个「冻结的预训练解码器」来读特征网格。这主要影响下面哪件事？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。冻结解码器是「在大量形状上预训好的形状常识」，它提供几何先验：让收敛更快、能让未观测区合理外推。但它不跟着当前场景一起训练，所以对新场景的泛化上限被这个先验锁死——这正是 ESLAM 想拿掉的「免预训练」卖点。" onclick="lessonKit.answer(this,'q0106a')">提供几何先验、能外推</button>
+          <button data-correct="no" data-explanation="不对。解码器是冻结的，动的只是网格特征，它本身不「跟着场景长大」；而且它反而是让模型「偏小」的一方。内存主要来自稠密分配的网格本身。" onclick="lessonKit.answer(this,'q0106a')">让网络参数无限变大</button>
+        </div>
+        <div class="quiz-feedback" id="q0106a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>5. 局限逐条</h2>
+
+      <p>原文自己承认的短板：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 预测受 coarse 尺度限制</b>
+          <p>未观测区的外推质量，被最粗那层（2 m）的分辨率卡着——太远太细的地方它仍补不准。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 不做回环</b>
+          <p>和 iMAP 一样，没有回环校正，长序列会漂移。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 与经典方法仍有差距</b>
+          <p>相比传统几何 SLAM，部分指标还没追上。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 冻结解码器泛化差</b>
+          <p>预训练先验锁死了新场景的上限——这点被 ESLAM 后续点名并改为免预训练。</p>
+        </div>
+      </div>
+
+      <p>另外还有一个结构性的隐性代价：它<b>预先稠密分配</b>整场景的网格，场景边界未知时不实用、内存随体积暴涨。下一节 Vox-Fusion 与 ESLAM 正是从「怎么省内存」这个角度来拆它的。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请用自己的话解释：为什么「一个全局 MLP」会在大场景里「糊成一团」？原文用了哪个词描述这个现象？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为单一 MLP 的所有场景信息挤在同一组权重里，容量有限；场景一大，网络只能对细节做<b>平均</b>，高频结构（砖缝、椅腿）被抹平。原文用 <b>oversmoothed（过平滑）</b>描述它，也直说「a key limiting factor … single MLP」。</p>
+              <p>本质是「固定容量 vs 无限细节需求」的矛盾：网格表示让容量随格子数自然扩展，而单 MLP 的容量被写死在参数规模里。</p>
+            </div></details>
+          </li>
+          <li>NICE-SLAM 的三层几何网格分辨率分别是多少？粗层和细层各自承担什么角色？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>Replica 上：coarse <b>2 m</b>、mid <b>32 cm</b>、fine <b>16 cm</b>（TUM 用 16/8 cm）。</p>
+              <p><b>粗层</b>给整体大势、未观测区外推；<b>中层</b>给主体结构占位；<b>细层</b>以残差叠加补砖缝级细节。三者相加（式 1–3：\(o_p=o_p^1+\Delta o_p^1\)）才是精确几何。这就是「多分辨率」的含义。</p>
+            </div></details>
+          </li>
+          <li>「冻结的预训练解码器」到底在 NICE-SLAM 里扮演什么角色？它带来好处也带来什么隐患？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它是在大量形状上预训好的「形状常识」容器，权重固定不变，只负责把「网格特征」翻译成「占用/颜色」。它提供<b>几何先验</b>，让收敛快、能外推未观测区。</p>
+              <p>隐患：它<b>不跟当前场景联合训练</b>，所以遇到和预训练分布差太远的新场景，泛化上限被这个先验锁死。这是 ESLAM 改为「免预训练、从头训解码器」的直接动机。</p>
+            </div></details>
+          </li>
+          <li>用一张表或三句话，总结 NICE-SLAM 相对 iMAP* 在 Replica 上的关键提升，并指出它付出的代价。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>提升：Replica Depth L1 从 7.64 cm 降到 3.53 cm；完成率从 66.60% 升到 89.33%；ScanNet ATE 从 36.67 cm 降到 9.63 cm；FLOPs 只有约 1/4。</p>
+              <p>代价：地图内存从 1.04 MB 涨到 12.02 MB（用网格换细节）；且仍只验证室内、不做回环、冻结解码器泛化受限。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0105-iMAP2021-第一次把地图塞进一个网络.html">← iMAP（2021）：第一次把整张地图塞进一个网络</a>
+        <a class="next" href="0107-Vox-Fusion与ESLAM-八叉树与特征平面.html">Vox-Fusion 与 ESLAM：八叉树与特征平面 →</a>
+      </div>
+      <p class="foot-note">NICE-SLAM 把「权重」拆成「网格」，细节立起来了。但网格也带来内存账——下一节看两条省内存的路 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三条规模化路线：组合、激光、渐进 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0112</div>
+      <h1>三条规模化路线：组合、激光、渐进</h1>
+      <p class="subtitle">隐式 SLAM 怎么「做大」？借位姿、换激光、分局部——三条路都不靠回环 😶‍🌫️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：隐式 SLAM 的规模化路线</span>
+        <span>👥 作者：NeRF-SLAM / NeRF-LOAM / PLGSLAM 各团队</span>
+        <span>📅 2023 / 2024 · <i>NeRF-SLAM / NeRF-LOAM / PLGSLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#errata">先说一个语料勘误</a>
+        <a href="#routes">三条规模化路线</a>
+        <a href="#nerfslam">NeRF-SLAM：借位姿</a>
+        <a href="#nerfloam">NeRF-LOAM：激光增量</a>
+        <a href="#plgslam">PLGSLAM：渐进式</a>
+        <a href="#table">横向对比</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="errata">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：讲清三篇各自「怎么把隐式 SLAM 做大」；明确 NeRF-SLAM 是组合式（位姿来自 DROID-SLAM）、NeRF-LOAM 是激光增量、PLGSLAM 是渐进 + 局部到全局 BA；并记住这三篇<b>都没有回环</b>，靠的是别的方式兜底。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第二季 <b>0036</b> 课「NeRF 需已知位姿、逐场景优化」——本组是「在线估位姿」的跨越，但仍靠组合/增量兜底；接上一课 <b>0110/0111</b>（回环改锚点的两种范式）；接第三季 <b>0071</b> 课「神经隐式两种组合」（NICER/DN）。本课的 PLGSLAM 还能和第五季 <b>0057</b> 选择性边缘化对照。</p>
+        </div>
+      </div>
+
+      <h2>1. 先说一个语料勘误（必须如实写）</h2>
+
+      <div class="callout">
+        <h4>★ 语料库问题：NeRF-SLAM 被重复录入了</h4>
+        <p>路线图里把「NeRF-SLAM」与「实时稠密单目 NeRF-SLAM」列成两行，但<b>语料库里这两行是同一篇论文的重复录入</b>——正文词数完全相同，两个图片目录的内容也相同。所以本节课把这两行<b>按一篇处理</b>。下面所有「NeRF-SLAM」指的都是同一篇 2023 年的工作，不再拆成两篇。</p>
+      </div>
+
+      <p>之所以要专门点出来，是因为它直接关系到「逐篇对比」的严谨性：我们不能假装有两篇不同的论文，然后给它们分别打分。遇到这种重复录入，诚实标注比假装没看见更重要。</p>
+    </main>
+
+    <section class="section-card" id="routes">
+      <h2>2. 三条规模化路线：怎么把隐式 SLAM 做大</h2>
+
+      <p>前面两课讲的是「回环怎么改隐式地图」。但回环不是把隐式 SLAM 做大的唯一办法——而且本组的这三篇<b>都没有回环</b>。它们各自回答了一个更基础的问题：<b>隐式 SLAM 怎么才能跑得大、跑得久？</b></p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>路线一：借别人的位姿</b>
+          <p><b>NeRF-SLAM</b>：自己不做位姿，直接拿 <b>DROID-SLAM</b> 的位姿和带不确定度的深度，喂给 Instant-NGP 建图。把「难的事」交给成熟前端。</p>
+        </div>
+        <div class="mini-card">
+          <b>路线二：换到激光上做增量</b>
+          <p><b>NeRF-LOAM</b>：用八叉树体素 embedding 当激光隐式地图，逐帧增量更新，不预训练、不带回环，专攻室外大尺度。</p>
+        </div>
+        <div class="mini-card">
+          <b>路线三：渐进 + 局部到全局 BA</b>
+          <p><b>PLGSLAM</b>：动态切分局部 tri-plane 场景，先粗后细；用「局部 BA + 全局 BA」两级消除累积误差。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">「借位姿」这条路的架构</text>
+
+          <!-- 左框：别人家的位姿 -->
+          <rect x="60" y="80" width="300" height="150" rx="12" fill="#fdf6f3" stroke="#cc785c" stroke-width="1.8"/>
+          <text x="210" y="116" text-anchor="middle" font-size="14" font-weight="700" fill="#a8563a">别人家的位姿估计</text>
+          <text x="210" y="142" text-anchor="middle" font-size="13" fill="#8f4a33">DROID-SLAM</text>
+          <text x="210" y="170" text-anchor="middle" font-size="11.5" fill="#a8846f">（前端：稠密 BA）</text>
+          <text x="210" y="194" text-anchor="middle" font-size="11.5" fill="#a8846f">输出位姿 + 带协方差的深度</text>
+
+          <!-- 箭头 -->
+          <path d="M370 155 L560 155" stroke="#3b4a5e" stroke-width="2.4"/>
+          <path d="M560 155 L548 148 L548 162 Z" fill="#3b4a5e"/>
+          <text x="465" y="142" text-anchor="middle" font-size="11.5" fill="#3b4a5e">位姿喂过来</text>
+
+          <!-- 右框：我负责建图 -->
+          <rect x="560" y="80" width="300" height="150" rx="12" fill="#eef6fb" stroke="#5a8fc7" stroke-width="1.8"/>
+          <text x="710" y="116" text-anchor="middle" font-size="14" font-weight="700" fill="#2c5f8a">我负责建图</text>
+          <text x="710" y="142" text-anchor="middle" font-size="13" fill="#3f78a0">NeRF / Instant-NGP</text>
+          <text x="710" y="170" text-anchor="middle" font-size="11.5" fill="#5f8a72">多分辨率哈希辐射场</text>
+          <text x="710" y="194" text-anchor="middle" font-size="11.5" fill="#5f8a72">输出稠密重建</text>
+
+          <text x="450" y="290" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a8563a">它自己不管位姿，所以也就没有回环</text>
+          <text x="450" y="316" text-anchor="middle" font-size="11.5" fill="#5a4a42">（全局一致靠 DROID 的稠密 BA 在线维持，不是回环修正）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>NeRF-SLAM 的「组合式」架构——左边一个现成前端负责位姿（DROID-SLAM），右边它自己只负责建图（NeRF）。<br>
+          <b>怎么看这张图：</b>① 左边框是「别人家的位姿估计」，它复用 DROID-SLAM 的预训练权重，不自己估；② 中间箭头是「位姿喂过来」，NeRF 用这些位姿监督建图；③ 下面那句话是重点：<b>它自己不管位姿，所以也就没有回环</b>——全局一致靠 DROID 的稠密 BA 在线维持，而不是回环修正。<br>
+          <b>要记住的一句话：</b>「借位姿」是做大规模的捷径，代价是放弃了回环这层保险。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="nerfslam">
+      <h2>3. NeRF-SLAM：借别人的位姿（组合式，无回环）</h2>
+
+      <p>NeRF-SLAM（2023）是这条路线的代表。它是一篇<b>组合式系统 / 管线论文</b>，不是端到端。它把「前沿的稠密单目 SLAM」和「实时的神经辐射场」拼起来：</p>
+      <ul>
+        <li><b>位姿是谁给的</b>：<b>DROID-SLAM</b>（III-A 节，复用其权重）。它还用 Rosinol 的方法实时算出深度/位姿的边际协方差 $\Sigma_d, \Sigma_T$，连「不确定性」也一并借来了。</li>
+        <li><b>建图部分用了什么</b>：<b>Instant-NGP 的多分辨率哈希体积辐射场</b>（纯哈希网格，不是点云），把 DROID 给的位姿和带不确定度的深度当作监督，训练 NeRF。深度不确定度大的地方权重调低，避免「鬼影 / floaters」。</li>
+        <li><b>有没有回环</b>：<b>没有</b>。正文从头到尾无 loop closure；GO-SLAM 正文也点名它「absence of online loop closing and full BA」。它的全局一致靠 DROID-SLAM 的<b>稠密 BA</b>在线维持，但不是回环修正。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeRF-SLAM/779aaf1df61f78927efa76e5bfafd79f78ff9de2b973455d2b13d3ed5f631a83.jpg" alt="NeRF-SLAM Fig.2 architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Architecture: DROID-SLAM (blue) provides poses and depth; Rosinol (purple) computes marginal covariances; our NeRF mapping (red) is supervised by depth weighted by its covariance.<br>
+          （中译：架构：DROID-SLAM（蓝）提供位姿与深度；Rosinol（紫）计算边际协方差；本文 NeRF 建图（红）由按协方差加权的深度监督。）<br>
+          <b>怎么看这张图：</b>① 颜色分区（蓝/紫/红）正是「组合式」的可视化——蓝是别人的前端，红是自己的建图；② 注意深度是被<b>协方差加权</b>的，不确定度高的深度权重低，这正是它抗鬼影的关键。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeRF-SLAM/03554855bd4204be1d5bac140060d6094fac94f52825efe69b56fcd126016fad.jpg" alt="NeRF-SLAM Fig.1 pipeline from RGB to radiance field">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>From left to right: RGB, depth uncertainty, back-projected point cloud, thresholded point cloud, neural radiance field.<br>
+          （中译：从左到右：RGB、深度不确定度、反投影点云、阈值后的点云、神经辐射场。）<br>
+          <b>怎么看这张图：</b>① 第二列「深度不确定度」是它借来的关键信号——亮的地方不确定度高；② 最后两列是它建的 NeRF 场景。把它和 Fig.2 一起看，就能完整理解这条「借位姿 + 建图」的路线。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeRF-SLAM/39fc9c7c6a231756db934f206b31f23d2accbd3f545137ee854391369f9846aa.jpg" alt="NeRF-SLAM Fig.3 qualitative Replica office">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Qualitative on Replica office-0: from raw point cloud (front-end) to our reconstruction, compared with σ-Fusion and NICE-SLAM.<br>
+          （中译：Replica office-0 定性结果：从前端原始点云到本文重建，对比 σ-Fusion 与 NICE-SLAM。）<br>
+          <b>怎么看这张图：</b>看它在 Replica 上比 NICE-SLAM 更干净的重建，体会「组合式」为何能又快又好。但请记住：它<b>没有回环</b>，这是规模化的另一面代价。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="nerfloam">
+      <h2>4. NeRF-LOAM：激光侧的增量式（无回环）</h2>
+
+      <p>NeRF-LOAM（2023）把隐式表示搬到了<b>激光</b>上做大尺度增量建图。它是 SJTU + 国防科大团队的工作（注意：<b>与 PIN-SLAM 不是同一团队</b>，且 PIN-SLAM 在引言里把它当「为何需要弹性点而非网格」的反面教材）。</p>
+
+      <ul>
+        <li><b>地图表示</b>：<b>八叉树稀疏体素 embedding</b>（每顶点 N_e 维）+ 一个共享 MLP 解码器，三线性插值得到 SDF。不是点云、不是规则全网格，是按需开桶的八叉树。</li>
+        <li><b>怎么处理大场景（分块/子图）</b>：八叉树天然是「按需开桶」——激光扫到新区域才生成新体素 embedding，不预分配整张全网格，所以能跑大场景。还做了<b>地面分离 SDF</b> 抑制 Z 轴漂移。</li>
+        <li><b>增量式的含义</b>：逐帧用射线在 SE(3) 切空间梯度下降优化 6 自由度位姿，前 K 帧后冻结网络、几何存进体素；靠 <b>key-scan buffer</b> 联合精修来缓解「前 K 帧灾难性遗忘」。</li>
+        <li><b>有没有回环</b>：<b>没有</b>。所谓「loop」在正文里只是「time-consuming loop queries」（代码循环）和作者名 Charles Loop，<b>不是回环检测</b>。key-scan 精修是「防遗忘」，不是回环。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeRF-LOAM/150c2463ebfc10afa45b1377af80304be01ea8b0e38da9a7f07738d9f1bb6ad6.jpg" alt="NeRF-LOAM Fig.4 overview three modules">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Our NeRF-LOAM Overview. Given a LiDAR stream, outputs poses and a reconstructed mesh map with three modules: 1) neural odometry; 2) neural mapping; 3) mesh reconstruction. The dashed line represents back projection.<br>
+          （中译：总览。给定激光流，输出位姿与重建网格地图，含三模块：神经里程计、神经建图、网格重建。虚线代表反投影。）<br>
+          <b>怎么看这张图：</b>① 三模块串起来就是「激光 → 位姿 + 地图 → 网格」；② 这是激光隐式增量建图的总纲图，请顺着虚线（反投影）看数据流。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeRF-LOAM/ed53e605b8a1b7f7093ac88b407d27ed052d752b3280588a4411aa908795044e.jpg" alt="NeRF-LOAM Fig.1 KITTI07 odometry and mesh">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Simultaneously odometry and dense mapping results on KITTI07. The odometry results are colored by the absolute trajectory errors (ATE). Our proposed novel NeRF-LOAM accurately estimates the poses and reconstructs the dense mesh map of the outdoor large-scale environment.<br>
+          （中译：KITTI07 上的里程计与稠密建图结果，里程计按 ATE 着色。本文准确估计位姿并重建户外大尺度环境的稠密网格地图。）<br>
+          <b>怎么看这张图：</b>这是它「户外大尺度激光隐式」的招牌证据。但要清醒：它<b>没有回环、靠 key-scan 精修兜底</b>，全局一致性由 PIN-SLAM 那类带回环的工作补足。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeRF-LOAM/18c018334219f40985d06014650f341e4b0bc9f469c4f470fcc2bb36f8609d8a.jpg" alt="NeRF-LOAM Fig.2 modified neural SDF">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The modified neural SDF. After ray and point sampling, the voxel embeddings are fed to a network to query the neural SDF after ground separation.<br>
+          （中译：改进的神经 SDF。射线/点采样后，体素 embedding 喂入网络，在地面分离后查询神经 SDF。）<br>
+          <b>怎么看这张图：</b>这张图讲清了「八叉树体素 embedding → 网络 → SDF」的数据流，以及「地面分离」这一步怎么让激光隐式更稳。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="plgslam">
+      <h2>5. PLGSLAM：渐进式 + 局部到全局 BA（非 ORB-SLAM3）</h2>
+
+      <p>PLGSLAM（2024）走第三条路：<b>渐进切分局部场景 + 局部到全局 BA</b>。它要解决的问题是——单一固定容量的全局场，装不下大尺度长序列。</p>
+
+      <div class="callout">
+        <h4>★ 诚实标注：位姿不是 ORB-SLAM3 给的</h4>
+        <p>有一个常见误传：PLGSLAM 用 ORB-SLAM3 提供位姿。但<b>正文不支持</b>。它只在引言把 ORB-SLAM 当传统方法举例、在表格当 baseline；它自称「integrate the traditional SLAM system with an end-to-end pose estimation network」，跟踪线程用<b>神经 warping 损失 + SIFT 重投影误差</b>做局部到全局 BA，<b>没有说用 ORB-SLAM3 出位姿</b>。本课的写法以正文为准。</p>
+      </div>
+
+      <ul>
+        <li><b>「Progressive」指什么</b>：相机轨迹离开当前局部场边界时，<b>动态新建局部场</b>并冻结旧的；若回到旧边界内则<b>激活旧场</b>继续优化。即「先粗（局部）后细（全局）」的渐进分配，内存由立方降到平方 $O(L^2)$。</li>
+        <li><b>局部到全局 BA 两级</b>：① <b>局部 BA</b>——只选与当前帧视觉重叠的局部关键帧优化几何；② <b>全局 BA</b>——维护全局关键帧数据库，用<b>神经 warping 损失</b>（把关键帧 I 用相对位姿 warp 到 I' 比颜色/深度）+ <b>SIFT 重投影误差</b>跨全部历史观测量消除累积误差。这是回环/全局一致的<b>替代机制（非严格回环检测）</b>。</li>
+        <li><b>位姿从哪来</b>：自己估 + 融合传统 SLAM（神经 warping + SIFT 重投影做 BA），<b>不是 ORB-SLAM3</b>。</li>
+      </ul>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">PLGSLAM 的「渐进式」</text>
+
+          <!-- 三格 -->
+          <rect x="40" y="56" width="248" height="270" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="164" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">① 刚开始</text>
+          <rect x="70" y="110" width="190" height="150" fill="none" stroke="#90a4ae" stroke-width="2"/>
+          <text x="165" y="190" text-anchor="middle" font-size="12" fill="#607d8b">只看到大块形状</text>
+          <text x="164" y="300" text-anchor="middle" font-size="11" fill="#5a4a42">当前优化范围：单一局部场</text>
+
+          <rect x="326" y="56" width="248" height="270" rx="10" fill="#f4f8f4" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="450" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 走远了</text>
+          <rect x="356" y="110" width="190" height="150" fill="none" stroke="#90a4ae" stroke-width="2"/>
+          <rect x="380" y="140" width="60" height="40" fill="#cfd8dc" stroke="#90a4ae"/>
+          <rect x="460" y="180" width="50" height="50" fill="#cfd8dc" stroke="#90a4ae"/>
+          <text x="450" y="190" text-anchor="middle" font-size="12" fill="#607d8b">家具轮廓出现</text>
+          <text x="450" y="300" text-anchor="middle" font-size="11" fill="#5a4a42">新建第二局部场，旧的冻结</text>
+
+          <rect x="612" y="56" width="248" height="270" rx="10" fill="#eef6fb" stroke="#9bb8d4" stroke-width="1.4"/>
+          <text x="736" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">③ 全局 BA 后</text>
+          <rect x="642" y="110" width="190" height="150" fill="none" stroke="#5a8fc7" stroke-width="2"/>
+          <rect x="666" y="138" width="60" height="40" fill="#9ec3e6" stroke="#2c5f8a"/>
+          <rect x="746" y="178" width="50" height="50" fill="#9ec3e6" stroke="#2c5f8a"/>
+          <line x1="726" y1="158" x2="746" y2="200" stroke="#2c5f8a" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="736" y="190" text-anchor="middle" font-size="12" fill="#3f78a0">纹理清晰</text>
+          <text x="736" y="300" text-anchor="middle" font-size="11" fill="#5a4a42">局部场拼合 + 全局 BA 消误差</text>
+
+          <path d="M288 185 L322 185" stroke="#9aa0a6" stroke-width="1.6"/>
+          <path d="M574 185 L608 185" stroke="#9aa0a6" stroke-width="1.6"/>
+          <text x="450" y="354" text-anchor="middle" font-size="11.5" fill="#5a4a42">越走细节越多：从大块形状 → 家具轮廓 → 清晰纹理</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>PLGSLAM 的「渐进式」——同一个场景在三个时刻被渲染的精细度，从左到右越来越高。<br>
+          <b>怎么看这张图：</b>① 第一格只看到大块形状（单一局部场）；② 第二格走远了，新建第二个局部场、旧的冻结，家具轮廓出现；③ 第三格经过全局 BA，局部场被拼合、误差被消除，纹理清晰；④ 每格下标注出「当前优化的范围」。<br>
+          <b>要记住的一句话：</b>单一全局场装不下大场景，所以切成可拼的局部场，再靠全局 BA 把缝对齐。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PLGSLAM__Progressive_Neural_Scene_Represenation_with_Loc/3af3d58dd0e9b97fb4cac02c4e6ac240b6c1949d04e21b0e32518ee4f4d966c4.jpg" alt="PLGSLAM Fig.1 large-scale indoor reconstruction">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Large-scale indoor scene 3D Reconstruction with different methods. We depict the final mesh and camera tracking trajectory error (ATE) … PLGSLAM outperforms others in both scene reconstruction and pose estimation.<br>
+          （中译：大尺度室内场景三维重建对比。展示最终网格与相机跟踪轨迹误差（ATE）……PLGSLAM 在重建与位姿估计上都更优。）<br>
+          <b>怎么看这张图：</b>这是它「大尺度室内」的招牌证据。配合下面的 Fig.2（双线程）、Fig.3（神经 warping 损失）一起看，能理解渐进表示与两级 BA 怎么落地。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PLGSLAM__Progressive_Neural_Scene_Represenation_with_Loc/59d7c9eec6aaa0eff1064f5fd62ffe375d7f40866588acb8a943c9372e60edff.jpg" alt="PLGSLAM Fig.2 system isometric view">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The isometric view of the proposed PLGSLAM system. Two parallel threads: the mapping thread and the tracking thread … combine the tri-planes with the MLP …<br>
+          （中译：PLGSLAM 系统的等距视图。两条并行线程：建图线程与跟踪线程……把 tri-plane 与 MLP 结合。）<br>
+          <b>怎么看这张图：</b>这张图展示「渐进场景表示（建图线程）+ 局部到全局 BA（跟踪线程）」的双线程结构。注意它用的是 <b>tri-plane（三平面）</b>而非点云或哈希网格。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PLGSLAM__Progressive_Neural_Scene_Represenation_with_Loc/4c77096e20dbdcd06388bc56506173dc8d7797632f520b68c5da5e3d2ed54c72.jpg" alt="PLGSLAM Fig.3 neural warping loss">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>This figure illustrates the designed neural warping loss. We calculate the neural warping loss between keyframe I and keyframe I'.<br>
+          （中译：本图说明设计的神经 warping 损失。我们计算关键帧 I 与关键帧 I' 之间的神经 warping 损失。）<br>
+          <b>怎么看这张图：</b>这张图对应「全局 BA」里的神经 warping 损失——把一张关键帧按相对位姿 warp 到另一张，比颜色/深度差异。它是<b>回环/全局一致的替代机制</b>，但不是严格意义上的回环检测（诚实标注：PLGSLAM 无严格回环）。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面关于 PLGSLAM 位姿来源的说法，哪个符合正文？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错，这是常见误传。正文没有说用 ORB-SLAM3 出位姿；它只在引言/表格把 ORB-SLAM 当 baseline。它实际用神经 warping 损失 + SIFT 重投影误差做局部到全局 BA。" onclick="lessonKit.answer(this,'q0112a')">位姿由ORB-SLAM3提供</button>
+          <button data-correct="yes" data-explanation="对。正文说它「integrate the traditional SLAM system with an end-to-end pose estimation network」，跟踪线程用神经 warping 损失 + SIFT 重投影误差做局部到全局 BA，并不依赖 ORB-SLAM3 出位姿。" onclick="lessonKit.answer(this,'q0112a')">自己估加传统SLAM融合</button>
+        </div>
+        <div class="quiz-feedback" id="q0112a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>6. 横向对比：三篇各走哪条路</h2>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">NeRF-SLAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">NeRF-LOAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">PLGSLAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>规模化路线</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">借位姿（组合式）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">激光增量</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">渐进 + 局部到全局 BA</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>传感器</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">单目</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">激光</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">RGB-D</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>地图表示</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Instant-NGP 哈希辐射场</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">八叉树体素 embedding + MLP</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">渐进式多局部 tri-plane + MLP</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>位姿来自</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">DROID-SLAM（借）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">自己估（梯度下降）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">自己估 + 传统 SLAM 融合（非 ORB-SLAM3）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>有没有回环</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>无</b>（靠 DROID 稠密 BA）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>无</b>（靠 key-scan 精修）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>无严格回环</b>（局部到全局 BA 替代）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>规模亮点</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">实时 10 FPS，Replica 小场景</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">MaiCity / Newer College / KITTI 户外</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Apartment 多房间（&gt;12000 帧）</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section-card" id="summary">
+      <h2>7. 收束：没有回环时怎么办</h2>
+
+      <p>三篇读下来，你会发现它们和前两课的 Loopy / GO / PIN 正好互补：<b>那三篇靠回环把地图拉正，这三篇靠「组合 / 增量 / 渐进」把地图做大，且都没有回环</b>。</p>
+
+      <div class="callout">
+        <h4>本组判断（非原文自评）</h4>
+        <p>三条规模化路线，本质上是「在还没有回环的情况下，先让隐式 SLAM 跑得更大更久」的三种工程智慧：</p>
+        <p>① <b>借位姿</b>（NeRF-SLAM）最省力，但放弃了回环这层保险，靠前端 BA 兜底；② <b>激光增量</b>（NeRF-LOAM）把隐式搬到激光上、按需开桶，但同样靠 key-scan 精修而非回环；③ <b>渐进 + 局部到全局 BA</b>（PLGSLAM）用分场和两级 BA 直接对抗累积误差，最接近「回环的效果」却仍非严格回环。</p>
+        <p>它们共同说明：<b>回环不是规模化的唯一解，但「没有回环」总要付出别的代价</b>——要么依赖强力前端（DROID），要么依赖增量精修（key-scan），要么依赖两级 BA（PLGSLAM）。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么本课的 NeRF-SLAM 必须按「一篇」处理，而不是路线图里的两行？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为语料库里「NeRF-SLAM」与「实时稠密单目 NeRF-SLAM」两行是<b>同一篇论文的重复录入</b>：正文词数完全相同，两个图片目录内容也相同。所以合并成一篇处理，避免虚构出两篇不同的工作。这是诚实标注的基本要求。</p>
+            </div></details>
+          </li>
+          <li>NeRF-SLAM 的位姿是谁给的？它建图部分用了什么表示？有没有回环？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>位姿由 <b>DROID-SLAM</b> 提供（复用其预训练权重），并借来带协方差的深度与位姿不确定度。建图用 <b>Instant-NGP 的多分辨率哈希体积辐射场</b>（纯哈希网格）。<b>没有回环</b>——全局一致靠 DROID 的稠密 BA 在线维持，不是回环修正。</p>
+            </div></details>
+          </li>
+          <li>NeRF-LOAM 怎么在激光侧处理大场景？它和 PIN-SLAM 是同一团队吗？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它用<b>八叉树稀疏体素 embedding</b>：激光扫到新区域才生成新体素 embedding，不预分配整张网格，因而能跑大场景；并做地面分离 SDF 抑制 Z 漂移。它是<b>增量式、无回环</b>，靠 key-scan 精修缓解遗忘。</p>
+              <p>它和 PIN-SLAM <b>不是同一团队</b>（NeRF-LOAM 是 SJTU + 国防科大；PIN-SLAM 是 Bonn/Stachniss 组），且 NeRF-LOAM <b>缺回环</b>。PIN-SLAM 在引言里把它当「为何需要弹性点而非网格」的反面教材。</p>
+            </div></details>
+          </li>
+          <li>PLGSLAM 的「Progressive（渐进）」指什么？它的局部到全局 BA 是哪两级？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>「渐进」指：相机离开当前局部场边界时<b>动态新建局部场</b>并冻结旧的；回到旧边界内则<b>激活旧场</b>。即先粗（局部）后细（全局）的渐进分配，内存从立方降到平方。</p>
+              <p>两级 BA：① <b>局部 BA</b>——只优化与当前帧视觉重叠的局部关键帧几何；② <b>全局 BA</b>——用神经 warping 损失 + SIFT 重投影误差跨全部历史观测量消除累积误差。这是回环的替代机制，<b>非严格回环检测</b>。</p>
+            </div></details>
+          </li>
+          <li>关于 PLGSLAM 的位姿来源，常见误传是什么？正文实际怎么说？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>误传：PLGSLAM 用 <b>ORB-SLAM3</b> 提供位姿。但正文不支持——它只在引言/表格把 ORB-SLAM 当 baseline，自称「integrate the traditional SLAM system with an end-to-end pose estimation network」，跟踪线程用<b>神经 warping 损失 + SIFT 重投影误差</b>做局部到全局 BA，<b>没有说用 ORB-SLAM3 出位姿</b>。写课时以正文为准。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0111-PIN-SLAM2024-首个完整隐式SLAM.html">← PIN-SLAM（2024）：首个完整隐式 SLAM</a>
+        <a class="next" href="0113-Orbeez-SLAM与NeurAR-轻量实时与不确定性.html">Orbeez-SLAM 与 NeurAR：轻量实时与不确定性 →</a>
+      </div>
+      <p class="foot-note">回环不是规模化的唯一解，但「没有回环」总要在别处付出代价 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

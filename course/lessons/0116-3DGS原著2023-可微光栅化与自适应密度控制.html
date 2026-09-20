@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3DGS 原著（2023）：可微光栅化与自适应密度控制 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0116</div>
+      <h1>3DGS 原著（2023）：可微光栅化与自适应密度控制</h1>
+      <p class="subtitle">这一节要还一笔挂了五季的债——<b>「自适应密度控制」到底是怎么做的</b>。而答案会有点反直觉 🫧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：3D 高斯参数化 · 瓦片光栅化 · 密度控制</span>
+        <span>👥 作者：Bernhard Kerbl · Georgios Kopanas · Thomas Leimkühler · George Drettakis</span>
+        <span>📅 2023 · <i>3D Gaussian Splatting for Real-Time Radiance Field Rendering</i>（SIGGRAPH 2023）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">它要解决什么</a>
+        <a href="#b">从「点」到「椭球」</a>
+        <a href="#c">参数化：怎么存一个高斯</a>
+        <a href="#d">投影到屏幕</a>
+        <a href="#e">渲染流程：16×16 瓦片</a>
+        <a href="#f">自适应密度控制（还债）</a>
+        <a href="#g">训练细节与数字</a>
+        <a href="#h">局限与勘误</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出 3DGS 相对 NeRF 的<b>根本差别在哪一步</b>；② 完整讲出<b>从三维高斯到屏幕上一个像素</b>的流程；③ <b>准确说出自适应密度控制的三条规则</b>（尤其克隆与分裂分别在什么条件下触发）；④ 解释为什么要"周期性地把不透明度压回零"。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一节是<b>全季的枢纽</b>。往前接：<b>第一季 0015 课</b>（3D 高斯综述，其中明确写过「综述只引用、未展开『自适应密度控制』」——那笔债本节还清）、<b>第二季 0039 课</b>（Plenoxels 的结论「NeRF 里真正不可省的不是网络而是可微渲染器」）、<b>第二季 0036 课</b>（NeRF 每条光线约 128 个采样点）。往后接：本季剩下 10 节高斯课，全都在改这一节讲的某一条规则。</p>
+        </div>
+      </div>
+
+      <h2>1. 它要解决什么：NeRF 的两难</h2>
+      <p>先把靶子立清楚。第二季 0036–0039 学过的那些方法，处境是这样的：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>Mip-NeRF360（质量最好）</h4>
+          <p>画面质量是当时的巅峰，但<b>训练与渲染时间都极高</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Instant NGP / Plenoxels（快）</h4>
+          <p>训练压到了分钟级，但原文也承认：它们<b>难以有效表示空白空间</b>、图像质量受<b>加速用的结构化网格</b>限制、而渲染速度又受"每条光线要查询大量采样点"拖累。</p>
+        </div>
+        <div class="mini-card">
+          <h4>共同的天花板</h4>
+          <p>原文摘要直接下了判断：对于<b>无界且完整的场景</b>（不是孤立物体）、在 1080p 分辨率下，<b>当时没有任何方法能达到实时显示速率</b>。</p>
+        </div>
+      </div>
+      <p>而 3DGS 的摘要承诺了三件事同时成立：<b>画质达到当时最好水平</b>、<b>训练时间有竞争力</b>、<b>1080p 下 ≥ 30 fps 实时渲染</b>。</p>
+
+      <p>它是怎么做到的？原文摘要里概括成 <b>three key elements</b>（三个关键要素）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$\text{① 用 3D 高斯表示场景（从 SfM 稀疏点初始化）} \;\to\; \text{② 优化与自适应密度控制交错进行} \;\to\; \text{③ 快速可见性感知渲染}$$
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><b>⚠️ 一处必须说清的事实：</b>你可能在别处看到过"3DGS = ①初始化 / ②投影与可微光栅化 / ③自适应密度控制"这样的三分法。<b>原文的分节并不是这样</b>——它真正的章节是 §4 可微 3D 高斯、§5 优化与自适应密度控制、§6 快速可微光栅化器、§7 实现与实验。<b>那个"三步"是后续课程常用的教学归纳。</b>我在这里沿用摘要的"三个关键要素"口径，并把这个区别告诉你，免得你回原文时找不到对应章节。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 从「点」到「椭球」：为什么不是点？</h2>
+      <p>原文在讲自己的方法之前，先花了一段讲前人的"点渲染"。它提到一条更早的思路（Xu 等人的工作）：<b>用点来表示辐射场</b>，配合径向基函数、并在优化过程中用点剪枝与稠密化。<b>但那种做法仍依赖体渲染的 ray marching，所以达不到实时显示速率。</b></p>
+      <p>这里的关键词是<b>ray marching（光线步进）</b>。回忆第二季 0036 课讲过的：NeRF 渲染一个像素，要沿光线取上百个点、每个点都跑一遍网络问"这里有多密、什么颜色"，然后按透明度累加。<b>一个点都不少，一次都不能省。</b></p>
+      <p>3DGS 的换法很直接：<b>别沿光线采点去问网络了，直接把三维场景里的小团块「泼」到屏幕上看。</b>这就是名字里的 <i>Splatting</i>（泼溅）。而"小团块"不能是球——真实的表面有朝向，球是各向同性的，没法表达"一片薄的墙面"。所以选<b>各向异性的三维高斯</b>：一个可以被拉长、压扁、旋转的椭球。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 上联：NeRF -->
+          <rect x="14" y="52" width="872" height="146" rx="10" fill="#f5f8fb" stroke="#cfdde8" stroke-width="1.2"/>
+          <text x="34" y="76" font-size="13" font-weight="700" fill="#2f5b82">① NeRF 的做法：沿一条光线，一路问下去</text>
+          <!-- 相机 -->
+          <polygon points="52,124 96,106 96,142" fill="#3d6b96" opacity="0.85"/>
+          <text x="50" y="160" font-size="10" fill="#3d6b96">相机</text>
+          <!-- 光线 -->
+          <line x1="96" y1="124" x2="836" y2="124" stroke="#8fb4d0" stroke-width="1.2"/>
+          <!-- 采样点 -->
+          <g fill="#c8553d">
+            <circle cx="180" cy="124" r="3.4"/><circle cx="216" cy="124" r="3.4"/><circle cx="252" cy="124" r="3.4"/>
+            <circle cx="288" cy="124" r="3.4"/><circle cx="324" cy="124" r="3.4"/><circle cx="360" cy="124" r="3.4"/>
+            <circle cx="396" cy="124" r="3.4"/><circle cx="432" cy="124" r="3.4"/><circle cx="468" cy="124" r="3.4"/>
+            <circle cx="504" cy="124" r="3.4"/><circle cx="540" cy="124" r="3.4"/><circle cx="576" cy="124" r="3.4"/>
+            <circle cx="612" cy="124" r="3.4"/><circle cx="648" cy="124" r="3.4"/><circle cx="684" cy="124" r="3.4"/>
+            <circle cx="720" cy="124" r="3.4"/><circle cx="756" cy="124" r="3.4"/><circle cx="792" cy="124" r="3.4"/>
+          </g>
+          <!-- 小问号标注 -->
+          <text x="486" y="106" font-size="10" fill="#a8432c">每个点都要跑一遍网络</text>
+          <text x="486" y="146" font-size="10" fill="#a8432c">≈ 上百次查询 / 每个像素</text>
+          <!-- 墙 -->
+          <rect x="800" y="88" width="8" height="72" fill="#b8ae9f"/>
+          <text x="822" y="130" font-size="10" fill="#8a7365">表面</text>
+
+          <!-- 下联：3DGS -->
+          <rect x="14" y="214" width="872" height="146" rx="10" fill="#f7fbf6" stroke="#d3e3d0" stroke-width="1.2"/>
+          <text x="34" y="238" font-size="13" font-weight="700" fill="#3f7a4f">② 3DGS 的做法：把三维椭球直接「泼」到屏幕上，按顺序叠</text>
+          <!-- 相机 -->
+          <polygon points="52,286 96,268 96,304" fill="#3d6b96" opacity="0.85"/>
+          <text x="50" y="322" font-size="10" fill="#3d6b96">相机</text>
+          <!-- 视野 -->
+          <line x1="96" y1="286" x2="760" y2="246" stroke="#a9c9b0" stroke-width="1" stroke-dasharray="4 3"/>
+          <line x1="96" y1="286" x2="760" y2="326" stroke="#a9c9b0" stroke-width="1" stroke-dasharray="4 3"/>
+          <!-- 椭球簇 -->
+          <ellipse cx="330" cy="286" rx="26" ry="11" fill="#5aa86f" opacity="0.55" transform="rotate(-8 330 286)"/>
+          <ellipse cx="400" cy="292" rx="30" ry="12" fill="#5aa86f" opacity="0.55" transform="rotate(5 400 292)"/>
+          <ellipse cx="470" cy="284" rx="24" ry="10" fill="#5aa86f" opacity="0.55" transform="rotate(-3 470 284)"/>
+          <ellipse cx="540" cy="290" rx="28" ry="11" fill="#5aa86f" opacity="0.5" transform="rotate(7 540 290)"/>
+          <ellipse cx="610" cy="286" rx="22" ry="10" fill="#5aa86f" opacity="0.5" transform="rotate(-6 610 286)"/>
+          <ellipse cx="670" cy="292" rx="25" ry="10" fill="#5aa86f" opacity="0.5" transform="rotate(4 670 292)"/>
+          <!-- 投影线 -->
+          <g stroke="#7fae8b" stroke-width="1" stroke-dasharray="3 3" opacity="0.9">
+            <line x1="330" y1="286" x2="330" y2="340"/>
+            <line x1="470" y1="284" x2="470" y2="340"/>
+            <line x1="610" y1="286" x2="610" y2="340"/>
+          </g>
+          <!-- 屏幕像素条 -->
+          <rect x="150" y="340" width="700" height="12" rx="3" fill="#e8f1e9" stroke="#c3d9c6" stroke-width="1"/>
+          <g fill="#3f7a4f">
+            <rect x="152" y="342" width="46" height="8" fill="#9fd0aa" opacity="0.55"/>
+            <rect x="240" y="342" width="52" height="8" fill="#7ec08e" opacity="0.6"/>
+            <rect x="330" y="342" width="60" height="8" fill="#5aa86f" opacity="0.65"/>
+            <rect x="410" y="342" width="58" height="8" fill="#5aa86f" opacity="0.65"/>
+            <rect x="470" y="342" width="56" height="8" fill="#5aa86f" opacity="0.7"/>
+            <rect x="540" y="342" width="62" height="8" fill="#4a9660" opacity="0.7"/>
+            <rect x="610" y="342" width="54" height="8" fill="#4a9660" opacity="0.72"/>
+            <rect x="670" y="342" width="50" height="8" fill="#3f7a4f" opacity="0.75"/>
+          </g>
+          <text x="450" y="372" text-anchor="middle" font-size="10.5" fill="#4b7554">每个椭球投影成一小片，按深度顺序叠加 —— 不用沿光线采样</text>
+
+          <text x="450" y="28" text-anchor="middle" font-size="13" font-weight="700" fill="#6b5a4e">同一个像素，两条完全不同的路</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面一格是 NeRF 的路子：一条光线射出去，沿线上取上百个点，<b>每个点都要跑一遍网络</b>问"这里多密、什么颜色"，再按透明度累加。下面一格是 3DGS 的路子：场景里本来就存着一堆椭球，把每个椭球<b>投影</b>到屏幕上变成一小片，然后<b>按深度顺序叠加</b>出像素。<br>
+          <b>怎么看这张图：</b>① 盯住上格的<b>那排红点</b>——那是"每个像素都要做的上百次网络查询"，是 NeRF 慢的根源。② 盯住下格那三根<b>虚线投影</b>——它把"三维椭球"变成"屏幕上一小片"，这一步是<b>解析几何</b>，不需要网络参与。③ 注意下格底部那条<b>像素条</b>：颜色是一段段叠出来的，不是一次性算出来的——这就是接下来要讲的 α 混合。<br>
+          <b>要记住的一句话：</b>3DGS 快的根本原因不是"网络更小"，而是<b>把"沿光线逐个查询"换成了"整块投影 + 排序叠加"</b>——后者在 GPU 上便宜得多。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 参数化：一个高斯存哪些数？</h2>
+      <p>要"泼"一个椭球，得先定义它。一个三维高斯分布由均值与协方差完全决定：</p>
+      <div class="formula-box">
+        $$G(\mathbf{X}) = \exp\!\left(-\tfrac{1}{2}(\mathbf{X}-\boldsymbol{\mu})^{\!\top}\Sigma^{-1}(\mathbf{X}-\boldsymbol{\mu})\right)$$
+        <p style="margin:.6rem 0 0;font-size:.92rem;color:#6b5a4e">$\boldsymbol{\mu}$ 是均值（椭球中心在哪），$\Sigma$ 是三阶协方差矩阵（椭球长什么样：往哪个方向拉长、拉多长）。</p>
+      </div>
+
+      <h3>为什么协方差不能直接当六个自由数去优化</h3>
+      <p>一个三阶对称矩阵有 6 个独立参数。理论上你可以直接把这 6 个数交给优化器。但原文<b>没有这么做</b>，而是把它分解成<b>旋转</b>与<b>缩放</b>：</p>
+      <div class="formula-box">
+        $$\Sigma = R\,S\,S^{\!\top}\!R^{\!\top}$$
+        <p style="margin:.6rem 0 0;font-size:.92rem;color:#6b5a4e">$S$ 是三个轴上的缩放（对角矩阵），$R$ 是旋转（用四元数表示）。实践中存的是<b>四元数 $q \in \mathbb{R}^4$</b> 与<b>缩放因子 $s \in \mathbb{R}^3$</b>。</p>
+      </div>
+      <p>这样做的理由很实在：<b>直接优化 6 个数，很容易优化出"不是一个合法协方差矩阵"的东西</b>（合法协方差必须是<b>半正定</b>的）。而写成 $R S S^{\!\top} R^{\!\top}$ 之后，<b>无论 $R$ 和 $S$ 取什么值，乘积一定是半正定的</b>——不需要额外加约束，从构造上就保证了合法性。</p>
+      <div class="callout">
+        <p><b>这条思想你其实已经见过。</b>第二季 0028 课讲 MSCKF 时，姿态误差用"3 维最小表示"而不是四元数的 4 个分量，理由是"否则协方差矩阵奇异"；第二季 0019 课讲 BA 参数化时，原话说参数化要"在当前估计附近尽量均匀、有限、行为良好"。3DGS 这里做的是同一件事：<b>换一套参数化，让优化在几何上合法</b>。</p>
+      </div>
+
+      <p>除了这三样（位置、协方差、不透明度），每个高斯还存<b>颜色</b>——注意颜色不是简单的 RGB 三个数，而是<b>球谐（SH）系数</b>，因为同一个表面从不同角度看亮度不同。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>位置 $\boldsymbol{\mu}$</h4><p>3 个数。椭球中心在哪。</p></div>
+        <div class="mini-card"><h4>协方差 $\Sigma$</h4><p>由四元数（4 个数）与缩放（3 个数）合成。椭球多长多扁、朝哪。</p></div>
+        <div class="mini-card"><h4>不透明度 $\alpha$</h4><p>1 个数。用 sigmoid 激活限制在 $[0,1)$ 以获得平滑梯度。</p></div>
+        <div class="mini-card"><h4>颜色（球谐）</h4><p>约 48 个数。让颜色可以随视角变化——这是"镜面感"的来源。</p></div>
+      </div>
+      <p><b>球谐这个工具你也不陌生</b>：第二季 0039 课的 Plenoxels 就是"显式体素 + 球谐"，用它来表示方向相关的颜色。3DGS 把同一件工具挂到了椭球上。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 投影到屏幕：怎么把一个三维椭球画成一小片</h2>
+      <p>要把椭球"泼"到图像上，得算出它在图像平面上的形状。原文的做法是把三维协方差用一阶线性化搬到二维：</p>
+      <div class="formula-box">
+        $$\Sigma' = J\,W\,\Sigma\,W^{\!\top}\!J^{\!\top}$$
+        <p style="margin:.6rem 0 0;font-size:.92rem;color:#6b5a4e">$W$ 是视角变换（世界系 → 相机系），$J$ 是投影变换（相机系 → 图像平面）的 <b>Jacobian</b>，$\Sigma'$ 是投影后图像平面上的二维协方差。</p>
+      </div>
+      <p><b>为什么需要 Jacobian？</b>因为"把三维点投到图像上"这件事是<b>非线性的</b>（要除以深度）。非线性变换不能直接作用在协方差上，得先用它的一阶导数（也就是 Jacobian）做线性近似。这是标准的误差传播做法，和第二季 0028 课 MSCKF 里用 Jacobian 把误差从一个坐标系搬到另一个坐标系是同一套数学。</p>
+      <p>还有一个细节值得记：<b>只有落在视锥内的椭球才值得投</b>。原文用了一个保守判据——只保留<b>99% 置信区间与视锥相交</b>的高斯；另外还用一个"guard band"直接扔掉那些均值贴近近平面、又远在视锥之外的高斯，理由是<b>算它们的二维投影协方差不稳定</b>（除以一个接近零的深度，数值会炸）。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 渲染流程：16×16 瓦片与「只排一次序」</h2>
+      <p>这是 3DGS 工程上最漂亮的部分。原文给这一节起的标题是 <i>Fast Differentiable Rasterizer for Gaussians</i>。<b>目标有三个</b>：渲染要快、排序要快、而且<b>不要限制"能参与混合的图元数量"</b>（前人工作有这个硬限制）。</p>
+
+      <h3>5.1 七步流程</h3>
+      <ol style="line-height:1.9">
+        <li><b>切瓦片</b>：把屏幕分成 <b>16×16 像素</b>的小块（tile）。</li>
+        <li><b>剔除</b>：扔掉落在视锥外的高斯（用 99% 置信区间判据），外加 guard band 扔掉极端位置的那些。</li>
+        <li><b>实例化 + 编 key</b>：一个高斯可能压到好几个瓦片上，那就为它<b>按覆盖的瓦片数量生成多个实例</b>；每个实例配一个 key，key 由<b>视角空间深度 + 瓦片 ID</b>拼成。</li>
+        <li><b>只排一次序</b>：用<b>单次快速的 GPU 基数排序</b>（radix sort）把所有 key 排好。</li>
+        <li><b>每个瓦片一个 thread block</b>：协作地把相关的高斯包读进 shared memory；对每个像素<b>从前到后</b>遍历，累积颜色与 $\alpha$。</li>
+        <li><b>唯一停止条件就是 $\alpha$ 饱和</b>：某个像素的 $\alpha$ 累积到接近 1 就停；一个瓦片里所有像素都饱和，整块就结束。</li>
+        <li><b>反向传播</b>：见 5.3。</li>
+      </ol>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">从三维椭球到像素颜色：五步，以及「只排一次序」这件事</text>
+
+          <!-- 步骤① -->
+          <rect x="20" y="50" width="160" height="140" rx="9" fill="#f7fbf6" stroke="#d3e3d0" stroke-width="1.2"/>
+          <text x="100" y="70" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3f7a4f">① 投影</text>
+          <ellipse cx="70" cy="112" rx="19" ry="9" fill="#5aa86f" opacity="0.55" transform="rotate(-10 70 112)"/>
+          <ellipse cx="112" cy="122" rx="21" ry="10" fill="#5aa86f" opacity="0.55" transform="rotate(6 112 122)"/>
+          <ellipse cx="90" cy="150" rx="17" ry="8" fill="#5aa86f" opacity="0.5"/>
+          <text x="100" y="180" text-anchor="middle" font-size="9.5" fill="#4b7554">三维椭球 → 二维椭圆</text>
+
+          <!-- 箭头 -->
+          <line x1="184" y1="120" x2="208" y2="120" stroke="#c9bdb2" stroke-width="1.6" marker-end="url(#arg)"/>
+
+          <!-- 步骤② -->
+          <rect x="212" y="50" width="160" height="140" rx="9" fill="#f7fbf6" stroke="#d3e3d0" stroke-width="1.2"/>
+          <text x="292" y="70" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3f7a4f">② 切 16×16 瓦片</text>
+          <g stroke="#bcd7c0" stroke-width="0.9">
+            <rect x="236" y="84" width="112" height="88" fill="#ffffff"/>
+            <line x1="236" y1="106" x2="348" y2="106"/><line x1="236" y1="128" x2="348" y2="128"/>
+            <line x1="236" y1="150" x2="348" y2="150"/>
+            <line x1="264" y1="84" x2="264" y2="172"/><line x1="292" y1="84" x2="292" y2="172"/>
+            <line x1="320" y1="84" x2="320" y2="172"/>
+          </g>
+          <ellipse cx="284" cy="118" rx="20" ry="9" fill="#5aa86f" opacity="0.5"/>
+          <ellipse cx="308" cy="142" rx="16" ry="8" fill="#5aa86f" opacity="0.45"/>
+          <text x="292" y="184" text-anchor="middle" font-size="9.5" fill="#4b7554">每块 16×16 像素</text>
+
+          <!-- 箭头 -->
+          <line x1="376" y1="120" x2="400" y2="120" stroke="#c9bdb2" stroke-width="1.6" marker-end="url(#arg)"/>
+
+          <!-- 步骤③ -->
+          <rect x="404" y="50" width="176" height="140" rx="9" fill="#f7fbf6" stroke="#d3e3d0" stroke-width="1.2"/>
+          <text x="492" y="70" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3f7a4f">③ 编 key 并排序</text>
+          <g font-size="9" fill="#3f7a4f">
+            <rect x="422" y="82" width="140" height="14" rx="3" fill="#e8f1e9"/>
+            <text x="428" y="93">深度 2.3 ｜ 瓦片 07</text>
+            <rect x="422" y="100" width="140" height="14" rx="3" fill="#e8f1e9"/>
+            <text x="428" y="111">深度 1.1 ｜ 瓦片 03</text>
+            <rect x="422" y="118" width="140" height="14" rx="3" fill="#e8f1e9"/>
+            <text x="428" y="129">深度 4.7 ｜ 瓦片 11</text>
+            <rect x="422" y="136" width="140" height="14" rx="3" fill="#e8f1e9"/>
+            <text x="428" y="147">深度 0.8 ｜ 瓦片 01</text>
+          </g>
+          <text x="492" y="168" text-anchor="middle" font-size="9.5" fill="#4b7554">一次基数排序搞定全部</text>
+          <text x="492" y="182" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">★ 没有逐像素排序</text>
+
+          <!-- 箭头 -->
+          <line x1="584" y1="120" x2="608" y2="120" stroke="#c9bdb2" stroke-width="1.6" marker-end="url(#arg)"/>
+
+          <!-- 步骤④⑤ -->
+          <rect x="612" y="50" width="268" height="140" rx="9" fill="#f7fbf6" stroke="#d3e3d0" stroke-width="1.2"/>
+          <text x="746" y="70" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3f7a4f">④ 每瓦片一队线程 ⑤ 从前到后叠加</text>
+          <rect x="632" y="84" width="228" height="20" rx="4" fill="#ffffff" stroke="#c3d9c6" stroke-width="1"/>
+          <text x="640" y="98" font-size="9.5" fill="#4b7554">线程块装载高斯包 → 共享内存</text>
+          <g>
+            <rect x="632" y="112" width="52" height="16" rx="3" fill="#9fd0aa" opacity="0.6"/>
+            <rect x="688" y="112" width="52" height="16" rx="3" fill="#7ec08e" opacity="0.65"/>
+            <rect x="744" y="112" width="52" height="16" rx="3" fill="#5aa86f" opacity="0.7"/>
+            <rect x="800" y="112" width="52" height="16" rx="3" fill="#3f7a4f" opacity="0.75"/>
+          </g>
+          <text x="746" y="146" text-anchor="middle" font-size="9.5" fill="#4b7554">按深度依次累加颜色与不透明度</text>
+          <text x="746" y="164" text-anchor="middle" font-size="9.5" font-weight="700" fill="#3f7a4f">不透明度积到 1 就停</text>
+          <text x="746" y="180" text-anchor="middle" font-size="9" fill="#7a9a80">（不限制参与混合的高斯个数）</text>
+
+          <defs>
+            <marker id="arg" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#c9bdb2"/>
+            </marker>
+          </defs>
+
+          <!-- 下方说明条 -->
+          <rect x="20" y="212" width="860" height="76" rx="9" fill="#fdf0ec" stroke="#e8b9a8" stroke-width="1.2"/>
+          <text x="40" y="234" font-size="11.5" font-weight="700" fill="#a8432c">★ 第 ③ 步里"只排一次序"意味着什么？</text>
+          <text x="40" y="254" font-size="11" fill="#8f4a33">排序只在"瓦片"这一级做（同一个瓦片内按深度排）。原文原话：<tspan font-weight="700">没有任何额外的逐像素排序</tspan>，混合就基于这一次初始排序。</text>
+          <text x="40" y="274" font-size="11" fill="#8f4a33">后果：<tspan font-weight="700">α 混合在某些配置下是近似的</tspan>。原文说当泼溅块接近单像素大小时近似可忽略，且在收敛的场景里看不到可见伪影。</text>
+
+          <!-- 底部延伸说明 -->
+          <rect x="20" y="302" width="860" height="90" rx="9" fill="#f5f8fb" stroke="#cfdde8" stroke-width="1.2"/>
+          <text x="40" y="324" font-size="11.5" font-weight="700" fill="#2f5b82">这个近似后来被别人盯上了</text>
+          <text x="40" y="344" font-size="11" fill="#41678a">相邻瓦片之间只保证"瓦片内有序"，所以从略微不同的角度看过去，遮挡关系可能突然改变 —— 画面上就是<tspan font-weight="700">物体边缘跳变（popping）</tspan>。</text>
+          <text x="40" y="364" font-size="11" fill="#41678a">本季 <tspan font-weight="700">0125 节</tspan>的 StopThePop 就是在改这件事：它要"视角一致"的排序，代价是速度。</text>
+          <text x="40" y="384" font-size="11" fill="#7a8fa3">顺带说一句：这也是为什么 3DGS 的反向传播要"重新遍历一遍 per-tile 列表"（从后到前），而不是存下每个像素的完整混合序列 —— 后者在全局内存里存不下。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>3DGS 渲染一条像素颜色的完整流程——① 三维椭球投影成二维椭圆；② 屏幕切成 16×16 的瓦片；③ 每个高斯按覆盖的瓦片数实例化、给一个由"深度 + 瓦片号"拼成的 key，然后<b>一次性</b>用基数排序排好；④ 每个瓦片派一个线程块，把相关高斯读进共享内存；⑤ 逐像素从前到后累加颜色与不透明度，积到 1 就停。下半部分两条色带专门解释"只排一次序"的含义与后果。<br>
+          <b>怎么看这张图：</b>① 顺着上排五个盒子从左读到右，这就是渲染一次的全部步骤。② 特别盯住第 ③ 格里那句<b>「没有逐像素排序」</b>——这是 3DGS 用"近似"换"速度"的地方，也是 0125 节 StopThePop 的靶子。③ 再看底下的蓝框：它把"瓦片内有序、跨瓦片不保证"这件事讲清了，这就是 popping 的来源。<br>
+          <b>要记住的一句话：</b><b>3DGS 的排序只在瓦片这一级做，而且只做一次</b>——省下来的时间非常可观，代价是视角略微变化时遮挡关系可能跳变。
+        </figcaption>
+      </figure>
+
+      <h3>5.2 为什么"只排一次"是划算的</h3>
+      <p>前人的 α 混合方案是<b>逐像素排序</b>——每个像素都要把自己看到的所有图元排一遍，开销巨大。3DGS 的做法是<b>把排序提到瓦片这一级</b>：同一个瓦片内的高斯共用一个排序结果，于是每个像素只需要按既定的顺序读下去就行。</p>
+      <p>排序用的 key 里包含<b>视角空间深度</b>，所以顺序就是"从近到远"。这也是它能把"从前到后累积 + 不透明度饱和即停"这套机制用起来的原因。</p>
+
+      <h3>5.3 反向传播怎么走</h3>
+      <p>因为原文<b>不限制参与混合的高斯数量</b>（这是刻意的：这样能处理任意深度复杂度的场景，也不必逐场景调超参），所以反向传播时必须知道"前向时每个像素到底混合了哪些点"。</p>
+      <p>一种笨办法是把每个像素的混合序列都存进全局内存——原文说这有动态内存管理的开销。<b>它的选择是：重新遍历一遍每个瓦片的列表</b>（复用前向算好的排序数组与瓦片范围），只是这次<b>从后往前</b>走。为了算梯度，它只需要存<b>前向结束时的最终累积不透明度</b>，反向时用它<b>除以每个点自己的不透明度</b>，就能还原出每一步需要的系数。<b>一个常量级的额外开销，换来不用存任意长的列表。</b></p>
+
+      <h3>5.4 一句原文很得意的话</h3>
+      <div class="callout">
+        <p>原文说：高斯<b>在任何时刻都保持欧氏空间中的原始图元</b>——<b>不像其它方法那样需要对远处或大型高斯做空间压缩、warping 或投影策略</b>。换成大白话：<b>它没有为了省事去扭曲自己的表示</b>，该是什么形状就是什么形状。这一点在本季后面几节会反复被提起（尤其 0125 节讲内存压缩时）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. ★★ 自适应密度控制（本节的还债点）</h2>
+      <div class="callout">
+        <p><b>先交代这笔债的来历：</b>第一季 <b>0015 课</b>读的是 3D 高斯的<b>综述</b>，那份综述在讲"高斯怎么长出来、怎么删掉"时只是<b>引用</b>了原始论文，没有展开。当时我在课上明确写了一句「这一步留到阶段 F」。<b>现在到还的时候了。</b></p>
+      </div>
+
+      <p>初始化时的高斯来自 <b>SfM 稀疏点云</b>——它很稀疏，而且点只落在有纹理的地方，大片平整的墙面、地面可能一个点都没有。所以必须有机制让高斯<b>长出来、长大、被清掉</b>。原文给这一节起的名字是 <i>Adaptive Control of Gaussians</i>。</p>
+
+      <h3>6.1 触发条件：看「视角空间位置梯度」</h3>
+      <p>原文的判据很有意思。它观察到：<b>两种情况都会有大的视角空间位置梯度</b>——</p>
+      <ul style="line-height:1.9">
+        <li><b>欠重建</b>（under-reconstruction）：某处小尺度的几何<b>没有被充分覆盖</b>；</li>
+        <li><b>过度重建</b>（over-reconstruction）：某处小尺度的几何<b>被一个过大的 splat 盖住了</b>。</li>
+      </ul>
+      <p>原文的原话是：</p>
+      <blockquote style="border-left:4px solid #cc785c;margin:1rem 0;padding:.7rem 1.1rem;background:rgba(204,120,92,.06);border-radius:0 10px 10px 0">
+        <p style="margin:0">我们观察到<b>这两种情况都有大的视角空间位置梯度</b>。直觉上这很可能是因为它们对应还没有被很好重建的区域，而优化正试图移动这些高斯来纠正它。</p>
+      </blockquote>
+      <p>所以规则是：<b>热身阶段之后，每 100 次迭代做一次稠密化</b>；把<b>视角空间位置梯度的平均幅度超过阈值 $\tau_{\mathrm{pos}} = 0.0002$</b> 的高斯挑出来处理。</p>
+
+      <h3>6.2 ★★ 两条分支：克隆与分裂（最容易被说反的地方）</h3>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#8f3520">自适应密度控制：欠重建要「克隆」，过度重建要「分裂」</text>
+
+          <!-- 左：欠重建 → 克隆 -->
+          <rect x="20" y="46" width="424" height="270" rx="10" fill="#fdf0ec" stroke="#e8b9a8" stroke-width="1.4"/>
+          <text x="232" y="70" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a8432c">欠重建（小几何没被盖住）→ 克隆 clone</text>
+
+          <!-- 目标形状：一条细长几何（黑色轮廓） -->
+          <path d="M60 148 L150 108 L152 122 L62 162 z" fill="#f3ded7" stroke="#a8432c" stroke-width="1.4"/>
+          <text x="104" y="182" text-anchor="middle" font-size="9.5" fill="#a8432c">真实几何（细长条）</text>
+
+          <!-- 现有高斯：太小盖不住 -->
+          <ellipse cx="106" cy="136" rx="11" ry="9" fill="#c8553d" opacity="0.6"/>
+          <text x="106" y="110" text-anchor="middle" font-size="9" fill="#8f4a33">现有高斯盖不住</text>
+
+          <!-- 箭头 -->
+          <line x1="176" y1="136" x2="218" y2="136" stroke="#c8553d" stroke-width="1.8" marker-end="url(#arc)"/>
+          <text x="197" y="126" text-anchor="middle" font-size="9" fill="#a8432c">克隆</text>
+
+          <!-- 结果：两个同样大小的 -->
+          <ellipse cx="252" cy="128" rx="11" ry="9" fill="#c8553d" opacity="0.6"/>
+          <ellipse cx="284" cy="142" rx="11" ry="9" fill="#c8553d" opacity="0.6"/>
+          <text x="268" y="172" text-anchor="middle" font-size="9.5" fill="#a8432c">复制一个同样大小的</text>
+          <text x="268" y="186" text-anchor="middle" font-size="9.5" fill="#a8432c">沿位置梯度方向推开</text>
+
+          <!-- 右侧结果说明 -->
+          <rect x="316" y="104" width="116" height="98" rx="7" fill="#ffffff" stroke="#e8b9a8" stroke-width="1"/>
+          <text x="374" y="124" text-anchor="middle" font-size="10" font-weight="700" fill="#8f3520">结果</text>
+          <text x="374" y="144" text-anchor="middle" font-size="9.5" fill="#8f3520">总体积 ↑</text>
+          <text x="374" y="160" text-anchor="middle" font-size="9.5" fill="#8f3520">高斯个数 ↑</text>
+          <text x="374" y="182" text-anchor="middle" font-size="9" fill="#a8432c">因为要盖的新几何</text>
+          <text x="374" y="194" text-anchor="middle" font-size="9" fill="#a8432c">本来就在体积之外</text>
+
+          <text x="232" y="228" text-anchor="middle" font-size="10.5" fill="#8f4a33">原文原话：「对于处在欠重建区域里的<tspan font-weight="700">小高斯</tspan>，</text>
+          <text x="232" y="245" text-anchor="middle" font-size="10.5" fill="#8f4a33">更好的做法是把它<tspan font-weight="700">克隆</tspan>——复制一个同样大小的，</text>
+          <text x="232" y="262" text-anchor="middle" font-size="10.5" fill="#8f4a33">并让它沿位置梯度的方向移动。」</text>
+          <text x="232" y="290" text-anchor="middle" font-size="9.5" fill="#b0735e">消融实验：克隆小高斯对「细结构」的收敛特别重要</text>
+
+          <!-- 右：过度重建 → 分裂 -->
+          <rect x="456" y="46" width="424" height="270" rx="10" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.4"/>
+          <text x="668" y="70" text-anchor="middle" font-size="12.5" font-weight="700" fill="#24486b">过度重建（小几何被大块盖住）→ 分裂 split</text>
+
+          <!-- 目标形状：一处小几何 -->
+          <path d="M500 142 L556 120 L558 134 L502 156 z" fill="#dde9f3" stroke="#24486b" stroke-width="1.4"/>
+          <text x="530" y="176" text-anchor="middle" font-size="9.5" fill="#24486b">真实几何（小块）</text>
+
+          <!-- 现有高斯：太大 -->
+          <ellipse cx="530" cy="132" rx="34" ry="24" fill="#3d6b96" opacity="0.5"/>
+          <text x="530" y="98" text-anchor="middle" font-size="9" fill="#2f5b82">一个大 splat 全糊住了</text>
+
+          <!-- 箭头 -->
+          <line x1="600" y1="132" x2="642" y2="132" stroke="#3d6b96" stroke-width="1.8" marker-end="url(#arb)"/>
+          <text x="621" y="122" text-anchor="middle" font-size="9" fill="#24486b">分裂</text>
+
+          <!-- 结果：两个小的 -->
+          <ellipse cx="678" cy="118" rx="15" ry="11" fill="#3d6b96" opacity="0.55"/>
+          <ellipse cx="696" cy="148" rx="15" ry="11" fill="#3d6b96" opacity="0.55"/>
+          <text x="688" y="180" text-anchor="middle" font-size="9.5" fill="#24486b">换成两个新的</text>
+          <text x="688" y="194" text-anchor="middle" font-size="9.5" fill="#24486b">尺度各除以 1.6</text>
+
+          <!-- 右侧结果说明 -->
+          <rect x="732" y="104" width="132" height="98" rx="7" fill="#ffffff" stroke="#b8cfe0" stroke-width="1"/>
+          <text x="798" y="124" text-anchor="middle" font-size="10" font-weight="700" fill="#24486b">结果</text>
+          <text x="798" y="144" text-anchor="middle" font-size="9.5" fill="#24486b">总体积 不变</text>
+          <text x="798" y="160" text-anchor="middle" font-size="9.5" fill="#24486b">高斯个数 ↑</text>
+          <text x="798" y="182" text-anchor="middle" font-size="9" fill="#2f5b82">新位置按原高斯</text>
+          <text x="798" y="194" text-anchor="middle" font-size="9" fill="#2f5b82">作为概率分布采样</text>
+
+          <text x="668" y="228" text-anchor="middle" font-size="10.5" fill="#2f5b82">原文原话：「另一方面，处在<tspan font-weight="700">高方差区域里的大高斯</tspan></text>
+          <text x="668" y="245" text-anchor="middle" font-size="10.5" fill="#2f5b82">需要被<tspan font-weight="700">分裂成更小的高斯</tspan>。我们把这样的高斯</text>
+          <text x="668" y="262" text-anchor="middle" font-size="10.5" fill="#2f5b82">替换成两个新的，尺度除以 1.6（实验确定的）。」</text>
+          <text x="668" y="290" text-anchor="middle" font-size="9.5" fill="#5b86a8">消融实验：分裂大高斯对「背景」的重建特别重要</text>
+
+          <defs>
+            <marker id="arc" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#c8553d"/>
+            </marker>
+            <marker id="arb" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#3d6b96"/>
+            </marker>
+          </defs>
+
+          <!-- 底部：删除与重置 -->
+          <rect x="20" y="330" width="860" height="124" rx="10" fill="#f8f5f1" stroke="#ddd0c4" stroke-width="1.4"/>
+          <text x="40" y="354" font-size="12" font-weight="700" fill="#6b5a4e">另外两条同样重要的规则</text>
+
+          <text x="40" y="380" font-size="11" font-weight="700" fill="#8f4a33">③ 删掉「基本透明」的</text>
+          <text x="40" y="398" font-size="10.5" fill="#6b5a4e">每次稠密化（每 100 次迭代）时，把不透明度低于阈值 ε</text>
+          <text x="40" y="414" font-size="10.5" fill="#6b5a4e">的高斯移除。它们对画面对不起作用，留着只占资源。</text>
+          <text x="40" y="436" font-size="10.5" fill="#6b5a4e">另外还会周期性删掉「世界空间里特别大的」和「屏幕投影面</text>
+          <text x="40" y="450" font-size="10.5" fill="#6b5a4e">积特别大的」高斯 —— 它们容易覆盖太多地方。</text>
+
+          <text x="470" y="380" font-size="11" font-weight="700" fill="#24486b">④ ★ 每 3000 次迭代把不透明度压回接近 0</text>
+          <text x="470" y="398" font-size="10.5" fill="#6b5a4e">原文给的理由：优化容易卡在「靠近输入相机的漂浮物」上，</text>
+          <text x="470" y="414" font-size="10.5" fill="#6b5a4e">导致高斯数量「无理由地增长」。</text>
+          <text x="470" y="432" font-size="10.5" fill="#6b5a4e">把所有人的不透明度压到近 0，等于让它们<tspan font-weight="700">重新竞争</tspan>：真需要的</text>
+          <text x="470" y="448" font-size="10.5" fill="#6b5a4e">会长回来，不需要的就被上面那条规则清掉。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>自适应密度控制的两条主要分支（上排左右两格）与两条辅助规则（下排）。左边是<b>欠重建</b>：小尺度的真实几何没被现有的高斯盖住，处理方式是<b>克隆</b>——复制一个<b>同样大小</b>的、沿位置梯度推开，结果是"总体积变大、数量变多"。右边是<b>过度重建</b>：一处小几何被一个过大的 splat 糊住了，处理方式是<b>分裂</b>——替换成<b>两个新的</b>、尺度各除以 1.6，结果是"总体积不变、数量变多"。<br>
+          <b>怎么看这张图：</b>① 先对比左右两格的<b>结果框</b>：左是"体积↑ + 数量↑"，右是"体积不变 + 数量↑"。这个差别是理解两条规则的钥匙。② 再盯住左右两格的<b>触发条件</b>：左边是"小高斯 + 欠重建"，右边是"大高斯 + 高方差"——<b>千万不要记反</b>（我在备课核实时就写反过一次）。③ 最后看下排第四条：这是原文里最容易被忽略、但最能体现"作者想清楚了"的一条——它解释了为什么必须周期性重置不透明度，否则靠近相机的漂浮物会失控增殖。<br>
+          <b>要记住的一句话：</b><b>小高斯盖不住 → 克隆；大高斯糊太狠 → 分裂。每 3000 步把所有不透明度清零，让它们重新竞争。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_3DGS/b5ee7a331624e828ef1f80f777c21076d344e0c50cd5af6c1c2495e52f601c34.jpg" alt="Fig 4 adaptive Gaussian densification scheme">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>原文写作 <i>Our adaptive Gaussian densification scheme. Top row (under-reconstruction): When small-scale geometry (black outline) is insufficiently covered, we clone the respective Gaussian. Bottom row (over-reconstruction): If small-scale geometry is represented by one large splat, we split it in two.</i>（中译：我们的自适应高斯稠密化方案。<b>上排（欠重建）</b>：当小尺度几何（黑色轮廓）<b>没有被充分覆盖</b>时，我们<b>克隆</b>对应的高斯。<b>下排（过度重建）</b>：如果小尺度几何被<b>一个过大的泼溅块</b>表示，我们就把它<b>一分为二</b>。）<br>
+          <b>怎么看这张图：</b>① 这是本节的<b>还债核心图</b>——上一张自绘图就是照着它画的；② 请把注意力放在<b>上下两排的对照</b>上：上排是"盖不住"，下排是"糊太狠"，这是两种完全相反的病；③ 再看每排的处理差别：上排是<b>复制一个同样大的</b>（体积会变大），下排是<b>把大的切成两个小的</b>（体积不变）；④ 图里的黑色轮廓是关键——那是"真实的几何"，两排都在努力让高斯去贴合它。<br>
+          <b>一句话：</b>这张图把原文那两条规则的<b>适用条件</b>钉死了：<b>看的是"高斯相对于它要盖的几何是太大还是太小"，不是"高斯数量的多少"。</b>
+        </figcaption>
+      </figure>
+
+      <h3>6.3 为什么需要"周期性重置不透明度"</h3>
+      <p>这条规则值得单独说，因为它是原文里"最像工程直觉、但也最不容易想到"的一条。原文的原话是：</p>
+      <blockquote style="border-left:4px solid #3d6b96;margin:1rem 0;padding:.7rem 1.1rem;background:rgba(61,107,150,.06);border-radius:0 10px 10px 0">
+        <p style="margin:0">与其它体积表示类似，我们的优化可能<b>卡在靠近输入相机的漂浮物（floaters）</b>上；在我们的情形里这可能导致高斯密度的<b>无理由增长</b>。 moderating 高斯数量增长的一个有效办法是<b>每 $N = 3000$ 次迭代把不透明度值设到接近零</b>。之后优化会把需要的高斯的不透明度重新涨回来，同时允许我们的剔除手段删掉那些不透明度低于阈值的。</p>
+      </blockquote>
+      <p>换成大白话：<b>靠近相机的那些大高斯，因为挡在前面的机会多、对画面的"贡献分数"高，容易越长越大、越长越多，甚至会错误地把远处本该独立存在的小高斯吞掉。</b>定期把所有不透明度清零，等于<b>让所有高斯退回到同一起跑线重新竞争</b>——真有用的会迅速涨回来，纯粹是噪声的就被上面那条剔除规则清走了。</p>
+      <div class="callout">
+        <p><b>为什么这条特别值得记：</b>它说明这套系统不是"设计出来的完美公式"，而是<b>在优化过程中反复观察到病态行为、再针对性打补丁</b>的结果。本季后面几节（尤其 0118 节讲 SplaTAM 与 GS-SLAM）会发现"什么时候该加高斯"这个问题其实没有唯一答案——原作者给的是一套启发式规则。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 训练细节与实验数字</h2>
+      <h3>7.1 损失函数与优化</h3>
+      <div class="formula-box">
+        $$\mathcal{L} = (1-\lambda)\,\mathcal{L}_1 + \lambda\,\mathcal{L}_{\mathrm{D\text{-}SSIM}}, \qquad \lambda = 0.2$$
+        <p style="margin:.6rem 0 0;font-size:.92rem;color:#6b5a4e">$\mathcal{L}_1$ 是逐像素绝对误差，$\mathcal{L}_{\mathrm{D\text{-}SSIM}}$ 是结构相似性项。<b>两项相加</b>——前者管"像不像"，后者管"结构对不对"。</p>
+      </div>
+      <p>几个实现上的细节：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>优化器</h4><p>随机梯度下降（SGD），充分利用 GPU 加速框架，并对部分操作写了自定义 CUDA kernel。</p></div>
+        <div class="mini-card"><h4>激活函数</h4><p>不透明度用 <b>sigmoid</b> 限制在 $[0,1)$，协方差的缩放用<b>指数激活</b>。都是为了拿到平滑梯度。</p></div>
+        <div class="mini-card"><h4>学习率调度</h4><p>类似 Plenoxels 的标准指数衰减——<b>但原文强调"只对位置用"</b>。</p></div>
+        <div class="mini-card"><h4>初始化</h4><p>从 SfM 稀疏点出发；初始协方差取<b>各向同性高斯</b>，其轴长 = <b>到最近三个点的距离的均值</b>。</p></div>
+      </div>
+      <p>稠密化在预热阶段之后每 100 次迭代做一次，不透明度重置每 3000 次迭代做一次。<b>优化结束后得到的规模是「所有测试场景 1–5 百万个高斯」。</b></p>
+
+      <h3>7.2 一个很有冲击力的对比</h3>
+      <figure class="figure">
+        <img src="../../md/images/2023_3DGS/22cf6edb8dd2fb41ef95851ed4d53bcc75dfad9386ec7e4ddbda52b97fe27fe9.jpg" alt="Fig 3 visualization of anisotropic 3D Gaussians">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>原文写作 <i>We visualize the 3D Gaussians after optimization by shrinking them 60% (far right). This clearly shows the anisotropic shapes of the 3D Gaussians that compactly represent complex geometry after optimization. Left the actual rendered image.</i>（中译：我们把优化后的 3D 高斯<b>缩小 60%</b> 来做可视化（最右格）。这清楚地显示出：优化后的三维高斯是<b>各向异性</b>的形状，能很紧凑地表示复杂几何。最左边是实际渲染出的图像。）<br>
+          <b>怎么看这张图：</b>① 先看最左格——那是一张正常的渲染图，看上去就是个普通场景；② 再看最右格——那是把每个高斯"缩水"之后再画出来的<b>骨架</b>，你会看到很多被压扁、拉长、朝向各异的椭球，它们像一片片薄片一样贴着物体表面；③ 这个对照说明一件事：<b>真实场景里的表面是"薄"的，所以高斯也应该是"扁"的</b>——这正是"各向异性"的必要性。如果高斯是球（各向同性），要盖住一面薄墙就得用很多小球，或者用一个大球把墙内外都糊上，两者都糟糕。<br>
+          <b>一句话：</b>缩小 60% 之后还看得出形状，说明这些椭球是"真的贴合在表面上"，而不是一团乱云。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_3DGS/cd46979fd9e6073df193165c9f572ebd01c511a5a490cdef4d55a4838e6e2932.jpg" alt="Fig 2 optimization starts with sparse SfM point cloud">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>原文写作 <i>Optimization starts with the sparse SfM point cloud and creates a set of 3D Gaussians. We then optimize and adaptively control the density of this set of Gaussians. During optimization we use our fast tile-based renderer, allowing competitive training times compared to SOTA fast radiance field methods. Once trained, our renderer allows real-time navigation for a wide variety of scenes.</i>（中译：优化从稀疏的 SfM 点云开始，创建一组 3D 高斯。然后我们优化并<b>自适应地控制</b>这组高斯的密度；优化过程中使用我们的快速<b>瓦片渲染器</b>，从而获得与当时最快的辐射场方法有竞争力的训练时间。训练完成后，渲染器允许对各类场景进行<b>实时浏览</b>。）<br>
+          <b>怎么看这张图：</b>① 这张图就是本节第 6 节那套机制的流程图——从"稀疏点云"到"成片椭球"，中间那个循环就是"优化 ↔ 自适应密度控制"来回交错；② 注意"a set of 3D Gaussians"这个措辞：原文把高斯集合当成一种<b>可增可删的集合</b>，而不是一组固定的参数——这正是它与隐式表示的分野；③ 图注里"real-time navigation"这个词组很重要：3DGS 训练完之后，浏览是<b>实时</b>的，这与 NeRF 那种"渲染一帧要几十秒"形成直接对比。<br>
+          <b>一句话：</b>这张图是理解"3DGS 为什么既能又好又实时"的入口——<b>因为它的地图是一组可以随时增删的椭球，而不是一个改一处动全身的网络。</b>
+        </figcaption>
+      </figure>
+
+      <h3>7.3 速度：这三件事同时成立</h3>
+      <p>原文摘要里承诺的三件事——画质、训练时间、实时渲染——同时成立，这在当时是第一次。摘要原话强调：训练时间"有竞争力"，并且<b>重要的是</b>能在 1080p 分辨率下达到<b>至少 30 fps</b> 的新视角合成。原文也明确说，它<b>能与当时的最高质量方法 Mip-NeRF360 持平</b>，在某些情况下甚至超过，<b>同时</b>提供快速训练与实时渲染。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>一个高斯处于「欠重建」区域、而且它本身是<b>小</b>的。按 3DGS 的自适应密度控制，应该怎么处理？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。欠重建 + 小高斯 → 克隆（clone）：复制一个同样大小的副本，沿位置梯度方向推开。消融实验还发现，克隆（而不是分裂）小高斯对「细结构」的收敛特别重要。注意这里的关键区分：小高斯在欠重建区域要clone，而大高斯在高方差区域才用split。" onclick="lessonKit.answer(this,'q0116a')">克隆它，复制一个同样大小的</button>
+          <button data-correct="no" data-explanation="正好反了。分裂（split）对应的是另一种情况：过度重建——一处小几何被一个过大的 splat 盖住，这时才把这个大高斯一分为二、尺度各除以 1.6。" onclick="lessonKit.answer(this,'q0116a')">分裂它，换成两个更小的</button>
+          <button data-correct="no" data-explanation="不完整。删掉它确实是三条规则之一，但删的是「不透明度低于阈值」的那些——也就是对画面基本没贡献的。一个处在欠重建区域的小高斯恰恰是有用的（它所在的位置缺几何），应该加强而不是删掉。" onclick="lessonKit.answer(this,'q0116a')">因为太小了，直接删掉它</button>
+        </div>
+        <div class="quiz-feedback" id="q0116a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 局限、勘误与遗留</h2>
+      <h3>8.1 原文承认的局限</h3>
+      <p>原文在 *Limitations* 一节里列出的问题，基本都围绕"它虽然好看，但代价不小"展开。请<b>回 `md/2023_3DGS.md` 那一节逐条核对</b>（OCR 会把连字吃掉，`renderin` 要读成 `rendering`、`ualit` 要读成 `quality`）。这里按已知要点归纳：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>需要 SfM 初始化</h4><p>高斯不是凭空长出来的，得先有稀疏点云。而 SfM 本身在弱纹理、无纹理场景会失败。</p></div>
+        <div class="mini-card"><h4>显存与存储</h4><p>几百万个高斯、每个约 60 个数。这一点在本季 0125 节会被专门处理。</p></div>
+        <div class="mini-card"><h4>没有"面"的概念</h4><p>椭球是一团云，几何精度不如显式网格，想抽网格很难。这是 0122 节 SuGaR 的靶子。</p></div>
+        <div class="mini-card"><h4>逐场景优化</h4><p>每个场景都要单独优化一遍——这也是 0124 节 GPS-Gaussian 想摆脱的事。</p></div>
+      </div>
+
+      <h3>8.2 本节纠正的 OCR 问题（诚实交代）</h3>
+      <p>这篇论文的 Markdown 是 OCR 产物，错误相当多，我在备课过程中逐句核对并修正了下面几类。<b>你在课里看到的公式与数字，都是按正确形式写的：</b></p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.92rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.08)">
+            <th style="text-align:left;padding:.55rem .8rem;border-bottom:2px solid rgba(204,120,92,.3)">md 里的样子（OCR 错误）</th>
+            <th style="text-align:left;padding:.55rem .8rem;border-bottom:2px solid rgba(204,120,92,.3)">正确形式</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .8rem;border-bottom:1px solid #eee">标题被拆成 <code>3D G␣auss␣i␣a␣n S␣p␣l␣a␣tin␣g…</code>（一堆 <code>&lt;sub&gt;</code> 标签）</td><td style="padding:.5rem .8rem;border-bottom:1px solid #eee"><i>3D Gaussian Splatting for Real-Time Radiance Field Rendering</i></td></tr>
+          <tr><td style="padding:.5rem .8rem;border-bottom:1px solid #eee"><code>renderin</code> / <code>ualit</code> / <code>previou</code> / <code>eficient</code> / <code>diferentiable</code> / <code>suficient</code> / <code>afect</code></td><td style="padding:.5rem .8rem;border-bottom:1px solid #eee"><code>rendering</code> / <code>quality</code> / <code>previous</code> / <code>efficient</code> / <code>differentiable</code> / <code>sufficient</code> / <code>affect</code>（连字 <code>ff</code>/<code>ti</code>/<code>fi</code> 被整篇吃掉）</td></tr>
+          <tr><td style="padding:.5rem .8rem;border-bottom:1px solid #eee">不透明度符号被印成 <code>�</code>（如 <code>with � less than a threshold</code>）</td><td style="padding:.5rem .8rem;border-bottom:1px solid #eee">$\alpha$（希腊字母 α）</td></tr>
+          <tr><td style="padding:.5rem .8rem;border-bottom:1px solid #eee"><code>�-blending</code></td><td style="padding:.5rem .8rem;border-bottom:1px solid #eee">α-blending（α 混合）</td></tr>
+          <tr><td style="padding:.5rem .8rem"><code>trasversing</code> / <code>coe</code> 类拼写</td><td style="padding:.5rem .8rem"><code>traversing</code>（遍历）等</td></tr>
+        </tbody>
+      </table>
+      <p>另外，<b>图片目录里混着作者头像与期刊横幅</b>，那些不是插图，我没有采用。本节引用的三张图（<b>Fig. 2</b> 优化流程总览、<b>Fig. 3</b> 缩小 60% 后的各向异性可视化、<b>Fig. 4</b> 自适应稠密化方案）都是正文真实插图，hash 已逐个核验存在。</p>
+      <div class="callout">
+        <p><b>一处需要你知道的演示差异：</b>原文 Fig. 2 与 Fig. 3 的<b>图注</b>我很确定（原文里紧跟着图），但本节采用的两张图我按正文顺序判断为"方法总览"与"缩小 60% 的可视化"。如果这里对应错了，请以 `md/2023_3DGS.md` 里图片出现的行号为准。</p>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么 3DGS 要把协方差 $\Sigma$ 分解成 $\Sigma = R S S^{\!\top} R^{\!\top}$，而不直接优化 6 个自由参数？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>为了保证<b>半正定性</b>。合法的协方差矩阵必须是半正定的；如果直接优化对称矩阵的 6 个独立参数，优化器很容易跑出"不是合法协方差"的东西，需要额外加约束。</p>
+              <p>而写成 $R S S^{\!\top} R^{\!\top}$ 之后（$R$ 是旋转、$S$ 是对角缩放），<b>无论 $R$ 与 $S$ 取什么值，乘积都自动是半正定的</b>——把约束变成了构造，这是优化里非常常用的手法。</p>
+            </details>
+          </li>
+          <li>用自己的话说清"渲染一个像素"时，NeRF 与 3DGS 分别做了什么。为什么后者在 GPU 上便宜得多？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>NeRF：</b>沿一条光线取上百个采样点，每个点都把"位置 + 视角方向"送进网络，问出颜色与密度，再按透射率累加。每个像素都要跑上百次网络前向。</p>
+              <p><b>3DGS：</b>场景里的椭球先被<b>投影</b>到图像平面变成二维椭圆（这是解析几何，不用网络），然后按深度顺序做 α 混合。</p>
+              <p><b>便宜在哪：</b>① 没有网络前向，投影是纯矩阵运算；② 排序只做一次（按瓦片），不是逐像素；③ 每个像素只需按顺序读几个高斯，而且不透明度饱和就停。<b>一句话：把"沿光线逐个查询"换成了"整块投影 + 排序叠加"。</b></p>
+            </div></details>
+          </li>
+          <li>3DGS 的排序<b>只做一次</b>（按瓦片，不逐像素）。这会带来什么后果？本季哪一节在处理它？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>后果：</b>α 混合在某些配置下是<b>近似的</b>。原文说当泼溅块接近单像素大小时近似可忽略，且在收敛场景里看不到可见伪影；但相邻瓦片之间只保证"瓦片内有序"，所以从略微不同的角度看过去，遮挡关系可能突然改变——画面上就是<b>边缘跳变（popping）</b>。</p>
+              <p><b>谁在处理它：</b>本季 <b>0125 节</b>的 StopThePop，标题就写着「Sorted Gaussian Splatting for View-Consistent Real-time Rendering」，它追求的就是"视角一致"的排序。</p>
+            </div></details>
+          </li>
+          <li>为什么原文要"每 3000 次迭代把所有高斯的不透明度压回接近零"？不这样做会出什么问题？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>不这样做：</b>优化容易卡在<b>靠近输入相机的漂浮物</b>上，导致高斯数量"无理由增长"。原因很直观——靠近相机的大高斯挡在前面的机会多、对画面的贡献分数高，于是越长越大、越长越多，甚至会把远处本该独立存在的小高斯错误地吞掉。</p>
+              <p><b>这样做的效果：</b>所有高斯退回到同一起跑线<b>重新竞争</b>——真正需要它渲染的区域，不透明度会迅速涨回来；纯粹是噪声的，就会被"删掉不透明度低于阈值的高斯"那条规则清走。</p>
+              <p><b>这条规则的意义：</b>它说明这套系统不是设计出来的完美公式，而是<b>在实践中观察病态行为、再针对性打补丁</b>的产物。</p>
+            </div></details>
+          </li>
+          <li>本节用的"三个关键要素"（高斯表示 / 优化与密度控制交错 / 快速渲染）与你在别处看过的"初始化 / 投影与光栅化 / 自适应密度控制"这三分法，有什么不同？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>前者是<b>原文摘要里自己的概括</b>（摘要原话是 "three key elements"）；后者是<b>后续课程常用的教学归纳</b>，<b>原文的分节没有这样划分</b>——它实际的章节是 §4 可微 3D 高斯、§5 优化与自适应密度控制、§6 快速可微光栅化器、§7 实现与实验。</p>
+              <p>为什么要专门说这件事：如果你拿着"三步"去原文里找对应小节，会找不到。项目里一直强调「不许替原文补它没有的东西」，这就是一个具体例子。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0115-DeepV2D2020-视频到深度的端到端.html">← DeepV2D（2020）：视频到深度的端到端</a>
+        <a class="next" href="0117-MonoGS2024-首个以高斯为唯一表示的SLAM.html">MonoGS（2024）：首个以高斯为唯一表示的 SLAM →</a>
+      </div>
+      <p class="foot-note">这一节是全季的地基。第一季欠的那笔债，到这里算是还了——而且你可能会发现，答案比"一个公式"要接地气得多 🫧</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

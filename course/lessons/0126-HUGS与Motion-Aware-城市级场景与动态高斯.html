@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HUGS 与 Motion-Aware：城市级场景与动态高斯 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0126</div>
+      <h1>HUGS 与 Motion-Aware：城市级场景与动态高斯</h1>
+      <p class="subtitle">前面都在处理「静止的世界」——这一节把「会动的东西」正式写进高斯的模型里 🚶</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动静分解 · unicycle 约束 · 跨维度运动对应 · 时间维</span>
+        <span>👥 两篇：HUGS（2024）／Motion-Aware 3DGS（2025）</span>
+        <span>📅 2024–2025 · <i>Holistic Urban 3D Scene Understanding</i> &amp; <i>Motion-Aware 3D Gaussian Splatting</i></span>
+      </div>
+      <div class="toc">
+        <a href="#what">城市级的「理解」是什么</a>
+        <a href="#hugs">HUGS：动静分解</a>
+        <a href="#uni">刚体假设与单车模型</a>
+        <a href="#flow">Motion-Aware：光流这条线索</a>
+        <a href="#pose">★ 它估位姿吗</a>
+        <a href="#line">动态这条线的三站</a>
+        <a href="#compare">对比与判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="what">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「场景理解」比「场景渲染」多做了什么；解释动静分离为什么是理解的第一步；知道 unicycle（单车模型）这种物理约束是怎么被塞进高斯优化里的；并说清 Motion-Aware 那篇的核心洞察——<b>为什么不能直接拿渲染出来的光流当监督信号</b>。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节要接的是一条已经走了很久的线：第一季 <b>0012</b> 动态环境视觉 SLAM 综述（结论是「没有任何单一方法普遍更优」）→ 第三季 <b>0068</b> 的「判定 / 处理 / 代价」三层框架 → 本季 <b>0114</b>（用语义或运动掩码<b>把动的剔掉</b>）→ <b>0121</b>（WildGS-SLAM 用特征不确定度把「可能不是真的」像素排除）→ <b>本节 0126</b>（<b>把「动」本身建成模型</b>）。</p>
+        </div>
+      </div>
+
+      <h2>1. 题眼：城市级的「理解」到底比「渲染」多了什么</h2>
+
+      <p>先立框架。前面几课里，高斯评价自己的标准是<b>渲染得真不真</b>；而这一节的两篇，把自己叫做「场景<b>理解</b>」。这两个词差在哪？</p>
+
+      <p>打个具体的比方。你拍一段开车路过的视频：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>如果只要「渲染」</b>
+          <p>你希望从任意新角度看这段街道时，画面看起来跟真的一样。<b>那就够了。</b>至于画面里那辆车是「一辆车」还是「一堆刚好长得像车的高斯」，渲染器不关心。</p>
+        </div>
+        <div class="mini-card">
+          <b>如果还要「理解」</b>
+          <p>你希望系统能告诉你：<b>这是一条车道、那是一辆车、那辆车的 3D 框在哪、它正朝哪个方向开、这个行人跟那栋楼不是一类东西</b>。更进一步——你希望能<b>把那辆车换掉，或者把它搬到别的位置</b>，重新渲一张图出来。</p>
+        </div>
+      </div>
+
+      <p>所以「理解」多出来的东西是：<b>语义（这是什么）、实例（这是哪个）、运动（它在怎么动）、可编辑性（我能不能改它）。</b>HUGS 的标题把这一点写在脸上了——<b>Holistic Urban 3D Scene Understanding</b>，「整体性的城市三维场景理解」。</p>
+
+      <p>这件事的第一步，也是整个领域的共识：<b>先把「动的」和「不动的」分开。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">一段城市街道：先把「动的」和「不动的」分开</text>
+
+          <!-- 左：街道 -->
+          <rect x="30" y="52" width="560" height="248" fill="#eef4fa" stroke="#c3d2de" stroke-width="1.2"/>
+          <!-- 楼 -->
+          <rect x="50" y="86" width="90" height="144" fill="#d6dde4" stroke="#b0bcc6" stroke-width="1.2"/>
+          <rect x="150" y="108" width="70" height="122" fill="#cfd8e0" stroke="#b0bcc6" stroke-width="1.2"/>
+          <rect x="456" y="96" width="104" height="134" fill="#d6dde4" stroke="#b0bcc6" stroke-width="1.2"/>
+          <g fill="#aabccb" opacity="0.7">
+            <rect x="62" y="100" width="16" height="16"/><rect x="92" y="100" width="16" height="16"/>
+            <rect x="62" y="130" width="16" height="16"/><rect x="92" y="130" width="16" height="16"/>
+            <rect x="468" y="112" width="16" height="16"/><rect x="498" y="112" width="16" height="16"/>
+            <rect x="528" y="112" width="16" height="16"/>
+          </g>
+          <!-- 人行道 + 路面 -->
+          <rect x="30" y="230" width="560" height="10" fill="#dde2e6"/>
+          <rect x="30" y="240" width="560" height="60" fill="#c8ccd2"/>
+          <g fill="#f0f2f5">
+            <rect x="52" y="266" width="40" height="5"/><rect x="132" y="266" width="40" height="5"/>
+            <rect x="212" y="266" width="40" height="5"/><rect x="292" y="266" width="40" height="5"/>
+            <rect x="372" y="266" width="40" height="5"/><rect x="452" y="266" width="40" height="5"/>
+          </g>
+          <!-- 树 -->
+          <rect x="250" y="182" width="8" height="48" fill="#a1795a"/>
+          <circle cx="254" cy="170" r="26" fill="#9cc79e" stroke="#6ba37a" stroke-width="1.2"/>
+          <rect x="400" y="190" width="7" height="40" fill="#a1795a"/>
+          <circle cx="403" cy="178" r="21" fill="#9cc79e" stroke="#6ba37a" stroke-width="1.2"/>
+
+          <!-- 停着的车（静态） -->
+          <rect x="70" y="256" width="96" height="26" rx="6" fill="#b9c6d2" stroke="#8a9aa8" stroke-width="1.3"/>
+          <rect x="90" y="242" width="56" height="16" rx="4" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.2"/>
+          <circle cx="86" cy="284" r="7" fill="#5a6470"/><circle cx="152" cy="284" r="7" fill="#5a6470"/>
+          <g fill="#4a9c76" opacity="0.45">
+            <ellipse cx="92" cy="256" rx="22" ry="8"/><ellipse cx="132" cy="254" rx="22" ry="8"/>
+            <ellipse cx="162" cy="258" rx="16" ry="7"/><ellipse cx="118" cy="244" rx="20" ry="7"/>
+          </g>
+
+          <!-- 开着的车（动态） -->
+          <rect x="316" y="252" width="96" height="26" rx="6" fill="#e0a3a3" stroke="#c0392b" stroke-width="1.3"/>
+          <rect x="336" y="238" width="56" height="16" rx="4" fill="#efc4c4" stroke="#c0392b" stroke-width="1.2"/>
+          <circle cx="332" cy="280" r="7" fill="#5a6470"/><circle cx="398" cy="280" r="7" fill="#5a6470"/>
+          <g fill="#c0392b" opacity="0.5">
+            <ellipse cx="338" cy="252" rx="22" ry="8"/><ellipse cx="378" cy="250" rx="22" ry="8"/>
+            <ellipse cx="406" cy="254" rx="16" ry="7"/><ellipse cx="364" cy="240" rx="20" ry="7"/>
+          </g>
+          <path d="M420 262 L462 262" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="5 4"/>
+          <path d="M462 262 L453 258 L453 266 Z" fill="#c0392b"/>
+
+          <!-- 行人（动态） -->
+          <circle cx="524" cy="196" r="9" fill="#e0a3a3" stroke="#c0392b" stroke-width="1.2"/>
+          <path d="M524 205 L524 230 M512 214 L536 214 M524 230 L516 242 M524 230 L532 242"
+                stroke="#c0392b" stroke-width="2.2" fill="none"/>
+          <g fill="#c0392b" opacity="0.5">
+            <ellipse cx="524" cy="196" rx="12" ry="9"/><ellipse cx="524" cy="214" rx="15" ry="8"/>
+            <ellipse cx="524" cy="234" rx="9" ry="11"/>
+          </g>
+
+          <!-- 右侧：抽出的动态层 -->
+          <rect x="610" y="52" width="260" height="248" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="740" y="78" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">把动态层单独抽出来</text>
+          <rect x="630" y="226" width="220" height="34" fill="#e8e0d8" stroke="#c9beb4" stroke-width="1.1" stroke-dasharray="5 4"/>
+          <rect x="646" y="122" width="60" height="104" fill="none" stroke="#c9beb4" stroke-width="1.1" stroke-dasharray="5 4"/>
+          <g fill="#c0392b" opacity="0.55">
+            <ellipse cx="700" cy="192" rx="24" ry="9"/><ellipse cx="742" cy="188" rx="24" ry="9"/>
+            <ellipse cx="770" cy="194" rx="18" ry="8"/><ellipse cx="722" cy="176" rx="22" ry="8"/>
+          </g>
+          <path d="M680 240 L830 240" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="5 4"/>
+          <path d="M830 240 L821 236 L821 244 Z" fill="#c0392b"/>
+          <g fill="#c0392b" opacity="0.55">
+            <ellipse cx="688" cy="284" rx="12" ry="9"/><ellipse cx="706" cy="298" rx="15" ry="8"/>
+            <ellipse cx="694" cy="312" rx="9" ry="11"/>
+          </g>
+          <text x="740" y="290" text-anchor="middle" font-size="10.5" fill="#a8563a">动的被搬到这里</text>
+
+          <text x="310" y="326" text-anchor="middle" font-size="10.5" fill="#2f6d51">绿色椭球 = 静态背景：路面、楼、树、停着的车</text>
+          <text x="310" y="346" text-anchor="middle" font-size="10.5" fill="#a8563a">红色椭球 = 动态物体：正在开的车、走着的行人</text>
+          <text x="740" y="326" text-anchor="middle" font-size="10.5" fill="#7a8a99">虚线是留下的空壳</text>
+          <text x="740" y="346" text-anchor="middle" font-size="10.5" fill="#7a8a99">背景可以单独用</text>
+
+          <text x="450" y="404" text-anchor="middle" font-size="12.5" fill="#5a4a42">理解场景的一部分，就是把「动的」和「不动的」分开</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一段城市街道上，静态背景（路面、建筑、树、停着的车）与动态物体（正在开的车、走着的行人）在同一个高斯场里是怎样被区分、又怎样被分开的。<br>
+          <b>怎么看这张图：</b>① 左格是<b>一个统一的高斯场</b>——同一个场景里既有绿的（静态）也有红的（动态），这是在没做分解之前的样子；② 右格是<b>把动态层抽出来之后</b>的结果——红线标的那些高斯被整体搬到另一个框里，原地留下虚线画出的「空壳」，背景变干净了；③ 这一步做完，你就能做很多之前做不了的事：<b>背景可以单独导出、动态物体可以被搬走或换掉、每个动态物体还能问「它往哪开」。</b><br>
+          <b>一处必须说明的简化：</b>真实的动态分离不是「按颜色挑出来」——颜色在这里只是我给静态与动态打的标签。HUGS 的做法是<b>把场景显式地建模成「一组静态高斯 + N 个刚体运动的高斯组」</b>，然后通过联合优化把这 N 组和背景分离开（下一节详讲）。<br>
+          <b>要记住的一句话：</b>这一节讲的所有能力，起点都是这一次分组——<b>「理解」的第一步，就是分清谁在动。</b>
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="hugs">
+      <h2>2. HUGS：把场景拆成「一块背景 + N 个刚体」</h2>
+
+      <p>HUGS 的核心思想一句话就能说完：<b>一个城市场景 = 一大块不动的背景 + 若干个各自作为刚体在动的物体。</b></p>
+
+      <p>具体到实现（原文 §3）：</p>
+
+      <ul>
+        <li><b>静态部分</b>：用一批高斯表示背景区域——路面、建筑、树、天空。</li>
+        <li><b>动态部分</b>：用 N 组高斯表示 N 个运动物体。每一组高斯先在<b>自己的规范空间（canonical space）</b>里表示——也就是「这个物体不动时的样子」；然后再用一组<b>各自的变换</b>把它搬到世界坐标系里的某个位置和朝向。</li>
+      </ul>
+
+      <p>这里的关键设计是：<b>每一组动态高斯只在自己的规范空间里优化一次，之后在时间上的「动」完全由那组变换负责。</b>这么做有一个非常大的好处：<b>物体的形状不会随着时间瞎变</b>——一辆车在整段视频里始终是同一辆车，变的只是它的位姿。这也是为什么它必须要「刚体」这个假设。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/5da5d4ce619b8bd4c7bb8ba0e348906c3143f62ee02a530d5fff01df40c68941.jpg" alt="HUGS Fig.2 method overview: static regions and N rigidly moving dynamic objects with unicycle models">
+        <figcaption>
+          <b>原图注（Figure 2）：</b>Method Overview. We decompose the scene into static regions and N rigidly moving dynamic objects. Each dynamic object is represented using 3D Gaussians in its canonical space and then transformed to the world coordinates based on transformations constrained by a unicycle model. We use N unicycle models of different parameters to individually represent the motion of N dynamic objects. Eac…<br>
+          （中译：方法总览。我们把场景分解为静态区域与 N 个刚体运动中的动态物体。每个动态物体在其规范空间里用 3D 高斯表示，然后基于受 unicycle（单车）模型约束的变换被搬到世界坐标系。我们用 N 个参数各不相同的单车模型来分别表示 N 个动态物体的运动。每……）<br>
+          <b>怎么看这张图：</b>这张图就是「一块背景 + N 个刚体」这个结构的展开图。① 请先在图里分清<b>两类东西</b>：被打包成「静态」的那部分，和各自独立打包的 N 个动态物体；② 再看每一组动态物体内部——<b>它的高斯是在「规范空间」里定义的</b>，也就是「这个物体不动时的样子」，这是一份与时间无关的形状；③ 最后看把规范空间接到世界坐标的那一环，那里就是 <b>unicycle 约束</b>生效的地方：<b>形状是固定的，时间上变化的只是那组变换。</b><br>
+          <b>一处诚实提醒：</b>原文图注在 OCR 里被截断（结尾的「Eac…」没了下文），我保留了省略号，没有替它补写内容。<br>
+          <b>要记住的一句话：</b>这个结构的价值在于<b>把「形状」与「运动」彻底分开了</b>——形状优化一次，运动交给少数几个物理参数，所以它既稳定、又能被解释。
+        </figcaption>
+      </figure>
+
+      <p>再说它怎么变成「理解」的：<b>语义</b>。原文 Fig. 3 讲了一个很值得记的细节——<b>语义 logits（类别分数）要在三维空间里做归一化</b>，而不是把各个二维视角的分数累积起来再 softmax。原文说，在 3D 空间里归一化<b>能明显减少漂浮物（floaters），得到更好的三维语义重建</b>。这个道理其实很直白：你在二维图上分别算分数再平均，光照、遮挡、视角都会带偏差进来；<b>直接在三维空间里比，才是「这个位置到底是什么」的正确问法</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/b82f6c504654e72650ab3d6bd0c1e197c3c073f87f97a6215da53e3bc25d222c.jpg" alt="HUGS Fig.1 illustration: lifting 2D and 3D predictions to 3D space via decomposed gaussians">
+        <figcaption>
+          <b>原图注（Figure 1）：</b>Illustration. Given posed RGB images as input, our method lifts noisy 2D &amp; 3D predictions to the 3D space via decomposed 3D Gaussians, and enables holistic scene understanding in 2D and 3D space.<br>
+          （中译：示意。给定带位姿的 RGB 图像作为输入，我们的方法通过<b>分解的高斯</b>把嘈杂的二维与三维预测抬升到三维空间，从而在二维与三维空间中实现整体性的场景理解。）<br>
+          <b>怎么看这张图：</b>这张图的两个关键词是「<b>decomposed（分解的）</b>」和「<b>posed（带位姿的）</b>」。① 输入是带位姿的 RGB 图像——也就是说，<b>位姿是别人给的，它自己不算位姿</b>（这一点下一节专门讲）；② 「分解的高斯」指的是上一段说的动静分解；③ 所谓「把嘈杂的 2D 与 3D 预测抬到 3D」，意思是：单独的二维检测（框、掩码）和三维检测都是有噪声的、互相不一致的，<b>把它们统一放到一个三维高斯场里去联合优化，噪声会互相抵消。</b><br>
+          <b>要记住的一句话：</b>这一篇的立场是「<b>用一个统一的三维表示，去消解各个模块各自为政带来的不一致</b>」。
+        </figcaption>
+      </figure>
+
+      <p>输入与输出也一次说清：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>输入</b>
+          <p>带位姿的 RGB 图像（单目），加上一些外部的二维 / 三维预测（比如 3D 检测框、语义分割）。</p>
+        </div>
+        <div class="mini-card">
+          <b>输出</b>
+          <p>重建出的高斯场 <b>+ 语义 + 三维框 + 可编辑的场景</b>。原文 Fig. 8 展示了「替换动态物体」和「把动态物体搬来搬去」。</p>
+        </div>
+        <div class="mini-card">
+          <b>规模</b>
+          <p><b>城市级。</b>实验跑在 KITTI、KITTI-360、vKITTI2 上，对比的是 MARS 与 PNF。KITTI-360 本身就是城市规模的驾驶数据集。</p>
+        </div>
+        <div class="mini-card">
+          <b>原文承认的短板</b>
+          <p><b>① 它依赖三维框的预测质量</b>——KITTI 上用的是单目三维框，vKITTI 上甚至用的是<b>手动抖过的框</b>；<b>② unicycle 模型只适配特定类型的刚体运动</b>（见下一节）。</p>
+        </div>
+      </div>
+
+      <p>第 ① 条要展开说一句，因为它是这一篇最实在的边界：<b>你要把场景拆成「背景 + N 个刚体」，前提是你得先知道「有哪几个刚体、它们大概在哪」。</b>这个信息 HUGS 是从外部检测器拿的。所以<b>如果检测器漏了一辆车，这辆车就不会被当成动态物体，会被当成背景「焊死」在场景里</b>——它一走动，背景就被污染了。原文也承认「嘈杂的框」是它的输入之一，并专门做了「用带噪框」的对比实验（Fig. 9）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_HUGS__Holistic_Urban_3D_Scene_Understanding_via_Gaussian/024b4e10b911118ee96bf2dcf9b8b22d09e592e43ae29b7a5648684733059a57.jpg" alt="HUGS Fig.7 scene decomposition on KITTI, foreground and background separated">
+        <figcaption>
+          <b>原图注（Figure 7）：</b>Scene Decomposition on KITTI. Our approach enables clear decomposition of foreground and background.<br>
+          （中译：KITTI 上的场景分解。我们的方法能做到前景与背景的清晰分解。）<br>
+          <b>怎么看这张图：</b>这张图就是上一张自绘图在真实数据上的样子。① 请重点看「<b>前景</b>」那一部分——动态物体被单独抽出来之后，它自己应该是一个<b>干净、完整、没有拖影</b>的东西；② 再看「<b>背景</b>」——原本被车和人挡住的那些区域，现在应该<b>露出了干净的路面</b>，而不是残留着一团糊掉的痕迹；③ 如果背景里还能看见「车形的鬼影」，那就说明分解没做干净，那辆车被当成背景焊进去了。<br>
+          <b>要记住的一句话：</b>动静分解好不好，<b>看背景里有没有鬼影就够了</b>——这正是第一季 <b>0012</b> 课与第三季 <b>0068</b> 课反复强调的「幽灵几何」问题。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="uni">
+      <h2>3. 刚体假设与「单车模型」：怎么把物理约束塞进优化</h2>
+
+      <p>上一节说「每一组动态高斯靠一组变换来搬动」。那这组变换是从哪来的？<b>如果让优化去自由地拟合它，结果往往是一团乱麻</b>——尤其是单目输入、又没有深度的时候，一个三维运动可以有无数种解释。</p>
+
+      <p>HUGS 的做法是给这个变换加上<b>物理约束</b>：每个动态物体都用<b>unicycle model（单车模型）</b>来描述，而且 N 个物体各有各的一套参数。</p>
+
+      <p>「单车模型」这个名词听着专业，其实就是一个非常朴素的观察：<b>一辆在平地上正常行驶的车，是不能横着平移的。</b>它能做的只有两件事：<b>沿车头方向往前走、以及用前轮转角改变朝向。</b>所以它的运动可以只用几个量来描述——比如<b>前进距离、朝向角、位置</b>。这个模型在自动驾驶里用得非常广（第四季 <b>0075</b> LeGO-LOAM 讲地面约束时、第五季讲车辆模型时都打过照面）。</p>
+
+      <p>把它接到高斯上有两个层面的好处：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>① 大幅压缩了「要解的东西」</b>
+          <p>一整个刚体变换有 6 个自由度（3 平移 + 3 旋转）。用单车模型之后，一个地面车辆的运动只剩很少几个量——<b>未知量少了，优化就稳了。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>② 把「物理上不可能」的解直接排除掉</b>
+          <p>一辆车横向漂移、或者瞬间掉头 90 度，这些解在单车模型下根本表达不出来。<b>这不是「加了个惩罚项希望它别乱动」，而是「结构上就动不了」。</b></p>
+        </div>
+      </div>
+
+      <p>所以整体的优化是这样的：<b>背景高斯 + N 组规范空间里的动态高斯 + N 组单车模型参数 + 语义，全部放在一起联合优化。</b>原文 §3 的原话大意就是「每个动态物体在自己的规范空间用高斯表示，然后根据受单车模型约束的变换搬到世界坐标系；我们用 N 个不同参数的单车模型来分别表示 N 个动态物体的运动」。</p>
+
+      <p>这个设计最大的局限也正是它的前提：<b>单车模型只适配「在地面上、沿自己的朝向、以刚体方式运动的物体」。</b>所以它对汽车很好使，对<b>走路的人</b>（有侧向摆臂、身体会扭转）就勉强，对<b>变形的东西</b>（比如飘起来的塑料袋）就完全不适用。原文也承认了这一点。这就是「物理约束」这类方法的通用形态：<b>你换来的稳定性，是用「适用范围」买来的。</b></p>
+    </section>
+
+    <section class="section-card" id="flow">
+      <h2>4. Motion-Aware：从光流里找运动线索</h2>
+
+      <p>如果说 HUGS 走的是「<b>给运动加物理约束</b>」这条路，那 Motion-Aware 走的是另一条：<b>从图像里已有的运动线索——光流——去找。</b></p>
+
+      <p>先看它要解决什么问题。目前主流的动态 3DGS 做法是给高斯加一个<b>随时间变化的形变</b>：同一个高斯在不同时刻被「拉」到不同的位置，于是场景就动起来了。问题是这个形变<b>很难约束住</b>——原文在 Fig. 7 里点了名：对比方法 4D-GS 倾向于产生<b>不合理的大幅运动</b>，很多前景高斯甚至<b>直接飞出了画面</b>。这就是典型的「学过冲了」。</p>
+
+      <p>而「运动」这件事，图像里其实是有直接证据的：<b>光流</b>。像素级的光流告诉你「这个像素从上一帧跑到哪去了」。于是很自然的想法是：<b>把三维高斯的运动，和二维光流对应起来当监督。</b>Motion-Aware 做的就是这件事，叫「<b>跨维度运动对应</b>」（cross-dimensional motion correspondence）。</p>
+
+      <p><b>但它发现了一个坑，而且这个坑是这一篇最有意思的地方。</b></p>
+
+      <div class="callout">
+        <h4>★ 核心洞察：渲染出来的光流，不等于真实的运动</h4>
+        <p>原文 Fig. 1 讲的是一件反直觉的事：<b>「三维里真实的运动」、</b><b>「理想的光流」、</b><b>「渲染器通过 α 混合算出来的光流」——这三样东西不是一回事。</b></p>
+        <p>具体机制是这样的：假设画面里有一个运动的小物体，<b>但它前面（更靠近相机的地方）挡着一个几乎静止的大高斯</b>（原文说是「一个近乎静止的灰色高斯」）。那么渲染器在算某个像素的时候，是<b>沿着这条光线把前后几个高斯的贡献加权平均</b>之后再得出的。</p>
+        <p>结果就是：<b>这个像素上的运动，被前面那个不动的高斯「稀释」甚至「挤压」了</b>——它表现出来的光流既变弱、方向也可能被带偏，原文说<b>甚至会出现方向相反的运动</b>。于是如果你直接拿这个渲染出来的光流去对齐真实的观测光流，<b>你就在让网络去学一个错误的运动。</b></p>
+      </div>
+
+      <p>为什么这件事值得单独拎出来讲？因为它是一个<b>「监督信号本身就有系统性偏差」</b>的例子。我们在第二季 <b>0022</b> 课（点云 BA）里见过类似的思考——残差建得对不对，直接决定优化往哪走；第五季 <b>0097</b> 课（R³LIVE++ 辐射重建）也在处理「观测里混了别的东西」这件事。<b>建模的难点常常不在于「怎么解方程」，而在于「方程本身写对了没有」。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>既然场景里有运动物体，为什么不干脆「把渲染出来的光流直接和观测光流对齐」，让网络自己学？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。渲染流是沿光线 α 混合加权平均的结果：如果前方挡着一个几乎静止的大高斯，运动物体的流会被稀释、挤压，方向甚至可能反过来。拿它当监督，就是逼网络学一个错的运动。原文的立论就建立在这条观察上。" onclick="lessonKit.answer(this,'q0126a')">渲染流被前面的遮挡物挤歪了</button>
+          <button data-correct="no" data-explanation="光流本身确实是外部提供的，但这不构成障碍——正是因为它是外部给的真值，才想拿它当监督。问题出在「被监督的那个量」上，不在监督信号的来源上。" onclick="lessonKit.answer(this,'q0126a')">光流是外部给的，形式不匹配</button>
+          <button data-correct="no" data-explanation="计算量确实是个工程考量，但原文的立论不是「太慢」，而是「错了」——这是一个正确性问题，不是效率问题。就算你有无限算力，直接对齐仍然会学到错误的运动。" onclick="lessonKit.answer(this,'q0126a')">渲染光流的计算开销太大了</button>
+        </div>
+        <div class="quiz-feedback" id="q0126a"></div>
+      </div>
+
+      <p>Motion-Aware 的对策有两部分：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 跨维度运动对应</b>
+          <p>不去直接对齐渲染流，而是建立「三维高斯位移」与「像素级光流」之间的对应关系，再配上一套<b>不确定度加权的流增强（flow augmentation）</b>——也就是：<b>让系统知道「这个光流证据有多可信」，不可信的地方就不要硬信。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>② 运动注入器（motion injector）</b>
+          <p>原文把动态 3DGS 的框架分成两类（迭代 / 超维的，与基于形变的），两类都加了运动感知增强；<b>对基于形变的那一类，额外加了一个 motion injector，用来处理「瞬态歧义」</b>——也就是那些只出现很短时间、看不清的运动。</p>
+        </div>
+      </div>
+
+      <p>效果上，论文在 PanopticSports、Neu3DV、HyperNeRF 三个动态数据集上做了对比，结论是：<b>运动区域更清楚、静态区域的细节更细，整体优于 4D-GS。</b>原文 Fig. 9 还顺带展示了一件副产品——<b>因为每个高斯都有自己的轨迹，所以顺带就有了跟踪能力</b>（图上画的就是前景高斯在 PanopticSports 上的轨迹线）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_Motion-Aware_3D_Gaussian_Splatting_for_Efficient_Dynamic/28dcdbe0e749a8e56478b31ea28a5ce8271d49940c9b65fa8a2830cad9f7a7aa.jpg" alt="Motion-Aware Fig.1 gap between actual 3D movement, ideal optical flow and rendered flow">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Illustration of the gap between actual 3D movement, ideal optical flow, and 2D flow rendered via α-blending. Due to a nearly static Gray Gaussian in front (closer to the imaging plane), the 2D flow produced by the renderer is perturbed and squeezed due to the effect of weighted-average along the ray. If we directly align it with optical flow, inaccurate motion (or even reversed direction u…<br>
+          （中译：三维真实运动、理想光流、以及通过 α 混合渲染出来的二维光流之间的差距示意。由于前面（更靠近成像平面处）有一个近乎静止的灰色高斯，渲染器产生的二维光流因为沿光线的加权平均效应而被扰动、被挤压。如果我们直接把它与光流对齐，就会得到不准确、甚至方向相反的运动……）<br>
+          <b>怎么看这张图：</b>这张图是这一篇的立论基础，请一定看明白。① 图中那个<b>灰色的大高斯</b>是「挡在前面、几乎不动」的东西；② 它后面那个<b>真正在运动的物体</b>才是你想估的；③ 关键结论是：渲染器算出来的那条流，<b>是两者沿光线加权平均的结果</b>，所以它既不等于真实的运动，也不等于理想的流——它被「挤压」了，甚至可能反向。<br>
+          <b>要记住的一句话：</b>所以这一篇的贡献不是「用光流做监督」（这个想法很旧），而是<b>「先把光流这个监督信号本身修对，再拿它去监督」</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2025_Motion-Aware_3D_Gaussian_Splatting_for_Efficient_Dynamic/98c0faf057f197b9e32dfb17b33dcffaf07b518ad72ef668c7440e21db03b7c6.jpg" alt="Motion-Aware Fig.9 visualization of tracking with 3D gaussians trajectories">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Visualization of tracking with 3D Gaussians. Lines in the figures stand for the trajectory of foreground 3D Gaussians on PanopticSports [11]. The 2D tracking errors (represented with max flow errors) are also reported.<br>
+          （中译：用 3D 高斯做跟踪的可视化。图中的线代表 PanopticSports 上前景 3D 高斯的轨迹。二维跟踪误差（用最大光流误差表示）也一并给出。）<br>
+          <b>怎么看这张图：</b>这张图是「时间维」这件事最直观的样子。① 图里那些<b>线</b>就是一个个前景高斯在时间里走过的路径；② 注意它们是<b>一条条分开的线</b>，不是一整团——说明每个高斯各自带着自己的运动轨迹，这正是「运动进了模型」的样子；③ 图注还报告了二维跟踪误差，作为量化的佐证。<br>
+          <b>要记住的一句话：</b>一旦每个高斯都带上了轨迹，<b>重建和跟踪就变成了同一件事</b>——这正是本节最后那条线索要讲的变化。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="pose">
+      <h2>5. ★ 一个必须查清的问题：它估位姿吗</h2>
+
+      <p>这个问题在 SLAM 语境下格外重要，因为「估位姿」与否直接决定了一篇论文是<b>里程计侧</b>（前端）还是<b>建图侧</b>（后端 / 感知）。两篇的答案都是：<b>不估，位姿是外部给的。</b></p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">问题</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">HUGS</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">Motion-Aware</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>它估相机位姿吗</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>不估</b>——输入就是「带位姿的 RGB 图像」（posed RGB images）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>不估</b>——原文明确把相机位姿当作已知 / 已提供的量</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>属于哪一侧</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">建图 + 感知侧（不是里程计前端）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">建图侧（mapping，动态场景重建）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>那它在解决什么</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">给定位姿之后，<b>场景是什么、谁在动、动得对不对、能不能编辑</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">给定位姿之后，<b>动态场景怎么重建得又准又省</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这件事为什么值得单独立一节？因为<b>它决定了你能不能说「这一篇是 SLAM」。</b></p>
+
+      <div class="callout">
+        <h4>诚实定位</h4>
+        <p><b>HUGS 与 Motion-Aware 都不是完整的 SLAM 系统。</b>它们不估相机位姿、不做回环、不维护长期一致的地图——它们默认「你已经知道每一帧相机在哪」。这在离线重建、数据集评测的场景下是合理的前提（KITTI 那类数据集本来就提供了位姿），但<b>放到一台真的要在未知环境里跑起来的机器上，前面还得有一整套里程计把它喂饱。</b></p>
+        <p>所以准确的说法是：<b>它们属于 SLAM 的「建图与感知」这一段</b>，和第五季 <b>0102</b> FusionPortable 那类评测平台、第四季 <b>0075</b> LeGO-LOAM 的机载场景理解是同一类角色——只是换了表示、也加上了动态。</p>
+      </div>
+
+      <p>顺带说一句：这也解释了为什么本季前面几课（<b>0117</b> MonoGS、<b>0118</b> SplaTAM、<b>0119</b> Photo-SLAM、<b>0121</b> WildGS-SLAM）那么强调「以高斯为唯一表示的 SLAM」——<b>那些是在把位姿估计也做进高斯里的</b>，而这一节的两篇不做。把它们放在一起读，正好能看清「高斯当表示」和「高斯当 SLAM 的全部」之间的差别。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>小刚读完 HUGS 之后说：「它能重建城市、能分语义、能估运动、还能编辑场景，这就是一个城市级 SLAM 系统。」这个说法对吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="能重建不等于会定位。HUGS 的输入明确写着是「带位姿的 RGB 图像」——位姿是别人给它的，它自己不解算。少了这一步，机器在未知环境里根本走不起来。" onclick="lessonKit.answer(this,'q0126b')">对，功能齐了就是 SLAM</button>
+          <button data-correct="yes" data-explanation="对。位姿估计是 SLAM 的入场券。HUGS 与 Motion-Aware 都假定位姿已知，所以它们属于 SLAM 的「建图与感知」那一段（mapping 侧），前面还得接一整套里程计才能跑起来。本季 0117 到 0121 那几篇才是把位姿也做进高斯的。" onclick="lessonKit.answer(this,'q0126b')">不对，它不估位姿，只是建图侧</button>
+          <button data-correct="no" data-explanation="语义和可编辑性确实超出了「建图」的范畴，这也是它叫「场景理解」的原因。但它们并不构成本质的判断依据——判断一篇工作是不是 SLAM，关键看它有没有把相机位姿作为待估量。" onclick="lessonKit.answer(this,'q0126b')">不对，因为它没有做语义分割</button>
+        </div>
+        <div class="quiz-feedback" id="q0126b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="line">
+      <h2>6. 动态这条线的三站：从「剔掉」到「建成模型」</h2>
+
+      <p>本节最后做一次收束。把本季处理「动态」的三个位置排成一条线，你会看到一条很清楚的思想演进：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">站</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">课</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">它怎么对付「动」</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">思想状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>1</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0114</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">DytanVO / RoDyn-SLAM / OVD-SLAM：用<b>运动掩码、语义掩码、特征点层面的语义加权</b>，把动态的东西从估计里剔出去</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>把动的当成噪声</b>——它不该出现在地图里</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>2</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0121</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">WildGS-SLAM：用 <b>DINOv2 的特征不确定度</b>当「这东西可能不是真的」的信号——<b>不需要深度，也不需要语义标签</b>，只是把高不确定的地方排除在建图之外</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>把动的当成「不可信」</b>——判据从「它是什么」变成「我有多确定」</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>3</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0126</b>（本节）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">HUGS 把动态物体建成 <b>N 组刚体高斯 + 单车模型</b>；Motion-Aware 给每个高斯<b>加上时间维</b>（各自的轨迹 / 随时间变化的形变）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>把动本身建成模型</b>——动不再是噪声，而是要被估出来的量</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这三站之间的变化，其实回答了第一季 <b>0012</b> 课留下的一个判断。那节课的结论是「<b>没有任何单一方法普遍更优</b>」——当时讨论的都是「用什么判据把动态点 / 动态像素挑出来」。而到了第三站，问题变了：</p>
+
+      <div class="callout">
+        <h4>三个层次的变化</h4>
+        <p><b>第一阶段问的是「哪些像素是动的」</b>——判据可以是几何（重投影误差）、语义（这是人吗）、学习特征（模型觉得自己懂吗）。答案是一张掩码，动态的部分被<b>丢掉</b>。</p>
+        <p><b>第二阶段问的是「哪些像素不可信」</b>——不再区分「动 / 不动」，而是给每个地方一个置信度。这更普适（不用预先定义什么叫动态），但动态区域依然是被<b>排除</b>。</p>
+        <p><b>第三阶段问的是「它在怎么动」</b>——动态物体不再是需要扔掉的垃圾，而是一个<b>需要被估出来的、有结构的量</b>：它有自己的形状（规范空间）、自己的位姿（单车模型 / 刚体变换）、自己的轨迹（随时间变化的形变）。<b>地图里于是第一次有了「时间」这个维度。</b></p>
+      </div>
+
+      <p>把这条线接回更早的地方，它其实一直在还同一笔债：第一季 <b>0012</b>（动态环境综述）、第三季 <b>0068</b>（判定 / 处理 / 代价三层框架）、第四季 <b>0082</b>（SuMa++ 用语义剔动态）——<b>这三处都在同一个问题上打转：动态物体在稠密地图里会留下「幽灵」。</b>而本节给出的答案是：<b>与其想尽办法把幽灵擦掉，不如把它请进来，给它一个模型。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">时间维：同一个高斯，在三帧里各自走一段路</text>
+
+          <!-- t1 -->
+          <rect x="40" y="60" width="240" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="160" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">t₁</text>
+          <g fill="#9cc79e" opacity="0.5">
+            <ellipse cx="80" cy="124" rx="20" ry="10"/><ellipse cx="120" cy="124" rx="20" ry="10"/>
+          </g>
+          <rect x="60" y="222" width="200" height="9" fill="#dde2e6"/>
+          <g fill="#8fb8dd" opacity="0.7" stroke="#4a7fae" stroke-width="1">
+            <ellipse cx="98" cy="218" rx="18" ry="9"/><ellipse cx="122" cy="206" rx="18" ry="9"/>
+            <ellipse cx="146" cy="218" rx="18" ry="9"/>
+          </g>
+
+          <!-- t2 -->
+          <rect x="330" y="60" width="240" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="450" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">t₂</text>
+          <g fill="#9cc79e" opacity="0.5">
+            <ellipse cx="80" cy="124" rx="20" ry="10"/><ellipse cx="120" cy="124" rx="20" ry="10"/>
+          </g>
+          <rect x="60" y="222" width="200" height="9" fill="#dde2e6"/>
+          <g fill="#8fb8dd" opacity="0.7" stroke="#4a7fae" stroke-width="1">
+            <ellipse cx="140" cy="214" rx="18" ry="9"/><ellipse cx="164" cy="202" rx="18" ry="9"/>
+            <ellipse cx="188" cy="214" rx="18" ry="9"/>
+          </g>
+
+          <!-- t3 -->
+          <rect x="620" y="60" width="240" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="740" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">t₃</text>
+          <g fill="#9cc79e" opacity="0.5">
+            <ellipse cx="80" cy="124" rx="20" ry="10"/><ellipse cx="120" cy="124" rx="20" ry="10"/>
+          </g>
+          <rect x="60" y="222" width="200" height="9" fill="#dde2e6"/>
+          <g fill="#8fb8dd" opacity="0.7" stroke="#4a7fae" stroke-width="1">
+            <ellipse cx="182" cy="210" rx="18" ry="9"/><ellipse cx="206" cy="198" rx="18" ry="9"/>
+            <ellipse cx="230" cy="210" rx="18" ry="9"/>
+          </g>
+
+          <!-- 轨迹 -->
+          <path d="M122 206 L452 202 L772 198" fill="none" stroke="#a8563a" stroke-width="1.8" stroke-dasharray="7 5"/>
+          <path d="M98 218 L428 214 L748 210" fill="none" stroke="#a8563a" stroke-width="1.6" stroke-dasharray="7 5"/>
+          <path d="M146 218 L476 214 L796 210" fill="none" stroke="#a8563a" stroke-width="1.6" stroke-dasharray="7 5"/>
+          <path d="M796 210 L828 202" stroke="#a8563a" stroke-width="1.8"/>
+          <path d="M828 202 L818 201 L822 209 Z" fill="#a8563a"/>
+
+          <text x="450" y="330" text-anchor="middle" font-size="10.5" fill="#4a7fae">蓝色：会动的那些高斯，每一个都带一条自己的轨迹</text>
+          <text x="450" y="350" text-anchor="middle" font-size="10.5" fill="#2f6d51">绿色：不动的那些高斯，三帧都停在原地</text>
+          <text x="450" y="386" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b2b2b">时间维加进来之后，高斯的「位置」变成了「时间的函数」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一批高斯在三帧里的状态，以及「每个高斯带一条自己的运动轨迹」这件事。<br>
+          <b>怎么看这张图：</b>① 三个格子分别是 t₁、t₂、t₃ 三个时刻的同一段场景；② <b>蓝色的那三个高斯在往右上方走</b>，红色虚线把它们各自对应起来，就成了三条轨迹；③ <b>绿色的两个高斯三帧都停在原地</b>——它们在时间上是常量；④ 所以「时间维」在这里的具体含义是：<b>每个高斯的位置（以及朝向）不再是常数，而是时间的函数</b>。<br>
+          <b>一处必须说明的简化：</b>真实的实现里，高斯的运动不是「预先知道轨迹然后照着走」——轨迹是<b>优化出来</b>的，而且靠光流等观测来约束（这正是上一节讲的「跨维度运动对应」）。本图画成三条已经确定的虚线，是为了让你看清「每个高斯各有一条轨迹」这个结构；另外，本图也简化了「有些高斯会新增或消失」这类情况——原文对瞬态运动的处理仍然有限。<br>
+          <b>要记住的一句话：</b>这就是本节那条线索的终点——<b>动态物体不再是需要删掉的噪声，而是一个有轨迹、可以被估出来的量</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>7. 横向对比与判断</h2>
+
+      <p>两篇都在处理动态，但走的是两条完全不同的路——一个加物理约束，一个找观测线索：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">对比项</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">HUGS（2024）</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">Motion-Aware（2025）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>它要的产物</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">城市场景的<b>理解</b>：重建 + 语义 + 三维框 + 可编辑</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">动态场景的<b>重建</b>（＋顺带的跟踪）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>怎么建模「动」</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">动静分解：静态高斯 + <b>N 组刚体高斯</b>，各由一套 <b>unicycle 模型</b>驱动</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">随时间变化的<b>形变</b>（对形变类框架另加 motion injector）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>运动从哪来</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>物理约束</b>（单车模型）＋ 联合优化</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>观测线索</b>（光流）＋ 跨维度对应 ＋ 不确定度加权</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>输入</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">带位姿 RGB（单目）＋ 外部的二维/三维检测（含 3D 框）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">带位姿的多视角序列 ＋ <b>光流</b>（外部提供）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>规模</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>城市级</b>（KITTI / KITTI-360 / vKITTI2）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">物体与人体级的动态场景（PanopticSports / Neu3DV / HyperNeRF）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>估相机位姿吗</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>不估</b>（输入带位姿）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>不估</b>（属建图侧）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>原文承认的短板</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">依赖三维框预测（KITTI 用单目框、vKITTI 用手抖框）；unicycle 只适配特定刚体</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">不估位姿；<b>依赖光流质量</b>；瞬态处理仍有限</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>最后是我们的判断——<b>请注意这是教学判断，不是原文自评</b>：</p>
+
+      <div class="callout">
+        <h4>我们的判断</h4>
+        <p><b>HUGS 是「把工程拼起来」的那一类，但拼得有想法。</b>单个零件都不新（高斯、语义、三维框、单车模型全是现成的），它的贡献在于<b>用一个统一的表示把这些东西联合优化起来</b>，并且给出了「语义要在三维空间归一化」这样的实证细节。它对下游（仿真、数据合成、场景编辑）的价值很直接：<b>你能把一辆车从街上拿走，路面还是干净的。</b>风险也很清楚——<b>整套东西的品质被上游的三维框检测卡住了。</b></p>
+        <p><b>Motion-Aware 的贡献更「方法论」一些。</b>它提出的不是一个更强的形变模型，而是一句提醒：<b>你打算拿来当监督的那个量，自己可能是错的。</b>「渲染出来的光流被前面那个静止高斯挤压了」这个观察很具体、很值得记，因为这类「监督信号本身有系统偏差」的坑，在整个 SLAM 里到处都是（残差怎么建、观测怎么加权、外参对不对……）。它的代价是<b>依赖光流质量</b>，而光流本身在遮挡、大位移、弱纹理处也不可靠。</p>
+        <p><b>两篇的边界也一样清楚：都不估位姿。</b>所以它们都不是完整的 SLAM 系统，而是 SLAM 的「建图与感知」那一段。要把它们变成一台能自己跑起来的机器，前面还得接一整套里程计。</p>
+      </div>
+
+      <p>到这里，本季「高斯怎么做重建与理解」这一大块就告一段落了。下一节是本季的收官——我们要把隐式（NeRF 系）与显式（高斯系）这两条路放回十年前，看清它们到底在争什么。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么「动静分离」是场景理解的第一步？如果一辆车没有被正确识别成动态物体，会发生什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>为什么是第一步：</b>因为后面所有的「理解」都建立在这个划分上。你要给场景里的东西贴语义、要估它们的运动、要能编辑它们，前提都是<b>你得先知道「这是同一个东西在不同时刻的样子」</b>。如果不分离，那么每一帧里车都在不同的位置，优化器面对的就是一团无法归类的颜色——它没法知道「这两个高斯是同一辆车的两个时刻」，也就没法估运动、没法做实例。</p>
+              <p><b>如果一辆车没被识别成动态：</b>它会被当成<b>背景的一部分</b>，被「焊死」在场景里。后果有两个，第二个更严重：</p>
+              <p>① <b>背景里出现鬼影。</b>因为它其实在移动，不同时刻的观测会互相矛盾；优化器只能取一个折中，结果就是路面上出现一团糊掉的、车形的残影。这正是第一季 <b>0012</b> 课与第三季 <b>0068</b> 课反复讲的「幽灵几何」。</p>
+              <p>② <b>连累整个建图。</b>在 SLAM 里，如果动态物体被当成静态结构参与位姿估计，它会去「拉扯」位姿——这是动态环境 SLAM 最经典的失效模式，也是第一季 <b>0012</b>、第三季 <b>0068</b>、本季 <b>0114</b> / <b>0121</b> 一路在处理的问题。</p>
+              <p><b>而 HUGS 恰恰把「找出有哪些刚体」交给了外部检测器</b>——所以原文承认它依赖三维框预测的质量。这意味着：<b>检测漏一个，这个错误就会往下传染到整个重建里。</b>它的防御手段是用「带噪框」做对比实验，证明自己有一定的鲁棒性，但没能从根上摆脱这个依赖。</p>
+            </div></details>
+          </li>
+          <li>HUGS 给每个动态物体配一个 unicycle（单车）模型。请说明这个「物理约束」带来了什么好处，以及它的代价是什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>单车模型说的是什么：</b>一辆在平地上正常行驶的车，<b>不能横着平移</b>。它能做的只有「沿车头方向前进」和「用前轮转角改变朝向」这两件事，所以它的运动可以用很少的几个量（比如前进距离、朝向角、位置）描述完。</p>
+              <p><b>好处一：压缩了未知量。</b>一个自由的刚体变换有 6 个自由度（3 平移 + 3 旋转）；换成单车模型之后，一个地面车辆的运动只剩少数几个参数。<b>要解的东西少了，在单目、缺乏深度的情况下优化就稳得多。</b></p>
+              <p><b>好处二：把物理上不可能的解从结构上排除掉。</b>这一点比「加一个惩罚项」强得多——加了惩罚项，错误解还是可能被优化出来，只是代价高；而用单车模型参数化之后，<b>「横向漂移」和「瞬间掉头」这些解在参数空间里根本表达不出来。</b>这是硬约束，不是软约束。</p>
+              <p><b>代价：适用范围被锁死了。</b>单车模型只适配「在地面上、沿自己朝向、以刚体方式运动」的物体。所以：<b>对汽车很好用</b>；对<b>走路的人</b>就勉强（人有侧向摆臂、身体会扭转，不是刚体）；对<b>会变形的东西</b>（飘起来的塑料袋、扬起的水花）完全不适用。原文自己也承认「unicycle 仅适配特定刚体」。</p>
+              <p><b>这是一个通用规律，值得记：</b>用物理先验换稳定性，<b>代价永远是适用范围</b>。第四季 <b>0075</b> LeGO-LOAM 用「地面只约束 3 个自由度」是同一个套路——在它假设成立的地方非常好用，一旦环境不满足假设就会失效。</p>
+            </div></details>
+          </li>
+          <li>Motion-Aware 发现「渲染出来的光流不能直接当监督」。请解释这个坑是怎么产生的，以及它给我们的普遍教训是什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>坑是怎么产生的（按图一步步走）：</b></p>
+              <p>① 场景里有一个<b>真正在运动的物体</b>；② 但在它<b>前面、更靠近相机的方向</b>，挡着一个<b>几乎静止的大高斯</b>；③ 渲染器在算某个像素的颜色时，是<b>沿这条光线把前后几个高斯的贡献加权平均</b>之后得到的（这就是 α 混合）；④ 于是这个像素上表现出来的「运动」，是「运动物体」和「不动的遮挡物」<b>加权平均</b>的结果——它被<b>稀释、挤压</b>，方向甚至可能反过来；⑤ 原文 Fig. 1 说的就是这件事：<b>三维真实运动、理想光流、渲染流，这三者不是一回事。</b></p>
+              <p>所以如果你图省事，直接把「渲染出来的光流」拿去和「观测到的光流」对齐，<b>你就是在逼网络学一个错误的运动方向</b>。Motion-Aware 的对策是：建立跨维度的运动对应 + 用不确定度加权（让系统知道哪里的光流证据不可信），并对形变类框架加一个 motion injector 处理瞬态歧义。</p>
+              <p><b>普遍教训：</b>这是一个典型的「<b>监督信号本身带有系统性偏差</b>」的例子。它不是随机噪声——随机噪声平均一下还能消掉，而系统性偏差<b>是你越优化、偏得越狠</b>。</p>
+              <p>这类坑在 SLAM 里到处都是：残差怎么建（第二季 <b>0022</b> 点云 BA 的点到面残差）、观测怎么加权（第三季 <b>0057</b> VINS-Mono 的鲁棒核）、外参标定对不对（第五季 <b>0103</b> 多激光雷达在线外参标定）、辐射观测里混了什么（第五季 <b>0097</b> R³LIVE++ 的辐射重建）。<b>建模最难的常常不是「怎么解方程」，而是「方程本身写对了没有」。</b></p>
+            </div></details>
+          </li>
+          <li>本节的收束把本季处理动态的三个位置排成了一条线（0114 → 0121 → 0126）。请复述这三个阶段各自「把动当成了什么」，并说明为什么这是一种递进。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>0114（DytanVO / RoDyn-SLAM / OVD-SLAM）：把动当成「噪声」。</b>用运动掩码、语义掩码、特征点层面的语义加权，把动态的东西从位姿估计和建图里<b>剔出去</b>。它背后的预设是「动态物体不该出现在地图里」，是个「清理」的思路。</p>
+              <p><b>0121（WildGS-SLAM）：把动当成「不可信」。</b>它不判断「这是不是动态物体」，而是用 DINOv2 的特征不确定度打一个「这东西可能不是真的」的信号——<b>既不需要深度，也不需要语义标签</b>，只把高不确定的地方排除在建图之外。这一步的进步在于：<b>判据从「它是什么（语义）」变成了「我有多确定（置信度）」</b>，因此不需要预先定义「什么叫动态」，泛用性更好。但动态区域依然是被排除的。</p>
+              <p><b>0126（HUGS / Motion-Aware）：把动当成「要被估出来的量」。</b>HUGS 把动态物体建成 N 组刚体高斯（每组带自己的单车模型参数）；Motion-Aware 给每个高斯加上时间维，让它带一条自己的轨迹。<b>动态物体不再是垃圾，而是地图的一部分。</b></p>
+              <p><b>为什么这是递进而不是平行：</b>前两站的目标都是「让动的别污染地图」，本质是<b>减法</b>——丢掉信息。而第三站是<b>加法</b>——把动态物体保留下来、并赋予它结构（形状、位姿、轨迹）。这带来了前两站永远做不到的能力：<b>你可以问「那辆车往哪开」，也可以把车换掉再渲一张图。</b></p>
+              <p><b>代价也要说清：</b>做加法的前提是<b>你得有更强的先验或更多的外部信息</b>——HUGS 要三维框检测，Motion-Aware 要光流，两篇都假设相机位姿已知。而做减法的 0114 / 0121 是能嵌进完整 SLAM 系统里跑在线的。<b>所以这条线不是「后者取代前者」，而是「各自的成本与能力不同」。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0125-高斯内存压缩与StopThePop-显存与排序.html">← 高斯内存压缩与 StopThePop：显存与排序</a>
+        <a class="next" href="0127-收官-两条路线的十年之争.html">收官：两条路线的十年之争 →</a>
+      </div>
+      <p class="foot-note">「动」这件事在稠密地图里纠缠了整整五季，到这一节终于从「擦掉它」变成了「给它一个模型」。下一节是本季收官，我们把隐式与显式这两条路放回十年里看 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

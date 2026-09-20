@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPS-Gaussian 与 Animatable Gaussians：前馈泛化与可驱动人体 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0124</div>
+      <h1>GPS-Gaussian 与 Animatable Gaussians：前馈泛化与可驱动人体</h1>
+      <p class="subtitle">到这一步，3DGS 一直是「一个场景优化一遍」——这两篇问的是：能不能不优化？⏱️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：免逐场景优化 · 逐像素高斯参数图 · SMPL 与 LBS · 姿态相关高斯</span>
+        <span>👥 两篇：GPS-Gaussian／Animatable Gaussians（均为 2024）</span>
+        <span>📅 2024 · <i>Generalizable Pixel-wise 3D Gaussian Splatting</i> &amp; <i>Pose-dependent Gaussian Maps</i></span>
+      </div>
+      <div class="toc">
+        <a href="#frame">能不能不针对每个场景优化</a>
+        <a href="#gps">GPS-Gaussian：一次前向出结果</a>
+        <a href="#pixel">逐像素的高斯参数图</a>
+        <a href="#anim">Animatable：让高斯跟着姿态动</a>
+        <a href="#gen">0011 说的「泛化」被回应了多少</a>
+        <a href="#compare">对比与判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="frame">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「Generalizable（可泛化）」在这里到底指什么；解释「逐像素高斯参数图」是怎么把 2D 的预测抬到 3D 的；说清 SMPL、LBS、姿态投影这三件事在数字人里各管什么；并且知道这两篇的边界到底卡在哪。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这两篇回答的是第二季 <b>0027</b> 课（COLMAP）那条老路的反面：<b>离线 SfM 逐场景优化</b>。本季 3DGS 原著（<b>0116</b>）与 <b>0117</b> MonoGS 走的也都是逐场景优化，正是 0027 的延续。而「免优化」这条诉求，还直接对上第一季 <b>0011</b> 课承认的六个不成熟环节里的「<b>泛化</b>」那一条。</p>
+        </div>
+      </div>
+
+      <h2>1. 题眼：能不能不要「针对每个场景再优化一遍」</h2>
+
+      <p>先把这一节的问题立起来。到目前为止，本季讲的 3DGS 都遵循同一个套路：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{拍一圈照片} \;\longrightarrow\; \text{跑几十分钟优化} \;\longrightarrow\; \text{得到这一场景的高斯}$$</div>
+      </div>
+
+      <p>这条流水线在第二季 <b>0027</b> 课（COLMAP）就已经定型了：<b>先离线做一遍 SfM 把位姿和稀疏点解出来，再基于它做后续重建。</b>3DGS 原著（<b>0116</b>）与 MonoGS（<b>0117</b>）只是在「后续重建」这一步换成了高斯，前面的路子没变——<b>每个新场景，都要从头优化一遍。</b></p>
+
+      <p>这件事在离线重建里可以接受（反正跑一次）；可一旦你想做「实时」的东西，它就立刻变成死结：<b>来一个新的物体、新的人、新的一间房，你就得等几十分钟。</b>GPS-Gaussian 的摘要里有一句话点得很准：原来的高斯泼溅与神经隐式方法都「 necessitate per-subject optimizations 」——<b>它们天生要求针对每一个主体（每个人、每个场景）单独优化。</b></p>
+
+      <p>这一节的两篇论文就是冲着这件事去的。先看它们要取代的那条老路长什么样：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">两条路：每个新场景跑一遍优化，还是看两张图就出结果</text>
+
+          <!-- ===== 左：逐场景优化 ===== -->
+          <rect x="30" y="60" width="400" height="270" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.5"/>
+          <text x="230" y="86" text-anchor="middle" font-size="13.5" font-weight="700" fill="#a8563a">逐场景优化：每个新场景都要重来</text>
+
+          <!-- 拍照 -->
+          <rect x="52" y="112" width="64" height="52" rx="4" fill="#eef3f8" stroke="#a8bed2" stroke-width="1.3"/>
+          <circle cx="84" cy="132" r="9" fill="#8fb8dd"/>
+          <path d="M84 141 L84 154 M72 146 L96 146 M84 154 L74 162 M84 154 L94 162" stroke="#4a7fae" stroke-width="1.8" fill="none"/>
+          <text x="84" y="180" text-anchor="middle" font-size="10.5" fill="#7a8a99">拍一圈照片</text>
+
+          <path d="M120 150 L146 150" stroke="#5a8fc7" stroke-width="1.8"/>
+          <path d="M146 150 L139 146 L139 154 Z" fill="#5a8fc7"/>
+
+          <!-- 沙漏 -->
+          <path d="M156 120 L204 120 L180 165 L204 210 L156 210 L180 165 Z" fill="#f2d98a" stroke="#c9a94a" stroke-width="1.4"/>
+          <rect x="152" y="112" width="56" height="8" rx="2" fill="#c9a94a"/>
+          <rect x="152" y="210" width="56" height="8" rx="2" fill="#c9a94a"/>
+          <text x="180" y="234" text-anchor="middle" font-size="10.5" font-weight="700" fill="#8a6a12">跑优化</text>
+          <text x="180" y="250" text-anchor="middle" font-size="10.5" fill="#8a6a12">几十分钟</text>
+
+          <path d="M208 165 L292 165" stroke="#5a8fc7" stroke-width="1.8"/>
+          <path d="M292 165 L285 161 L285 169 Z" fill="#5a8fc7"/>
+
+          <!-- 输出高斯 -->
+          <g fill="#8fb8dd" opacity="0.65" stroke="#4a7fae" stroke-width="1">
+            <ellipse cx="320" cy="126" rx="13" ry="12"/>
+            <ellipse cx="344" cy="134" rx="12" ry="10"/>
+            <ellipse cx="330" cy="152" rx="17" ry="9"/>
+            <ellipse cx="356" cy="158" rx="11" ry="9"/>
+            <ellipse cx="326" cy="176" rx="14" ry="8"/>
+            <ellipse cx="350" cy="180" rx="12" ry="8"/>
+            <ellipse cx="316" cy="196" rx="10" ry="8"/>
+            <ellipse cx="342" cy="200" rx="11" ry="8"/>
+          </g>
+          <text x="338" y="226" text-anchor="middle" font-size="10.5" fill="#2c5f8a">一版可渲染的高斯</text>
+
+          <text x="230" y="300" text-anchor="middle" font-size="11.5" fill="#a8563a">换一个人、换一个场景 → 从头再来一遍</text>
+
+          <!-- ===== 右：前馈 ===== -->
+          <rect x="470" y="60" width="400" height="270" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.5"/>
+          <text x="670" y="86" text-anchor="middle" font-size="13.5" font-weight="700" fill="#2f6d51">前馈：两张照片进去，毫秒级出结果</text>
+
+          <!-- 两张源视角 -->
+          <rect x="492" y="110" width="64" height="52" rx="4" fill="#eef3f8" stroke="#a8bed2" stroke-width="1.3"/>
+          <circle cx="524" cy="130" r="9" fill="#8fb8dd"/>
+          <path d="M524 139 L524 152 M512 144 L536 144 M524 152 L514 160 M524 152 L534 160" stroke="#4a7fae" stroke-width="1.8" fill="none"/>
+          <text x="552" y="122" font-size="10" fill="#7a8a99">A</text>
+
+          <rect x="492" y="176" width="64" height="52" rx="4" fill="#eef3f8" stroke="#a8bed2" stroke-width="1.3"/>
+          <circle cx="524" cy="196" r="9" fill="#8fb8dd"/>
+          <path d="M524 205 L524 218 M512 210 L536 210 M524 218 L514 226 M524 218 L534 226" stroke="#4a7fae" stroke-width="1.8" fill="none"/>
+          <text x="552" y="188" font-size="10" fill="#7a8a99">B</text>
+          <text x="524" y="252" text-anchor="middle" font-size="10.5" fill="#7a8a99">两个相邻视角</text>
+
+          <path d="M562 170 L596 170" stroke="#4a9c76" stroke-width="1.8"/>
+          <path d="M596 170 L589 166 L589 174 Z" fill="#4a9c76"/>
+
+          <!-- 网络 -->
+          <rect x="600" y="136" width="76" height="68" rx="8" fill="#dfe6ec" stroke="#8a9aa8" stroke-width="1.5"/>
+          <text x="638" y="176" text-anchor="middle" font-size="12" font-weight="700" fill="#3b4a5e">网络</text>
+          <text x="638" y="124" text-anchor="middle" font-size="10.5" fill="#2f6d51">一次前向推理</text>
+
+          <path d="M680 170 L716 170" stroke="#4a9c76" stroke-width="1.8"/>
+          <path d="M716 170 L709 166 L709 174 Z" fill="#4a9c76"/>
+
+          <!-- 输出 -->
+          <g fill="#8fb8dd" opacity="0.65" stroke="#4a7fae" stroke-width="1">
+            <ellipse cx="756" cy="126" rx="13" ry="12"/>
+            <ellipse cx="780" cy="134" rx="12" ry="10"/>
+            <ellipse cx="766" cy="152" rx="17" ry="9"/>
+            <ellipse cx="792" cy="158" rx="11" ry="9"/>
+            <ellipse cx="762" cy="176" rx="14" ry="8"/>
+            <ellipse cx="786" cy="180" rx="12" ry="8"/>
+            <ellipse cx="752" cy="196" rx="10" ry="8"/>
+            <ellipse cx="778" cy="200" rx="11" ry="8"/>
+          </g>
+          <text x="774" y="226" text-anchor="middle" font-size="10.5" fill="#2f6d51">可渲染的高斯</text>
+
+          <text x="670" y="300" text-anchor="middle" font-size="11.5" fill="#2f6d51">不针对这个人做任何优化</text>
+
+          <text x="450" y="380" text-anchor="middle" font-size="12.5" fill="#5a4a42">省掉的不是计算量，而是「针对这个场景再优化一遍」这件事</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「逐场景优化」与「前馈式（免优化）」两条路线，从输入到出结果的全过程对比。<br>
+          <b>怎么看这张图：</b>① 左格是<b>老路</b>——先拍一圈照片，然后中间那个沙漏（表示一段比较长的优化时间，几十分钟这个量级），最后才得到一版可渲染的高斯；关键在于下面那行字：<b>换一个人或换一个场景，整个沙漏要重新漏一遍</b>；② 右格是<b>新路</b>——只取两个相邻视角的照片，送进一个网络，<b>一次前向推理</b>就出来一版可渲染的高斯，中间没有「迭代优化」这一步。<br>
+          <b>一处必须说明的简化：</b>左格里的沙漏是教学示意，不是原文插图；原文并没有给「优化一次要多久」这样的统一数字（不同场景差异很大，本季前面各课给过 15–45 分钟、25–41 分钟这类量级）。右格的「毫秒级」也要加限定——它指的是<b>一次前向推理出的结果立即可渲染、可实时</b>（原文给的是 2K 分辨率下超过 25 FPS），不是「几毫秒就训练完了」。<br>
+          <b>要记住的一句话：</b>这一节省掉的<b>不是计算量，而是「针对这个场景再优化一遍」这件事</b>——把成本从「每次使用时付出」挪到了「一次训练时付出」。
+        </figcaption>
+      </figure>
+
+      <p>这里必须补一句诚实的说明。本季的写作规范里，这一课原先列的是「GPS-Gaussian ＋ GridFormer 组课」。我在核对时发现：<b>GridFormer 那篇的标题是「Residual Dense Transformer with Grid Structure for Image Restoration in Adverse Weather Conditions」，全文讲的是图像去雨 / 去雾 / 去雪，正文没有任何高斯、泼溅、三维或新视角合成的内容。</b>它跟 3D 高斯毫无关系，属于被错标进来的。所以这一课改成 <b>GPS-Gaussian（前馈免优化）＋ Animatable Gaussians（姿态可驱动）</b>——两篇都是人体方向、都属于「非 SLAM 但方法可借鉴」，组在一起更顺。</p>
+    </main>
+
+    <section class="section-card" id="gps">
+      <h2>2. GPS-Gaussian：一次前向推理直接出结果</h2>
+
+      <p>先看它的定位。原文摘要里的关键一句是：<b>不同于需要「逐主体优化」的原版高斯泼溅与神经隐式方法，我们引入定义在源视图上的高斯参数图，直接回归高斯泼溅的属性，从而做到即时的新视角合成，不需要任何微调或优化。</b></p>
+
+      <p>所以「<b>Generalizable（可泛化）</b>」在这里的意思很具体，一点都不玄：<b>网络只在训练阶段见过大量不同的人，训练完之后，来一个从来没见过的人，不需要针对他重新优化，直接前向推理就能渲染出他的新视角。</b>原文 Fig. 1 的图注用了三个词把这件事说得很干净——「without any fine-tuning or optimization」。</p>
+
+      <p>它的做法可以拆成四步（原文 Fig. 2）：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 选两个相邻视角</b>
+          <p>给一个目标新视角，先挑出离它<b>最近的两个源视角</b>（原文：the adjacent two views）。注意是<b>两个</b>——这是「稀疏视角」设定，不是几十个相机围着拍。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 估深度</b>
+          <p>两个视角的图像先过共享的图像编码器，再由一个<b>双目的迭代式深度估计器</b>（binocular depth estimator）分别预测两张深度图。原文说得很清楚：双目立体里「深度估计」等价于「视差估计」，而且它<b>两个视角都要深度图</b>（不像经典做法只算参考视角的），这样更对称、更好并行。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 深度当位置图、RGB 当颜色图</b>
+          <p>每个源视角上，<b>深度图就是 3D 位置图，RGB 图就是颜色图</b>；其余的高斯参数（旋转、缩放、不透明度）<b>逐像素回归</b>出来。这一步就是把 2D 抬到 3D 的关键。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 两个视角的高斯合并渲染</b>
+          <p>两张参数图各自反投影到 3D，聚合成一个高斯集合，再直接泼溅渲染到目标视角。整条链路<b>完全可微</b>，可以端到端训练。</p>
+        </div>
+      </div>
+
+      <p>关于输入，有一件必须讲清楚的事：<b>它并不是「随手两张手机照片就行」。</b>原文的设定是「以人为中心的场景 + 稀疏的多相机视角」，而且在把像素反投影到 3D 的公式里明确用到了<b>相机参数 $K$</b>、还提到用的是<b>校正过的双目（rectified stereo）</b>——也就是说<b>相机是已知、可用的</b>。原文没有专门讨论标定问题，但这个前提写在它的公式里，我们在读的时候不能忽略。</p>
+
+      <p>速度与训练数据：<b>2K 分辨率的新视角合成，超过 25 FPS，单张现代显卡。</b>对比实验统一在 RTX 3090 上、用两张 1024×1024 的源图像来测「合成一个新视角」的时间；它和 FloRen 都用了 TensorRT 加速推理。训练数据是<b>大量人体扫描数据</b>（THuman2.0、Twindom 以及自采的真实数据），文中明确说是「从大量人体扫描里学到人体的先验」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GPS-Gaussian__Generalizable_Pixel-Wise_3D_Gaussian_Splat/435833543d25a448a7b174cad22116654ee720d2e840479e4d56683ee1bb5deb.jpg" alt="GPS-Gaussian Fig.2 overview: two source views, depth estimation, gaussian parameter maps, aggregation">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of GPS-Gaussian. Given RGB images of a human-centered scene with sparse camera views and a target novel viewpoint, we select the adjacent two views on which to formulate our Gaussian representation. We extract the image features followed by conducting an iterative depth estimation. For each source view, the depth map and the RGB image serve as a 3D position map and a color map, respectively, to formulate the Gaussian representation while the other parameters of 3D Gaussians are predicted in a pixel-wise manner. The Gaussian parameter maps defined on 2D image planes of both views are further unprojected to 3D space and aggregated for novel view rendering. The fully differentiable framework enables a joint training mechanism for all networks.<br>
+          （中译：GPS-Gaussian 总览。给定以人为中心场景的稀疏相机视角 RGB 图像与一个目标新视角，我们选出相邻的两个视角来构造高斯表示。我们先提图像特征，再做迭代式深度估计。对每个源视角，深度图与 RGB 图分别充当 3D 位置图与颜色图，用来构造高斯表示，而 3D 高斯的其它参数以逐像素方式预测。两个视角上定义的、位于 2D 图像平面的高斯参数图，进一步被反投影到 3D 空间并聚合，用于新视角渲染。整个框架完全可微，这让所有网络可以联合训练。）<br>
+          <b>怎么看这张图：</b>顺着图从左往右走一遍，就能看懂前面那四步。① 左边是<b>两个相邻视角 + 一个目标视角</b>；② 中间是<b>深度估计模块</b>——注意它给出了两张深度图；③ 中间偏右那一块是<b>高斯参数图</b>：深度当位置、RGB 当颜色，其余参数（旋转、缩放、不透明度）各有一张图；④ 最右边是<b>反投影到 3D 并聚合、渲染到目标视角</b>。<br>
+          <b>要记住的一句话：</b>这张图里<b>没有「优化」这个环节</b>——从输入到输出全是网络前向。这正是它与本季前面所有高斯 SLAM 论文最大的结构差别。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="pixel">
+      <h2>3. 逐像素的高斯参数图：2D 是怎么被抬到 3D 的</h2>
+
+      <p>「pixel-wise（逐像素）」这个词值得单独讲一节，因为它是这套方法的核心技巧。</p>
+
+      <p>回忆一下 3DGS 原本的做法：<b>一整个场景的高斯是「优化出来」的</b>——从一个 SfM 稀疏点云开始，然后靠跳来跳去的梯度去挪位置、改大小、改颜色。高斯是<b>空间中的一堆点</b>，没有天然的编号顺序。</p>
+
+      <p>GPS-Gaussian 换了一个思路：<b>不要「空间中的点」，而要「图像上的图」。</b>它在源视图的图像平面上定义一组<b>参数图（parameter maps）</b>——原文列了五种：位置 $\mathcal{M}_p$、颜色 $\mathcal{M}_c$、旋转 $\mathcal{M}_r$、缩放 $\mathcal{M}_s$、不透明度 $\mathcal{M}_\alpha$。</p>
+
+      <p>关键在于：<b>图像是二维的、有规则网格的、CNN 最擅长处理的东西。</b>把高斯参数放到图像平面上，就可以用普通 2D 卷积网络来回归它们——这正是原文说的「用 2D CNN 的强大表达能力」，也是它相对隐式方法（纯 MLP）的一个结构性优势。而位置那一项不用网络猜，直接<b>由深度图给出</b>，再通过相机投影矩阵 $P$（用相机参数 $K$）反投影到 3D。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{源视图像素} \;\to\; \text{深度 + RGB + 回归出的参数} \;\to\; \text{反投影成 3D 高斯} \;\to\; \text{聚合渲染}$$</div>
+      </div>
+
+      <p>这样做有两个直接好处：<b>① 一个像素对应一个高斯，数量天然有限、结构规整</b>（不会像原版 3DGS 那样靠自适应密度控制长出几百万个）；<b>② 位置由深度决定，几何与颜色是解耦的</b>——深度准不准，直接决定高斯在哪儿。</p>
+
+      <p>最后一个设计是<b>联合训练</b>，原文 §4.3 讲了它的两个动机，很值得记：<b>（a）</b>如果两个源视角的深度估计器各自独立训练，两张深度图会对不齐，导致 3D 表示不一致——所以两个视角的深度要一起训；<b>（b）</b>经典的立体匹配深度估计本质是个 2D 任务（在两张图之间找像素对应），而可微渲染能提供<b>三维层面的辅助信息</b>，反过来又能提升深度的精度。<b>这是一个互相帮忙的关系：更准的深度让高斯参数更准，可微渲染又让深度更准。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GPS-Gaussian__Generalizable_Pixel-Wise_3D_Gaussian_Splat/ecc29c51269565058ff3b46793464400de7553298343f5675e5a8c4b2c382b56.jpg" alt="GPS-Gaussian Fig.1 high-fidelity real-time novel view synthesis of unseen performers">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>High-fidelity and real-time novel view synthesis (NVS). Our proposed method synthesizes 2K-resolution novel views of unseen human performers in real-time without any fine-tuning or optimization. The performance outperforms the state-of-the-art feedforward NVS methods ENeRF [19], FloRen [47] and 3D-GS [12], which are representative approaches in implicit neural human rendering, image-based human rendering and per-subject optimization, respectively. We only mark the running efficiency for feed-forward methods.<br>
+          （中译：高保真、实时的信视角合成。我们的方法对<b>没见过的</b>人体表演者实时合成 2K 分辨率的新视角，不需要任何微调或优化。性能超过了当前最好的前馈式新视角合成方法 ENeRF、FloRen 与 3D-GS——它们分别代表隐式神经人体渲染、基于图像的人体渲染、以及逐主体优化三条路线。）<br>
+          <b>怎么看这张图：</b>这张图的题眼是「<b>unseen</b>（没见过的）」这两个字。① 图里的人是网络训练时没见过的；② 结果是实时的、2K 分辨率；③ 更值得注意的是它拿来对比的三个对手，图注特意说明了它们各自代表一条路线——<b>注意 3D-GS 在这里是以「逐主体优化」的代表身份出现的</b>，也就是说这一篇把自己放在了「逐主体优化」的对立面。<br>
+          <b>要记住的一句话：</b>「免优化」不是「优化得更快」，而是<b>结构上就不做优化</b>。
+        </figcaption>
+      </figure>
+
+      <p>说完能做什么，再说<b>不能做什么</b>——这一篇的边界必须写清楚，原文自己也承认了：</p>
+
+      <div class="callout">
+        <h4>三条边界（必须记住）</h4>
+        <p><b>① 只在人体上验证过。</b>它的训练数据全是人体扫描（THuman2.0、Twindom、自采真实人体数据），学到的是「人体长什么样」的先验。它对桌子、房间、街道没有任何证据。</p>
+        <p><b>② 它依赖深度估计。</b>整个框架的几何全靠那个双目深度模块，深度不准，高斯的位置就不准。</p>
+        <p><b>③ 它明确说了「没见过的大姿态 / 遮挡下泛化未保证」。</b>换句话说，「可泛化」是有范围的——泛化到「新的人」，不保证泛化到「新的动作幅度」。</p>
+        <p><b>以及最要紧的一条：它不是 SLAM。</b>它只做新视角合成，不估计相机位姿、不做回环、不建长期地图。它属于「免优化新视角合成」这条分支。它给 SLAM 的价值在于<b>方法可借鉴</b>（比如「把参数放到 2D 图上再抬到 3D」这个技巧），而不是它本身能当 SLAM 用。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GPS-Gaussian__Generalizable_Pixel-Wise_3D_Gaussian_Splat/8317c4f1ae9ba17d8bab922583f6aab2658cc7c2acc7bfba3dc20d126e07d6ae.jpg" alt="GPS-Gaussian Fig.3 qualitative comparison on THuman2.0, Twindom and real-world data">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Qualitative comparison on THuman2.0 [69], Twindom [55] and our collected real-world data. Our method produces more detailed human appearances and can recover more reasonable geometry.<br>
+          （中译：在 THuman2.0、Twindom 与自采真实数据上的定性对比。我们的方法产生更细致的人体外观，并能恢复更合理的几何。）<br>
+          <b>怎么看这张图：</b>这张图的作用是让你确认「免优化」不等于「粗糙」。① 它横跨了三个数据源——<b>两个公开数据集 + 自采真实数据</b>，说明不是只在一个数据集上凑出来的；② 每一组都是和别的方法并排比的，请重点看<b>衣服褶皱、头发边缘这类细节</b>哪里更清楚；③ 顺带注意这批图的<b>裁剪形状</b>——都紧贴人体，这本身就是在提示你：这套方法的世界里几乎只有人体。<br>
+          <b>要记住的一句话：</b>它赢在「细节 + 速度 + 免优化」三者同时成立；而这个「同时成立」的限制条件，就是<b>场景必须是人</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="anim">
+      <h2>4. Animatable Gaussians：让高斯跟着姿态动</h2>
+
+      <p>第一篇解决的是「<b>来一个没见过的人</b>」；第二篇解决的是另一个问题：<b>同一个人，摆出不同的姿势怎么办？</b></p>
+
+      <p>先说清楚它的目标：「<b>Pose-dependent（姿态相关）</b>」在这里的意思是——<b>高斯的属性是跟着姿态变的。</b>不是我优化出一套固定的高斯然后死板地渲染，而是我输入一个姿态，就预测出一套与之匹配的高斯。原文的标题写得很直接：Learning Pose-dependent Gaussian Maps for High-fidelity Human Avatar Modeling。</p>
+
+      <p>它的流程分两大步，看下面这张原图最清楚：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Animatable_Gaussians__Learning_Pose-Dependent_Gaussian_M/9a54a6cb89da7a1b4f7ec3549783be2f3791f54d6851c7140f06bbc1563be72b.jpg" alt="Animatable Gaussians Fig.2 pipeline: template reconstruction and pose-dependent gaussian maps via StyleUNet">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Illustration of the pipeline. It contains two main steps: 1) Reconstruct a character-specific template from multi-view images. 2) Predict pose-dependent Gaussian maps through the StyleUNet, and render the synthesized avatar by LBS and differentiable rasterization.<br>
+          （中译：流程示意。它包含两个主要步骤：1）从多视角图像重建一个<b>角色专属模板</b>；2）通过 StyleUNet 预测<b>姿态相关高斯图</b>，并用 LBS 与可微光栅化渲染合成出来的数字人。）<br>
+          <b>怎么看这张图：</b>这张图把两段分得很干净，请盯住中间那条分界。① <b>左半段是「建模板」</b>——从多视角视频里重建一个属于这个人的参数化模板（这一步是<b>每个角色都要做一次</b>的）；② <b>右半段是「用模板」</b>——给一个姿态，从模板出发预测出姿态相关的高斯图，再用 LBS 把高斯变形到当前姿态，最后可微光栅化渲染出来。<br>
+          <b>要记住的一句话：</b>第二步（用模板）是快而可重复的，第一步（建模板）是慢而一次性的——<b>这正是「免优化」与「仍要建模板」两种性质叠在同一篇论文里的样子</b>。
+        </figcaption>
+      </figure>
+
+      <p>把两段拆开讲。</p>
+
+      <p><b>第一步：重建一个角色专属模板（character-specific template）。</b>从一个接近 A-pose 的帧出发，先优化一个<b>标准的 SDF 与颜色场</b>去拟合多视角图像（用 SMPL 蒙皮 + SDF 体渲染），再用 <b>Marching Cubes</b> 把模板网格抽出来，最后把 SMPL 顶点的蒙皮权重扩散到模板表面，得到一个<b>可形变的参数化模板</b>。</p>
+
+      <p>这里要专门提醒一句，免得和 <b>0122</b> 课混淆：<b>这里的 SDF 与 Marching Cubes 是用来做「模板网格」的——它是这套方法的内置传统重建步骤，跟「高斯怎么抽网格」没有关系。</b>高斯本身并不是从 SDF 里长出来的，它们是挂在模板表面上、以 2D 参数图的形式存在的。原文还特意说了为什么要用「角色专属模板」而不是直接用 SMPL-X：<b>因为像长裙这种衣服，拓扑跟 SMPL-X 根本不一致</b>（原文 Fig. 8 的消融就是在比这个）。</p>
+
+      <p><b>第二步：把 3D 模板参数化到 2D 图上。</b>为了能用强大的 2D 网络（这里是基于 StyleGAN 的 <b>StyleUNet</b>），就得先把 3D 表示摊成 2D。原文的做法很聪明：<b>把 canonical（标准姿态）的模板沿正交投影投到正面和背面两个视角</b>，于是得到两张「正/背高斯图」（canonical Gaussian maps）——<b>图上每一个像素就是一个 3D 高斯</b>，带着位置、协方差、不透明度、颜色。原文说，虽然只用正背两张图来参数化，但因为投影是正交的，<b>侧身和手部的高斯也照样能被覆盖到</b>（Fig. 4 专门展示了侧身高斯）。</p>
+
+      <p><b>第三步：从姿态预测高斯图，再把它驱动起来。</b>给一个驱动姿态：</p>
+
+      <ol>
+        <li>先把模板用 <b>LBS（线性混合蒙皮）</b>变形到该姿态，把变形后的顶点坐标渲染成正背两张<b>位置图</b>——这张位置图就是「姿态条件」；</li>
+        <li>把位置图送进 <b>StyleUNet</b>，输出两张<b>姿态相关的高斯图</b>；</li>
+        <li>把这些 canonical 高斯用 <b>LBS</b> 变换到 posed 空间——注意是<b>位置和协方差一起变</b>（原文给的就是位置与协方差两个量的变换公式），因为高斯是各向异性的，光搬位置不转朝向会错；</li>
+        <li>可微光栅化渲染到目标相机。</li>
+      </ol>
+
+      <p>公式上，LBS 就是那套经典的「按蒙皮权重把几根骨头的变换加权平均」：$W(p)=\left(\sum_k w_k M_k(p)\right)p$。看得出它就是「一根骨头一个变换，按权重混起来」。</p>
+
+      <p>还有一个设计叫<b>姿态投影（pose projection）</b>，很值得记：<b>用 PCA 把驱动姿态信号投影回训练姿态的分布里</b>，并把每个分量限制在 $\pm 2\sigma$ 以内。理由说得很实在——这是数据驱动的方法，<b>直接外推到训练分布之外的姿态，结果一定不好看</b>；与其硬推，不如把姿态拉回到「训练时见过的合理范围」里再插值。原文 Fig. 10 专门做了这个消融。</p>
+
+      <p>速度和局限：动画帧率在对比中居前，评测硬件是 RTX 3090、分辨率 1024×1024。原文承认两条局限：<b>① 建模板需要多视角视频</b>（不是随便拍一张就行）；<b>② 它是 per-character 的</b>——换一个人得重新建模板，<b>并不具备跨身份泛化能力</b>。</p>
+
+      <p>这第 ② 条尤其要和上一篇对照着记：<b>GPS-Gaussian 是「跨人零样本」，Animatable Gaussians 是「单人多姿态」。</b>两篇都叫「泛化」，但泛化的方向完全不同——一个是泛化到新的人，一个是泛化到新的姿态。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Animatable_Gaussians__Learning_Pose-Dependent_Gaussian_M/b09d4fb645f613a32d28796d46d0a42f1145192095f8c4a512874acf87765608.jpg" alt="Animatable Gaussians Fig.5 example animatable avatars with high-fidelity dynamic appearances">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Example animatable avatars with high-fidelity dynamic appearances created by our method.<br>
+          （中译：用我们的方法创建的、具有高保真动态外观的可动画数字人示例。）<br>
+          <b>怎么看这张图：</b>这是「高斯跟着姿态动」的成品展示。① 看同一个人在不同姿势下的<b>衣物褶皱</b>——褶皱会随姿势改变，这正是 MLP 类方法最吃力、而这篇最想证明自己能做好的地方（原文说纯 MLP 有低频偏置，回归不出姿态相关的高频衣物细节）；② 看这些姿势有没有「僵」——如果是简单地把一具静态人形整体旋转，褶皱会显得板结；③ 注意这些姿势都属于<b>训练分布附近</b>的合理人体姿态，这正是上一段说的「姿态投影」在起作用。<br>
+          <b>要记住的一句话：</b>「姿态相关」这四个字的分量全在细节上——<b>要动的不是整个模型，而是每一块布褶</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一套高斯，被姿态参数推到三个不同的姿势</text>
+
+          <!-- 格 1：立 -->
+          <rect x="40" y="60" width="240" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="160" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">① 立</text>
+          <circle cx="160" cy="136" r="14" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.2"/>
+          <path d="M160 150 L160 206 M132 166 L188 166 M160 206 L142 256 M160 206 L178 256"
+                stroke="#8a9aa8" stroke-width="3" fill="none"/>
+          <g fill="#8fb8dd" opacity="0.5" stroke="#4a7fae" stroke-width="0.9">
+            <ellipse cx="160" cy="136" rx="16" ry="11"/><ellipse cx="160" cy="166" rx="22" ry="10"/>
+            <ellipse cx="146" cy="164" rx="10" ry="9"/><ellipse cx="174" cy="164" rx="10" ry="9"/>
+            <ellipse cx="160" cy="188" rx="15" ry="10"/><ellipse cx="150" cy="219" rx="10" ry="14"/>
+            <ellipse cx="170" cy="219" rx="10" ry="14"/><ellipse cx="143" cy="248" rx="9" ry="12"/>
+            <ellipse cx="177" cy="248" rx="9" ry="12"/>
+          </g>
+
+          <!-- 格 2：坐 -->
+          <rect x="330" y="60" width="240" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="450" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">② 坐</text>
+          <circle cx="450" cy="146" r="14" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.2"/>
+          <path d="M450 160 L450 208 M424 178 L476 178 M450 208 L492 208 L492 244"
+                stroke="#8a9aa8" stroke-width="3" fill="none"/>
+          <g fill="#8fb8dd" opacity="0.5" stroke="#4a7fae" stroke-width="0.9">
+            <ellipse cx="450" cy="146" rx="16" ry="11"/><ellipse cx="450" cy="178" rx="22" ry="10"/>
+            <ellipse cx="436" cy="176" rx="10" ry="9"/><ellipse cx="464" cy="176" rx="10" ry="9"/>
+            <ellipse cx="450" cy="200" rx="15" ry="10"/><ellipse cx="470" cy="208" rx="14" ry="9"/>
+            <ellipse cx="492" cy="226" rx="9" ry="12"/>
+          </g>
+
+          <!-- 格 3：举手 -->
+          <rect x="620" y="60" width="240" height="240" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="740" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">③ 举手</text>
+          <circle cx="740" cy="132" r="14" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.2"/>
+          <path d="M740 146 L740 202 M740 158 L772 118 M740 160 L710 190 M740 202 L722 252 M740 202 L758 252"
+                stroke="#8a9aa8" stroke-width="3" fill="none"/>
+          <g fill="#8fb8dd" opacity="0.5" stroke="#4a7fae" stroke-width="0.9">
+            <ellipse cx="740" cy="132" rx="16" ry="11"/><ellipse cx="740" cy="162" rx="22" ry="10"/>
+            <ellipse cx="754" cy="150" rx="11" ry="9"/><ellipse cx="766" cy="132" rx="10" ry="8"/>
+            <ellipse cx="728" cy="172" rx="10" ry="8"/><ellipse cx="740" cy="184" rx="15" ry="10"/>
+            <ellipse cx="730" cy="215" rx="10" ry="14"/><ellipse cx="750" cy="215" rx="10" ry="14"/>
+            <ellipse cx="723" cy="244" rx="9" ry="12"/><ellipse cx="757" cy="244" rx="9" ry="12"/>
+          </g>
+
+          <!-- 连接箭头 -->
+          <path d="M284 180 L322 180" stroke="#a8563a" stroke-width="2"/>
+          <path d="M322 180 L313 175 L313 185 Z" fill="#a8563a"/>
+          <text x="303" y="168" text-anchor="middle" font-size="10.5" fill="#a8563a">姿态参数</text>
+
+          <path d="M574 180 L612 180" stroke="#a8563a" stroke-width="2"/>
+          <path d="M612 180 L603 175 L603 185 Z" fill="#a8563a"/>
+          <text x="593" y="168" text-anchor="middle" font-size="10.5" fill="#a8563a">姿态参数</text>
+
+          <text x="450" y="334" text-anchor="middle" font-size="11.5" fill="#5a4a42">每个高斯的位置与朝向，都被同一组姿态参数推着走</text>
+          <text x="450" y="376" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b2b2b">同一套高斯，摆出不同姿势——这才叫「可驱动」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一套（canonical）高斯，在三个不同姿态下被推动到不同的位置，形成三种不同的形体。<br>
+          <b>怎么看这张图：</b>① 三个格子里用的是<b>同一批蓝色椭球</b>（同一套高斯），区别只在于它们被推到了哪里；② 中间的红色箭头标着「姿态参数」——它是唯一的输入，<b>姿态变了，每个高斯的位置和朝向就跟着变</b>；③ 请注意椭球不是整体刚性平移：坐下的时候，腰腹那一带的椭球被<b>压缩</b>了；举手的时候，手臂方向的椭球被<b>拉伸旋转</b>了。这就是 LBS「按蒙皮权重把几根骨头的变换加权平均」的效果。<br>
+          <b>一处必须说明的简化：</b>真实的实现里，高斯图是由 StyleUNet 从姿态条件<b>预测</b>出来的（不是把一套固定的高斯搬来搬去）；本图为了讲清「姿态推动高斯」这一件事，把「预测」这一步省略了，画成了「同一套高斯被推着走」。完整流程请看上面那张原图（Fig. 2）。<br>
+          <b>要记住的一句话：</b>「<b>可驱动</b>」的关键不是说给高斯加了一个动画控制器，而是<b>高斯的属性本身就写成姿态的函数</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="gen">
+      <h2>5. ★ 一个必讲的对照：0011 说的「泛化」被回应了多少</h2>
+
+      <p>这一节要往回接一条很具体的旧线索。第一季 <b>0011</b> 课（深度学习视觉 SLAM 2023）在结尾总结了原文承认的<b>六个不成熟环节</b>，其中第四条叫「<b>泛化</b>」。原文那一段的大意是：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「没有数据集能覆盖真实部署的全部情形（暴雨大雪、动物横穿、临时施工、道路损坏、异常驾驶……），数据还偏向常见样本（如直行）。更深一层：对抗样本能在输入上做人眼不可见的微扰就完全骗过模型——所以『仅在未见数据集上测试是不够的』，需要能证明泛化性的新方法。」</p>
+
+      <p>把这段话拆开，它其实提了两个层次的问题：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>浅一层：分布覆盖</b>
+          <p>训练数据覆盖不到真实世界的全部情形，所以「在没见过的数据上跑一遍」不等于「泛化好」。</p>
+        </div>
+        <div class="mini-card">
+          <b>深一层：评价标准本身不可靠</b>
+          <p>「 merely testing on unseen dataset is not sufficient 」——需要在压力条件下评估，甚至要有能证明泛化性的新方法。</p>
+        </div>
+      </div>
+
+      <p>现在回头看 GPS-Gaussian。<b>它确实是在回应这条线索</b>，而且回应得有分量：</p>
+
+      <ul>
+        <li>它把「每个新场景都优化一遍」这件事<b>从结构上去掉了</b>——不是优化得更快，而是根本不做优化；</li>
+        <li>它在<b>没见过的</b>人身上直接出结果（Fig. 1 的题眼就是 unseen），而且是实时的；</li>
+        <li>它把成本挪到了训练阶段：<b>用大量不同的人、不同的衣服、不同的姿态去训练一个先验</b>——这正是「靠数据覆盖分布」这件事的直接实践。</li>
+      </ul>
+
+      <p><b>但边界非常窄，必须诚实指出。</b>0011 课担心的那些情形——暴雨大雪、动物横穿、临时施工——这条方法<b>一个都没碰</b>。它只在人体上有证据；它的「泛化」指的是<b>泛化到新的人</b>，而且原文自己承认「没见过的大姿态与遮挡下泛化未保证」。所以更准确的表述是：</p>
+
+      <div class="callout">
+        <h4>准确的表述</h4>
+        <p>GPS-Gaussian 的「免逐场景优化」是 <b>0011 课那条「泛化不成熟」</b>的一个<b>回应</b>，但它把问题<b>缩小到了一个非常干净的域</b>（人体、稀疏多相机、已知标定、受控环境）之后才成立的。</p>
+        <p>换句话说：<b>它证明了「免优化」这条路是通的，但没有证明「免优化」在开放世界通用。</b>这两句话差别很大，读论文时千万别混。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>小明读完这两篇之后说：「3D 高斯终于解决了泛化问题——以后来一个新场景，不用优化直接就能出结果。」这个说法哪里不对？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="GPS-Gaussian 的免优化推论是真的：它确实对新的人零样本直接出结果。问题不在这句话的前半段，而在于把「在人体上成立」推广成了「新场景都能用」。" onclick="lessonKit.answer(this,'q0124a')">前一句说错了，前馈仍要优化</button>
+          <button data-correct="yes" data-explanation="对。这两篇的「泛化」被框得很死：GPS-Gaussian 只在人体上验证过（训练数据全是人体扫描），原文还承认「未见大姿态/遮挡的泛化未保证」；Animatable Gaussians 更是 per-character，换人要重训。所以「新场景直接出结果」这个结论，原文一个字都没有支持。" onclick="lessonKit.answer(this,'q0124a')">后一句推广得太宽了，只限人体</button>
+          <button data-correct="no" data-explanation="两篇确实都不是 SLAM（不估位姿、不建长期地图），但这不影响上面那句话对不对。判断一句话是不是过头，要看它的适用范围，而不是看它属于哪个任务类别。" onclick="lessonKit.answer(this,'q0124a')">两篇都不是 SLAM，不该拿来比</button>
+        </div>
+        <div class="quiz-feedback" id="q0124a"></div>
+      </div>
+
+      <p>顺带把 0011 那条线索的另外一半也接上：0011 课讲的另一句是「<b>深度学习先吃下匹配与检索</b>」——因为分类预训练能白送「认」的能力。而这两篇论文走的是「<b>深度学习吃掉「重建」这一环</b>」：<b>不是把匹配做快，而是把「优化求解」整个换成一个网络前向。</b>这是同一条思路（把难的手工环节换成学出来的映射）往更深处的延伸，也是本季反复出现的一个模式。</p>
+
+      <p>还有一条对照组值得放在这：<b>第二季 0027 课（COLMAP）</b>代表的是标准的离线 SfM 路线——逐场景解一遍位姿与稀疏结构。3DGS 原著与 MonoGS 都是它的延续。GPS-Gaussian 与 Animatable Gaussians 则站在它的<b>反面</b>：<b>不针对这个场景解一遍，而是靠训练时见过的大量相似场景把答案「背」下来。</b>但请注意时间的先后：这两篇仍然需要多相机、需要标定、需要一次性的模板重建——<b>它们不是「不需要任何准备」，而是把准备从「每次」挪到了「一次」。</b></p>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>6. 横向对比与判断</h2>
+
+      <p>两篇都是人体方向，都非 SLAM，但泛化的方向完全相反。摆在一起看：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">对比项</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">GPS-Gaussian</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">Animatable Gaussians</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>「泛化」泛的是什么</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">泛化到<b>没见过的人</b>（跨身份零样本）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">泛化到<b>没见过的姿态</b>（同一个角色）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>是否逐场景优化</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>否</b>——一次前向推理，无微调无优化</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>建模板时要</b>（每个角色一次），建完之后换姿态不用</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>输入</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">两个相邻视角 RGB + 目标视角（多相机、稀疏视角、双目已校正、公式用到相机参数）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>多视角视频</b>建模板 + 一个驱动姿态</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>高斯的参数形式</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">源视图上的<b>逐像素参数图</b>（位置来自深度，其余回归）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">正 / 背两张<b>高斯图</b>，每像素一个 3D 高斯</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>靠什么驱动</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">无需驱动（只做新视角）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">SMPL 类骨架 + <b>LBS</b> + StyleUNet 预测 + 姿态投影（PCA，限制在 $\pm 2\sigma$）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>速度</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">2K 分辨率 &gt;25 FPS（单卡；评测统一用 RTX 3090、1024×1024 源图）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">动画帧率在对比中居前（RTX 3090、1024×1024）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>是不是 SLAM</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>不是</b>——不估位姿、不建长期地图</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>不是</b>——是 avatar（数字人）建模</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>原文承认的短板</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">仅人体；依赖深度估计；未见大姿态/遮挡泛化未保证</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">需多视角视频建模板；per-character，换人需重训</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>然后是我们的一句判断——<b>请注意这是教学判断，不是原文自评</b>：</p>
+
+      <div class="callout">
+        <h4>我们的判断</h4>
+        <p><b>GPS-Gaussian 更「敢」。</b>它直接在结构上去掉了优化步骤，把整件事变成一个回归问题——这是一个路线级的选择，改变了「3DGS 必须逐场景优化」这个默认前提。它对 SLAM 的启发也最实在：<b>「把参数表示成 2D 图、再抬到 3D」这个技巧，完全可以搬到「来一个新房间就立刻出一版高斯」这件事上。</b></p>
+        <p><b>Animatable Gaussians 更「稳」。</b>它仍然有一次性建模板的成本，但它拿到的是「任意姿态即时渲染」这种极其实用的能力，而且在衣物褶皱这类细节上正面赢了 MLP 系方法。它的贡献是工程与表示层面的（把 SMPL + LBS + 2D CNN 这几样成熟工具拼到高斯上），不是路线层面的。</p>
+        <p><b>两篇的共同边界也一样刺眼：都只在人体上成立。</b>把它们称作「3D 高斯的泛化」是过头的话——更准确的说法是「<b>在人体这个被约束得很紧的域里，3D 高斯可以不逐场景优化</b>」。0011 课那句「泛化不成熟」，到今天仍然只被回答了一小块。</p>
+      </div>
+
+      <p>下一节换一个完全不同的角度：不再问「好不好用」，而问「<b>跑得起来吗</b>」——几百万个高斯到底占多少显存，以及那个被原版 3DGS 一直容忍的渲染伪影。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请解释 GPS-Gaussian 里「Generalizable（可泛化）」这个词具体指什么。它和「训练得更快」是一回事吗？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不是一回事，差别很关键。</p>
+              <p><b>「可泛化」在这里指的是：训练完之后，来一个网络从来没见过的（unseen）人，不需要针对他做任何微调或优化，一次前向推理就能渲染出他的新视角。</b>原文摘要的措辞是「without any fine-tuning or optimization」，Fig. 1 的题眼就是「unseen human performers」。</p>
+              <p><b>对比原版 3DGS</b>：原版要先拿到某个场景的照片，再针对<b>这个场景</b>跑一遍优化，才能得到这个场景的高斯。换一个人、换一个场景，就得重来。<b>GPS-Gaussian 把「针对这个场景优化」这一步从结构上去掉了。</b></p>
+              <p><b>和「训练更快」的区别</b>：训练更快说的是「同一个训练流程跑得更省时间」；而这里说的是<b>推理时不再需要训练/优化</b>。前者是效率问题，后者是流程结构问题。当然，代价是它在<b>训练阶段</b>要吃掉大量人体扫描数据（THuman2.0、Twindom 等）来学到人体先验——<b>成本没有消失，只是从「每次使用时」挪到了「一次性训练时」</b>。</p>
+              <p>还要记住它的适用范围：只在人体上验证过；依赖深度估计；原文自己都说「未见大姿态/遮挡的泛化未保证」。所以这个「可泛化」是被框住的。</p>
+            </div></details>
+          </li>
+          <li>GPS-Gaussian 用「逐像素的高斯参数图」。请说明这样表示有什么好处，以及位置这一项为什么不用网络回归。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>好处有三条。</b></p>
+              <p>① <b>能用 2D CNN。</b>图像平面是规则的二维网格，卷积网络最擅长；把高斯参数放到图像平面上，就等于把重建问题变成了一个「图像到图像」的回归问题。原文特别提到，纯 MLP 有低频偏置（这一点在 Animatable Gaussians 里也说了），而 2D CNN 的表达能力更强，能回归出更高频的细节。</p>
+              <p>② <b>数量天然规整、结构清晰。</b>一个像素对应一个高斯，不会像原版 3DGS 那样靠自适应密度控制在空间里长出几百万个位置混乱的高斯。</p>
+              <p>③ <b>几何与外观解耦。</b>位置图与颜色图是分开的两张图，谁出问题一眼就能看出来。</p>
+              <p><b>位置为什么不回归</b>：因为位置有一个<b>比网络更可靠的来源——深度</b>。原文的做法是：先把两个源视角的图像送进双目深度估计器（双目里深度估计等价于视差估计），得到深度图；然后用相机投影矩阵 $P$（用到相机参数 $K$）把像素反投影到 3D，位置就定了。让网络去「猜」一个三维坐标既不稳定也没必要，<b>而深度本身就是几何的物理量</b>。</p>
+              <p>这也解释了为什么它要强调<b>联合训练</b>：两个源视角的深度必须一起训（否则两张深度图对不齐，3D 表示不一致）；而可微渲染又能提供三维层面的辅助监督，反过来提升深度精度。<b>深度更准 → 高斯位置更准 → 渲染更好 → 梯度回传让深度更准</b>，是个正循环。</p>
+            </div></details>
+          </li>
+          <li>Animatable Gaussians 里同时出现了 SDF、Marching Cubes 和 3D 高斯。请说清它们各自扮演什么角色；并说明为什么这里用 SMPL-X 反而不如「角色专属模板」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>三者的分工：</b></p>
+              <p>① <b>SDF + Marching Cubes</b> 用在<b>第一步「建模板」</b>上——先优化一个 canonical 的 SDF 与颜色场去拟合多视角图像（用 SMPL 蒙皮 + SDF 体渲染），然后用 Marching Cubes 从 SDF 场里抽出模板网格。这一步用的完全是传统神经隐式重建那一套。</p>
+              <p>② <b>3D 高斯</b>才是最终的表示。它们是挂在模板表面上的：把 canonical 模板沿正交投影投到正 / 背两个视角，得到两张高斯图，<b>图上每个像素就是一个 3D 高斯</b>（位置、协方差、不透明度、颜色）。之后每一步驱动（LBS、StyleUNet 预测、可微光栅化）都是在高斯上做。</p>
+              <p><b>这一点务必和 0122 课的 SuGaR 区分开</b>：SuGaR 面对的问题是「怎么从高斯里抽出网格」，所以它要处理高斯与 mesh 的关系；而 Animatable Gaussians 用 SDF + MC 只是为了造一个<b>内部模板</b>，高斯不是从 SDF 长出来的，它是从 2D 高斯图来的。两处的 SDF/MC 出现在完全不同的位置，不要混。</p>
+              <p><b>为什么不用 SMPL-X</b>：原文 Fig. 8 的消融给出答案——<b>SMPL-X 表示不了长裙</b>，因为长裙的拓扑跟 SMPL-X 的身体模型根本不一致，直接套用会导致对没见过的姿态泛化很差。而「角色专属模板」是从输入视频里自适应重建出来的，它能<b>把衣服的基本形状也学进去</b>（原文的用词是 adaptive to the wearing garments）。所以对宽松衣物（尤其是长裙）而言，专属模板明显更好。</p>
+            </div></details>
+          </li>
+          <li>本节最后把这两篇与第一季 0011 课的「泛化」那条线索对上了。请说明：它们回应了这条线索的哪一部分，又完全没碰到哪一部分？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>回应了哪一部分：</b>0011 课说「泛化不成熟」，其中一层含义是「没有数据集能覆盖真实部署的全部情形，所以要靠数据去覆盖分布」。这两篇正是这条思路的实践——<b>GPS-Gaussian 用大量不同的人、不同的衣服、不同的姿态去训练一个先验，训练完之后对新的人零样本直接出结果</b>；它把「逐场景优化」这一步从结构上去掉，证明了「不针对每个场景优化也行」这件事在某个域里是通的。</p>
+              <p><b>完全没碰哪一部分：</b>0011 课担心的那些情形——<b>暴雨大雪、动物横穿、临时施工、道路损坏、异常驾驶，以及对抗样本</b>——这两篇一个都没有涉及。它们的世界是：<b>人体、稀疏多相机、相机已标定、受控采集</b>。</p>
+              <p>所以更准确的表述是：<b>它们回应的是「泛化」这条线索里「靠数据先验替代逐场景优化」这一小块，而且只在一个被约束得很紧的域（人体）里成立。</b>GPS-Gaussian 原文自己都承认「未见大姿态/遮挡下的泛化未保证」，Animatable Gaussians 更是明确说自己是 per-character（换人要重训）。</p>
+              <p><b>另外还有一条值得对照的差异。</b>0011 课讲的另一句是「深度学习先吃下匹配与检索」——那是把「认」的能力学出来。而这两篇吃的是更后面的一环：<b>把「优化求解」整个换成网络前向</b>。这是同一条思路（把难的手工环节换成学出来的映射）往深处又走了一步。至于它能不能对付开放世界，<b>到今天仍然没有答案</b>。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0123-LangSplat与GaussianGrasper-语言高斯与机器人抓取.html">← LangSplat 与 GaussianGrasper：语言高斯与机器人抓取</a>
+        <a class="next" href="0125-高斯内存压缩与StopThePop-显存与排序.html">高斯内存压缩与 StopThePop：显存与排序 →</a>
+      </div>
+      <p class="foot-note">这一课按核实结果换掉了原来的搭档（GridFormer 是图像去雨，与高斯无关）。读论文时多看一眼标题里的任务词，能省掉很多弯路 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

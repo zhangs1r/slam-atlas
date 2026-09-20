@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PIN-SLAM（2024）：首个完整隐式 SLAM — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0111</div>
+      <h1>PIN-SLAM（2024）：首个完整隐式 SLAM</h1>
+      <p class="subtitle">用一张「会拉伸又会收回的网」当激光地图，还能回环、还能跑两万帧 🕸️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：弹性神经点云 · 激光隐式 SLAM</span>
+        <span>👥 作者：Bonn / Stachniss 组（T-RO / RA-L）</span>
+        <span>📅 2024 · <i>PIN-SLAM: LiDAR SLAM Using a Point-Based Implicit Neural Representation</i></span>
+      </div>
+      <div class="toc">
+        <a href="#confirm">先确认：它是激光</a>
+        <a href="#deform">神经点云与可形变</a>
+        <a href="#complete">为什么是首个完整</a>
+        <a href="#quote">引原文：能全局一致</a>
+        <a href="#scale">场景规模与数字</a>
+        <a href="#answer0010">收束：回应 0010</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="confirm">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：确认 PIN-SLAM 是<b>激光</b> SLAM 而非视觉；讲清「神经点云为什么能形变」；说出它凭什么被称为「首个完整隐式神经 SLAM」；并把它和第一季 <b>0010</b> 课那句「大尺度户外未证明」的判断对上号。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第一季 <b>0010</b> 课「隐式地图在大尺度户外有效性尚未被证明」（本文是激光侧第一个正面证据）；接第三季 <b>0057</b> 课 VINS 选择性边缘化、第四季 <b>0078</b> 课 LIO-SAM 因子图 iSAM2（这里是<b>稠密隐式</b>上的对应物）；接第四季 <b>0092/0093</b> 课激光回环（PIN 用<b>神经点特征</b>而非原始扫描）；接上一课 <b>0110</b>（回环搬点的同一思路，但这里是激光）。</p>
+        </div>
+      </div>
+
+      <h2>1. 先确认：PIN-SLAM 是激光 SLAM，不是视觉</h2>
+
+      <p>这是读这篇论文的第一个、也最容易被搞混的一点。前面几篇（iMAP、NICE-SLAM、NeRF-SLAM、Orbeez-SLAM……）大多是<b>相机 / RGB-D</b> 的工作；但 PIN-SLAM 明确是<b>激光 SLAM</b>。它的输入是激光雷达点云，里程计靠「扫描帧对隐式 SDF 的无对应点配准」，建图也是激光点云。</p>
+
+      <p>为什么强调这个？因为本季有一条很长的暗线——第一季 <b>0010</b> 课曾下过一个判断：「隐式地图方法在<b>大尺度户外</b>的有效性尚未被证明」。那句话当时指的是 iMAP / NICE-SLAM 那一代<b>视觉</b>隐式工作，它们跑不了大场景。PIN-SLAM 是<b>激光侧</b>第一个正面反驳这句话的工作。这一点我们留到第 6 节专门收束。</p>
+
+      <div class="callout">
+        <h4>一句话定位</h4>
+        <p>PIN-SLAM = 用<b>弹性神经点云（PIN map）</b>做的激光 SLAM。回环时连锚点一起刚性搬动，<b>不重训地图</b>就能保持全局一致。它是作者自认的「第一个完整的隐式神经 SLAM 系统」。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PIN-SLAM/904ca3e9c751e99fb43869d67f50839ad965bea9e1126963b2cc787078d97090.jpg" alt="PIN-SLAM Fig.1 large-scale globally consistent neural point map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We present PIN-SLAM … a large-scale globally consistent neural point map built with about 20 000 LiDAR scans recorded with a car without using any information from a GNSS, IMU, or wheel odometry.<br>
+          （中译：我们提出 PIN-SLAM……用一辆车记录的约 2 万帧激光扫描、且不借助任何 GNSS / IMU / 轮速信息，构建出大规模全局一致的神经点地图。）<br>
+          <b>怎么看这张图：</b>① 中间这张大地图就是「神经点地图」的渲染结果；② 它强调「约 2 万帧、无 GNSS / IMU」——这是一条很有分量的证据，说明隐式地图也能撑住大尺度户外；③ 这张图正是本组「隐式地图也能全局一致」的关键证据，请记住它。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="deform">
+      <h2>2. 神经点云 + 可形变：点怎么被拉动</h2>
+
+      <p>核心表示是一朵<b>稀疏可优化的神经点云</b>。每个点 $m_i$ 长这样：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$m_i = (x_i,\; q_i,\; f_i^g,\; t_i^c,\; t_i^u,\; \mu_i)$$</div>
+      </div>
+
+      <p>别被符号吓到，逐个字读：</p>
+      <ul>
+        <li>$x_i$：点的位置；</li>
+        <li>$q_i$：这个点<b>自己的坐标系朝向</b>（一个四元数）——这是「弹性」的命门，下面讲；</li>
+        <li>$f_i^g$：可优化的隐特征；</li>
+        <li>$t_i^c, t_i^u$：创建 / 更新时间戳；</li>
+        <li>$\mu_i$：稳定度。</li>
+      </ul>
+
+      <p>想知道某处有没有墙，就取它周围 K 个邻居点的特征，喂进<b>一个全局共享的浅 MLP 解码器</b> $D_\theta^g$，预测 SDF（有符号距离场），再反距离加权得到任意位置的 SDF 值。关键细节：<b>这个 MLP 只在最初若干步训练，之后冻结，只优化点的特征</b>。所以「改地图」= 改点的 $x/q/f$，不动 MLP。</p>
+
+      <h3>「可形变」到底从哪来</h3>
+      <p>每个点预测 SDF 时，不是直接用世界坐标，而是用<b>相对坐标</b> $d_j = q_j\,(p - x_j)\,q_j^{-1}$——也就是把查询点 $p$ 先<b>变换到点自己的坐标系里</b>。妙处在这里：</p>
+      <div class="callout">
+        <h4>弹性 = 相对坐标对刚体变换不变</h4>
+        <p>当回环把整个点云刚体搬动（位置 $x$、朝向 $q$ 一起变）时，相对坐标 $d_j$ 完全不变 → 每个点的 SDF 预测不变 → <b>整张地图跟着被重排，但局部几何不被破坏</b>。这就是论文里说的「elasticity（弹性）」的来历。</p>
+        <p>严格说，它<b>没有显式的 deformation graph（形变图）</b>。弹性不是来自一张额外的图，而是来自「每个点自带坐标系朝向 $q$」这个设计——点一被刚体变换，查询就自动在新位置成立。这是一种「<b>隐式的</b>」形变能力。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">一串神经点被整体拉动</text>
+
+          <!-- 左：回环前偏移 -->
+          <rect x="40" y="50" width="380" height="330" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 回环前：与真实场景有系统偏移</text>
+          <!-- 真实场景轮廓 -->
+          <rect x="90" y="120" width="150" height="110" fill="none" stroke="#3b4a5e" stroke-width="2.4"/>
+          <text x="165" y="180" text-anchor="middle" font-size="11" fill="#607d8b">真实场景</text>
+          <!-- 偏移的神经点云 -->
+          <g fill="#c0392b">
+            <circle cx="250" cy="110" r="5"/><circle cx="290" cy="118" r="5"/><circle cx="330" cy="126" r="5"/>
+            <circle cx="260" cy="160" r="5"/><circle cx="300" cy="168" r="5"/><circle cx="340" cy="176" r="5"/>
+            <circle cx="248" cy="210" r="5"/><circle cx="288" cy="218" r="5"/><circle cx="328" cy="226" r="5"/>
+            <circle cx="270" cy="262" r="5"/><circle cx="310" cy="270" r="5"/><circle cx="350" cy="278" r="5"/>
+          </g>
+          <text x="300" y="320" text-anchor="middle" font-size="11" fill="#c0392b">神经点云偏了一截</text>
+          <text x="230" y="362" text-anchor="middle" font-size="11.5" fill="#a8563a">（每个点都带着自己的特征一起偏）</text>
+
+          <!-- 右：回环后 -->
+          <rect x="480" y="50" width="380" height="330" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 回环后：每个点被搬到新位置</text>
+          <rect x="530" y="120" width="150" height="110" fill="none" stroke="#3b4a5e" stroke-width="2.4"/>
+          <text x="605" y="180" text-anchor="middle" font-size="11" fill="#607d8b">真实场景</text>
+          <!-- 箭头：旧->新，特征跟着走 -->
+          <g fill="#2e9e6b">
+            <circle cx="530" cy="120" r="5"/><circle cx="570" cy="128" r="5"/><circle cx="610" cy="136" r="5"/>
+            <circle cx="540" cy="170" r="5"/><circle cx="580" cy="178" r="5"/><circle cx="620" cy="186" r="5"/>
+            <circle cx="528" cy="220" r="5"/><circle cx="568" cy="228" r="5"/><circle cx="608" cy="236" r="5"/>
+            <circle cx="550" cy="272" r="5"/><circle cx="590" cy="280" r="5"/><circle cx="630" cy="288" r="5"/>
+          </g>
+          <g stroke="#2e9e6b" stroke-width="1.5" fill="none">
+            <path d="M250 110 Q380 90 530 120"/><path d="M290 118 Q420 100 570 128"/><path d="M330 126 Q460 110 610 136"/>
+            <path d="M260 160 Q390 150 540 170"/><path d="M300 168 Q430 158 580 178"/><path d="M340 176 Q470 166 620 186"/>
+            <path d="M248 210 Q380 215 528 220"/><path d="M288 218 Q420 225 568 228"/><path d="M328 226 Q460 235 608 236"/>
+            <path d="M270 262 Q400 270 550 272"/><path d="M310 270 Q440 280 590 280"/><path d="M350 278 Q480 290 630 288"/>
+          </g>
+          <g fill="#2e9e6b">
+            <path d="M530 120 L538 116 L538 124 Z"/><path d="M540 170 L548 166 L548 174 Z"/><path d="M528 220 L536 216 L536 224 Z"/><path d="M550 272 L558 268 L558 276 Z"/>
+          </g>
+          <text x="670" y="330" text-anchor="middle" font-size="11.5" fill="#2f6d51">点搬到位，特征也跟着走</text>
+          <text x="670" y="362" text-anchor="middle" font-size="11" fill="#5f8a72">地图不是硬塑料，是一张能拉开又能收回的网</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是回环前的神经点云，整团相对真实场景偏了一截（红色点）；右格是回环后，每个点被一根箭头从旧位置搬到了新位置，特征随点一起走，点云正好贴回真实轮廓。<br>
+          <b>怎么看这张图：</b>① 注意每个点都「带着自己的特征」——所以搬点 ≠ 搬空，渲染结果跟着点走；② 箭头密密麻麻但有规律，说明这是一次<b>整体刚性变换</b>，不是乱动；③ 把这张图和上一课那张「点被整体拉住」对照，会发现 PIN-SLAM 是激光版的同一思路。<br>
+          <b>要记住的一句话：</b>这就是「可形变地图」——地图不是一块硬塑料，而是一张能拉开又能收回的网。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="complete">
+      <h2>3. 里程计与回环：为什么是「首个完整」</h2>
+
+      <p>一篇 SLAM 论文要自称「完整」，至少要能同时做好三件事：<b>里程计（我自己知道我在哪）、回环检测（我认出我回过这）、全局一致（整张图不重影）</b>。PIN-SLAM 作者在原话里正是按这三条来定义的。</p>
+
+      <h3>里程计怎么做</h3>
+      <p>它<b>自己估位姿</b>，不靠别的系统喂。做法是无对应点的 scan-to-implicit-SDF 配准：把当前扫描帧投到当前局部地图的 SDF 上，让 $S(Tp)\to 0$，用一个二阶 LM 优化求位姿 $T^* = \arg\min_T \sum_{p\in P_r} S(Tp)^2$。还附带一个<b>隐式局部 BA</b>，同时优化近 N 帧位姿和点特征。RGB-D 扩展时还能加光度项。</p>
+
+      <h3>回环怎么做</h3>
+      <p>回环检测不用原始点云，而用<b>神经点特征</b>：把局部地图的神经点投影到俯视极坐标 bin（仿 Scan Context），每个 bin 存平均神经点特征，得到<b>旋转不变</b>的局部上下文描述子，再做「polar context augmentation」容忍大平移重访。Top-1 召回 94.5%，超过多数方法。</p>
+      <p>检测到候选回环后，scan-to-map 配准验证，成功就把相对位姿作为<b>位姿图回环边</b>，用 <b>GTSAM</b> 做位姿图优化（PGO）。PGO 之后，每个神经点的位姿差 $\delta T_t$ 直接作用到它的位置 $x_i$ 与朝向 $q_i$：$x_i \leftarrow \delta T\,x_i,\; q_i \leftarrow \delta q\,q_i$。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PIN-SLAM/45cf5877f68f7a1d72c5a1bb69f2d5377cc2f58858d7dfd4614e4fe2ee79e113.jpg" alt="PIN-SLAM Fig.5 odometry vs loop closure globally consistent">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Comparison of (a) locally consistent mesh with duplicated structures reconstructed by PIN LiDAR odometry—PIN-LO, and (b) globally consistent mesh reconstructed by PIN-SLAM after loop closure corrections—PIN-SLAM. The estimated trajectories are overlaid … colorized according to the timestamp.<br>
+          （中译：对比 (a) 仅里程计 PIN-LO 重建出带重复结构的局部一致网格，(b) PIN-SLAM 回环修正后重建出全局一致网格。估计轨迹叠加，按时间戳着色。）<br>
+          <b>怎么看这张图：</b>① (a) 是<b>只跑里程计</b>的结果——注意它出现了「重复结构 / double structure」，这就是漂移的痕迹；② (b) 是<b>加了回环</b>之后，重复结构消失、整张图对齐；③ 这张图把「为什么需要回环」讲得最直观。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">里程计与回环：两级</text>
+
+          <!-- 上：里程计 -->
+          <text x="60" y="66" font-size="13" font-weight="700" fill="#8f4a33">① 里程计（连续帧配准）</text>
+          <rect x="60" y="78" width="780" height="96" rx="8" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.2"/>
+          <g fill="#cc785c">
+            <rect x="100" y="112" width="40" height="22" rx="4"/>
+            <rect x="220" y="112" width="40" height="22" rx="4"/>
+            <rect x="340" y="112" width="40" height="22" rx="4"/>
+            <rect x="460" y="112" width="40" height="22" rx="4"/>
+            <rect x="580" y="112" width="40" height="22" rx="4"/>
+            <rect x="700" y="112" width="40" height="22" rx="4"/>
+          </g>
+          <text x="120" y="127" text-anchor="middle" font-size="10" fill="#fff">帧</text>
+          <text x="240" y="127" text-anchor="middle" font-size="10" fill="#fff">帧</text>
+          <text x="360" y="127" text-anchor="middle" font-size="10" fill="#fff">帧</text>
+          <text x="480" y="127" text-anchor="middle" font-size="10" fill="#fff">帧</text>
+          <text x="600" y="127" text-anchor="middle" font-size="10" fill="#fff">帧</text>
+          <text x="720" y="127" text-anchor="middle" font-size="10" fill="#fff">帧</text>
+          <polyline points="140,123 180,123 220,123 260,123 300,123 340,123 380,123 420,123 460,123 500,123 540,123 580,123 620,123 660,123 700,123 740,123"
+                    fill="none" stroke="#cc785c" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="450" y="160" text-anchor="middle" font-size="11.5" fill="#8f4a33">每帧对隐式 SDF 配准，估计我刚动了多少（无对应点 scan-to-SDF）</text>
+
+          <!-- 下：回环 -->
+          <text x="60" y="216" font-size="13" font-weight="700" fill="#2f6d51">② 回环（发现回到旧地方）</text>
+          <rect x="60" y="228" width="780" height="120" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.2"/>
+          <!-- 两段分离的地图 -->
+          <g fill="#2e9e6b">
+            <circle cx="140" cy="278" r="4"/><circle cx="160" cy="288" r="4"/><circle cx="130" cy="290" r="4"/><circle cx="155" cy="265" r="4"/>
+          </g>
+          <text x="150" y="320" text-anchor="middle" font-size="10.5" fill="#2f6d51">地图段 A</text>
+          <g fill="#2e9e6b">
+            <circle cx="740" cy="278" r="4"/><circle cx="760" cy="288" r="4"/><circle cx="730" cy="290" r="4"/><circle cx="755" cy="265" r="4"/>
+          </g>
+          <text x="750" y="320" text-anchor="middle" font-size="10.5" fill="#2f6d51">地图段 B</text>
+          <!-- 回环边 -->
+          <path d="M175 282 C 400 230, 500 230, 725 282" fill="none" stroke="#e08a2b" stroke-width="2.4"/>
+          <path d="M725 282 L716 276 L716 288 Z" fill="#e08a2b"/>
+          <text x="450" y="252" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e08a2b">回环边（神经点特征认出是同一处）</text>
+          <text x="450" y="340" text-anchor="middle" font-size="11.5" fill="#2f6d51">PGO 后把两段地图整体拉到一起 → 全局一致</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把 PIN-SLAM 的两级拆开——上面是里程计（连续帧对隐式 SDF 配准，逐帧估计运动），下面是回环（用神经点特征认出「我回过这」，连一条回环边，PGO 后把两段地图整体拉到一起）。<br>
+          <b>怎么看这张图：</b>① 上面那行虚线是逐帧运动，单独看会慢慢漂；② 下面橙色回环边是关键，它把原本分离的两段地图「认出来是同一处」；③ PGO 之后，地图段 A、B 被刚体对齐，这正是 Fig.5 里「重复结构消失」的原因。<br>
+          <b>要记住的一句话：</b>里程计负责「别漂太偏」，回环负责「最终拉正」——两者都落在神经点上，所以无需重训网络。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PIN-SLAM 做回环时，PGO 优化出的位姿差作用到了神经点的哪些量？它有没有去重训那个 MLP 解码器？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。回环后每个神经点的位置 x 与朝向 q 被刚体变换（x←δT x，q←δq q），特征 f 也随点走；而那个共享 MLP 解码器在最初几步后就冻结了，不重训。这正是「改显式锚点、不动权重」。" onclick="lessonKit.answer(this,'q0111a')">改点的位置与朝向</button>
+          <button data-correct="no" data-explanation="错。它恰恰没有重训 MLP。重训既慢又会破坏已建好的区域；PIN-SLAM 的设计是「权重冻住、只搬点」，靠每个点自带的坐标系朝向 q 来实现可形变。" onclick="lessonKit.answer(this,'q0111a')">重训整个MLP</button>
+        </div>
+        <div class="quiz-feedback" id="q0111a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="quote">
+      <h2>4. 引原文：隐式地图也能做到全局一致</h2>
+
+      <p>论文在引言里给自己定的目标原话（中文转述，依据正文第 24 行）：</p>
+
+      <div class="callout">
+        <h4>★ 原文论断（如实转述）</h4>
+        <p>「据作者所知，PIN-SLAM 是<b>第一个完整的隐式神经 SLAM 系统</b>，包含了里程计、回环检测、以及全局一致的隐式建图（first full-fledged implicit neural SLAM system including odometry, loop closure detection, and globally consistent implicit mapping）。」</p>
+        <p>换句话说，作者明确主张：<b>隐式地图也能做到全局一致</b>——这不是稀疏点云 SLAM 的专利。</p>
+      </div>
+
+      <p>这句话为什么重？因为在前几季里，「全局一致」几乎总是和「稀疏地图 + 位姿图」绑在一起讲的（比如第四季 LIO-SAM 的因子图）。PIN-SLAM 的功劳是：把「全局一致」这件事，在<b>稠密隐式表示</b>上也做通了。它用的手段，就是上一节讲的「回环搬点」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PIN-SLAM/0e490e58494929a96b9faa76d320370d3a48cb2fd8e29e9746850411923391de.jpg" alt="PIN-SLAM Fig.2 pipeline overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Pipeline overview of PIN-SLAM. (1) voxel-downsample point clouds; (2) align to implicit SDF of current local map to estimate global pose; … loop closure with neural point context descriptor; PGO then points moved with frames.<br>
+          （中译：流水线总览。(1) 体素降采样点云；(2) 对齐到当前局部地图的隐式 SDF 估计全局位姿；……用神经点上下文描述子做回环；PGO 后点随帧搬动。）<br>
+          <b>怎么看这张图：</b>① 顺着流程图看「配准 → 局部 BA → 神经点上下文描述子回环 → PGO 后点随帧搬动」；② 这张图把第 2、3 节的文字都串起来了，是理解整篇的钥匙。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PIN-SLAM/0dae9ae537148c3d6fef2068a6bfcc3f10ec249880e808fff7b6c59cdeae6d97.jpg" alt="PIN-SLAM Fig.3 SDF querying 2-D diagram">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Diagram of SDF querying in our PIN map simplified in 2-D. (a) query position p; (b) explains elasticity via the neural point's own coordinate frame.<br>
+          （中译：PIN 地图里 SDF 查询的二维示意。(a) 查询位置 p；(b) 用神经点自身坐标系解释弹性。）<br>
+          <b>怎么看这张图：</b>① (a) 是「用邻居点预测某处 SDF」；② (b) 正是第 2 节讲的「弹性」——查询点先变换到点自己的坐标系里，所以刚体搬动点后查询不变。这是全文最该看懂的一张图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="scale">
+      <h2>5. 场景规模与数字：能跑多大</h2>
+
+      <p>光说「能跑大场景」不够，得看数字。PIN-SLAM 给出的是相当硬的证据：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>规模：城区约 2 万激光帧</b>
+          <p>论文 Fig.1 主图就是一辆车<b>无 GNSS / 无 IMU / 无轮速</b>记录约 2 万帧激光，构建出全局一致神经点地图。这是户外大尺度最直接的证据。</p>
+        </div>
+        <div class="mini-card">
+          <b>精度：KITTI 有回环 ATE 1.0 m</b>
+          <p>KITTI 上仅里程计（PIN-LO）3.2 m → 回环后（PIN-SLAM）<b>1.0 m</b>。Newer College 平均 0.17 m，Hilti-21 平均 0.19 m，Replica RGB-D 平均 2.4 cm。</p>
+        </div>
+        <div class="mini-card">
+          <b>速度：7.1 FPS（full）/ 11.3 FPS（light）</b>
+          <p>单张 NVIDIA A4000。对比 NeRF-LOAM 约 4.43 s/帧——PIN-SLAM 快约 30 倍。内存压缩比约 0.7%，比 SHINE 还省约 15%。</p>
+        </div>
+        <div class="mini-card">
+          <b>数据集覆盖广</b>
+          <p>KITTI（43k 帧，64 线）、MulRAN（64k）、IPB-Car（43k）、Newer College（53k）、Hilti-21（15k）、Replica（16k RGB-D），以及 Nebula 洞穴（Spot 机器狗）、ETH DOALS 动态场景。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PIN-SLAM/a87f0a2d1fb29556df66f315779ee75d4c2f632009b010717a01b68319f70981.jpg" alt="PIN-SLAM Fig.4 running example dynamic object filtered">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Example during the operation of PIN-SLAM at a timestep: (a) point cloud for mapping; (b) registration weight from black to red, points in blue filtered (dynamic objects, vegetation); …<br>
+          （中译：运行实例。(a) 用于建图的点云，绿圈标出一辆移动的公交车；(b) 配准权重由黑到红，蓝色点被滤除（主要在动态物体、粗糙植被上）。）<br>
+          <b>怎么看这张图：</b>这张图顺带展示了 PIN-SLAM 的<b>动态滤除</b>能力——移动公交车（绿圈）相关点被降权/滤掉，说明它不光能回环，还能处理一部分动态。不过这不属于本季模块 3 的「动态三篇」，仅作旁注。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="answer0010">
+      <h2>6. 收束：回应第一季 0010 的那句判断</h2>
+
+      <p>现在回到本季开场埋下的那笔债。第一季 <b>0010</b> 课（深度学习视觉定位建图）曾下判断：</p>
+
+      <div class="callout">
+        <h4>第一季 0010 的原话（转述）</h4>
+        <p>「隐式地图方法在<b>大尺度户外</b>的有效性尚未被证明。」——当时这句话指的是 iMAP / NICE-SLAM 那一代<b>视觉</b>隐式工作，它们场景规模与精度都很有限。</p>
+      </div>
+
+      <p>到了 2024 年，PIN-SLAM 用<b>激光</b>侧的证据正面回应了这句话：</p>
+
+      <div class="callout">
+        <h4>★ 本节的回答（判断，非原文自评）</h4>
+        <p>PIN-SLAM 是那条判断的<b>第一个正面证据（激光侧）</b>。它用约 2 万帧无 GNSS/IMU 的城区激光、靠弹性神经点云做到回环与全局一致，证明「隐式地图在大尺度户外有效」这件事，至少在<b>激光</b>上已经被立住了。</p>
+        <p>但要有分寸：它是<b>激光</b>证据，不是视觉证据；第一季 0010 原话偏向视觉侧。所以更准确的说法是——<b>那句判断在「激光隐式」这一支已被打破，在「视觉隐式跑大户外」上仍需后续工作（如本季后续的 3DGS 系）来回应</b>。我们这里只确认激光侧这一笔债还清了。</p>
+      </div>
+
+      <p>下一课我们回到「没有回环」的那几条路线：NeRF-SLAM（借别人的位姿）、NeRF-LOAM（激光增量）、PLGSLAM（渐进式 + 局部到全局 BA）——它们从不同角度回答「怎么把隐式 SLAM 做大」，也正好补齐本组「回环之外」的拼图。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>确认 PIN-SLAM 是激光还是视觉 SLAM？它用什么做里程计输入？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它是<b>激光 SLAM</b>。输入是激光雷达点云，里程计靠「扫描帧对隐式 SDF 的无对应点配准」（让 $S(Tp)\to 0$ 求位姿），与前面几篇相机 / RGB-D 的隐式工作不同。</p>
+              <p>确认这一点很重要：它让我们能把第一季 0010 的「大尺度户外」判断，在<b>激光侧</b>给出正面证据。</p>
+            </div></details>
+          </li>
+          <li>PIN-SLAM 的「可形变」来自哪里？它有没有用显式的 deformation graph？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>弹性来自「每个神经点自带坐标系朝向 $q_i$」。查询时用相对坐标 $d_j=q_j(p-x_j)q_j^{-1}$，当点被刚体搬动（x、q 一起变）时，相对坐标不变 → SDF 预测不变 → 整张地图跟着重排但局部几何不被破坏。</p>
+              <p>它<b>没有</b>显式的 deformation graph。弹性不是一张额外的图，而是来自这个「点自带坐标系」的设计——是一种隐式的形变能力。</p>
+            </div></details>
+          </li>
+          <li>作者凭什么说它是「首个完整的隐式神经 SLAM」？列出那三条。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>依据正文原话，三条是：① <b>里程计</b>（自己估位姿，无对应点 scan-to-SDF + 隐式局部 BA）；② <b>回环检测</b>（用神经点特征做旋转不变的上下文描述子）；③ <b>全局一致的隐式建图</b>（PGO 后连神经点一起刚性搬动）。</p>
+              <p>三者齐备，作者才称其为「first full-fledged implicit neural SLAM system」。前面很多隐式工作缺其中至少一项（比如没有回环、或不全局一致）。</p>
+            </div></details>
+          </li>
+          <li>PIN-SLAM 在哪些数据集上证明了「能跑大场景」？给两个硬数字。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>硬证据：① 城区<b>约 2 万帧</b>激光、无 GNSS/IMU/轮速，构建全局一致神经点地图（Fig.1）；② KITTI 上仅里程计 ATE 3.2 m，加回环后降到 <b>1.0 m</b>。</p>
+              <p>另如 Newer College 平均 0.17 m、MulRAN 平均 4.51 m（最优）、Replica RGB-D 平均 2.4 cm。速度 7.1 FPS（full），比 NeRF-LOAM 快约 30 倍。</p>
+            </div></details>
+          </li>
+          <li>第一季 0010 说「隐式地图在大尺度户外有效性尚未被证明」。PIN-SLAM 是否还清了这笔债？请给出有分寸的说法。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>有分寸地说：PIN-SLAM 是<b>激光侧</b>的第一个正面证据，约 2 万帧无 GNSS/IMU 城区激光做到回环与全局一致，这笔债在「激光隐式」这一支还清了。</p>
+              <p>但它不是视觉证据，第一季 0010 原话更偏向视觉侧。所以更准确是：<b>激光隐式已立住，视觉隐式跑大户外仍需后续（含本季 3DGS 系）来回应</b>。我们这一节的功劳，是确认激光侧这一笔。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0110-Loopy-SLAM与GO-SLAM-隐式地图怎么闭环.html">← Loopy-SLAM 与 GO-SLAM：隐式地图怎么闭环</a>
+        <a class="next" href="0112-三条规模化路线-NeRF-SLAM与NeRF-LOAM与PLGSLAM.html">三条规模化路线：组合、激光、渐进 →</a>
+      </div>
+      <p class="foot-note">一张能拉伸又能收回的网——这就是隐式地图也能全局一致的秘密 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

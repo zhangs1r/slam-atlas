@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第六季开场：隐式与显式之争 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0104</div>
+      <h1>第六季开场：隐式与显式之争</h1>
+      <p class="subtitle">前五季我们一直在问「位姿怎么算」；这一季换一个问题——<b>场景本身到底存在哪？</b>🧠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：地图表示的两条路 · 两笔旧债</span>
+        <span>📚 规模：37 篇论文 → 24 节课</span>
+        <span>📅 2020–2025 · 神经隐式 SLAM 与 3D 高斯 SLAM</span>
+      </div>
+      <div class="toc">
+        <a href="#what">这一季读什么</a>
+        <a href="#war">核心矛盾：隐式 vs 显式</a>
+        <a href="#debt">两笔挂了五季的债</a>
+        <a href="#dark">一条暗线：地图里存什么</a>
+        <a href="#how">怎么读这一季</a>
+        <a href="#check">读完你能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="what">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>先不急着读论文。这一节只做三件事：把这一季<b>要解决的唯一矛盾</b>说清、把<b>两笔旧债</b>摆上台面、给你一张<b>六模块的地图</b>。读完你应该能说出「隐式表示」和「显式表示」各自的赢面在哪。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>直接接<b>第一季 0010 课</b>（建图三分类里那句「隐式地图方法在大尺度户外的有效性尚未被证明」）与<b>第一季 0015 课</b>（3D 高斯，以及那句「综述只引用未展开『自适应密度控制』」），也接<b>第二季 0036–0039</b>（NeRF / Instant NGP / Plenoxels）与<b>第三季 0071</b>（神经隐式 SLAM 的两种组合）。这一季就是把这四处留下的线全部走完。</p>
+        </div>
+      </div>
+
+      <h2>1. 前五季，我们其实一直在忙「位姿」</h2>
+      <p>回头看一遍走过的路：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>第一季 · 先建立坐标系</h4>
+          <p>知道这个领域有哪些方法家族、各自在什么场景下会挂。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第二季 · 打地基</h4>
+          <p>学会把 SLAM 写成最小二乘、学会消元、边缘化、预积分这些零件。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第三季 · 视觉主干</h4>
+          <p>从 MonoSLAM 一路走到 VINS-Mono：特征法、直接法、视觉惯性的完整谱系。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第四季 · 激光主干</h4>
+          <p>换个传感器重看一遍：LOAM 挑点，FAST-LIO2 干脆不挑了。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第五季 · 多传感器融合</h4>
+          <p>把激光、视觉、惯性接成一台机器，并第一次让地图「可渲染」。</p>
+        </div>
+      </div>
+      <p>这五季的主语几乎一直是<b>位姿</b>：这个机器人在哪、朝哪、走得准不准。地图虽然一直出现（点云、TSDF、体素、面片、八叉树），但它更像一个<b>副产品</b>——位姿对了，地图自然就对了。</p>
+      <p>而这一季要换主语：<b>场景</b>。而且换得相当彻底——我们会遇到一整批工作，它们不再问「怎么把点配准得更准」，而是问：</p>
+      <blockquote style="border-left:4px solid #cc785c;margin:1.2rem 0;padding:.7rem 1.1rem;background:rgba(204,120,92,.06);border-radius:0 10px 10px 0">
+        <p style="margin:0"><b>「如果我把整个房间塞进一个函数的参数里，能不能照样做 SLAM？」</b></p>
+      </blockquote>
+      <p>这就是「神经隐式表示」。而它的对手——3D 高斯——会反过来问：<b>「为什么要把简单的东西搞复杂？」</b> 这两个问题之间的拉锯，就是这一季的全部内容。</p>
+    </main>
+
+    <section class="section-card" id="war">
+      <h2>2. 核心矛盾：同一个场景，三种存法</h2>
+      <p>先建立一个最小直觉。假设你面前是一个房间，里面有沙发、桌子、窗。现在你要让计算机「记住」这个房间，可以怎么做？</p>
+      <p>下面这张图是<b>全季的坐标系</b>，请花两分钟看懂它——后面 23 节课都在这个坐标系里活动。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 三个面板边框 -->
+          <rect x="14" y="46" width="282" height="300" rx="12" fill="#fbf8f5" stroke="#e2d7cd" stroke-width="1.4"/>
+          <rect x="309" y="46" width="282" height="300" rx="12" fill="#f5f8fb" stroke="#cfdde8" stroke-width="1.4"/>
+          <rect x="604" y="46" width="282" height="300" rx="12" fill="#f7fbf6" stroke="#d3e3d0" stroke-width="1.4"/>
+
+          <text x="155" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#8a5a3e">① 显式 · 点云</text>
+          <text x="450" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#3d6b96">② 隐式 · 一个函数</text>
+          <text x="745" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#3f7a4f">③ 显式 · 一堆椭球</text>
+
+          <!-- 面板①：点云 -->
+          <rect x="34" y="96" width="242" height="176" rx="6" fill="#ffffff" stroke="#e6ddd5" stroke-width="1"/>
+          <!-- 房间轮廓 -->
+          <rect x="52" y="112" width="206" height="144" fill="#faf7f4" stroke="#cbb9a8" stroke-width="1.2"/>
+          <text x="60" y="130" font-size="9.5" fill="#a89887">墙</text>
+          <!-- 沙发（点云化） -->
+          <g fill="#8a5a3e" opacity="0.85">
+            <circle cx="86" cy="214" r="2.1"/><circle cx="92" cy="213" r="2.1"/><circle cx="98" cy="212" r="2.1"/>
+            <circle cx="104" cy="212" r="2.1"/><circle cx="110" cy="213" r="2.1"/><circle cx="116" cy="214" r="2.1"/>
+            <circle cx="86" cy="220" r="2.1"/><circle cx="92" cy="219" r="2.1"/><circle cx="98" cy="218" r="2.1"/>
+            <circle cx="104" cy="218" r="2.1"/><circle cx="110" cy="219" r="2.1"/><circle cx="116" cy="220" r="2.1"/>
+            <circle cx="88" cy="226" r="2.1"/><circle cx="94" cy="225" r="2.1"/><circle cx="100" cy="224" r="2.1"/>
+            <circle cx="106" cy="224" r="2.1"/><circle cx="112" cy="225" r="2.1"/>
+            <circle cx="84" cy="204" r="2.1"/><circle cx="118" cy="204" r="2.1"/>
+          </g>
+          <!-- 桌子 -->
+          <g fill="#7b6a5c" opacity="0.85">
+            <circle cx="168" cy="226" r="2"/><circle cx="175" cy="225" r="2"/><circle cx="182" cy="225" r="2"/>
+            <circle cx="189" cy="226" r="2"/><circle cx="168" cy="233" r="2"/><circle cx="175" cy="232" r="2"/>
+            <circle cx="182" cy="232" r="2"/><circle cx="189" cy="233" r="2"/>
+            <circle cx="176" cy="244" r="2"/><circle cx="182" cy="244" r="2"/>
+          </g>
+          <!-- 窗 -->
+          <g fill="#5f8ab0" opacity="0.8">
+            <circle cx="214" cy="140" r="2"/><circle cx="220" cy="140" r="2"/><circle cx="226" cy="140" r="2"/>
+            <circle cx="214" cy="146" r="2"/><circle cx="220" cy="146" r="2"/><circle cx="226" cy="146" r="2"/>
+            <circle cx="214" cy="152" r="2"/><circle cx="220" cy="152" r="2"/><circle cx="226" cy="152" r="2"/>
+          </g>
+          <text x="155" y="296" text-anchor="middle" font-size="11" fill="#8a7365">存：几百万个三维点</text>
+          <text x="155" y="314" text-anchor="middle" font-size="11" fill="#8a7365">要删一块？找到那些点删掉就行</text>
+          <text x="155" y="334" text-anchor="middle" font-size="11" font-weight="700" fill="#8a5a3e">看得见摸得着，好编辑</text>
+
+          <!-- 面板②：隐式函数 -->
+          <rect x="329" y="96" width="242" height="176" rx="6" fill="#ffffff" stroke="#dbe6ee" stroke-width="1"/>
+          <!-- 输入箭头 -->
+          <text x="345" y="176" font-size="9.5" fill="#6b8aa5">三维坐标</text>
+          <text x="345" y="190" font-size="9.5" fill="#6b8aa5">+ 视角方向</text>
+          <line x1="404" y1="182" x2="436" y2="182" stroke="#7fa5c4" stroke-width="1.6" marker-end="url(#ar1)"/>
+          <!-- 黑箱网络 -->
+          <rect x="440" y="140" width="84" height="84" rx="10" fill="#3d6b96" opacity="0.9"/>
+          <text x="482" y="174" text-anchor="middle" font-size="11" fill="#ffffff" font-weight="700">一个网络</text>
+          <text x="482" y="192" text-anchor="middle" font-size="9.5" fill="#d8e7f4">权重 = 地图</text>
+          <!-- 输出箭头 -->
+          <line x1="526" y1="182" x2="558" y2="182" stroke="#7fa5c4" stroke-width="1.6" marker-end="url(#ar1)"/>
+          <text x="562" y="176" font-size="9.5" fill="#6b8aa5">颜色</text>
+          <text x="562" y="190" font-size="9.5" fill="#6b8aa5">+ 密度</text>
+          <!-- 问号 -->
+          <circle cx="450" cy="248" r="13" fill="none" stroke="#9dbdd6" stroke-width="1.4" stroke-dasharray="3 3"/>
+          <text x="450" y="254" text-anchor="middle" font-size="14" fill="#5b86a8">?</text>
+          <text x="480" y="252" font-size="10" fill="#6b8aa5">里面没有一个「点」</text>
+          <text x="450" y="296" text-anchor="middle" font-size="11" fill="#5a7f9c">存：一堆权重数字</text>
+          <text x="450" y="314" text-anchor="middle" font-size="11" fill="#5a7f9c">要删一块？得重训或加条件</text>
+          <text x="450" y="334" text-anchor="middle" font-size="11" font-weight="700" fill="#3d6b96">只能不停地「问」它</text>
+
+          <!-- 面板③：高斯 -->
+          <rect x="624" y="96" width="242" height="176" rx="6" fill="#ffffff" stroke="#dfeadd" stroke-width="1"/>
+          <!-- 沙发：椭球 -->
+          <rect x="642" y="112" width="206" height="144" fill="#fbfdfa" stroke="#cadbc7" stroke-width="1.2"/>
+          <g opacity="0.62">
+            <ellipse cx="88" cy="216" rx="15" ry="7" fill="#5aa86f" transform="rotate(6 88 216)" opacity="0"/>
+          </g>
+          <ellipse cx="672" cy="216" rx="16" ry="7" fill="#5aa86f" opacity="0.5" transform="rotate(6 672 216)"/>
+          <ellipse cx="700" cy="222" rx="14" ry="6" fill="#5aa86f" opacity="0.5" transform="rotate(-4 700 222)"/>
+          <ellipse cx="678" cy="200" rx="10" ry="9" fill="#5aa86f" opacity="0.45"/>
+          <ellipse cx="706" cy="202" rx="9" ry="8" fill="#5aa86f" opacity="0.45"/>
+          <!-- 桌子 -->
+          <ellipse cx="768" cy="228" rx="17" ry="6" fill="#c79a5b" opacity="0.55" transform="rotate(3 768 228)"/>
+          <ellipse cx="800" cy="230" rx="13" ry="5" fill="#c79a5b" opacity="0.55"/>
+          <ellipse cx="770" cy="244" rx="4" ry="8" fill="#c79a5b" opacity="0.5"/>
+          <ellipse cx="798" cy="244" rx="4" ry="8" fill="#c79a5b" opacity="0.5"/>
+          <!-- 窗 -->
+          <ellipse cx="822" cy="140" rx="14" ry="9" fill="#6d9dc4" opacity="0.55"/>
+          <ellipse cx="822" cy="158" rx="13" ry="8" fill="#6d9dc4" opacity="0.5"/>
+          <!-- 光线 -->
+          <line x1="636" y1="272" x2="836" y2="196" stroke="#3f7a4f" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.75"/>
+          <text x="745" y="296" text-anchor="middle" font-size="11" fill="#4b7554">存：几百万个椭球</text>
+          <text x="745" y="314" text-anchor="middle" font-size="11" fill="#4b7554">每个带位置·朝向·大小·颜色</text>
+          <text x="745" y="334" text-anchor="middle" font-size="11" font-weight="700" fill="#3f7a4f">可数、可删、可直接渲染</text>
+
+          <defs>
+            <marker id="ar1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#7fa5c4"/>
+            </marker>
+          </defs>
+
+          <text x="450" y="376" text-anchor="middle" font-size="12" fill="#6b5a4e">同一个房间 · 三种「存法」——这一季的 37 篇论文全都站在这三个格子里</text>
+          <text x="450" y="400" text-anchor="middle" font-size="11.5" fill="#9c8b7d">左边与右边是「显式」：地图里有一件件具体的东西。中间是「隐式」：地图是一堆权重，你要靠不停地问。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间（沙发、桌子、窗）被三种方式"记住"——左边存成一片点云（每个点都是明码标价的坐标）、中间塞进一个网络（没有"点"这个东西，只能给它坐标、让它回答颜色和密度）、右边存成一片各向异性椭球（每个椭球自带位置、朝向、大小、颜色）。<br>
+          <b>怎么看这张图：</b>① 先注意<b>左边与右边的共同点</b>：两者都是「显式」，地图里有一件件具体的东西，所以你能指着它说「删掉这个」。② 再看中间的<b>不同</b>：它没有可指的东西，你唯一的交互方式是「提问」。③ 最后看每格底部那句<b>代价说明</b>——左边"好编辑"、中间"只能问"、右边"可数可删还可直接渲染"。这一季的争议，本质就是"中间这一格值不值得"。<br>
+          <b>要记住的一句话：</b>隐式与显式的分野不在"存多少信息"，而在<b>你能不能指着地图里的一件东西说"这个删掉"</b>。
+        </figcaption>
+      </figure>
+
+      <p>三种存法各自的长短，用一句话概括：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>点云 / 体素 / 网格</h4>
+          <p><b>赢面：</b>简单、可编辑、可索引。<br><b>输面：</b>想要"照片级的好看"就得存极密，内存爆炸；而且它只管几何，不管"从不同角度看应该是什么亮度"。</p>
+        </div>
+        <div class="mini-card">
+          <h4>隐式（NeRF 那一类）</h4>
+          <p><b>赢面：</b>存储极省（权重才几十 MB）、画面质感好、天然连续（可以在任意位置求值）。<br><b>输面：</b>慢——渲染一个像素要沿光线采样上百次、每次都跑一遍网络；而且想改一块就得动全局。</p>
+        </div>
+        <div class="mini-card">
+          <h4>3D 高斯</h4>
+          <p><b>赢面：</b>又快又好看；地图是"可数的椭球"，所以能删能加能压缩。<br><b>输面：</b>占显存狠（几百万个椭球）；而且椭球是"一团云"，<b>没有"面"这个概念</b>，所以想抽网格很难。</p>
+        </div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面关于「隐式表示」的说法，哪一条是<b>对的</b>？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="正好相反。隐式表示的存储很省（网络权重通常只有几十 MB），它的痛点是计算——渲染一个像素要沿光线采样上百次、每次都跑一遍网络。" onclick="lessonKit.answer(this,'q0104a')">隐式表示的主要问题是太占内存</button>
+          <button data-correct="yes" data-explanation="对。隐式表示里没有一件件可指的「东西」，所以想局部修改（比如回环之后要挪一块地图）非常麻烦。这也解释了为什么后来的工作都在想办法给它加一个「显式的外壳」——比如把特征挂在点云上、或者干脆换成高斯。" onclick="lessonKit.answer(this,'q0104a')">隐式表示难在地图没法局部修改</button>
+          <button data-correct="no" data-explanation="不对。隐式表示恰恰天然是连续的——它可以在任意位置求值，不需要先插值。这是它相对体素网格的优势之一。" onclick="lessonKit.answer(this,'q0104a')">隐式表示只能表达离散的空间</button>
+        </div>
+        <div class="quiz-feedback" id="q0104a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="debt">
+      <h2>3. 两笔挂了五季的债</h2>
+      <p>这一季有一个很特殊的身份：它是<b>还债季</b>。有两句话在前面五季里被明确写下来、又被明确推迟了，现在到了必须回答的时候。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 300" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <!-- 时间轴 -->
+          <line x1="50" y1="212" x2="860" y2="212" stroke="#d9cdc2" stroke-width="2"/>
+          <text x="50" y="238" font-size="10.5" fill="#9c8b7d">第一季</text>
+          <text x="248" y="238" font-size="10.5" fill="#9c8b7d">第二季</text>
+          <text x="446" y="238" font-size="10.5" fill="#9c8b7d">第三季</text>
+          <text x="644" y="238" font-size="10.5" fill="#9c8b7d">第四/五季</text>
+          <text x="836" y="238" font-size="10.5" font-weight="700" fill="#8a5a3e">第六季</text>
+
+          <!-- 债一：3DGS 自适应密度控制 -->
+          <circle cx="96" cy="212" r="6" fill="#c8553d"/>
+          <line x1="96" y1="206" x2="96" y2="120" stroke="#c8553d" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <rect x="34" y="66" width="196" height="54" rx="8" fill="#fdf0ec" stroke="#e8b9a8" stroke-width="1.2"/>
+          <text x="132" y="86" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">债① 0015 课写下：</text>
+          <text x="132" y="103" text-anchor="middle" font-size="10" fill="#a8432c">「3DGS 综述只引用未展开</text>
+          <text x="132" y="116" text-anchor="middle" font-size="10" fill="#a8432c">『自适应密度控制』」</text>
+          <!-- 偿还箭头 -->
+          <line x1="200" y1="94" x2="700" y2="94" stroke="#c8553d" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar2)"/>
+          <circle cx="812" cy="212" r="6" fill="#c8553d"/>
+          <line x1="812" y1="206" x2="812" y2="120" stroke="#c8553d" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <rect x="716" y="72" width="180" height="46" rx="8" fill="#f8e2da" stroke="#c8553d" stroke-width="1.4"/>
+          <text x="806" y="92" text-anchor="middle" font-size="11" font-weight="700" fill="#8f3520">0116 课还清</text>
+          <text x="806" y="108" text-anchor="middle" font-size="10" fill="#8f3520">三格连环画讲透</text>
+
+          <!-- 债二：大尺度户外未证明 -->
+          <circle cx="96" cy="212" r="6" fill="#3d6b96" opacity="0"/>
+          <rect x="34" y="150" width="196" height="56" rx="8" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.2"/>
+          <text x="132" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">债② 0010 课写下：</text>
+          <text x="132" y="184" text-anchor="middle" font-size="10" fill="#2f5b82">「隐式地图方法在大尺度户外的</text>
+          <text x="132" y="199" text-anchor="middle" font-size="10" fill="#2f5b82">有效性尚未被证明」</text>
+          <line x1="230" y1="176" x2="690" y2="176" stroke="#3d6b96" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar3)"/>
+          <rect x="700" y="150" width="196" height="50" rx="8" fill="#e3eef7" stroke="#3d6b96" stroke-width="1.4"/>
+          <text x="798" y="169" text-anchor="middle" font-size="11" font-weight="700" fill="#24486b">0111 / 0121 课正面回答</text>
+          <text x="798" y="186" text-anchor="middle" font-size="10" fill="#24486b">PIN-SLAM 与 Splat-SLAM 给证据</text>
+
+          <defs>
+            <marker id="ar2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+              <path d="M0,0 L9,4.5 L0,9 z" fill="#c8553d"/>
+            </marker>
+            <marker id="ar3" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+              <path d="M0,0 L9,4.5 L0,9 z" fill="#3d6b96"/>
+            </marker>
+          </defs>
+
+          <text x="450" y="278" text-anchor="middle" font-size="11.5" fill="#8a7365">两笔债都是「当时判断不了，于是明确推迟」——而这一季的论文，刚好攒够了证据</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条从第一季到第六季的时间轴，上面挂着两笔被明确"记在账上"的债：债①是第一季 0015 课说的"3DGS 综述只引用、未展开『自适应密度控制』"；债②是第一季 0010 课说的"隐式地图方法在大尺度户外的有效性尚未被证明"。虚线箭头表示它们各自在本季的哪一节课被偿还或回答。<br>
+          <b>怎么看这张图：</b>① 两笔债的区别很重要：债①是<b>"当时资料不够，讲不了"</b>；债②是<b>"当时证据不够，判断不了"</b>。② 债①在本季 <b>0116 节</b>连本带利还清——那一节会用三格连环画把"分裂 / 克隆 / 剔除"讲透。③ 债②会在 <b>0111 节（PIN-SLAM，激光侧）</b>与 <b>0121 节（Splat-SLAM，纯 RGB 侧）</b>拿到两个方向的证据，但那两句原话是否算被推翻，要我在课里给出判断并说明依据。<br>
+          <b>要记住的一句话：</b>一门课肯把"我当时不知道"写下来，比假装什么都懂要有用得多。
+        </figcaption>
+      </figure>
+
+      <h3>债① ：3DGS 的「自适应密度控制」</h3>
+      <p>第一季 0015 课读的是 3D 高斯的<b>综述</b>，那份综述在讲"高斯怎么长出来、怎么删掉"时只是<b>引用</b>了原始论文的做法，并没有展开。于是当时我在课上明确写了一句：<b>这一步留到后面还</b>。</p>
+      <p>这一季的 <a href="0116-3DGS原著2023-可微光栅化与自适应密度控制.html">0116 节</a>会读 3DGS 的<b>原始论文</b>，把那套机制拆成三条规则讲清（顺便说一句：这三条规则里最容易被说反的是"什么时候克隆、什么时候分裂"，我在备课核实时就写反过一次，课里会把正确版本标出来）。</p>
+
+      <h3>债② ：隐式方法在「大尺度户外」到底行不行</h3>
+      <p>第一季 0010 课讲"建图三分类"（几何 / 语义 / 隐式）时，我引用了一句当时的判断：<b>隐式地图方法在大尺度户外的有效性尚未被证明</b>。那句话在当时是诚实的——iMAP 那一代工作确实只在房间尺度上验证过。</p>
+      <p>而现在，我们手里有了 2024–2025 年的 <b>PIN-SLAM</b>（激光侧、842 行、宣称"首个完整隐式 SLAM"）和 <b>Splat-SLAM</b>（纯 RGB 侧、全局优化）。它们是否构成"正面证据"？<b>我会在 0111 与 0121 两节里给出判断，并写明这个判断的依据与边界——是判断，就不假装是原文自评。</b></p>
+    </section>
+
+    <section class="section-card" id="dark">
+      <h2>4. 一条暗线：地图里到底存什么</h2>
+      <p>本项目有一条贯穿五季的最长线索，每一季都在同一个问题上换一次答案。这一季要再换两次，所以先把它摆出来。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$\text{TSDF（存标量距离）} \to \text{体素块 + 哈希（存格子）} \to \text{可增量树（存点，能插能删）} \to \text{存平面} \to \text{存函数权重 / 存椭球}$$
+        </div>
+      </div>
+      <p>换成大白话：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.94rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.08)">
+            <th style="text-align:left;padding:.6rem .8rem;border-bottom:2px solid rgba(204,120,92,.3)">课次</th>
+            <th style="text-align:left;padding:.6rem .8rem;border-bottom:2px solid rgba(204,120,92,.3)">地图里存的是</th>
+            <th style="text-align:left;padding:.6rem .8rem;border-bottom:2px solid rgba(204,120,92,.3)">这个选择的动机</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">第二季 0033</td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">每个格子里一个<b>到表面的距离</b></td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">表面就是"距离为零"的那一层，好找</td>
+          </tr>
+          <tr>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">第二季 0034 / 第四季 0084 / 0085</td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">格子块 / 可增量插入删除的<b>点</b></td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">地图会一边走一边长，得能动态加东西</td>
+          </tr>
+          <tr>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">第五季 0100</td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">每个格子里一块<b>拟合好的平面</b></td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">查询快、抗噪，而且视觉可以直接拿它当几何用</td>
+          </tr>
+          <tr>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">第五季 0098</td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">一堆<b>椭球高斯</b></td>
+            <td style="padding:.55rem .8rem;border-bottom:1px solid #eee">地图本身就能直接渲染，建图与渲染合流</td>
+          </tr>
+          <tr>
+            <td style="padding:.55rem .8rem;font-weight:700;color:#8a5a3e">本季 0105–0126</td>
+            <td style="padding:.55rem .8rem;font-weight:700;color:#8a5a3e"><b>函数权重</b> ／ <b>特征网格</b> ／ <b>椭球</b></td>
+            <td style="padding:.55rem .8rem;font-weight:700;color:#8a5a3e">把整条线索推到底：连"地图是一堆东西"这个前提都开始被怀疑</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>读这一季时请一直带着这个问句：</b>「这篇论文把场景存成了什么？为什么它认为这样更好？代价是什么？」——只要你能回答这三问，这一季的 24 节课就都串起来了。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="how">
+      <h2>5. 六个模块的地图</h2>
+      <p>本季 24 节课，按"先立地基、再看演进、最后换赛道"的顺序排成六块：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>模块 1 · 隐式表示的地基（0105–0109）</h4>
+          <p>从 <b>iMAP</b>（第一次把地图塞进一个网络）到 <b>Point-SLAM</b>（把特征挂在点云上），看隐式表示怎么从"糊成一团"一步步变清晰：纯网络 → 多层级网格 → 稀疏体素/特征平面 → 联合编码 → 点基。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块 2 · 规模化与闭环（0110–0112）</h4>
+          <p>本季最尖锐的问题：<b>如果地图是一堆权重，回环来了怎么改？</b> <b>Loopy-SLAM</b>、<b>GO-SLAM</b>、<b>PIN-SLAM</b> 与三条规模化路线给出不同的答案。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块 3 · 鲁棒性与动态（0113–0115）</h4>
+          <p>稠密地图碰上"世界在动"会怎样？<b>Orbeez-SLAM</b>、<b>NeurAR</b> 与动态三篇，加上 2020 年的 <b>DeepV2D</b>（可微 SfM 的起点）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块 4 · 高斯的原点（0116–0117）</h4>
+          <p><b>0116 是本季的还债课</b>：读 3DGS 原始论文，把可微光栅化与自适应密度控制一次性讲透。然后是 <b>MonoGS</b>——第一次只用高斯做 SLAM。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块 5 · 高斯 SLAM 主干（0118–0121）</h4>
+          <p><b>SplaTAM / GS-SLAM</b>（什么时候加高斯）、<b>Photo-SLAM</b>（上嵌入式）、<b>SNI-SLAM</b>（带语义）、<b>WildGS-SLAM / Splat-SLAM</b>（动态与全局一致）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>模块 6 · 表面、语言与工程（0122–0126）</h4>
+          <p><b>SuGaR / GS-IR</b>（抽网格与解耦光照）、<b>LangSplat / GaussianGrasper</b>（语言高斯）、<b>GPS-Gaussian</b>（免逐场景优化）、<b>内存压缩 / StopThePop</b>（显存与排序）、<b>HUGS / Motion-Aware</b>（城市与动态）。</p>
+        </div>
+      </div>
+
+      <h3>怎么读这一季（三种读法）</h3>
+      <div class="tab-buttons">
+        <button data-tab-button="rd" data-tab-id="r1" onclick="lessonKit.openTab('rd','r1')">速览（4 小时）</button>
+        <button data-tab-button="rd" data-tab-id="r2" onclick="lessonKit.openTab('rd','r2')">系统（完整）</button>
+        <button data-tab-button="rd" data-tab-id="r3" onclick="lessonKit.openTab('rd','r3')">只挑必读</button>
+      </div>
+      <div class="tab-panel" data-tab-panel="rd" data-tab-id="r1">
+        <p>只看这五节：<b>0104</b>（本节，建立坐标系）→ <b>0105</b>（隐式表示的地基）→ <b>0109</b>（点基，看隐式怎么变准）→ <b>0116</b>（3DGS 原著，本季最硬的一节）→ <b>0127</b>（收官，两条路线的对照）。读完能说出"隐式与显式各自的赢面"。</p>
+      </div>
+      <div class="tab-panel" data-tab-panel="rd" data-tab-id="r2">
+        <p>按 0104 → 0127 顺序读完 24 节。这一季的排列是"认知依赖"顺序，跳读会丢线索——尤其模块 1 的五节（表示的五代升级）与模块 4–5（高斯从重建走到 SLAM）内部有强依赖。</p>
+      </div>
+      <div class="tab-panel" data-tab-panel="rd" data-tab-id="r3">
+        <p>如果你时间有限但想抓住这一季的骨架，读这七节：<b>0105</b>（iMAP，隐式的起点）、<b>0109</b>（Point-SLAM，表示升级的终点）、<b>0111</b>（PIN-SLAM，还债②的一半）、<b>0116</b>（3DGS 原著，还债①）、<b>0117</b>（MonoGS，高斯做 SLAM 的起点）、<b>0121</b>（Splat-SLAM，还债②的另一半）、<b>0127</b>（收官）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="check">
+      <h2>6. 读完这一季，你应该能回答</h2>
+      <div class="summary-grid">
+        <div class="mini-card"><p>「隐式表示」的"隐"具体隐在哪？为什么它省内存却费算力？</p></div>
+        <div class="mini-card"><p>为什么后来的方法要给隐式表示"加一个显式的外壳"（特征网格 / 点云 / 平面）？</p></div>
+        <div class="mini-card"><p>3DGS 的「自适应密度控制」三条规则分别是什么？克隆与分裂分别在什么条件下触发？</p></div>
+        <div class="mini-card"><p>3DGS 的排序为什么只做一次（按瓦片）？这会带来什么后果，后来的工作怎么修的？</p></div>
+        <div class="mini-card"><p>回环来了，隐式地图与高斯地图分别"改的是哪一层"？</p></div>
+        <div class="mini-card"><p>第一季 0010 课那句"大尺度户外尚未被证明"，到 2025 年算不算被回答了？依据是什么？</p></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用三句话（不看课）向同学解释"隐式表示"与"显式表示"的差别，并各举一个本项目里学过的代表方法。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>显式表示</b>：地图里有一件件具体的东西（点、格子、面片、椭球），你可以指着它说"删掉这个"。本项目里的代表：第二季 0033 的 TSDF 体素、第四季 0084 的 ikd-Tree 点云、第五季 0098 的高斯。</p>
+              <p><b>隐式表示</b>：地图是一堆网络权重，没有"东西"可指，你只能给它一个坐标、让它回答"这里有什么"。本项目里的代表：第二季 0036 的 NeRF、本季 0105 的 iMAP、0106 的 NICE-SLAM。</p>
+              <p><b>关键区别</b>不在存储量，而在<b>可编辑性</b>——隐式表示的致命弱点是很难做局部修改，这就是为什么后来的工作都想办法给它加显式外壳。</p>
+            </div></details>
+          </li>
+          <li>第一季 0015 课说 3D 高斯的显存是它"卡在哪"的一条。请说出"一个高斯要存哪些数"，并估算为什么三百万个高斯就会吃掉大量显存。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>一个 3D 高斯通常要存：<b>位置</b> 3 个数、<b>缩放</b> 3 个数、<b>旋转</b> 4 个数（四元数）、<b>不透明度</b> 1 个数、<b>球谐系数</b>约 48 个数（3 阶 × 3 个颜色通道），合计约 <b>60 个数</b>。</p>
+              <p>以单精度浮点（4 字节）算，一个高斯约 240 字节；三百万个就是约 <b>0.7 GB</b>——而且这只是"静止"的高斯参数本身，还没算优化中间量、排序缓冲与渲染时的临时数据。这就是 0125 节要处理的问题。</p>
+            </div></details>
+          </li>
+          <li>本节用"能不能指着地图里的一件东西说『删掉这个』"来区分隐式与显式。请用这个判据给下面四类表示分类：体素哈希、NeRF、3D 高斯、特征网格（feature grid）。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>显式：</b>体素哈希（能删一个体素块）、3D 高斯（能删一个椭球）。</p>
+              <p><b>隐式：</b>NeRF（只能改权重，改一处影响全局）、特征网格（每个格点上的特征是可寻址的，看似"能删"，但它删掉之后网络还会把空缺插值出来——所以本质上仍是隐式，只是"半显式"）。</p>
+              <p><b>补充一句：</b>正是"特征网格删了还会有残留"这种麻烦，推动了后面的点基表示（0109 Point-SLAM）——让特征挂在"真的可以搬走的点"上。</p>
+            </div></details>
+          </li>
+          <li>为什么这一季要花整整一节（0116）读 3DGS 的原始论文，而不是继续读综述？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>两个原因。① <b>综述会省略掉"机制"</b>：第一季 0015 课读的 3DGS 综述在讲"自适应密度控制"时只是引用，没有展开，所以那一步一直是个黑洞。要讲清它必须回到原始论文。② <b>原始论文才是这个方向的原点</b>：本季后面 10 节高斯课（MonoGS、SplaTAM、GS-SLAM、Photo-SLAM……）全都在改 3DGS 原著里的某一条规则，不先把原著读透，后面就只能记住一堆名字。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0103-多激光雷达2022-在线外参标定.html">← 上一季收官：多激光雷达（2022）</a>
+        <a class="next" href="0105-iMAP2021-第一次把地图塞进一个网络.html">iMAP（2021）：第一次把地图塞进一个网络 →</a>
+      </div>
+      <p class="foot-note">这一季有点像"回到 2020 年重新出发"——前面五季攒下的所有判断，这一季要么被印证，要么被推翻。慢慢读，不急 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

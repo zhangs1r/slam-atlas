@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photo-SLAM（2024）：明确面向嵌入式实时 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0119</div>
+      <h1>Photo-SLAM（2024）：明确面向嵌入式实时</h1>
+      <p class="subtitle">定位要快、渲染要好，那就把地图分两层存 🛠️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：超图元地图 · 几何与光度解耦 · Jetson 部署 · 显式回环</span>
+        <span>👥 作者：Huajian Huang、Longwei Li、Hui Cheng、Sai-Kit Yeung（香港科技大学 / 中山大学）</span>
+        <span>📅 2024 · <i>Photo-SLAM: Real-time Simultaneous Localization and Photorealistic Mapping for Monocular, Stereo, and RGB-D Cameras</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">为什么这篇不一样</a>
+        <a href="#hyper">超图元地图：两层分工</a>
+        <a href="#cameras">单目 / 双目 / RGB-D</a>
+        <a href="#embedded">凭什么能上嵌入式</a>
+        <a href="#loop">本组唯一显式的回环</a>
+        <a href="#result">结果与边界</a>
+        <a href="#ex">课后练习</a>
+      </div>
+    </header>
+
+    <main class="section-card">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「超图元地图（hyper primitives map）」把什么和什么分了开、为什么要这么分；知道三种相机（单目 / 双目 / RGB-D）分别怎么补深度；能复述它跑在 Jetson AGX Orin 上的那几个数字；并理解「显式回环」在这个系列里为什么是个稀缺品。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>延续前两课 <b>0117</b>（MonoGS 用渲染误差反传位姿）与 <b>0118</b>（SplaTAM / GS-SLAM 的增删判据）。这一篇的定位端<b>不走渲染反传</b>，而是回到第三季 <b>0043</b> ORB-SLAM 那一族的特征法因子图——它是「ORB 定位 + 高斯画质」的混合结构。算力预算这条线则接第二季 <b>0035</b> Voxblox 的机载约束与第五季 <b>0102</b> FusionPortable 的评测平台。</p>
+        </div>
+      </div>
+
+      <h2 id="why">1. 为什么这一篇不一样</h2>
+
+      <p>前面几篇高斯 SLAM 都在比「精度」和「渲染质量」。这一篇的出发点不一样，它开篇就把矛头指向了一个很现实的问题：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「近期把神经渲染与 SLAM 结合的工作展示了很好的前景。然而，<b>现有方法完全依赖隐式表示，资源消耗极大，无法在便携设备上运行，这背离了 SLAM 的初衷。</b>」</p>
+
+      <p>这句话说得很重。「SLAM 的初衷」是什么？就是让一台机器人在陌生的环境里自己走、自己看、自己建一张能用的图——而如果这套系统必须绑在一张桌面级大显卡上，那它就只能待在实验室里。论文还进一步列出了隐式表示的几个具体痛点：优化过程耗时；因此不得不引入各种深度来源（RGB-D 相机、稠密光流、单目深度估计）来保证收敛；而且因为特征是被 MLP 解码的，通常还得先<b>划一个包围盒</b>把采样点归一化，这本身就限制了系统的可扩展性。</p>
+
+      <p>所以它给出的答案不是「把网络做小」，而是<b>换一种地图的组织方式</b>——这就是下一节的超图元地图。</p>
+
+      <h2 id="hyper">2. 超图元地图：一次存两遍，各干各的活</h2>
+
+      <p>先把名字解释一下。「<b>primitive</b>」是「图元」，指三维世界里的一个基本元素（点、面片、椭球都算）。「<b>hyper primitives</b>」直译是「超图元」——它比普通的点图元多带了一堆属性。论文的定义是这样的：</p>
+
+      <div class="callout">
+        <h4>一个超图元里存了什么（原文定义）</h4>
+        <p>一组点云 $\mathbf{P}\in\mathbb{R}^3$，每个点<b>关联</b>着：<b>ORB 特征</b> $\mathbf{O}\in\mathbb{R}^{256}$、<b>旋转</b> $\mathbf{r}\in SO(3)$、<b>缩放</b> $\mathbf{s}\in\mathbb{R}^3$、<b>密度</b> $\sigma\in\mathbb{R}^1$、以及<b>球谐系数</b> $\mathrm{SH}\in\mathbb{R}^{16}$。</p>
+      </div>
+
+      <p>请盯着这个清单看几秒，你会发现它其实是<b>两套东西被焊在了一起</b>：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>几何的那一半：位置 + ORB 特征</b>
+          <p>位置 $\mathbf{P}$ 和 256 维的 ORB 描述子 $\mathbf{O}$ 是<b>传统视觉 SLAM 的东西</b>。论文说得很明确：ORB 特征「负责建立 2D–2D 与 2D–3D 对应关系」，系统的位姿就是从这些对应关系里用因子图解出来的。</p>
+          <p>它的特点是<b>稀疏但可靠</b>——一帧图像里能提出来的 ORB 特征通常只有几百到几千个，但它们是被精心挑选过的、可以反复匹配的点。</p>
+        </div>
+        <div class="mini-card">
+          <b>外观的那一半：旋转 + 缩放 + 密度 + 球谐</b>
+          <p>这四个是<b>3D 高斯的参数</b>（对应上一课 <b>0116</b> 里讲的协方差分解与球谐颜色）。它们只为一件事服务：<b>把场景渲染得好看</b>。</p>
+          <p>它的特点是<b>稠密但只对渲染负责</b>——这些参数不参与位姿估计，只参与光度损失的反向传播。</p>
+        </div>
+      </div>
+
+      <p>换句话说，<b>「定位」和「好看」这两个诉求被拆到了同一张地图的两个字段上</b>。论文在动机里把这场分工的必要性讲得很直接：纯隐式表示「要么慢、要么离不开深度」，而只靠稀疏特征点又「只能给你一张视觉上很朴素的图」。分开存，就两边都拿到。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一面墙，存两遍：几何层管定位，光度层管画质</text>
+
+          <!-- 上层：几何 -->
+          <rect x="60" y="54" width="780" height="114" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="76" y="78" font-size="12.5" font-weight="700" fill="#3b4a5e">上层：稀疏的几何特征（显式）</text>
+          <text x="76" y="96" font-size="10.5" fill="#7a8a99">位置 + ORB 特征：只留这些，够用来算位姿</text>
+          <g fill="#5a8fc7" stroke="#2c5f8a" stroke-width="0.6">
+            <rect x="104" y="116" width="9" height="9"/><rect x="168" y="136" width="9" height="9"/>
+            <rect x="228" y="112" width="9" height="9"/><rect x="292" y="142" width="9" height="9"/>
+            <rect x="348" y="118" width="9" height="9"/><rect x="404" y="138" width="9" height="9"/>
+            <rect x="466" y="114" width="9" height="9"/><rect x="524" y="144" width="9" height="9"/>
+            <rect x="584" y="116" width="9" height="9"/><rect x="642" y="140" width="9" height="9"/>
+            <rect x="702" y="112" width="9" height="9"/><rect x="762" y="142" width="9" height="9"/>
+            <rect x="136" y="150" width="9" height="9"/><rect x="322" y="120" width="9" height="9"/>
+            <rect x="496" y="146" width="9" height="9"/><rect x="672" y="118" width="9" height="9"/>
+            <rect x="196" y="120" width="9" height="9"/><rect x="446" y="120" width="9" height="9"/>
+            <rect x="606" y="146" width="9" height="9"/><rect x="800" y="126" width="9" height="9"/>
+          </g>
+          <text x="824" y="98" text-anchor="end" font-size="10.5" fill="#2c5f8a">一共几十个点，稀疏但很准</text>
+
+          <!-- 中缝竖线 -->
+          <line x1="450" y1="172" x2="450" y2="230" stroke="#90a4ae" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M450 172 L445 182 L455 182 Z" fill="#90a4ae"/>
+          <path d="M450 230 L445 220 L455 220 Z" fill="#90a4ae"/>
+          <text x="466" y="206" font-size="11.5" font-weight="700" fill="#5a4a42">定位要快、渲染要好，那就分两层存</text>
+
+          <!-- 下层：光度 -->
+          <rect x="60" y="234" width="780" height="114" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="76" y="258" font-size="12.5" font-weight="700" fill="#2f6d51">下层：稠密的光度特征（隐式）</text>
+          <text x="76" y="276" font-size="10.5" fill="#5f8a72">球谐系数等纹理参数：铺满整面墙，只用来渲染</text>
+          <g fill="#4a9c76">
+            <rect x="100" y="288" width="18" height="8" opacity="0.45"/><rect x="122" y="288" width="18" height="8" opacity="0.7"/>
+            <rect x="144" y="288" width="18" height="8" opacity="0.35"/><rect x="166" y="288" width="18" height="8" opacity="0.8"/>
+            <rect x="188" y="288" width="18" height="8" opacity="0.5"/><rect x="210" y="288" width="18" height="8" opacity="0.65"/>
+            <rect x="232" y="288" width="18" height="8" opacity="0.4"/><rect x="254" y="288" width="18" height="8" opacity="0.75"/>
+            <rect x="276" y="288" width="18" height="8" opacity="0.55"/><rect x="298" y="288" width="18" height="8" opacity="0.35"/>
+            <rect x="320" y="288" width="18" height="8" opacity="0.7"/><rect x="342" y="288" width="18" height="8" opacity="0.5"/>
+            <rect x="364" y="288" width="18" height="8" opacity="0.8"/><rect x="386" y="288" width="18" height="8" opacity="0.45"/>
+            <rect x="408" y="288" width="18" height="8" opacity="0.6"/><rect x="430" y="288" width="18" height="8" opacity="0.35"/>
+            <rect x="452" y="288" width="18" height="8" opacity="0.75"/><rect x="474" y="288" width="18" height="8" opacity="0.5"/>
+            <rect x="496" y="288" width="18" height="8" opacity="0.65"/><rect x="518" y="288" width="18" height="8" opacity="0.4"/>
+            <rect x="540" y="288" width="18" height="8" opacity="0.8"/><rect x="562" y="288" width="18" height="8" opacity="0.55"/>
+            <rect x="584" y="288" width="18" height="8" opacity="0.35"/><rect x="606" y="288" width="18" height="8" opacity="0.7"/>
+            <rect x="628" y="288" width="18" height="8" opacity="0.5"/><rect x="650" y="288" width="18" height="8" opacity="0.45"/>
+            <rect x="672" y="288" width="18" height="8" opacity="0.75"/><rect x="694" y="288" width="18" height="8" opacity="0.6"/>
+            <rect x="716" y="288" width="18" height="8" opacity="0.35"/><rect x="738" y="288" width="18" height="8" opacity="0.8"/>
+            <rect x="760" y="288" width="18" height="8" opacity="0.5"/><rect x="782" y="288" width="18" height="8" opacity="0.65"/>
+            <rect x="100" y="300" width="18" height="8" opacity="0.7"/><rect x="122" y="300" width="18" height="8" opacity="0.4"/>
+            <rect x="144" y="300" width="18" height="8" opacity="0.8"/><rect x="166" y="300" width="18" height="8" opacity="0.5"/>
+            <rect x="188" y="300" width="18" height="8" opacity="0.6"/><rect x="210" y="300" width="18" height="8" opacity="0.35"/>
+            <rect x="232" y="300" width="18" height="8" opacity="0.75"/><rect x="254" y="300" width="18" height="8" opacity="0.45"/>
+            <rect x="276" y="300" width="18" height="8" opacity="0.65"/><rect x="298" y="300" width="18" height="8" opacity="0.5"/>
+            <rect x="320" y="300" width="18" height="8" opacity="0.35"/><rect x="342" y="300" width="18" height="8" opacity="0.8"/>
+            <rect x="364" y="300" width="18" height="8" opacity="0.55"/><rect x="386" y="300" width="18" height="8" opacity="0.7"/>
+            <rect x="408" y="300" width="18" height="8" opacity="0.4"/><rect x="430" y="300" width="18" height="8" opacity="0.65"/>
+            <rect x="452" y="300" width="18" height="8" opacity="0.5"/><rect x="474" y="300" width="18" height="8" opacity="0.8"/>
+            <rect x="496" y="300" width="18" height="8" opacity="0.35"/><rect x="518" y="300" width="18" height="8" opacity="0.7"/>
+            <rect x="540" y="300" width="18" height="8" opacity="0.45"/><rect x="562" y="300" width="18" height="8" opacity="0.6"/>
+            <rect x="584" y="300" width="18" height="8" opacity="0.75"/><rect x="606" y="300" width="18" height="8" opacity="0.4"/>
+            <rect x="628" y="300" width="18" height="8" opacity="0.55"/><rect x="650" y="300" width="18" height="8" opacity="0.8"/>
+            <rect x="672" y="300" width="18" height="8" opacity="0.35"/><rect x="694" y="300" width="18" height="8" opacity="0.65"/>
+            <rect x="716" y="300" width="18" height="8" opacity="0.5"/><rect x="738" y="300" width="18" height="8" opacity="0.7"/>
+            <rect x="760" y="300" width="18" height="8" opacity="0.45"/><rect x="782" y="300" width="18" height="8" opacity="0.6"/>
+            <rect x="100" y="312" width="18" height="8" opacity="0.5"/><rect x="122" y="312" width="18" height="8" opacity="0.65"/>
+            <rect x="144" y="312" width="18" height="8" opacity="0.4"/><rect x="166" y="312" width="18" height="8" opacity="0.75"/>
+            <rect x="188" y="312" width="18" height="8" opacity="0.55"/><rect x="210" y="312" width="18" height="8" opacity="0.35"/>
+            <rect x="232" y="312" width="18" height="8" opacity="0.8"/><rect x="254" y="312" width="18" height="8" opacity="0.5"/>
+            <rect x="276" y="312" width="18" height="8" opacity="0.6"/><rect x="298" y="312" width="18" height="8" opacity="0.7"/>
+            <rect x="320" y="312" width="18" height="8" opacity="0.45"/><rect x="342" y="312" width="18" height="8" opacity="0.8"/>
+            <rect x="364" y="312" width="18" height="8" opacity="0.35"/><rect x="386" y="312" width="18" height="8" opacity="0.6"/>
+            <rect x="408" y="312" width="18" height="8" opacity="0.7"/><rect x="430" y="312" width="18" height="8" opacity="0.45"/>
+            <rect x="452" y="312" width="18" height="8" opacity="0.55"/><rect x="474" y="312" width="18" height="8" opacity="0.8"/>
+            <rect x="496" y="312" width="18" height="8" opacity="0.4"/><rect x="518" y="312" width="18" height="8" opacity="0.65"/>
+            <rect x="540" y="312" width="18" height="8" opacity="0.5"/><rect x="562" y="312" width="18" height="8" opacity="0.7"/>
+            <rect x="584" y="312" width="18" height="8" opacity="0.35"/><rect x="606" y="312" width="18" height="8" opacity="0.75"/>
+            <rect x="628" y="312" width="18" height="8" opacity="0.45"/><rect x="650" y="312" width="18" height="8" opacity="0.6"/>
+            <rect x="672" y="312" width="18" height="8" opacity="0.8"/><rect x="694" y="312" width="18" height="8" opacity="0.4"/>
+            <rect x="716" y="312" width="18" height="8" opacity="0.65"/><rect x="738" y="312" width="18" height="8" opacity="0.5"/>
+            <rect x="760" y="312" width="18" height="8" opacity="0.75"/><rect x="782" y="312" width="18" height="8" opacity="0.55"/>
+          </g>
+          <text x="824" y="278" text-anchor="end" font-size="10.5" fill="#2f6d51">铺得密密麻麻，只求渲染像</text>
+
+          <text x="450" y="404" text-anchor="middle" font-size="12" fill="#5a4a42">两层共用同一面墙的坐标，但一个只服务定位，一个只服务渲染</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>超图元地图的「两层分工」：同一面墙，被存成了两个用途完全不同的层次。<br>
+          <b>怎么看这张图：</b>① <b>上层</b>是稀疏的几何特征——几十个小方块，每个对应一个 ORB 特征点。它稀疏，但每一个都可靠、可匹配，是位姿估计的全部依据；② <b>下层</b>是稠密的光度特征——铺满整面墙的细密格子，对应球谐系数等纹理参数。它只参与渲染损失的反传，不参与解位姿；③ 中间那根竖线表示<b>这两层描述的是同一个物理表面</b>，只是各存各的、各管各的；④ 为什么要分开？因为两件事的「最优数据结构」不同——定位要的是稀疏可靠、算得快；渲染要的是足够稠密、够细腻。<br>
+          <b>要记住的一句话：</b>这一篇的贡献不是「用了高斯」，而是<b>承认了「定位」和「画质」是两件事，并且让它们各自拥有自己的数据</b>——这就是「超图元」这个名字里「超」的含义。
+        </figcaption>
+      </figure>
+
+      <p>下面这张原图是整个系统的结构图，只有四块，非常清爽：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Photo-SLAM/9b677ac238783af40bfc0e9c0bf6f723c4b7212776f807b283ce22b906576834.jpg" alt="Photo-SLAM Fig.2 the four main components">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The Photo-SLAM contains four main components, including localization, explicit geometry mapping, implicit photorealistic mapping, and loop closure components, while maintaining a map with hyper primitives.<br>
+          （中译：Photo-SLAM 包含四个主要组件：定位、显式几何建图、隐式照片级建图、回环检测，它们共同维护一张以超图元构成的地图。）<br>
+          <b>怎么看这张图：</b>① 数一数箭头：四个组件<b>并行跑在四个线程里</b>，共同读写同一张超图元地图（原文原话是「每个组件运行在一个并行线程中，并共同维护一张超图元地图」）；② 注意哪两个组件是「写几何」、哪两个是「用几何」——定位与几何建图负责稀疏特征，光度建图负责稠密外观，回环负责在两者之上做全局修正；③ 请把这张图和上一节的自绘图对起来看：自绘图讲的是「一张地图里存了什么」，这张图讲的是「谁来读写这些字段」。<br>
+          <b>和前面几课对照：</b><b>0117</b> MonoGS 的组件是「跟踪 / 建图 / 关键帧管理 / 新视角合成」但全用同一种表示；这一篇是「定位 / 几何建图 / 光度建图 / 回环」，前两者用显式特征、后两者用隐式高斯——<b>一张系统图就把「分两层」的设计说完了</b>。
+        </figcaption>
+      </figure>
+
+      <h2 id="cameras">3. 单目 / 双目 / RGB-D：三种输入怎么统一</h2>
+
+      <p>超图元的初始化靠的是「三角化」：当相邻帧之间有足够多的 2D–2D 对应时，系统解出变换矩阵，然后才初始化地图、开始跟踪。这个流程和 ORB-SLAM 一样。</p>
+
+      <p>问题出在<b>增密</b>这一步。论文发现一个很有意思的现象：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「实验中发现，一帧里<b>不到 30%</b> 的 2D 几何特征点是「活跃的」（也就是有对应的三维点），在非 RGB-D 的场景下尤其如此。」</p>
+
+      <p>这很好理解：3D 点要靠多帧匹配三角化才能生成，纹理弱或者刚出现在视野里的那些特征，还没来得及变成 3D 点。而论文的推理很聪明：</p>
+
+      <p><b>「2D 特征点在一帧里分布密集的地方，本质上就是纹理复杂的区域——而纹理复杂的区域正需要更多的超图元。」</b>所以它反过来用这些<b>尚未激活的特征点</b>去做增密：关键帧一产生，就在这些点上创建临时的超图元。</p>
+
+      <p>那么这些临时超图元的「深度」（也就是位置）从哪来？这就是三种相机分道扬镳的地方：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">输入类型</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">怎么拿到未激活特征点的深度</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">论文原话要点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>RGB-D</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">直接把未激活的 2D 特征点用深度投影到三维</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「可以直接把未激活的 2D 特征点用深度投影来创建临时超图元」</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>单目</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">借邻居：用<b>最近的活跃 2D 特征点的深度</b>来估它自己的深度</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「对未激活的 2D 特征点，通过解读其最近邻活跃特征点的深度来估计其深度」</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>双目</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">用<b>立体匹配</b>算法来估深度</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「双目场景下，我们依赖立体匹配算法来估计未激活特征点的深度」</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>请注意这套设计的克制之处：<b>它没有引入任何深度网络</b>（不像 <b>0117</b> 之后的 WildGS-SLAM 用 Metric3D，也不像 <b>0119</b> 之外很多工作用单目深度估计器）。单目版本只是「拿最近的邻居的深度当自己的深度」——这个方法粗糙，但它足够便宜，而且后面还有一整套迭代优化在兜底。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Photo-SLAM/dcbf355410f4b887fc3fdef01c8ea9c92423f6d7ad44563f2be3a5a4af074c1c.jpg" alt="Photo-SLAM Fig.4 geometry-based densification of hyper primitives">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>We make use of initial geometric information to densify hyper primitives.<br>
+          （中译：我们利用初始的几何信息来对超图元做稠密化。）<br>
+          <b>怎么看这张图：</b>① 找到「激活」与「未激活」两类特征点的对照——前者已经有三维点、后者还没有；② 看新增出来的那些临时超图元是从哪冒出来的：正是从「未激活」的那批特征点里来的；③ 论文给的理由在这一节已经讲过：这些点密集的地方就是纹理复杂的地方，而纹理复杂的地方最需要补超图元。<br>
+          <b>要记住的一句话：</b>这是一种「<b>用几何信息去指导外观表示</b>」的增密思路——和上一课 <b>0118</b> 里 SplaTAM 用剪影、GS-SLAM 用深度差是同一件事的第三种答案。
+        </figcaption>
+      </figure>
+
+      <p>还有一处值得提的设计是<b>高斯金字塔式训练（Gaussian-Pyramid-based learning）</b>。它的做法是：先把原图反复做高斯平滑与降采样得到一组多尺度图像（金字塔），训练开始时只用最顶层（最模糊、分辨率最低）的那一张当监督，随着迭代进行，逐渐降低层级换成更清晰的图像，直到金字塔底部。默认用 <b>3 层</b>（论文写作 $n=2$）。消融显示：4 层反而会「因增量建图过程中对低层特征过拟合」而变差。这和第三季 <b>0049</b> DSO 的由粗到细图像金字塔是同一个思路。</p>
+
+      <h2 id="embedded">4. 凭什么能上嵌入式</h2>
+
+      <p>先给数字，再说原因——数字是这一课最硬的部分：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">平台</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">跟踪 FPS</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">渲染 FPS</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">显存</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Jetson AGX Orin</b>（嵌入式）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>18.315</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>95.057</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>4 GB</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">笔记本（RTX 3080 Ti）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">19.974</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">353.504</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">4 GB</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">桌面（RTX 4090）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">41.646</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">911.262</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">6 GB</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这组数字出自 Replica 数据集的单目设定。值得注意的有两点：<b>① 嵌入式平台只要 4 GB 显存</b>，和笔记本一样多；② 从桌面换到 Jetson，跟踪帧率只掉了一半多（41.6 → 18.3），但<b>渲染帧率掉了将近十倍</b>（911 → 95）——说明渲染这一步更吃 GPU，而定位那一步受平台影响较小，这正好印证了「两层分工」的收益。</p>
+
+      <p>那具体省在哪儿？我们把论文提到的工程细节归拢一下：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 定位只用稀疏特征</b>
+          <p>位姿估计靠的是 ORB 特征点的因子图 + Levenberg–Marquardt 优化（重投影误差 + Huber 核），地图侧的几何建图做局部 BA。这条路在 CPU 上就很快，不需要 GPU 参与。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 渲染只在有需要时做</b>
+          <p>光度建图那一侧才用高斯泼溅的瓦片渲染器。而且论文指出：<b>渲染速度理论上只和当前视野里可见的超图元数量有关，和整张地图的大小无关</b>——这意味着场景变大不会直接拖慢渲染。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 全局软件工程：纯 C++ 与 CUDA</b>
+          <p>论文强调系统「完全用 C++ 与 CUDA 实现」，基于 ORB-SLAM3、3DGS 与 LibTorch 框架。没有整条链路都压在 Python 上。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 训练分层推进，不用一步到位</b>
+          <p>高斯金字塔式训练让前期的监督信号更「便宜」（低分辨率图像），迭代次数得以摊开；论文也指出，渲染变快以后，同样的在线时间内就能对超图元做更多次迭代优化，「最终带来精度与质量的提升」。</p>
+        </div>
+      </div>
+
+      <p>下面这张自绘图把「嵌入式约束」这件事画成一条时间预算：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">嵌入式实时：每一帧都得在预算里跑完</text>
+
+          <!-- 小车 -->
+          <rect x="60" y="50" width="72" height="26" rx="6" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.4"/>
+          <path d="M132 76 L132 50 L154 50 L154 76 Z" fill="#dfe9f3" stroke="#2c5f8a" stroke-width="1.2"/>
+          <circle cx="76" cy="80" r="7" fill="#37474f"/>
+          <circle cx="140" cy="80" r="7" fill="#37474f"/>
+          <text x="96" y="46" text-anchor="middle" font-size="11" fill="#2c5f8a">嵌入式平台</text>
+          <text x="176" y="72" font-size="11.5" fill="#5a4a42">Jetson AGX Orin：跟踪 18.315 FPS、渲染 95.057 FPS、显存约 4 GB</text>
+
+          <!-- 预算条 -->
+          <text x="60" y="126" font-size="11.5" font-weight="700" fill="#3b4a5e">一帧的时间预算（各段比例仅为示意）</text>
+          <rect x="60" y="136" width="180" height="46" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.2"/>
+          <rect x="240" y="136" width="290" height="46" fill="#cc785c" stroke="#a8563a" stroke-width="1.2"/>
+          <rect x="530" y="136" width="310" height="46" fill="#2f6d51" stroke="#1f5540" stroke-width="1.2"/>
+          <text x="150" y="165" text-anchor="middle" font-size="12.5" font-weight="700" fill="#ffffff">前端</text>
+          <text x="385" y="165" text-anchor="middle" font-size="12.5" font-weight="700" fill="#ffffff">建图</text>
+          <text x="685" y="165" text-anchor="middle" font-size="12.5" font-weight="700" fill="#ffffff">渲染</text>
+
+          <!-- 刻度 -->
+          <line x1="60" y1="182" x2="60" y2="192" stroke="#90a4ae" stroke-width="1.4"/>
+          <line x1="240" y1="182" x2="240" y2="192" stroke="#90a4ae" stroke-width="1.4"/>
+          <line x1="530" y1="182" x2="530" y2="192" stroke="#90a4ae" stroke-width="1.4"/>
+          <line x1="840" y1="182" x2="840" y2="192" stroke="#90a4ae" stroke-width="1.4"/>
+          <text x="450" y="212" text-anchor="middle" font-size="11" fill="#7a8a99">这条横条代表「每帧必须在多长的时间内处理完」，装不下就得降频</text>
+
+          <!-- 说明 -->
+          <text x="60" y="252" font-size="12" fill="#3b4a5e">它能上嵌入式的关键，不是在某一项上省，而是：</text>
+          <text x="60" y="276" font-size="12" fill="#2c5f8a">定位那一段只用稀疏 ORB 特征走因子图——便宜，而且在 CPU 上就能跑</text>
+          <text x="60" y="300" font-size="12" fill="#2f6d51">渲染那一段虽然贵，但只和当前视野里可见的超图元数量有关，和整张地图大小无关</text>
+          <text x="60" y="324" font-size="12" fill="#a8563a">整条链路用 C++ 与 CUDA 实现，没有全压在 Python 上</text>
+
+          <text x="450" y="360" text-anchor="middle" font-size="12" fill="#5a4a42">原文没有给出前端 / 建图 / 渲染三项的耗时细分，所以横条的比例只是示意，数字请看上面的实测帧率</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「实时」在嵌入式场景里到底是什么意思——不是「跑得动」，而是「每一帧都必须在预算内跑完」。<br>
+          <b>怎么看这张图：</b>① 上面那台小车代表搭载 Jetson AGX Orin 的机器人平台，旁边是它实测的跟踪帧率、渲染帧率与显存；② 中间那条横条是<b>示意</b>的时间预算，被切成前端 / 建图 / 渲染三段——<b>请注意各段的比例是示意，不是原文数字</b>；③ 下面三行是它真正省下来的地方：定位便宜、渲染与地图规模无关、整条链路是 C++/CUDA。<br>
+          <b>必须说明的一点：</b>原文只给出了各平台的实测帧率（跟踪 18.315 / 渲染 95.057 FPS 等）与显存占用，<b>并没有给出「前端 / 建图 / 渲染分别占多少毫秒」这样的细分</b>。所以图中横条的三段比例是<b>教学示意</b>，不代表原文数据——这也是本节课要求明确标注的地方。<br>
+          <b>要记住的一句话：</b>嵌入式实时不是靠某一处优化换来的，而是<b>架构上把「便宜的活」和「贵的活」分开</b>之后自然得到的。
+        </figcaption>
+      </figure>
+
+      <p>再看效果图。这一张同时展示了三种相机的重建结果，以及渲染帧率的量级：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Photo-SLAM/c7df7d91c927b589c8679c2b07168e50d85750bdddde7a24f57cdf162a920fc3.jpg" alt="Photo-SLAM Fig.1 rendering and trajectory results">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Rendering and trajectory results. Photo-SLAM can reconstruct high-fidelity views of scenes using monocular, stereo, and RGB-D cameras while render speed is up to 1000 FPS.<br>
+          （中译：渲染与轨迹结果。Photo-SLAM 能用单目、双目与 RGB-D 相机重建高保真的场景视图，而渲染速度最高可达 1000 FPS。）<br>
+          <b>怎么看这张图：</b>① 请先确认它把<b>三种输入</b>放在了一起展示——这正是这一节的标题；② 注意原图注的用词是「up to 1000 FPS」，这是一个<b>上限</b>（对应桌面 4090 上的 RGB-D 结果 1084.017 FPS），不是所有配置都能达到；③ 图上还叠了轨迹，说明它同时在做定位——渲染结果和轨迹是同一个系统的两种输出。<br>
+          <b>和上一课的对照：</b>上一课 SplaTAM 也报了 400 FPS 渲染，但那是它自己的渲染器；这里 Photo-SLAM 的高帧率有一半功劳要记在「定位不占用渲染管线」这个架构决定上。
+        </figcaption>
+      </figure>
+
+      <h2 id="loop">5. 本组唯一显式的回环</h2>
+
+      <p>这一节要单独讲，因为在这八篇高斯 SLAM 里，<b>只有 Photo-SLAM 明确实现了回环检测</b>（<b>0121</b> 课的 Splat-SLAM 也有，但那已经是 2025 年的工作了，而且它走的是另一条技术路线——DROID 光流 + 全局 BA）。</p>
+
+      <p>论文只用了很短一段话交代这件事，但信息量不小：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「回环在 SLAM 中至关重要，因为它有助于解决定位与几何建图过程中累积的误差与漂移。检测到闭合回环之后，我们<b>可以通过相似变换来修正局部关键帧与超图元</b>。有了修正后的相机位姿，光度建图组件就能进一步<b>摆脱里程计漂移造成的鬼影</b>，提升建图质量。」</p>
+
+      <p>这里有三个要点：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 为什么必须有几何层</b>
+          <p>回环本质上是「认出这里我来过」。认出这件事，靠的是<b>特征描述子的匹配</b>——也就是超图元里那 256 维的 ORB 字段。纯光度/纯高斯的表示要做到这一点要另想办法。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 用相似变换修正</b>
+          <p>检测到回环后，用<b>相似变换</b>去修正局部关键帧与超图元。单目系统还要顺带把尺度的漂移一起拉回来——这正是第三季 <b>0045</b> ORB-SLAM 用 sim(3) 修正单目尺度的同一件事。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 修正完还要重渲</b>
+          <p>位姿被拉正之后，光度建图组件会重新优化——论文说这能「摆脱里程计漂移造成的鬼影」。请回忆 <b>0117</b>：高斯地图的「可被扭曲修改」正是它相比网格、体素的一个关键优势。</p>
+        </div>
+      </div>
+
+      <p>把这一节和 <b>0118</b> 连起来看就很有意思了：SplaTAM 与 GS-SLAM 都选择了不做回环，把全部火力投在「表示与增删判据」上；而 Photo-SLAM 因为定位端本来就是成熟的 ORB-SLAM3 骨架，回环几乎是「顺手」得到的。<b>这是架构选择带来的红利。</b>但也别忘了代价——它的定位精度上限被特征法锁住了，在无纹理场景里会比不过 <b>0118</b> 里 SplaTAM 那种「亚厘米级、无纹理」的表现。</p>
+
+      <h2 id="result">6. 结果与边界</h2>
+
+      <p>论文报告的主结果：在 Replica 数据集上，单目配置的 PSNR 达到 <b>33.302</b>（SSIM 0.926、LPIPS 0.078），摘要里的说法是「PSNR 高出 30%、渲染速度快数百倍」。它支持的场景也最广：Replica / TUM（单目、RGB-D）、EuRoC（双目）、以及手持双目相机在<b>户外无边界场景</b>下的建图（见图 9），户外用的是 ZED2 双目相机。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Photo-SLAM/ee74f8277fc1dd6c44cc39e196322eebb3113604960aba9fd679560cf5f4f87c.jpg" alt="Photo-SLAM Fig.9 outdoor unbounded scene with a hand-held stereo camera">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Mapping results of Photo-SLAM using a hand-held stereo camera in an outdoor unbounding scene.<br>
+          （中译：用一台手持双目相机在户外无边界场景下的建图结果。）<br>
+          <b>怎么看这张图：</b>① 关键词是「<b>outdoor</b>」与「<b>unbounding</b>」（无边界）——这在本组八篇里是很少见的，后面几课我们会看到，大部分高斯 SLAM 的评测都停在室内数据集（Replica / TUM / ScanNet）；② 输入是<b>手持双目</b>，不是深度相机，也不是固定在车上的激光雷达；③ 这正是第一季 <b>0010</b> 课那句「隐式/稠密方法在大尺度户外的有效性尚未被证明」需要的那种证据形态——不过请注意，这一张是<b>定性</b>的建图结果，论文并没有在户外场景上报告完整的定量基准。<br>
+          <b>要记住的一句话：</b>「能在户外跑起来」和「在户外被定量证明了」是两回事，读论文时要把这两件事分开看。
+        </figcaption>
+      </figure>
+
+      <p>消融部分给出了两条很清楚的结论：<b>几何增密（Geo）与高斯金字塔训练（GP）缺一不可。</b>没有 Geo，单目与 RGB-D 的 PSNR 分别掉 2.028 与 1.662，渲染图上会出现天花板一类的伪影；只有 Geo 而没有 GP，则会出现「超图元被增密了、但位置不准、又没优化透，反而变成负担」的情况（单目 PSNR 从 33.302 掉到 20.002）。论文还专门提到：4 层金字塔反而变差，「可能因为增量建图过程中对低层特征过拟合」。</p>
+
+      <div class="callout">
+        <h4>★ 关于「局限」的诚实说明</h4>
+        <p><b>这篇论文没有单独的「局限性」小节。</b>它的第 5 节标题是 Conclusion，内容只写了贡献与总结，Acknowledgements 之后直接进入参考文献。所以任何「原文承认的局限」其实都是从它的实验范围、消融结论和系统结构里<b>推断</b>出来的，不能说成「原文说」。</p>
+        <p>可以确定地说出的边界有这些：</p>
+        <p>① <b>定位依赖 ORB 几何</b>——因为定位端就是特征法因子图，所以在特征稀少或重复纹理的环境里，它会遇到和传统特征法一样的困难（这也是为什么后面 <b>0121</b> 的 Splat-SLAM 要走「纯 RGB + DROID 光流」那条路）。</p>
+        <p>② <b>需要两套表示并存的工程量</b>——超图元里既有 ORB 又有球谐，论文也说明了系统是基于 ORB-SLAM3、3DGS 与 LibTorch 三者拼起来的。</p>
+        <p>③ <b>户外结果以定性为主</b>——图 9 展示了手持双目在户外无边界场景的建图，但没有配套的定量基准数字。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文用「<b>未激活</b>的 2D 特征点」（还只有二维、没三角化出三维点的那些）来触发增密。这个做法背后的推理是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="恰恰相反，未激活的点恰恰是「还没算出来」的那些。用它来增密，是因为它们所处的位置有信息量，不是因为它们本身算得准。" onclick="lessonKit.answer(this,'q0119a')">因为它们的深度算得更准</button>
+          <button data-correct="yes" data-explanation="对。论文原话是：那些在图像上分布密集的 2D 特征点，本质上代表着纹理复杂的区域，而纹理复杂的区域正需要更多的超图元。换句话说，「哪里的特征挤成一堆」就是「哪里该多放几个高斯」的一个免费信号——而且不需要额外计算。" onclick="lessonKit.answer(this,'q0119a')">因为它们挤在一起说明纹理复杂</button>
+          <button data-correct="no" data-explanation="未激活的点确实比活跃的点更多，但论文的理由不是「数量」，而是它们所代表的空间位置——也就是纹理复杂度。" onclick="lessonKit.answer(this,'q0119a')">因为它们的数量比活跃点多</button>
+        </div>
+        <div class="quiz-feedback" id="q0119a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文说「渲染速度理论上只和当前视野里可见的超图元数量有关，而与整张地图的大小无关」。这句话为什么对高斯这类表示成立，而对 NeRF 那类隐式表示不成立？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。3DGS 是「遍历图元」而不是「沿光线采样」：屏幕上只出现视野内的那些高斯，屏幕外的高斯根本不参与计算，所以地图再大也不影响一帧的渲染耗时。而 NeRF 那一类要沿每条光线采样上百个点、每点都去问一次网络——光线长度和场景复杂度是绑在一起的。" onclick="lessonKit.answer(this,'q0119b')">因为高斯是遍历图元、不是逐光线采样</button>
+          <button data-correct="no" data-explanation="高斯也是要占显存的（这一点恰好是它被诟病的地方）。但「速度与地图大小无关」说的是计算量，不是显存——地图越大，显存确实会涨。" onclick="lessonKit.answer(this,'q0119b')">因为高斯地图不占用显存空间</button>
+          <button data-correct="no" data-explanation="恰恰相反，高斯是可以被删、被裁剪的显式元素，这正是它「可编辑」的体现。但这句话讲的是渲染速度的来源，与能否删除无关。" onclick="lessonKit.answer(this,'q0119b')">因为高斯可以被随时删除掉</button>
+        </div>
+        <div class="quiz-feedback" id="q0119b"></div>
+      </div>
+
+      <h2 id="ex">7. 课后练习</h2>
+
+      <section class="exercise-box">
+        <h3>练习</h3>
+        <ol>
+          <li>请解释「超图元（hyper primitive）」这个名字里的「超」指的是什么，并说明这套设计相比「纯隐式表示」和「纯特征点地图」各补上了什么短板。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>「超」指的是一个图元身上挂了两类属性。</b>普通的三维点只有位置；而一个超图元除了位置 $\mathbf{P}$，还挂着 ORB 特征 $\mathbf{O}\in\mathbb{R}^{256}$、旋转 $\mathbf{r}$、缩放 $\mathbf{s}$、密度 $\sigma$、球谐 $\mathrm{SH}\in\mathbb{R}^{16}$。</p>
+              <p><b>它补上了纯隐式表示的什么短板：</b>纯隐式（NICE-SLAM、ESLAM 那一类）要沿光线采样、再用 MLP 解码，优化慢；因此不得不引入各种深度来源来保证收敛；而且因为要归一化采样，通常得先定义一个包围盒，限制了可扩展性。论文的原话是这些方法「资源消耗极大，无法在便携设备上运行，背离了 SLAM 的初衷」。</p>
+              <p><b>它补上了纯特征点地图的什么短板：</b>传统特征点 SLAM（第三季 <b>0043</b> ORB-SLAM 那一族）定位很准很快，但地图「视觉上很朴素」——只有稀疏的点，拿不出照片级的视图。而这一篇用同一张地图里的球谐字段来渲染，于是建图结果可以直接给人看。</p>
+              <p><b>所以它的分工是：</b>位置 + ORB → 定位要快、要可靠；旋转 + 缩放 + 密度 + 球谐 → 渲染要漂亮。这就是「几何给定位、光度给渲染」。</p>
+            </div></details>
+          </li>
+          <li>这篇论文在单目、双目、RGB-D 三种输入下，分别怎么给「未激活的 2D 特征点」估深度？并说明它为什么没有采用单目深度估计网络。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>三种做法（均出自论文正文）：</b>① RGB-D——直接用深度把未激活的 2D 特征点投影到三维；② 单目——用「最近的活跃 2D 特征点的深度」来解读出它自己的深度；③ 双目——依赖立体匹配算法来估计。</p>
+              <p><b>为什么不用深度网络：</b>论文没有直接解释（原文没有给出理由，我们只能从整体动机推断——这里请把它当作课程判断）。合理的推断有两条：一是论文的核心卖点是「能上嵌入式」，引入一个深度网络会额外占算力和显存，与目标冲突；二是它所处的 2024 年，用预训练深度模型确实是一条现成的路，但那会让系统多一个外部依赖，而这一篇想证明的是「<b>架构层面的分工</b>」本身的价值，不是靠外部大模型来救场。</p>
+              <p>另外，粗估的深度并不会单独背包袱：这些临时超图元后面会进入光度建图的迭代优化里，被多视角的渲染损失逐步纠正——这也是它敢用「邻居深度」这种粗糙办法的原因。</p>
+            </div></details>
+          </li>
+          <li>为什么在这一组高斯 SLAM 里，「有回环」是件稀罕事？请结合本课与 <b>0118</b> 的内容说明回环为什么需要显式的几何信息。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>为什么稀罕：</b>上一课的 SplaTAM 与 GS-SLAM 都<b>没有提及实现回环</b>（对比表里这两栏都填的是「未提及」）；<b>0117</b> 的 MonoGS 把「为大尺度场景集成回环」写进了未来工作。也就是说，2024 年这一批高斯 SLAM，大部分把火力集中在「表示」与「增删判据」上，回环被推迟了。</p>
+              <p><b>回环为什么需要显式的几何信息：</b>回环的第一步是「认出这里我来过」，也就是要做<b>场景识别</b>——把当前帧和历史上的帧做匹配。这一步需要一个可比较、可索引的描述子。Photo-SLAM 手里正好有：超图元里的 256 维 ORB 特征，本来就是从 ORB-SLAM3 那套体系里来的，匹配与检测回环的基础设施是现成的。</p>
+              <p><b>检测到之后还得能改：</b>论文用<b>相似变换</b>修正局部关键帧与超图元——「相似变换」而不是刚体变换，是因为单目存在尺度漂移，必须把尺度一起拉回来。而这一步之所以能生效，靠的又是高斯表示的<b>可扭曲性</b>：位姿改了，地图跟着被搬一下就行（<b>0117</b> 讲过的性质）。论文说，修正之后光度建图组件能进一步「摆脱里程计漂移造成的鬼影」。</p>
+              <p><b>一句话总结：</b>回环要「认得出」+「改得动」。前者需要描述子，后者需要可形变的表示。<b>Photo-SLAM 因为定位端是成熟的 ORB-SLAM3 骨架，两样都顺手拿到了。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0118-SplaTAM与GS-SLAM-轮廓掩码与自适应增删.html">← SplaTAM 与 GS-SLAM：轮廓掩码与自适应增删</a>
+        <a class="next" href="0120-SNI-SLAM2024-高斯带语义标签.html">SNI-SLAM（2024）：高斯带语义标签 →</a>
+      </div>
+      <p class="foot-note">「能上嵌入式」这句话听起来像营销，但这一篇给出的是一整条能被验证的数字链 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

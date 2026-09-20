@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iMAP（2021）：第一次把整张地图塞进一个网络 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0105</div>
+      <h1>iMAP（2021）：第一次把整张地图塞进一个网络</h1>
+      <p class="subtitle">把一个房间「压缩」进一个小小的神经网络，而不是存成一堆点云 🗄️→🧠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：隐式场景表示 · 实时联合优化</span>
+        <span>👥 作者：S. Sucar 等（牛津 VGG）</span>
+        <span>📅 2021 · <i>iMAP: Implicit Mapping and Positioning in Real-Time</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">它要解决什么</a>
+        <a href="#how">怎做到联合优化</a>
+        <a href="#scale">场景规模上限</a>
+        <a href="#real">实时性怎么达成</a>
+        <a href="#first">原文自述「第一个」吗</a>
+        <a href="#limit">局限逐条</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「隐式地图」和普通点云地图的根本差别；讲清楚 iMAP 怎样让一个网络同时当地图和定位器；说出它的速度数字与房间级规模上限；并知道它<b>绝不是</b>「解决了隐式 SLAM」的那篇。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它正是第一季 <b>0010</b> 课点名的 iMAP——那节课留下「隐式地图在大尺度户外的有效性尚未被证明」这句话，当时引用的就是这一代工作。第二季 <b>0036–0039</b> 讲离线的 NeRF / Instant NGP，iMAP 是把「逐场景训练一两天」压到实时的转折点，后面 <b>0106</b> 起才开始拆它的短板。</p>
+        </div>
+      </div>
+
+      <h2>1. 它要解决什么：为什么「用一个网络既当地图又当定位器」是个大胆想法</h2>
+
+      <p>先想清楚传统稠密 SLAM 的地图长什么样。以大家熟悉的 TSDF 融合（第二季 <b>0033</b> KinectFusion、<b>0035</b> Voxblox）为例，地图就是一堆<b>固定分辨率的体素格子</b>：每个格子里存一个距离值。它的毛病有三个，iMAP 在原文第 46 行把它们摆了出来：</p>
+
+      <ul>
+        <li><b>内存贵</b>：分辨率越高，格子数量按体积（边长的三次方）暴涨；</li>
+        <li><b>不能联合优化位姿</b>：地图是「先建好再拿去配准」，位姿和地图是分开两件事；</li>
+        <li><b>难补未观测区域</b>：没看见的地方就是白洞，谁也没法凭空填。</li>
+      </ul>
+
+      <p>iMAP 提出了一个反过来想的方案：<b>根本不存格子，只存一个神经网络的权重</b>。想知道「这个三维坐标 (x,y,z) 处有什么、什么颜色」，不是去查表，而是<b>把坐标喂进网络，让网络当场算出来</b>。网络权重 θ 就是整张地图。原文第 21 行说，这种隐式表示没有量化伪影、分辨率可以连续自适应、还能平滑地补洞。</p>
+
+      <p>难点只有一个字：<b>慢</b>。离线的 NeRF 要训练几小时到几天，而 SLAM 要求边走边建、实时出结果。iMAP 把这件事当成「持续学习 / 灾难性遗忘」问题来对付——用关键帧当记忆回放、用损失引导的稀疏采样来加速。</p>
+
+      <p>下面这张自绘图先把「隐式 vs 显式」的差别画给你看。注意右边：房间还在，但<b>没有任何「点」这种可读单元</b>，你只能不停地问那台黑箱。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">iMAP 的黑箱：把整个房间塞进一个网络</text>
+
+          <!-- 房间 -->
+          <rect x="40" y="60" width="380" height="350" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="230" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">真实房间（沙发 / 桌子 / 窗）</text>
+          <!-- 地板 -->
+          <line x1="60" y1="380" x2="400" y2="380" stroke="#90a4ae" stroke-width="1.4"/>
+          <!-- 沙发 -->
+          <rect x="90" y="300" width="150" height="60" rx="10" fill="#b0bec5" stroke="#607d8b" stroke-width="1.4"/>
+          <text x="165" y="295" text-anchor="middle" font-size="11" fill="#455a64">沙发</text>
+          <!-- 桌子 -->
+          <rect x="270" y="330" width="110" height="40" rx="6" fill="#d7ccc8" stroke="#8d6e63" stroke-width="1.4"/>
+          <text x="325" y="324" text-anchor="middle" font-size="11" fill="#6d4c41">桌子</text>
+          <!-- 窗 -->
+          <rect x="250" y="110" width="130" height="90" rx="4" fill="#bbdefb" stroke="#64b5f6" stroke-width="1.4"/>
+          <line x1="315" y1="110" x2="315" y2="200" stroke="#64b5f6" stroke-width="1"/>
+          <text x="315" y="104" text-anchor="middle" font-size="11" fill="#1565c0">窗</text>
+          <!-- 沙发上的点 -->
+          <circle cx="150" cy="320" r="6" fill="#e53935"/>
+
+          <!-- 黑箱 -->
+          <rect x="470" y="220" width="150" height="95" rx="8" fill="#37474f"/>
+          <text x="545" y="262" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff">黑箱 MLP</text>
+          <text x="545" y="284" text-anchor="middle" font-size="11" fill="#cfd8dc">权重 = 整张地图</text>
+
+          <!-- 箭头进 -->
+          <path d="M156 322 C 300 360, 380 300, 468 262" fill="none" stroke="#e53935" stroke-width="2"/>
+          <path d="M468 262 L459 258 L462 270 Z" fill="#e53935"/>
+          <text x="250" y="372" font-size="12" fill="#c62828">三维坐标 + 视角方向</text>
+
+          <!-- 箭头出 -->
+          <path d="M620 262 C 700 240, 740 290, 780 310" fill="none" stroke="#2e7d32" stroke-width="2"/>
+          <path d="M780 310 L772 302 L774 314 Z" fill="#2e7d32"/>
+          <rect x="785" y="296" width="40" height="28" rx="4" fill="#aed581"/>
+          <text x="805" y="346" text-anchor="middle" font-size="11" fill="#2e7d32">颜色 + 密度</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间，左边是你能看见的真实家具，右边中央是一台「黑箱」——一个多层感知机（MLP）。沙发上那个红点代表「我想知道这里是什么」。<br>
+          <b>怎么看这张图：</b>① 红箭头从沙发上的点<b>带着三维坐标和观看方向</b>进入黑箱；② 黑箱（它的权重就是整张地图）当场算出<b>颜色和体积密度</b>，由绿箭头送出，落在一小块像素颜色上；③ 关键在于：房间明明在那儿，但<b>房间里没有任何「点」「面」「格子」这种可读单元</b>——你没法指着某块内存说「这是桌腿」，只能不停地问网络。<br>
+          <b>要记住的一句话：</b>隐式的「隐」，就隐在「场景不以外显结构存在，只活在函数权重里」。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="how">
+      <h2>2. 它怎么做到联合优化位姿与地图</h2>
+
+      <p>「地图即网络」只是存法。SLAM 还要同时回答「相机在哪」。iMAP 的做法是<b>联合优化</b>：把网络权重 θ 和所有关键帧的位姿 {T_i} 放到同一个损失里，一起用梯度下降去调。</p>
+
+      <p>渲染一个像素时，它沿一条光线采样若干点，每个点过 MLP 得到颜色 c 和密度 ρ，再用体渲染累加出预测深度 \(\hat D\) 和预测图像 \(\hat I\)：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\hat D=\sum_i w_i d_i,\qquad \hat I=\sum_i w_i c_i$$</div>
+        <div class="flow-formula">$$w_i=o_i\prod_{j<i}(1-o_j),\qquad o_i=1-e^{-\rho_i\delta_i}$$</div>
+      </div>
+
+      <p>其中 \(o_i\) 是「这个点不透明度」由密度 ρ 换算来，\(\delta_i\) 是采样间距。有了预测值和真实观测，就能量误差。几何损失用深度方差归一、用来弱化边缘（原文式 4）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$L_g=\frac1M\sum\frac{|D-\hat D|}{\sqrt{\hat D_{var}}},\qquad \min_{\theta,\{T_i\}}(L_g+\lambda_p L_p)$$</div>
+      </div>
+
+      <p>原文第 93–113 行说，式 5 同时优化 θ 和 W 个关键帧位姿。与此同时，它还开了一个<b>并行的 tracking 进程</b>：锁住网络不动，只优化「当前这一帧」的位姿（第 115 行）。这和第二季 <b>0078</b> LIO-SAM「前端只估位姿、后端才调地图」的分工精神是一致的——只是 iMAP 把「后端」换成了续训网络。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">两种地图：一堆点 vs 一堆权重</text>
+
+          <!-- 显式 -->
+          <rect x="40" y="60" width="380" height="320" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="230" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">显式地图：一堆点（明码标价）</text>
+          <g fill="#5c6bc0">
+            <circle cx="90" cy="140" r="5"/><circle cx="130" cy="150" r="5"/><circle cx="170" cy="138" r="5"/>
+            <circle cx="110" cy="190" r="5"/><circle cx="155" cy="200" r="5"/><circle cx="195" cy="185" r="5"/>
+            <circle cx="90" cy="250" r="5"/><circle cx="135" cy="262" r="5"/><circle cx="178" cy="248" r="5"/>
+            <circle cx="115" cy="310" r="5"/><circle cx="160" cy="320" r="5"/><circle cx="200" cy="305" r="5"/>
+          </g>
+          <circle cx="170" cy="138" r="9" fill="none" stroke="#e53935" stroke-width="2"/>
+          <line x1="163" y1="131" x2="177" y2="145" stroke="#e53935" stroke-width="2"/>
+          <line x1="177" y1="131" x2="163" y2="145" stroke="#e53935" stroke-width="2"/>
+          <text x="300" y="200" font-size="12" fill="#c62828">想删就删：</text>
+          <text x="300" y="218" font-size="12" fill="#c62828">删这个点不影响别的</text>
+
+          <!-- 隐式 -->
+          <rect x="480" y="60" width="380" height="320" rx="10" fill="#f3eef9" stroke="#d1c4e9" stroke-width="1.4"/>
+          <text x="670" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#5e35b1">隐式地图：一堆权重（牵一发动全身）</text>
+          <g fill="#7e57c2">
+            <circle cx="530" cy="150" r="6"/><circle cx="600" cy="150" r="6"/><circle cx="670" cy="150" r="6"/><circle cx="740" cy="150" r="6"/>
+            <circle cx="530" cy="220" r="6"/><circle cx="600" cy="220" r="6"/><circle cx="670" cy="220" r="6"/><circle cx="740" cy="220" r="6"/>
+            <circle cx="530" cy="290" r="6"/><circle cx="600" cy="290" r="6"/><circle cx="670" cy="290" r="6"/><circle cx="740" cy="290" r="6"/>
+          </g>
+          <g stroke="#b39ddb" stroke-width="1">
+            <line x1="530" y1="150" x2="600" y2="150"/><line x1="600" y1="150" x2="670" y2="150"/><line x1="670" y1="150" x2="740" y2="150"/>
+            <line x1="530" y1="220" x2="600" y2="220"/><line x1="600" y1="220" x2="670" y2="220"/><line x1="670" y1="220" x2="740" y2="220"/>
+            <line x1="530" y1="290" x2="600" y2="290"/><line x1="600" y1="290" x2="670" y2="290"/><line x1="670" y1="290" x2="740" y2="290"/>
+            <line x1="530" y1="150" x2="530" y2="220"/><line x1="600" y1="150" x2="600" y2="220"/><line x1="670" y1="150" x2="670" y2="220"/>
+            <line x1="530" y1="220" x2="530" y2="290"/><line x1="600" y1="220" x2="600" y2="290"/><line x1="670" y1="220" x2="670" y2="290"/>
+          </g>
+          <circle cx="600" cy="220" r="9" fill="none" stroke="#e53935" stroke-width="2.4"/>
+          <circle cx="600" cy="220" r="22" fill="none" stroke="#ef9a9a" stroke-width="1.5" stroke-dasharray="3 3"/>
+          <circle cx="600" cy="220" r="40" fill="none" stroke="#ef9a9a" stroke-width="1" stroke-dasharray="3 3"/>
+          <text x="690" y="350" font-size="12" fill="#6a1b9a">改这一个权重</text>
+          <text x="690" y="368" font-size="12" fill="#6a1b9a">全世界都跟着动</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间，两种「存法」的代价模型。<br>
+          <b>怎么看这张图：</b>① 左格是显式地图——一堆独立的点，删掉红圈那个点，其它点纹丝不动，想改哪改哪；② 右格是隐式地图——场景信息分散在大量互相连接的权重里，红圈那个权重一旦被改动，会通过连线「涟漪」扩散到整个场景；③ 这正是隐式表示的双刃剑：能平滑补洞，但<b>没有局部可独立编辑的单元</b>。<br>
+          <b>要记住的一句话：</b>显式是「明码标价、想删就删」，隐式是「牵一发动全身」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_iMAP/fc209e39d293186de12d373126827a51cfc65e2a9029ced3150f46e835652191.jpg" alt="iMAP Figure 2 system pipeline">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>iMAP system pipeline.<br>
+          <b>怎么看这张图：</b>这是全文最该先看的图。它把「网络=地图 → 沿光线体渲染出深度颜色 → 与观测比对 → 联合优化」这一条线画全了，而且把 track（只优位姿）和 map（续训网络）两个并行进程标得很清楚。盯着中间的 MLP 看——它就是整张地图，没有任何格子。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="scale">
+      <h2>3. 场景规模上限：原文承认的「房间级」</h2>
+
+      <p>这是全篇最需要冷静看待的一点。iMAP 把整张地图塞进一个 MLP，但<b>单个网络的容量是有限的</b>。原文自己只敢说能重建「whole rooms」（整间房）。精读材料查到：NICE-SLAM 原文第 20 行直接证实，把 iMAP 放大到<b>多房间公寓</b>会显著掉点、乃至失败。</p>
+
+      <p>换句话说，iMAP 的成功上限就是<b>单个房间级别</b>。一旦场景变大、信息变多，那 1 MB 的权重就「装不下」了——它会开始模糊、丢细节。所以读 iMAP 一定要带着这句话：</p>
+
+      <div class="callout">
+        <h4>必须纠正的误解</h4>
+        <p>iMAP 是「第一次把整张地图塞进一个网络」的<b>尝试</b>，它的贡献在于证明了这条路「能实时走通」。但<b>它的精度与场景规模都很有限</b>，绝不能写成「iMAP 解决了隐式 SLAM」。真正把规模推上去的，是下一节开始的 NICE-SLAM 一脉。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_iMAP/f0d55cc29ea8731389188cadecbf33c087ae5ccc6eaa975cf7545cd67c701a72.jpg" alt="iMAP Figure 1 room reconstruction">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Room reconstruction from real-time iMAP with an Azure Kinect RGB-D camera, showing watertight scene model, camera tracking and automatic keyframe set.<br>
+          <b>怎么看这张图：</b>这张图是 iMAP 的「高光时刻」——它确实从实时 RGB-D 输入里重建出了一间「水密」的房间，并且自动选出了关键帧（图中一串相机位姿）。但请注意它的主语是「a room」：原文展示的就是<b>单个房间</b>，这正是它能力边界的诚实写照。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="real">
+      <h2>4. 实时性怎么达成：速度数字</h2>
+
+      <p>把离线 NeRF 压到实时，靠的是两招（原文摘要与第 238 行）：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>关键帧当记忆回放</b>
+          <p>持续学习会「灾难性遗忘」——学了新页就忘了旧页。iMAP 维护一个关键帧集合，每步随机翻几页重看，防止旧区域被覆盖。这就是「主动采样 + 关键帧回放」对抗遗忘的核心。</p>
+        </div>
+        <div class="mini-card">
+          <b>损失引导的稀疏采样</b>
+          <p>不在整张图上均匀撒采样点，而是先在 8×8 网格上算损失分布，再把采样点按损失大小分配到「高损失、值得学」的区域（见下一张 Fig. 3）。少而精的采样换来速度。</p>
+        </div>
+      </div>
+
+      <p>具体数字（原文摘要、表 2、第 238 行）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">iMAP 数值</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">对照</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>tracking 频率</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">10 Hz</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">TSDF 融合不在同一量级</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>mapping 频率</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">2 Hz</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">网络宽 256、窗口 W=5、每帧 200 采样点</td></tr>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>地图内存</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">约 1.04 MB</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">TSDF 256³ 约 67.10 MB</td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>精度（Replica）</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Acc 4.43 cm / Comp 5.56 cm</td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem">与 TSDF 相近，但内存小几十倍</td></tr>
+        </tbody>
+      </table>
+
+      <p>注意那个「神经网络先快学低频大形、再慢学高频细节」的特性，原文 Fig. 13 把它量化了：达到 5 cm 深度误差约需 1 秒，但到 0.75 cm 要 43 秒——这正是「实时 tracking 边走边建粗模」可行的根本原因，也是「损失引导的稀疏采样」能把 mapping 压到 2 Hz 的底层逻辑。</p>
+    </section>
+
+    <section class="section-card" id="first">
+      <h2>5. 原文有没有自述「第一个」：有，但要读懂它说的是什么</h2>
+
+      <p>有，而且写得很直白。摘要第 13 行原文：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「We show for the first time that a multilayer perceptron (MLP) can serve as the only scene representation in a realtime SLAM system.」<br>（我们第一次证明：一个多层感知机可以充当实时 SLAM 系统中<b>唯一的</b>场景表示。）</p>
+
+      <p>贡献 1（第 36 行）又说它是「The first dense real-time SLAM system that uses an implicit neural scene representation … jointly optimising a full 3D map and camera poses」。所以「第一个」是<b>确凿的自述</b>，但定语很精确：</p>
+
+      <ul>
+        <li>第一个用 <b>MLP 当唯一表示</b>；</li>
+        <li>第一个做到 <b>real-time</b>；</li>
+        <li>第一个 <b>联合优化完整 3D 地图与相机位姿</b>。</li>
+      </ul>
+
+      <p>它<b>没有</b>说的是「第一个解决隐式 SLAM」「第一个达到最高精度」「第一个能跑大场景」。定语边界一定要守住——否则就会把一篇「开山但很初级」的工作吹成「集大成者」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_iMAP/4a77abf9b02995bc16ec6a265b72848a7e413717d2c47da478b8955e4e38e8a7.jpg" alt="iMAP Figure 6 hole filling">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>iMAP (left) manages to fill in unobserved regions which can be seen as holes in TSDF fusion (right).<br>
+          <b>怎么看这张图：</b>这是隐式表示的招牌优势——左边 iMAP 把没看见的背面/遮挡区平滑地补上了，右边传统 TSDF 融合只留下白洞。但也要清醒：这种「补」是网络的<b>平滑猜测</b>，不保证真实，只是比白洞好看、比白洞有用。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>iMAP 摘要说自己「第一次证明 MLP 可以充当实时 SLAM 中唯一的场景表示」。这句话能推出下面哪个结论？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文自述的定语是「唯一表示 + 实时 + 联合优化」，它证明了这条路走得通，但精度与规模都很有限（多房间即失败）。「解决隐式 SLAM」是过度解读，那是后续 NICE-SLAM 一脉才逐步推进的事。" onclick="lessonKit.answer(this,'q0105a')">它证明了这条路能实时走通</button>
+          <button data-correct="no" data-explanation="不能。原文只敢说重建「whole rooms」，NICE-SLAM 明确指出多房间公寓会让 iMAP 显著掉点。把「首次实时」读成「已解决大尺度」是偷换了定语。" onclick="lessonKit.answer(this,'q0105a')">它已解决大尺度隐式SLAM</button>
+        </div>
+        <div class="quiz-feedback" id="q0105a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="limit">
+      <h2>6. 局限逐条（原文承认的失败边界）</h2>
+
+      <p>iMAP 在原文与后续工作的对照里，明确暴露了四条短板：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 不抗动态物体</b>
+          <p>它只用 RGB-D 信息，假设场景静态。有人走过、东西被搬动，它不会把动态部分剔除，只会硬塞进地图。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 不做回环</b>
+          <p>没有回环检测与校正，长轨迹下位姿会悄悄漂移——这一点和我们第一季 <b>0014</b> 回环检测课讲的「假阳性铁律」是同一类老问题。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 单 MLP 容量上限</b>
+          <p>只能稳定重建房间级，多房间公寓即失败。这是「整张地图塞进一个网络」这种极简方案的结构性代价。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 长序列仍有遗忘</b>
+          <p>即便有关键帧回放，长时间运行下旧区域仍可能被新信息覆盖，只是被缓解而非根除。</p>
+        </div>
+      </div>
+
+      <p>这四条里，②③④ 直接定义了后面几年的研究方向：NICE-SLAM 用特征网格破除「容量上限」，Co-SLAM 用全局 BA 提升鲁棒性，而「回环」这条债要等到本季后半段（0110 之后的 Loopy-SLAM / GO-SLAM）才正面还。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请用一句话区分「显式地图」和 iMAP 的「隐式地图」，并各举一个由此带来的好处与一个代价。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>区别：</b>显式地图把场景存成外显结构（点、体素、格子），每个单元独立可读；iMAP 的隐式地图把场景<b>全部塞进一个 MLP 的权重</b>里，没有独立可读单元。</p>
+              <p><b>显式好处：</b>想删/改某块就删/改某块（明码标价）；<b>显式代价：</b>分辨率固定、内存按体积暴涨、难补未观测区。</p>
+              <p><b>隐式好处：</b>无量化伪影、可连续自适应分辨率、能平滑补洞；<b>隐式代价：</b>牵一发动全身、不能局部独立编辑、单网络容量有限。</p>
+            </div></details>
+          </li>
+          <li>iMAP 说自己做「联合优化」位姿与地图。这和传统 SLAM「先建图、再拿地图去配准位姿」有何不同？为什么它需要两个并行进程（track / map）？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>传统稠密 SLAM 里，地图（如 TSDF 格子）和位姿通常是<b>分开</b>的两步：先把观测融进地图，再用地图去估位姿。iMAP 把网络权重 θ 和所有关键帧位姿 {T_i} 放进<b>同一个损失</b>（式 5）一起梯度下降，所以「地图长什么样」和「相机在哪」是同时被优化的。</p>
+              <p>但它仍需两个进程：tracking 进程<b>锁住网络</b>、只优化当前帧位姿（要够快，10 Hz）；mapping 进程才去续训网络权重（慢一些，2 Hz）。这和第二季 LIO-SAM「前端快估位姿、后端精调」的分工精神一致，只是后端换成了神经网络的在线训练。</p>
+            </div></details>
+          </li>
+          <li>为什么说 iMAP 的「补洞」既是优点也是隐患？请结合 Fig. 6 说明。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>优点：</b>隐式 MLP 能平滑插值，把没观测到的背面/遮挡区「猜」出来，比 TSDF 融合留下的白洞更完整、更可用（Fig. 6 左 vs 右）。</p>
+              <p><b>隐患：</b>这种补是网络的<b>统计性猜测</b>，不一定符合真实几何。如果未观测区其实有物体或结构，iMAP 会把它「平滑掉」。所以它擅长「看起来完整」，但不保证「补得对」——后续 NICE-SLAM 用 coarse 级几何先验来让这种外推更靠谱。</p>
+            </div></details>
+          </li>
+          <li>iMAP 摘要自称「第一次」。请写出它自述的「第一个」到底指什么（至少三点），并说明它<b>没有</b>声称什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>自述的「第一个」：</b>① 第一个用 MLP 充当实时 SLAM 中<b>唯一的</b>场景表示；② 第一个达到 <b>real-time</b> 的隐式神经 SLAM；③ 第一个 <b>联合优化</b>完整 3D 地图与相机位姿。</p>
+              <p><b>它没有声称：</b>解决隐式 SLAM、达到最高精度、能跑大尺度/多房间场景。它的能力上限是房间级，多房间公寓即失败。定语边界必须守住，不能把「开山但很初级」读成「集大成者」。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0104-导览-第六季开场-隐式与显式之争.html">← 第六季开场：隐式与显式之争</a>
+        <a class="next" href="0106-NICE-SLAM2022-多层级特征网格.html">NICE-SLAM（2022）：多层级特征网格 →</a>
+      </div>
+      <p class="foot-note">iMAP 把「地图=一个网络」这个大胆想法第一次跑通了实时。下一节看后人怎么补它的容量短板 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

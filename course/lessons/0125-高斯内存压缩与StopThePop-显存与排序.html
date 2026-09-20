@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高斯内存压缩与 StopThePop：显存与排序 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0125</div>
+      <h1>高斯内存压缩与 StopThePop：显存与排序</h1>
+      <p class="subtitle">全季最实在的两篇：一个把「几百万个高斯占满显存」的账算清并砍掉 96%，一个把「转视角时画面乱跳」的根找出来 🧾</p>
+      <div class="hero-meta">
+        <span>🎯 主题：图元剪枝 · 自适应球谐阶数 · 码本量化 · 逐像素排序 · popping</span>
+        <span>👥 两篇：Reducing the Memory Footprint of 3DGS／StopThePop（均 2024）</span>
+        <span>📅 2024 · <i>Reducing the Memory Footprint of 3D Gaussian Splatting</i> &amp; <i>StopThePop</i></span>
+      </div>
+      <div class="toc">
+        <a href="#debt">0015 课关于显存的原话</a>
+        <a href="#ledger">一个高斯要存什么</a>
+        <a href="#three">压缩的三招</a>
+        <a href="#cost">代价、收益、能不能上手机</a>
+        <a href="#pop">StopThePop：缺陷在哪</a>
+        <a href="#fix">怎么改：瓦片还在，排序变细</a>
+        <a href="#compare">对比与判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="debt">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：亲手把「一个高斯要存多少数、几百个高斯是多大一堆」这笔账算出来；说清压缩砍掉的是哪几栏、代价是多少；并解释 3DGS 的渲染里那个被长期容忍的「排序近似」到底是什么，以及它为什么会造成转视角时的闪烁。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这又是第一季 <b>0015</b> 课那张「整条赛道卡在哪」表里的两条：<b>「显存 / 压缩」</b>与<b>「真实感」</b>。算力与显存这条线在第二季 <b>0035</b> Voxblox（机载 i7、250 ms 预算）、第五季 <b>0102</b> FusionPortable 的评测平台之后，到本季 <b>0119</b> Photo-SLAM（明确面向嵌入式）与本节，讲的是同一件事：<b>表示再漂亮，跑不起来就没用。</b></p>
+        </div>
+      </div>
+
+      <h2>1. 题眼：把 0015 课关于「显存」的原话翻出来</h2>
+
+      <p>第一季 <b>0015</b> 课末尾那张挑战表里，「显存 / 压缩」那一格的原话是：</p>
+
+      <div class="callout">
+        <h4>0015 课原文（「显存 / 压缩」一格）</h4>
+        <p>「<b>额外压缩流程延长训练时间；还没找到「能最大化表达力的最小高斯集合」；静态压缩方法向动态场景扩展仍欠探索。</b>」</p>
+      </div>
+
+      <p>这三句话各说了一件事，正好可以当成这一节的目录：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 「额外压缩流程延长训练时间」</b>
+          <p>压缩不是白来的——多一道工序就要多花时间。<b>这正是内存压缩那篇要面对的账。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>② 「还没找到能最大化表达力的最小高斯集合」</b>
+          <p>哪些高斯是「冗余的」、哪些是「一个都不能少」的？这个判据当时没人给。<b>这就是图元剪枝那一步要回答的问题。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>③ 「静态压缩方法向动态场景扩展仍欠探索」</b>
+          <p>这一条本节解决不了——它属于后面 <b>0126</b> 课（动态）的题目。这里先记住它在。</p>
+        </div>
+      </div>
+
+      <p>至于 StopThePop，它对应的是同一张表里「真实感」那一格的一句：「投影到 2D 加速渲染却让<b>遮挡计算变复杂</b>；过建高斯导致 <b>aliasing 与伪影</b>」。StopThePop 要处理的正是这个「<b>有伪影</b>」的问题——而且它的根，比大家想的更靠底层。</p>
+    </main>
+
+    <section class="section-card" id="ledger">
+      <h2>2. 一笔具体的账：一个高斯要存什么</h2>
+
+      <p>这一节最硬的一块内容，就是把账算出来。别怕，就是加法。</p>
+
+      <p>先看一个高斯身上带着哪些数。这篇论文（§4 开头）给的公式是：一个图元占</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$14+3\sum_{i=1}^{N}(2i+1)\quad\text{个浮点数（}N\text{ 是球谐阶数）}$$</div>
+      </div>
+
+      <p>那个 <b>14</b> 是什么？拆开就是：<b>位置 3（$x,y,z$）+ 缩放 3 + 基础颜色 3（也就是球谐的第 0 阶）+ 旋转 4（一个四元数）+ 不透明度 1 = 14</b>。后面那一大串 $3\sum(2i+1)$ 就是<b>高阶球谐</b>——它用来表示「颜色随视角变化」，也就是镜面高光那类效果。</p>
+
+      <p>论文说得很直接：<b>用 3 阶球谐时，每个图元需要 59 个浮点数，其中 45 个（占 76%）花在球谐上。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">一笔账：一个高斯存 59 个数，三百万个就是几百兆</text>
+
+          <!-- 图元结构 -->
+          <text x="60" y="62" font-size="12" font-weight="700" fill="#3b4a5e">一个高斯要存什么</text>
+          <rect x="60" y="76" width="130" height="64" rx="6" fill="#eef3f8" stroke="#8fa6bb" stroke-width="1.3"/>
+          <text x="125" y="104" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2c5f8a">位置 3</text>
+          <text x="125" y="122" text-anchor="middle" font-size="10" fill="#7a8a99">x, y, z</text>
+
+          <rect x="200" y="76" width="130" height="64" rx="6" fill="#eef3f8" stroke="#8fa6bb" stroke-width="1.3"/>
+          <text x="265" y="104" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2c5f8a">缩放 3</text>
+          <text x="265" y="122" text-anchor="middle" font-size="10" fill="#7a8a99">三个轴的尺度</text>
+
+          <rect x="340" y="76" width="130" height="64" rx="6" fill="#eef3f8" stroke="#8fa6bb" stroke-width="1.3"/>
+          <text x="405" y="104" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2c5f8a">旋转 4</text>
+          <text x="405" y="122" text-anchor="middle" font-size="10" fill="#7a8a99">一个四元数</text>
+
+          <rect x="480" y="76" width="130" height="64" rx="6" fill="#eef3f8" stroke="#8fa6bb" stroke-width="1.3"/>
+          <text x="545" y="104" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2c5f8a">不透明度 1</text>
+          <text x="545" y="122" text-anchor="middle" font-size="10" fill="#7a8a99">一个数</text>
+
+          <rect x="620" y="76" width="220" height="64" rx="6" fill="#fdf2ea" stroke="#d89878" stroke-width="1.6"/>
+          <text x="730" y="104" text-anchor="middle" font-size="12.5" font-weight="700" fill="#a8563a">球谐 45</text>
+          <text x="730" y="122" text-anchor="middle" font-size="10" fill="#a8846f">占了总量的 76%</text>
+
+          <text x="450" y="164" text-anchor="middle" font-size="12.5" fill="#5a4a42">合计 59 个浮点数（约 60 个），其中 14 个是「基础属性」，45 个是球谐</text>
+          <text x="450" y="190" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b2b2b">59 × 三百万个高斯 ≈ 1.8 亿个浮点数；每个 4 字节 ≈ 700 MB</text>
+          <text x="450" y="212" text-anchor="middle" font-size="11" fill="#7a8a99">原文实测：论文里那几个场景的占用是 700 MB 到 1.2 GB</text>
+
+          <path d="M40 228 L860 228" stroke="#e0d5c8" stroke-width="1"/>
+
+          <!-- 三招 -->
+          <rect x="60" y="244" width="240" height="120" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="180" y="268" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">① 剪掉冗余图元</text>
+          <g fill="#8fb8dd" stroke="#4a7fae" stroke-width="0.9">
+            <circle cx="108" cy="296" r="8"/><circle cx="134" cy="296" r="8"/><circle cx="160" cy="296" r="8"/>
+            <circle cx="186" cy="296" r="8"/><circle cx="212" cy="296" r="8"/><circle cx="238" cy="296" r="8"/>
+            <circle cx="120" cy="322" r="8"/><circle cx="146" cy="322" r="8"/><circle cx="172" cy="322" r="8"/>
+            <circle cx="198" cy="322" r="8"/><circle cx="224" cy="322" r="8"/>
+          </g>
+          <g stroke="#c0392b" stroke-width="2.2">
+            <path d="M154 290 L166 302"/><path d="M166 290 L154 302"/>
+            <path d="M166 316 L178 328"/><path d="M178 316 L166 328"/>
+            <path d="M218 316 L230 328"/><path d="M230 316 L218 328"/>
+          </g>
+          <text x="180" y="352" text-anchor="middle" font-size="10.5" fill="#a8563a">图元数量约减少 60%</text>
+
+          <rect x="330" y="244" width="240" height="120" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="450" y="268" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">② 按需降球谐阶数</text>
+          <g stroke="#c0392b" stroke-width="1.6">
+            <rect x="356" y="280" width="52" height="14" fill="#fdf2ea"/>
+            <rect x="414" y="280" width="52" height="14" fill="#fdf2ea"/>
+            <rect x="472" y="280" width="52" height="14" fill="#fdf2ea"/>
+            <rect x="530" y="280" width="52" height="14" fill="#fdf2ea"/>
+          </g>
+          <text x="382" y="291" text-anchor="middle" font-size="9.5" fill="#a8563a">0 阶</text>
+          <text x="440" y="291" text-anchor="middle" font-size="9.5" fill="#a8563a">1 阶</text>
+          <text x="498" y="291" text-anchor="middle" font-size="9.5" fill="#a8563a">2 阶</text>
+          <text x="556" y="291" text-anchor="middle" font-size="9.5" fill="#a8563a">3 阶</text>
+          <g stroke="#c0392b" stroke-width="2.4">
+            <path d="M492 278 L504 296"/><path d="M504 278 L492 296"/>
+            <path d="M550 278 L562 296"/><path d="M562 278 L550 296"/>
+          </g>
+          <text x="450" y="322" text-anchor="middle" font-size="10.5" fill="#7a8a99">看不出视角变化的高斯</text>
+          <text x="450" y="338" text-anchor="middle" font-size="10.5" fill="#7a8a99">就不必存高阶系数</text>
+          <text x="450" y="356" text-anchor="middle" font-size="10.5" fill="#a8563a">每个图元只留 0 到 3 阶</text>
+
+          <rect x="600" y="244" width="240" height="120" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="720" y="268" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">③ 码本量化 + 半精度</text>
+          <g stroke="#8a9aa8" stroke-width="1.2" fill="none">
+            <path d="M626 300 L814 300"/>
+          </g>
+          <g fill="#b8c8d8">
+            <circle cx="630" cy="286" r="4"/><circle cx="654" cy="292" r="4"/><circle cx="678" cy="288" r="4"/>
+            <circle cx="702" cy="294" r="4"/><circle cx="726" cy="287" r="4"/><circle cx="750" cy="293" r="4"/>
+            <circle cx="774" cy="289" r="4"/><circle cx="798" cy="295" r="4"/>
+          </g>
+          <g fill="#d89878" stroke="#a8563a" stroke-width="1.2">
+            <rect x="640" y="306" width="16" height="16"/>
+            <rect x="688" y="306" width="16" height="16"/>
+            <rect x="736" y="306" width="16" height="16"/>
+            <rect x="784" y="306" width="16" height="16"/>
+          </g>
+          <text x="720" y="342" text-anchor="middle" font-size="10.5" fill="#7a8a99">把连续的值归进几个码字</text>
+          <text x="720" y="356" text-anchor="middle" font-size="10.5" fill="#a8563a">位置不做码本，但仍用半精度</text>
+
+          <text x="450" y="392" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b2b2b">三招合起来：体积约降到二十七分之一（平均削减 96.3%）</text>
+          <text x="450" y="418" text-anchor="middle" font-size="12.5" fill="#5a4a42">Mip-NeRF360 上 744 MB 降到 29 MB；平均质量只掉 0.21 dB</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>3DGS 存储开销的一笔明细账，以及压缩方法从哪三栏下手把它砍掉 96%。<br>
+          <b>怎么看这张图：</b>① 上面一行五个方框就是<b>一个高斯的全部参数</b>——位置、缩放、旋转、不透明度，再加上最大的一块球谐；② 注意<b>球谐那一个框占了总量的 76%</b>，这就是为什么后面一定要对它动刀；③ 中间那行乘法是关键——<b>59 个浮点数乘三百万个高斯，约等于 700 MB</b>，原文实测各场景的占用在 700 MB 到 1.2 GB 之间；④ 下面三个框是压缩的三招，红色叉号标出被砍掉的东西：<b>冗余的图元、看不出视角变化的高阶球谐</b>；⑤ 最下面两行是总账：<b>体积降到约二十七分之一，平均质量只掉 0.21 dB。</b><br>
+          <b>★ 一处口径说明（重要）：</b>你可能会在别处看到「球谐 48 个、一个高斯 60 个数」这类说法——那是按 3DGS 的球谐自由度（每通道 16 个系数 × 3 通道）算的口径。本图用的是<b>这篇论文自己的口径</b>：$14+3\sum_{i=1}^{N}(2i+1)$，3 阶时为 <b>59</b> 个浮点数，其中球谐 <b>45</b> 个。两个口径都指同一件事，但数字不同，引用时要说清是哪一个。<br>
+          <b>要记住的一句话：</b>这是全季最硬的一条工程账——<b>几百万个高斯不是「渲染得慢」，而是「放不下」。</b>
+        </figcaption>
+      </figure>
+
+      <p>顺手把「压完是多大」也记住：论文 Table 1 里 Mip-NeRF360 数据集上，原版 3DGS 是 <b>744 MB</b>，本方法是 <b>29 MB</b>（约 <b>25.7 倍</b>）；单个场景 bicycle 更夸张，从 <b>1362 MB（605 万个高斯）</b>压到 <b>48 MB（241 万个高斯）</b>。三个数据集平均下来就是摘要里那个 <b>×27</b>。</p>
+    </section>
+
+    <section class="section-card" id="three">
+      <h2>3. 压缩的三招：每一招砍的是哪一栏</h2>
+
+      <p>这一节的逻辑线很清楚：论文先分析「内存花在哪」，得出<b>三个可下手的地方</b>——<b>图元数量、球谐系数数量、每个属性的精度</b>——然后各给一个解法。</p>
+
+      <h3>第一招：分辨率感知的图元剪枝</h3>
+
+      <p>最朴素的想法是「把低不透明度的高斯更狠地删掉」。论文说这样做确实能压住数量，<b>但不够</b>——因为 3DGS 的自适应密度控制会在某些区域<b>长出多得离谱的高斯</b>。所以论文换了个判据：<b>估计空间上的「冗余度」，再把冗余度投到每个图元上，把冗余的剪掉。</b></p>
+
+      <p>关键在那个「<b>分辨率感知</b>」上（Fig. 4）：<b>相机能分辨的细节是有分辨率的，离得越远的相机能表示的空间分辨率越低。</b>所以一个高斯是否「必要」，不能只看它自己，还要看<b>有没有相机、在什么距离上、以什么分辨率在看它</b>。用这个判据，论文说能比基线删掉大约 <b>60%</b> 的图元，而显存降到原来的 <b>32%–52%</b>，PSNR 的变化在 <b>−0.32 到 +0.16 dB</b> 之间——<b>几乎无感</b>。论文还给了个有趣的解释：剪枝有时候反而会提升质量，因为它起到了<b>正则化</b>的作用，逼优化去找更泛化的解。剪枝本身在训练中<b>每 1000 次迭代</b>做一次。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Reducing_the_Memory_Footprint_of_3D_Gaussian_Splatting/9d142d874dd215c15f32affda47156cdff8ee500665f504dd3310cc2e9dfb254.jpg" alt="Reducing Memory Fig.2 primitives as ellipsoids revealing millions of primitives and per-primitive storage">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>3DGS produces photo-realistic renderings from input views and sparse points. Rendering the Gaussians as ellipsoids instead of splats reveals that each scene is modeled by millions of primitives. Each primitive stores a significant amount of information: position, rotation quaternion, scale, opacity, color, and 3 bands of spherical harmonics. This leads to the exceedingly high memor…<br>
+          （中译：3DGS 从输入视图与稀疏点产生照片级的渲染结果。把高斯渲染成椭球而不是扁平的 splat，就能看出每个场景是被几百万个图元建模的。每个图元存了大量信息：位置、旋转四元数、缩放、不透明度、颜色，以及 3 阶球谐。这导致了极高的内……）<br>
+          <b>怎么看这张图：</b>这张图就是「账本」的来源。① 请不要把它当成渲染结果看——<b>它是把高斯画成一个个椭球</b>，让你看见「一个场景到底由多少个东西组成」；② 那些密密麻麻的椭球就是几百万个图元，每一个都要完整地存下位置、四元数、缩放、不透明度、颜色和球谐系数；③ 所以本课的加法不是抽象练习，而是图上那一颗颗椭球背后的真实开销。<br>
+          <b>一处诚实提醒：</b>原文图注在 OCR 里被截断（结尾「the exceedingly high memor…」没了下文），我保留了省略号，没有替它补上「memory footprint」——虽然从上下文看基本可以确定就是这个意思。
+        </figcaption>
+      </figure>
+
+      <h3>第二招：每个图元自适应决定球谐阶数</h3>
+
+      <p>回到那笔账：<b>76% 的存储花在球谐上。</b>可球谐是用来干什么的？——表示「颜色随视角变化」，也就是镜面高光那类效果。问题是：<b>场景里大部分地方根本没有视角相关的效果。</b>一面漫反射的白墙，从哪个角度看颜色都一样，给它存 45 个球谐系数纯属浪费。</p>
+
+      <p>所以论文在训练到 <b>15K 迭代（稠密化停止时）</b>做一次分析，判断每个图元到底需要几阶球谐，分别给 <b>0（就一个 RGB）/ 1 / 2 / 3</b> 阶。判据是纯数值的：<b>把球谐函数在所有输入视角上求一遍值</b>——如果一个图元从各个视角看颜色几乎不变（低方差），那它只需要第 0 阶；如果用低阶球谐算出来的颜色与高阶的差别很小，那高阶就可以直接不存。论文给的方差阈值是 $\epsilon_\sigma = 0.04$。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Reducing_the_Memory_Footprint_of_3D_Gaussian_Splatting/059aca273d1bdbfa7f745cd268008e157854bb77bfb5e993cfedc1ba5ccd197c.jpg" alt="Reducing Memory Fig.4 resolution and scale aware redundancy metric">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Our resolution and scale-aware redundancy metric measures how necessary a Gaussian is to represent the scene. a) Each camera can capture details of specific resolution, the further we move away from the camera, the smaller the spatial resolution this camera can represent. b) Given multiple cameras for a given primitive in the scene, multiple resolutions can be represented. c) For each Gaus…<br>
+          （中译：我们这个「分辨率与尺度感知」的冗余度度量，衡量一个高斯对表示这个场景有多必要。(a) 每台相机能捕获特定分辨率的细节，离相机越远，这台相机能代表的空间分辨率越小。(b) 对场景中给定的一个图元，多台相机会给出多个分辨率。(c) 对每个高斯……）<br>
+          <b>怎么看这张图：</b>这张图解释的是「<b>冗余</b>」这个词怎么被量化——这是 0015 课那句「还没找到能最大化表达力的最小高斯集合」的答案。① 看 (a)：<b>距离越远，同一个像素代表的真实空间范围越大</b>，所以远处的高斯本来就没必要那么密；② 看 (b)：一个图元可能同时被多台相机看到，每台相机能分辨的精细程度不同；③ 看 (c)：把这两件事合起来，就能算出每个高斯到底「需不需要存在」。<br>
+          <b>要记住的一句话：</b>「冗余」不是几何上的属性，而是<b>相对于「谁在看、看得多清楚」而言的属性</b>——这就是为什么它叫「分辨率感知」。
+        </figcaption>
+      </figure>
+
+      <h3>第三招：码本量化 + 半精度</h3>
+
+      <p>第三招最朴素也最有效：<b>与其给每个属性存一个 32 位浮点数，不如把它们归到几个「码字」上。</b>论文的做法是码本量化（k-means），<b>但有一个例外：位置不做码本量化</b>——因为位置直接决定几何，量化误差会直接变成几何误差。位置仍然被处理，只是用另一招：<b>16 位半精度浮点数</b>。论文说，对剩下的那些（位置与码本条目）用半精度，<b>质量基本不受影响</b>：Table 4 显示质量只掉 <b>0.07 dB</b>，而内存还能再降<b>至少 20%</b>。三招各贡献约 <b>3 倍</b>，合起来就是 <b>27 倍</b>。</p>
+
+      <p>另外要说一句<b>训练时显存的问题没有被解决</b>——论文 §6.1 明确说：图元剪枝与球谐裁剪虽然发生在训练过程中、也会影响 GPU 显存，<b>但它们的效应出现在峰值之后，所以训练时的显存需求并没有改变。</b>它们的收益主要落在<b>渲染与存储</b>上。这句话很诚实，也提醒我们：<b>压缩≠训练更省显存。</b></p>
+    </section>
+
+    <section class="section-card" id="cost">
+      <h2>4. 代价是什么，以及能不能上手机</h2>
+
+      <p>先看代价。原文给的数字是：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">指标</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">原版 3DGS</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">压缩后</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">代价</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">Mip-NeRF360 存储</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">744 MB</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>29 MB</b>（×25.7）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">PSNR 27.42 → 27.10（<b>−0.32 dB</b>）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">Tanks&amp;Temples 存储</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">412 MB</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>14 MB</b>（×27.6）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">23.66 → 23.57（−0.09 dB）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">Deep Blending 存储</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">630 MB</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>18 MB</b>（×34.8）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">29.47 → 29.63（<b>+0.16 dB，反而涨了</b>）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">渲染速度</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">—</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">×1.7 提速</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">—（变快了，不是代价）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">训练显存</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">—</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>没有改善</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">原文明确：收益出现在峰值之后</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>所以「代价」的答案是：<b>平均质量掉 0.21 dB，而且不是每个数据集都掉——Deep Blending 上反而涨了 0.16 dB。</b>论文自己也说了原因：剪枝与球谐裁剪有时会起到正则化作用。当然，论文也承认<b>极端压缩会有质量损耗、码本量化会引入误差、剪枝依赖冗余度估计是否靠谱</b>——这三条是它的短板。</p>
+
+      <p>再说「<b>能不能在嵌入式 / 移动端跑</b>」——<b>这一篇说得很明确：能，而且专门做了。</b>证据有三条：</p>
+
+      <ul>
+        <li><b>图 1 就是一张手机截图。</b>图注写的是「一台手机上运行改造过的 gsplat.js、加载 bicycle 场景的截图」，右边是同一场景用本方法处理后的结果，<b>内存占用显著更低、下载时间更短</b>；</li>
+        <li><b>论文做了一个 WebGL 实现</b>，摘要里说这个实现在手机上带来 <b>20 到 30 倍的下载加速</b>；</li>
+        <li><b>实测数字</b>：原版 3DGS 场景在本地 Wi-Fi 下初次加载要 <b>120 秒</b>、显示 <b>16 FPS</b>；用本方法<b>下载只要 5 秒、跑到 45 FPS</b>（约 24 倍下载加速）。</li>
+      </ul>
+
+      <p>不过要补一句论文自己说的话：<b>「把码本与半精度类型处理集成进渲染器，才能把磁盘存储的这份收益同样带到显存上。」</b>也就是说——<b>压缩首先省的是磁盘 / 传输，要把它变成显存收益，渲染器那边还得配合改。</b>这一点很重要，别把它读成「显存自动就小了」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Reducing_the_Memory_Footprint_of_3D_Gaussian_Splatting/00696e4cf4c72c293161c2eca0585a7d7177f48b21806487532b0c636718a264.jpg" alt="Reducing Memory Fig.1 phone running gsplat.js for the bicycle scene, before and after">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Left: screenshot from a phone running a modified gsplat.js for the bicycle scene. Right: same scene, processed with our method, reaching a significantly lower memory footprint and shorter download time.<br>
+          （中译：左：一台手机运行改造过的 gsplat.js 加载 bicycle 场景的截图。右：同一场景用我们的方法处理后的结果，内存占用显著更低、下载时间更短。）<br>
+          <b>怎么看这张图：</b>这张图的题眼是「<b>手机</b>」两个字。① 请注意这是一个真的在手机上跑起来的结果，而且是个网页实现（gsplat.js + WebGL），不是「理论上可以在移动端部署」；② 左右两边是同一场景的对照；③ 呼应本节那张账本——<b>「几百万个高斯几百兆」这件事在手机上根本不是一个可选项，是硬门槛。</b><br>
+          <b>要记住的一句话：</b>这是本季把「显存」这件事从论文拉到地面的那张图——<b>它回答的是「这东西到底能不能装进一台手机」。</b>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>小华读完压缩方法后说：「太好了，这套方法让 3DGS 的显存占用降了 27 倍，训练也能跑在更小的卡上了。」这个说法哪里有问题？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="×27 这个数字本身是对的：三个数据集平均下来体积降 96.3%，约二十七分之一。问题不在这个数字，而在于它省的是哪一份内存。" onclick="lessonKit.answer(this,'q0125a')">二十七倍这个数字算错了</button>
+          <button data-correct="yes" data-explanation="对。原文明确说剪枝与球谐裁剪的效应出现在显存峰值之后，训练时的显存需求并没有改变；而且论文说要把码本与半精度集成进渲染器，磁盘上的收益才能同样落到显存上。所以 ×27 首先省的是磁盘与传输，不是训练显存。" onclick="lessonKit.answer(this,'q0125a')">省的是磁盘与传输，训练显存没变</button>
+          <button data-correct="no" data-explanation="压缩方法并没有引入新的场景表示，也没有改渲染的混合顺序，它就是图元剪枝、球谐降阶与量化三招，都是对已有属性的操作。所以谈不上「换了表示所以指标不可比」。" onclick="lessonKit.answer(this,'q0125a')">换了新表示，指标不可比</button>
+        </div>
+        <div class="quiz-feedback" id="q0125a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="pop">
+      <h2>5. StopThePop：那个被长期容忍的缺陷到底在哪</h2>
+
+      <p>换一个话题。这一节要处理的不是「装不下」，而是「<b>转视角时画面会跳</b>」。</p>
+
+      <p>这个现象有专门的名字：<b>popping</b>——<b>几何没变，颜色却突然变了。</b>StopThePop 的 Fig. 1 图注把它的定义写得很清楚：3DGS 由于「<b>近似的、全局的排序方案</b>」，在视角旋转时会遭受 popping 伪影。</p>
+
+      <p>要理解它，得回到 3DGS 的光栅化。这一节的骨架来自我们对 3DGS 原著的逐句核实（本项目的《3DGS 原著核心机制》文件 §3 第 5 条），原文的原话是：</p>
+
+      <div class="callout">
+        <h4>3DGS 原文（光栅化那一节，第 5 条）</h4>
+        <p>「<b>没有额外的逐像素排序</b>」（there is no additional per-pixel ordering of points），混合就基于这一次初始排序。因此 <b>α 混合在某些配置下是近似的</b>。</p>
+        <p>原文自己给的辩解是：当 splat 接近单像素大小时，这个近似可以忽略；并且说「<b>在收敛的场景里不产生可见伪影</b>」。</p>
+      </div>
+
+      <p>StopThePop 正是冲着这句话来的。<b>它的观察比「排序不够细」更进一步，指出了根因在「用什么当深度」上：</b></p>
+
+      <ol>
+        <li>3DGS 把三维高斯压成<b>扁平的二维 splat</b>，然后按<b>高斯均值的视角空间 $z$ 坐标</b>排序；</li>
+        <li>这个做法等价于把这些 splat 放在<b>以相机为中心的球壳</b>上——注意球壳会随相机位置改变；</li>
+        <li>于是<b>相机一旋转，两个高斯在视线方向上的先后关系就可能被翻转</b>；</li>
+        <li>顺序一翻，α 混合的累加顺序就变了，<b>同一块几何渲出来的颜色突然不同</b>——这就是 popping。</li>
+      </ol>
+
+      <p>原文还特别指出一个细节：<b>平移不会破坏这个顺序，只有旋转会</b>（因为球壳的半径取决于距离，平移时两个高斯的相对距离不变）。这也解释了为什么 popping 在<b>转头</b>的时候最刺眼——VR 场景里这个问题尤其让人出戏。</p>
+
+      <p>而这件事的恶劣之处还不只是「难看」：<b>3DGS 的训练过程可以利用这一点去「作弊」。</b>原文 Fig. 12 的图注直说了——3DGS 可以<i>用 popping 伪造出视角相关效果</i>：只要在几个视角之间让颜色跳一下，训练损失就降下去了，但这不是真的视角相关效果。StopThePop 的做法是<b>把这条路堵上</b>，同时保证画质。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一块几何，转一点点视角：左边跳变，右边稳定</text>
+
+          <!-- 左：3DGS -->
+          <rect x="30" y="60" width="390" height="240" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.5"/>
+          <text x="225" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">近似排序：边缘突然跳变</text>
+
+          <rect x="70" y="204" width="200" height="12" rx="3" fill="#c8a887" stroke="#a1795a" stroke-width="1.2"/>
+          <rect x="82" y="216" width="9" height="36" fill="#a1795a"/>
+          <rect x="248" y="216" width="9" height="36" fill="#a1795a"/>
+
+          <!-- 杯子 + 重影 -->
+          <path d="M136 172 L136 204 L176 204 L176 172 Z" fill="#d0503c" stroke="#9c3325" stroke-width="1.2"/>
+          <path d="M144 170 L144 198 L182 198 L182 170 Z" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <path d="M176 178 A9 9 0 0 1 176 194" fill="none" stroke="#9c3325" stroke-width="2"/>
+
+          <!-- 锯齿 -->
+          <path d="M180 168 L188 176 L180 184 L188 192 L180 200 L188 208"
+                fill="none" stroke="#c0392b" stroke-width="2"/>
+
+          <!-- 椅子 -->
+          <rect x="284" y="148" width="76" height="56" rx="5" fill="#dfe6ec" stroke="#8a9aa8" stroke-width="1.2"/>
+          <rect x="276" y="204" width="92" height="10" rx="2" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.2"/>
+          <path d="M356 152 L368 160 L356 168 L368 176 L356 184"
+                fill="none" stroke="#c0392b" stroke-width="2"/>
+
+          <path d="M368 108 L348 148" stroke="#c0392b" stroke-width="1.4"/>
+          <text x="356" y="104" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">popping</text>
+          <text x="225" y="278" text-anchor="middle" font-size="11" fill="#a8563a">同一块几何，颜色却跳了</text>
+
+          <!-- 中间箭头 -->
+          <path d="M426 180 L474 180" stroke="#5a8fc7" stroke-width="2"/>
+          <path d="M474 180 L465 175 L465 185 Z" fill="#5a8fc7"/>
+          <text x="450" y="166" text-anchor="middle" font-size="10.5" fill="#2c5f8a">转一点点</text>
+
+          <!-- 右：改进后 -->
+          <rect x="480" y="60" width="390" height="240" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.5"/>
+          <text x="675" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">改进排序：边缘稳定</text>
+
+          <rect x="520" y="204" width="200" height="12" rx="3" fill="#c8a887" stroke="#a1795a" stroke-width="1.2"/>
+          <rect x="532" y="216" width="9" height="36" fill="#a1795a"/>
+          <rect x="698" y="216" width="9" height="36" fill="#a1795a"/>
+
+          <path d="M586 172 L586 204 L626 204 L626 172 Z" fill="#d0503c" stroke="#9c3325" stroke-width="1.2"/>
+          <path d="M626 178 A9 9 0 0 1 626 194" fill="none" stroke="#9c3325" stroke-width="2"/>
+
+          <rect x="734" y="148" width="76" height="56" rx="5" fill="#dfe6ec" stroke="#8a9aa8" stroke-width="1.2"/>
+          <rect x="726" y="204" width="92" height="10" rx="2" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.2"/>
+
+          <path d="M786 104 L766 146" stroke="#2f6d51" stroke-width="1.4"/>
+          <text x="800" y="100" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">稳定</text>
+          <text x="675" y="278" text-anchor="middle" font-size="11" fill="#2f6d51">边缘只有一条线，不跳</text>
+
+          <text x="450" y="374" text-anchor="middle" font-size="12.5" fill="#5a4a42">问题不在颜色，在「谁挡谁」排错了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个场景、同样的几何，相机只转动一点点，在「近似排序」与「改进排序」两种渲染下的不同表现。<br>
+          <b>怎么看这张图：</b>① 左格是<b>原版 3DGS 的近似排序</b>——杯子的边缘出现了<b>红色的重影轮廓与锯齿</b>（虚线是上一帧的位置，实线是这一帧的位置），椅子上方也标着「popping」并画了锯齿；意思是<b>几何完全没动，颜色却跳了一下</b>；② 右格是<b>改进排序之后</b>——同样的场景、同样的转动，边缘只剩下一条干净的线；③ 中间那个箭头标着「转一点点」，是为了强调这个现象<b>不需要剧烈运动，只要转一点点就会出现</b>。<br>
+          <b>一处必须说明的简化：</b>真实的 popping 是<b>时间上的突变</b>（一个视频里某一帧突然变了），而静态的一张图是画不出「时间」的。这里用「重影 + 锯齿」来示意那种瞬间的错位感，请以图注描述的机制为准。<br>
+          <b>要记住的一句话：</b>问题不在颜色，在<b>「谁挡谁」排错了</b>——顺序错了，α 混合累加出来的颜色自然就错。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_StopThePop__Sorted_Gaussian_Splatting_for_View-Consisten/7c13084c4e24fa5b971777bc9ee7b4e680d2dc04117eb48ab39e9922c5e6f758.jpg" alt="StopThePop Fig.1 popping artifacts during view rotation in 3DGS">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>3D Gaussian Splating [Kerbl et al. 2023] sufers from popping artifacts during view rotation due to its approximate, global sorting scheme. Our method is able to efectively circumvent short-range popping artifacts (left) and long-range view-inconsistencies (right) during rotation with a novel, hierarchica per-pixel sorting strategy.<br>
+          （中译：3D 高斯泼溅由于它近似的全局排序方案，在视角旋转时会遭受 popping 伪影。我们的方法用一种新的分层逐像素排序策略，能有效避开旋转过程中的短程 popping 伪影（左）与长程的视角不一致（右）。）<br>
+          <b>怎么看这张图：</b>这张图把 popping 分成两类，值得分开看。① <b>短程（short-range）</b>的 popping——相机转一点点就出现的突然跳变，就是本节上面那张自绘图画的现象；② <b>长程（long-range）的视角不一致</b>——相机转了比较多、甚至绕过去之后，同一个物体呈现出来的样子<b>跟前面对不上</b>，累积起来就变成明显的失真；③ 两边都是「旋转」造成的，因为原文说平移不会破坏排序，只有旋转会。<br>
+          <b>一处 OCR 说明：</b>这条图注里有多处字母被吃掉（Splating→Splatting、sufers→suffers、efectively→effectively、hierarchica→hierarchical），中译里我按正确拼写还原，特此说明。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>popping 的表现是「几何一点没变，颜色却跳了一下」。那么它最根本的原因是下面哪一条？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="高斯的颜色确实是用球谐表示的（会随视角变化），球谐阶数不够高时颜色会失真——但那是「颜色算得不够准」，是连续的偏差，不会造成「同一块几何突然变色」这种跳变。popping 是顺序问题。" onclick="lessonKit.answer(this,'q0125b')">球谐阶数太低导致颜色失真</button>
+          <button data-correct="no" data-explanation="GPU 排序确实是一次性、按瓦片做的，但这不是根因。StopThePop 的核心洞察是「用什么量当深度」这件事本身有问题——就算排序算法再快再完美，只要还用均值的视角空间 z 来排，旋转时顺序照样会翻转。" onclick="lessonKit.answer(this,'q0125b')">排序在 GPU 上做得太快了</button>
+          <button data-correct="yes" data-explanation="对。3DGS 用高斯均值的视角空间 z 当深度，等价于把 splat 放在以相机为中心的球壳上；相机旋转时两个高斯沿视线的先后关系会翻转，混合顺序一变，颜色就跳。原文在光栅化那一节也承认「没有额外的逐像素排序」，混合在某些配置下是近似的。" onclick="lessonKit.answer(this,'q0125b')">用来排序的深度量会随旋转翻转</button>
+        </div>
+        <div class="quiz-feedback" id="q0125b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="fix">
+      <h2>6. 怎么改：瓦片还在，但排序变细了</h2>
+
+      <p>先说它的核心思路：<b>不要用「高斯的均值到相机的 z 距离」排序，而要把每个 splat 放在「沿这条视线贡献最大的那个点」上，用那个点的深度来排序。</b></p>
+
+      <p>这个点叫 $t_{\text{opt}}$。为什么这样就能消除 popping？因为它<b>与相机旋转无关</b>——你转动相机，两个高斯各自的「最大贡献点」在视线上的先后关系不会翻转。原文 Fig. 3 画的就是这件事，而且特别指出：<b>$t_{\text{opt}}$ 构成的是一张曲面，会随相机位置改变</b>——它不是几何意义上的位置，而是「沿着视线看，这个高斯最浓的那一层在哪」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_StopThePop__Sorted_Gaussian_Splatting_for_View-Consisten/056cb753053bb3db17a1c69328e15dbc8bafd7afd2bf77daf2431dc3d82478f4.jpg" alt="StopThePop Fig.3 t_opt point of maximum contribution along the view ray">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Our approach to compute $t_{opt}$ avoids popping by placing splats at the point of maximum contribution along the view ray r, creating sort orders independent of camera rotation (red view vector). Note that the shape of $t_{opt}$ is a curved surface and changes with the camera position; cf. Fig. 2.<br>
+          （中译：我们计算 $t_{opt}$ 的方法，是把 splat 放在沿视线 $r$ 贡献最大的那个点上，从而产生与相机旋转无关的排序（红色是视线向量）。注意 $t_{opt}$ 构成的形状是一张曲面，并且会随相机位置变化；参见 Fig. 2。）<br>
+          <b>怎么看这张图：</b>① 先找到图里的<b>红色视线向量</b>——它是判断的基准；② 再看那条视线穿过的高斯，每个高斯上标出的 $t_{opt}$ 就是<b>「沿着这条线走到哪一点，这个高斯贡献最大」</b>；③ 关键差别在于：原来的做法用的是「均值的深度」，那是<b>一个固定的点</b>，转动相机时两个点谁前谁后可能反转；而 $t_{opt}$ 是沿视线取的最大值，<b>转视角时两者的先后关系是稳的</b>。<br>
+          <b>要记住的一句话：</b>它不是「排得更准」，而是<b>换了一个与旋转无关的量来排</b>——这是从根上解决问题，而不是把误差调小。
+        </figcaption>
+      </figure>
+
+      <p>然后是「怎么做到不太慢」。这里有一个必须讲清的取舍：<b>如果真做完全的逐像素排序，代价是 100 倍以上的渲染时间</b>（论文原文说「比 3DGS 慢 100 倍以上」）。这显然不能用。所以它做了一个<b>分层</b>的方案，而且<b>瓦片这一层被保留了</b>：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$16\times16\ \text{瓦片} \;\to\; 4\times4\ \text{子块队列} \;\to\; 2\times2\ \text{子块队列} \;\to\; \text{每个像素自己的小队列}$$</div>
+      </div>
+
+      <p>具体一点（原文 §5.3 + Fig. 7）：一个 $16\times16$ 的瓦片启动 <b>256 个线程</b>；先有一个 <b>64 个元素</b>的 $4\times4$ 队列（由 16 个线程共同管理），喂给四个 <b>8 个元素</b>的 $2\times2$ 队列，每个 $2\times2$ 队列再喂给四个<b>逐像素队列</b>（每个 4 个元素，一个线程管一个）。这些队列里<b>只存高斯的 id 和当前层的 $t_{\text{opt}}$</b>，其它信息需要时再从全局显存取、并在同一层的线程之间用 shuffle 操作共享。这样整体等效的排序窗口在 <b>25 到 72</b> 之间。</p>
+
+      <p>这个「分层」的巧妙之处在于：<b>相邻的像素看到的高斯顺序大体相似，所以排序的力气可以共享。</b>越往下走越细、越准，但上层已经把绝大多数不必要的高斯剔掉了。配套的还有两个优化：<b>逐瓦片深度计算</b>（把排序误差从 $\delta_{\max}=5.43,\ \delta_{\text{avg}}=0.898$ 降到 $\delta_{\max}=4.01,\ \delta_{\text{avg}}=0.284$）和<b>瓦片级剔除</b>（每个瓦片的平均高斯数减少约 <b>44%</b>）。</p>
+
+      <p>结果是：<b>这套分层光栅器平均只比原版 3DGS 慢 4%。</b>而且还有一个额外的好处——原文说，如果你同时启用「不透明度衰减」（每 50 次迭代把所有高斯的 $\alpha$ 乘一个 $0.9995$ 的常数），<b>高斯数量能减少约一半而质量几乎不变</b>，于是渲染速度几乎翻倍，<b>整体反而比原版 3DGS 快 1.6 倍，显存也减半。</b></p>
+
+      <p>那怎么证明「popping 真的被消除了」？这里有个方法论上的坑值得记：<b>常规图像指标测不出 popping。</b>原文用 MSE 做过对比，发现即使画面明显在跳，MSE 也反映不出来（因为它会把光流 warp 带来的小误差算得比 popping 更重）。所以他们改用 <b>FLIP</b>——一个更接近人眼感知差异的度量：把第 $i$ 帧用光流 warp 到第 $i+t$ 帧，再和真实渲染的第 $i+t$ 帧比 FLIP 误差。结果里 FLIP 能清楚地标出 popping 造成的尖峰，而 MSE 不行。最后还有一个 18 人的用户研究，平均偏好分数 $s_{\text{mean}}=0.42$（正数表示更偏好本方法）。</p>
+
+      <p>它自己承认的局限也要如实写：<b>① 分层排序有额外开销</b>（虽然只有 4%）；<b>② 它依赖一个已经训好的 3DGS 模型</b>，不能凭空工作；<b>③ 坏几何救不回来</b>——如果高斯本身的位置就错了，把顺序排对也变不出正确几何；<b>④ 它仍然在近似真正的三维高斯</b>，忽略了高斯之间的重叠。</p>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>7. 横向对比与判断</h2>
+
+      <p>这两篇虽然都叫「工程」，但一个动的是<b>存储</b>，一个动的是<b>顺序</b>：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">对比项</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">内存压缩</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">StopThePop</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>对付 0015 表的哪一条</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">「显存 / 压缩」——额外压缩流程、最小高斯集合</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">「真实感」——过建高斯导致 aliasing 与伪影、遮挡计算变复杂</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>缺陷的根在哪</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">每个图元存太多数（59 个，其中 45 个是球谐）；图元数量过建</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">用高斯均值的视角空间 z 排序 → splat 落在球壳上 → 旋转时顺序翻转；<b>没有逐像素排序</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>怎么改</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">三招：分辨率感知剪枝 + 每个图元自适应球谐阶数 + 码本量化与半精度</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">把 splat 放在沿视线的最大贡献点 $t_{\text{opt}}$ + 保留瓦片但加三级分层排序（4×4 → 2×2 → 逐像素）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>改变什么量</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">存储与传输（要集成进渲染器才变成显存收益）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">混合顺序（颜色本身不变）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>收益</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">体积<b>降 96.3%（×27）</b>，渲染 ×1.7 提速</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">排序开销仅 <b>+4%</b>；配合不透明度衰减可<b>快 1.6×、显存减半</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>代价</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">平均掉 <b>0.21 dB</b>（个别数据集反而涨）；<b>训练显存没有改善</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">额外的排序开销（+4%）；仍需已训好的模型；坏几何救不回</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>是否要重训</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">剪枝与球谐裁剪在训练中做（15K 迭代时定阶）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">两者都行：论文对已训好的模型做了验证（Fig. 4），也重训了自己的版本</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>能不能上嵌入式 / 手机</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>明确做了</b>：手机 WebGL 实现，下载 120 秒 → 5 秒，16 FPS → 45 FPS</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">原文未提及移动端部署</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>最后是我们的判断——<b>请注意这是教学判断，不是原文自评</b>：</p>
+
+      <div class="callout">
+        <h4>我们的判断</h4>
+        <p><b>内存压缩那篇是「清账」性质的。</b>它没有提出新表示、没有新模型，只是把 3DGS 这笔开销逐项拆开、逐项砍掉。但它做的事价值极高：<b>它把 0015 课那句「还没找到能最大化表达力的最小高斯集合」从一句感慨变成了一个可量化的指标（分辨率感知冗余度）。</b>而且它给出了移动端的实测，这对任何想真正部署这套东西的人都是硬需求。</p>
+        <p><b>StopThePop 是「纠根」性质的。</b>它揪住的是原版 3DGS 在光栅化那一节的第 5 条——「没有额外的逐像素排序」——并用「改用一个与旋转无关的排序量」从根上解决。这一点在 SLAM 场景里格外重要：<b>SLAM 的相机本来就在不停地动，popping 在重建过程中的建图与渲染都会造成麻烦。</b>从本季前面 <b>0098</b> LIV-GaussMap、<b>0119</b> Photo-SLAM 这些实时高斯 SLAM 的角度看，StopThePop 讲的正是「上线前必须过的一道关」。</p>
+        <p><b>两篇都不解决「动态」。</b>0015 表里那句「静态压缩方法向动态场景扩展仍欠探索」，到今天为止我们还没有在本季看到正面的回答——那是下一节 <b>0126</b>（HUGS 与 Motion-Aware）的题目。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请把 3DGS 的存储账算一遍：一个高斯要存哪些数、一共多少个浮点数、球谐占多少比例；如果有三百万个高斯，总占用大概是多少？再说一句这个「一个高斯 59 个数」的口径是从哪来的。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>逐项拆开（按内存压缩那篇论文的口径）：</b></p>
+              <ul>
+                <li>位置 3 个（$x,y,z$）</li>
+                <li>缩放 3 个</li>
+                <li>基础颜色 3 个（也就是球谐的第 0 阶）</li>
+                <li>旋转 4 个（一个四元数）</li>
+                <li>不透明度 1 个</li>
+              </ul>
+              <p>这五项加起来是 <b>14 个</b>，就是公式里的常数项。再加上高阶球谐 $3\sum_{i=1}^{N}(2i+1)$：用 3 阶球谐时这一项是 <b>45 个</b>。所以每个高斯一共 <b>59 个浮点数</b>，其中 <b>45 个（76%）花在球谐上</b>。</p>
+              <p><b>总量：</b>59 × 3,000,000 ≈ <b>1.8 亿个浮点数</b>；每个 4 字节 → 约 <b>700 MB</b>。论文正文说的是「700 MB 到 1.2 GB」，和这个量级对得上。</p>
+              <p><b>口径来源：</b>这是内存压缩那篇论文 §4 开头自己给的结构公式 $14+3\sum_{i=1}^{N}(2i+1)$。注意你可能在别处看到「球谐 48 个、一个高斯 60 个数」的说法——那是按 3DGS 的球谐自由度（每通道 16 个系数 × 3 通道 = 48）算的口径。两个口径描述的是同一件事，但数字不同，<b>引用的时候要说清是哪一个</b>，否则账会算不平。</p>
+              <p><b>为什么必须先搞清楚这笔账：</b>因为不摊开算，你不会知道下手的地方在哪。算完之后一眼就能看出——<b>球谐占了 76%，是最大的一块肉。</b>这也是论文第二招（自适应球谐阶数）的动机。</p>
+            </div></details>
+          </li>
+          <li>压缩方法说「剪枝与球谐裁剪也影响训练显存，但它们的效应出现在峰值之后」。请解释这句话，并说明压缩到底省的是什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>这句话的意思：</b>训练过程有一根「显存占用曲线」，它会在某个时刻达到<b>峰值</b>（通常是高斯数量还在增长、稠密化最激烈的那一段）；峰值之后才慢慢回落。<b>剪枝和球谐裁剪虽然确实在训练中执行、也确实减少了高斯/系数，但它们的作用发生在峰值之后</b>——也就是说，等它们开始省的时候，曲线最高点早就过去了。</p>
+              <p><b>所以结论是：训练时的显存需求没有被这套方法改善。</b>原文明确写了这一点，非常诚实。</p>
+              <p><b>那它省的是什么？</b>省的是<b>存储与传输</b>，以及<b>渲染阶段</b>的开销。具体证据有：磁盘体积降 96.3%（×27）、渲染速度 ×1.7、手机上加载时间从 120 秒降到 5 秒、帧率从 16 FPS 提到 45 FPS。</p>
+              <p><b>还有一条特别重要的补充：</b>论文说「<b>把码本与半精度类型处理集成进渲染器，才能把磁盘存储的这份收益同样带到显存上</b>」。这句话意味着——<b>压缩首先省的是磁盘，想让它变成显存收益，渲染器那边还得配合改。</b>别把「文件小了 27 倍」直接读成「显存也小了 27 倍」，那是不成立的。</p>
+              <p>对本项目前面几课（<b>0035</b> Voxblox 的机载约束、<b>0119</b> Photo-SLAM 面向 Jetson）来说，这条区分的意义很大：<b>能装进内存和能存进硬盘，是两个不同的门槛。</b></p>
+            </div></details>
+          </li>
+          <li>请解释 3DGS 的 popping 是怎么产生的。为什么说「平移不会引起 popping，只有旋转会」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>产生的机制（四步）：</b></p>
+              <p>① 3DGS 为了渲染快，把三维高斯压成<b>扁平的二维 splat</b>，并且用<b>高斯均值的视角空间 $z$ 坐标</b>当作深度来排序；② 这个做法等价于把这些 splat 都摆到<b>以相机为中心的球壳</b>上——球壳的半径就是「这个高斯离相机多远」；③ 每个高斯在球壳上的位置是 <b>$z$ 的单调函数</b>，所以「谁在谁前面」完全由 $z$ 决定；④ 相机一旋转，两个高斯在<b>视线方向上的相对深度</b>就可能翻转 → 排序翻转 → α 混合的累加顺序改变 → <b>同一块几何渲出来的颜色突然不同</b>。这就是 popping。</p>
+              <p><b>为什么只有旋转会：</b>因为平移时，<b>两个高斯到相机的距离差（相对关系）基本不变</b>——你往前走一步，近的还是近的、远的还是远的，它们在球壳上的前后次序不会倒。但<b>旋转改变的是「视线方向」本身</b>：原来落在视线两侧的两个高斯，转一点之后可能一个跑到视线前方、一个跑到后方，沿视线的投影深度就反转了。原文的 Fig. 2 就是用「球壳 + 视线」画这件事的。</p>
+              <p>另外原文还指出一层后果：<b>3DGS 可以利用这一点「作弊」</b>——在训练时让颜色在几个视角之间跳一下，训练损失就降下去了，而这并不是真正的视角相关效果。StopThePop 的做法同时也把这条作弊路径堵住了。</p>
+              <p><b>为什么这件事在 SLAM 里更要紧：</b>SLAM 的相机一直在动（尤其是旋转），popping 会在重建与渲染里反复出现；而 SLAM 不像离线渲染那样能「挑个不转的视角」。所以对实时高斯 SLAM 来说，这是一道必须过的关。</p>
+            </div></details>
+          </li>
+          <li>StopThePop 把 splat 放在 $t_{\text{opt}}$（沿视线的最大贡献点）上来排序。请说明它和原来的做法差在哪，以及为什么这样可以做到「View-Consistent」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>原来的做法</b>：用<b>高斯均值的视角空间 $z$</b>排序。均值的三维位置是固定的，但它的 $z$（也就是到相机的距离方向上的投影）会随相机旋转而改变；等价于把 splat 放在随相机变动的球壳上，所以旋转时次序会翻转。</p>
+              <p><b>现在的做法</b>：不使用均值位置，而是<b>沿当前视线 $r$ 取一个「这个高斯贡献最大」的点作为 splat 的位置</b>，用它的深度来排序。原文 Fig. 3 特别指出：$t_{\text{opt}}$ 构成的是一张<b>曲面</b>，而且会随着相机位置变化——它不是几何位置，而是「沿着这条线看，这个高斯最浓的那一层落在哪」。</p>
+              <p><b>为什么这样就 View-Consistent</b>：因为 $t_{\text{opt}}$ 的定义本身就<b>内建了视线的方向</b>——它是在「以当前视线为轴的坐标系」里定义的量。所以相机转动时，<b>两个高斯各自的 $t_{\text{opt}}$ 在视线上的先后关系保持稳定</b>，不会像 $z$ 那样翻转。排序稳定 → 混合顺序稳定 → 颜色稳定。这就是「视角一致」：<b>几何没变，颜色就不该变。</b></p>
+              <p><b>代价与配套</b>：<b>完全的逐像素排序会让渲染慢 100 倍以上</b>，所以论文做了分层（保留 16×16 瓦片，加 $4\times4$ → $2\times2$ → 逐像素三级队列，队列里只存 id 与 $t_{\text{opt}}$），最终等效排序窗口在 25 到 72 之间，<b>平均只比原版 3DGS 慢 4%</b>。再配合不透明度衰减（高斯数量减半），整体反而比原版快 1.6 倍、显存减半。</p>
+              <p><b>最后一句提醒：</b>这个方案<b>不能救坏几何</b>。它改的是「谁挡谁」的顺序，如果高斯本身位置就错了，把顺序排对也变不出正确的形状。原文自己也承认它仍在近似真正的三维高斯、忽略了高斯之间的重叠。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0124-GPS-Gaussian与Animatable-Gaussians-前馈泛化与可驱动人体.html">← GPS-Gaussian 与 Animatable Gaussians：前馈泛化与可驱动人体</a>
+        <a class="next" href="0126-HUGS与Motion-Aware-城市级场景与动态高斯.html">HUGS 与 Motion-Aware：城市级场景与动态高斯 →</a>
+      </div>
+      <p class="foot-note">这一节那两个数字值得背下来：一个高斯 59 个数、三百万个就是几百兆；3DGS 没有逐像素排序、混合是近似的。前者解释「为什么装不下」，后者解释「为什么会闪」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

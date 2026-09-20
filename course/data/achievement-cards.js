@@ -247,6 +247,46 @@ window.ACHIEVEMENT_CARDS = {
         "<text x='200' y='282' font-size='12' text-anchor='middle' fill='rgba(234,251,255,0.72)' font-family='Helvetica, Arial, sans-serif'>阶段 E · 9 篇 · 多传感器融合</text>" +
         "</svg>",
       card_file: "reference/成就卡-第五季.html"
+    },
+    {
+      id: "ach-stage-f",
+      title: "隐式织网者",
+      icon: "🫧",
+      paper: "阶段 F · 前沿：神经隐式与 3D 高斯",
+      date: "2026-09-20",
+      rarity: "legendary",
+      thumb_b64:
+        "data:image/svg+xml;utf8," +
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'>" +
+        "<defs>" +
+        "<linearGradient id='bgf' x1='0' y1='0' x2='1' y2='1'>" +
+        "<stop offset='0%' stop-color='#1d1740'/>" +
+        "<stop offset='58%' stop-color='#3f2f78'/>" +
+        "<stop offset='100%' stop-color='#141029'/>" +
+        "</linearGradient>" +
+        "<radialGradient id='glowf' cx='50%' cy='38%' r='60%'>" +
+        "<stop offset='0%' stop-color='rgba(185,163,255,0.34)'/>" +
+        "<stop offset='100%' stop-color='rgba(185,163,255,0)'/>" +
+        "</radialGradient>" +
+        "</defs>" +
+        "<rect width='400' height='300' fill='url(#bgf)'/>" +
+        "<rect width='400' height='300' fill='url(#glowf)'/>" +
+        "<g stroke-width='2.4'>" +
+        "<ellipse cx='176' cy='104' rx='68' ry='38' transform='rotate(-24 176 104)' fill='#b9a3ff' fill-opacity='0.28' stroke='#cbb8ff' stroke-opacity='0.85'/>" +
+        "<ellipse cx='228' cy='122' rx='60' ry='32' transform='rotate(32 228 122)' fill='#8fd8e8' fill-opacity='0.26' stroke='#a9e6f2' stroke-opacity='0.85'/>" +
+        "<ellipse cx='196' cy='158' rx='54' ry='30' transform='rotate(8 196 158)' fill='#f0a6d8' fill-opacity='0.24' stroke='#f7bfe6' stroke-opacity='0.8'/>" +
+        "<ellipse cx='250' cy='78' rx='38' ry='22' transform='rotate(-58 250 78)' fill='#cbb8ff' fill-opacity='0.20' stroke='#dcd0ff' stroke-opacity='0.7'/>" +
+        "</g>" +
+        "<g fill='#f4efff'>" +
+        "<circle cx='176' cy='104' r='6.4'/><circle cx='228' cy='122' r='6'/><circle cx='196' cy='158' r='5.6'/><circle cx='250' cy='78' r='4.8'/>" +
+        "</g>" +
+        "<g fill='#e8e0ff' fill-opacity='0.5'>" +
+        "<circle cx='124' cy='150' r='3'/><circle cx='286' cy='164' r='3'/><circle cx='298' cy='124' r='2.6'/><circle cx='144' cy='82' r='2.6'/><circle cx='212' cy='196' r='2.8'/><circle cx='116' cy='116' r='2.4'/>" +
+        "</g>" +
+        "<text x='200' y='258' font-size='19' font-weight='700' text-anchor='middle' fill='#f2eeff' font-family='Helvetica, Arial, sans-serif'>隐式织网者</text>" +
+        "<text x='200' y='282' font-size='12' text-anchor='middle' fill='rgba(242,238,255,0.72)' font-family='Helvetica, Arial, sans-serif'>阶段 F · 36 篇 · 隐式与 3D 高斯</text>" +
+        "</svg>",
+      card_file: "reference/成就卡-第六季.html"
     }
   ]
 };

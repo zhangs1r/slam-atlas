@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MonoGS（2024）：首个以高斯为唯一表示的 SLAM — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0117</div>
+      <h1>MonoGS（2024）：首个以高斯为唯一表示的 SLAM</h1>
+      <p class="subtitle">同一个渲染误差，既推动相机、又推动地图 📷</p>
+      <div class="hero-meta">
+        <span>🎯 主题：渲染误差反传位姿 · 高斯作唯一表示 · 各向异性正则</span>
+        <span>👥 作者：Hidenobu Matsuki、Riku Murai、Paul H. J. Kelly、Andrew J. Davison（帝国理工）</span>
+        <span>📅 2024 · <i>Gaussian Splatting SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#name">先把名字说清楚</a>
+        <a href="#onlyrep">唯一表示是什么意思</a>
+        <a href="#pose">位姿是怎么被推出来的</a>
+        <a href="#live">单目 · 3 fps</a>
+        <a href="#floaters">高斯没有「面」的麻烦</a>
+        <a href="#davison">跨越 17 年的呼应</a>
+        <a href="#result">结果与边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="name">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「用高斯作唯一表示」比用点云、体素、MLP 强在哪；解释为什么渲染误差可以直接拿来优化相机位姿；知道单目 3 fps 这个数字背后还有什么代价；以及理解「高斯没有面」会带来什么麻烦。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>地基是上一课 <b>0116</b>（3DGS 原著：椭球参数化、瓦片光栅化、自适应密度控制）。位姿估计这件事则要对比第三季 <b>0057</b> VINS-Mono 与第四季 <b>0084</b> FAST-LIO2——那些是几何/滤波范式，这里是「渲染误差反传」。最后 <b>0041</b> 课会以意想不到的方式重新出现。</p>
+        </div>
+      </div>
+
+      <h2 id="lead">1. 一个必须先说清楚的名字问题</h2>
+
+      <p>这节课要读的论文，本地文件叫 <code>2024_MonoGS.md</code>，这一课的标题里也写着 MonoGS。但我们必须先把一件事说明白，否则你以后去检索原文会找不到：</p>
+
+      <div class="callout">
+        <h4>★ 判定依据（请务必记住）</h4>
+        <p><b>这篇论文的正文标题是 <i>Gaussian Splatting SLAM</i>——标题里没有 MonoGS 这个词。</b></p>
+        <p>依据有三条：① 本地 md 文件第 1 行就是 <code># Gaussian Splatting SLAM</code>，紧接着是四位作者与单位，没有任何副标题；② 全文正文里，<code>MonoGS</code> 这个词<b>一次都没有出现过</b>（唯一出现它的地方是插图路径 <code>images/2024_MonoGS/…</code>，那是资料库给文件起的名字）；③ 摘要里的自我介绍是「Our method, which runs live at 3fps…」，用的词是 method，不是 MonoGS。</p>
+        <p>所以：<b>MonoGS 只是社区里约定俗成的系统名</b>（因为这篇论文同时给了单目与 RGB-D 两种配置，单目那一版被大家叫成了 Mono Monocular-Gaussian-SLAM，简写 MonoGS）。本课程沿用它，只是为了标题好认；<b>检索原文时请用 <i>Gaussian Splatting SLAM</i></b>。</p>
+      </div>
+
+      <p>顺带交代一下这篇论文的来历。作者是帝国理工 Dyson 机器人实验室的 Hidenobu Matsuki 与 Andrew J. Davison，加上软件性能优化组的 Riku Murai 和 Paul H. J. Kelly，2024 年发表在 CVPR。论文一开头就把自己的位置讲得很清楚：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「我们给出<b>3D 高斯泼溅在单目 SLAM 上的第一次应用</b>……我们的方法以 3 fps 实时运行，把高斯作为<b>唯一</b>的三维表示，统一了准确而高效的跟踪、建图与高质量渲染所需要的表示。」</p>
+
+      <p>注意这句话里有两个词分量很重：<b>「单目」</b>（最难的设定）与<b>「唯一」</b>。「唯一」是这一课的核心，下一节专门讲它。</p>
+
+      <h2 id="onlyrep">2. 「唯一表示」到底是什么意思</h2>
+
+      <p>先把「表示」（representation）这个词用大白话讲一遍：<b>机器把三维世界记在内存里的那种形式。</b>地图可以是一张点云表、一张体素格、一段网格、一堆网络权重——选哪一种，就决定了你后面所有的算法长什么样。</p>
+
+      <p>论文在引言里点名了几种旧答案，并且逐一说了它们的短处。请看这张表：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">旧的表示</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">原文点出的毛病</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">体素格 / SDF 格</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">吃内存、分辨率有上限；即使上八叉树或哈希，也<b>没法为了大范围修正而灵活地扭曲</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">网格（mesh）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">拓扑不规则，<b>融合新信息很难做</b></td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点云 / 面元（surfel）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">不连续，融合与优化都棘手</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">神经场（NeRF 那一类）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">渲染要<b>逐像素沿光线步进</b>，代价高</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>然后是它的主张：<b>3D 高斯一条都不占。</b>论文原话说，高斯「作为 SLAM 表示，最像点和面元，因此继承了它们的效率、局部性和<b>容易被扭曲修改</b>的能力」；同时它又是「以平滑、连续可微的方式表达几何——密集的高斯云互相融合，共同定义一个连续的体积函数」。再加上现代显卡天生就擅长把海量高斯泼溅到屏幕上，所以它同时拿到了三样东西。</p>
+
+      <p>那「唯一」两个字具体指什么？指的是<b>系统的每一个环节都吃同一份数据，不需要第二套表示</b>。请看论文的系统总览图：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_MonoGS/4e5ff14b063b91ad0252c03c4906fdce83aa6a5e42c875ac5a0b9233fed7e180.jpg" alt="MonoGS Fig.2 SLAM system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>SLAM System Overview: Our SLAM system uses 3D Gaussians as the only representation, unifying all components of SLAM, including tracking, mapping, keyframe management, and novel view synthesis.<br>
+          （中译：SLAM 系统总览。我们的 SLAM 系统把 3D 高斯作为<b>唯一</b>表示，统一了 SLAM 的所有组成部件，包括跟踪、建图、关键帧管理与新视角合成。）<br>
+          <b>怎么看这张图：</b>① 先看图上是不是只有<b>一种</b>数据形状在流转——没有「特征点地图」和「稠密地图」两套东西并排；② 再看箭头：同一份高斯，一头喂给跟踪（算位姿），一头喂给建图（改形状），还能直接渲染出图给新视角合成本用；③ 这就是「唯一」的意思——<b>跟踪用的、建图改的、渲染出的，是同一样东西。</b>
+        </figcaption>
+      </figure>
+
+      <p>为什么要强调「唯一」？因为很多同期系统走的是<b>分层（layered）</b>路线：前端用传统特征点算位姿，后端用神经场或体素建图，两套表示之间靠位姿硬接起来。论文对这种做法的评论很含蓄，但意思很明确：真正有意思的进展，是「一个统一的新稠密表示能用在系统运转的所有方面」。<b>这不是工程上的洁癖，而是因为一旦表示统一了，渲染出来的误差就能反过来同时修正位姿和地图。</b>下一节讲的就是这件事。</p>
+
+      <h2 id="pose">3. 位姿是怎么被推出来的</h2>
+
+      <p>这是本节课最重要的一节。先回忆一下我们熟悉的位姿估计是怎么做的：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>传统做法（第三季 / 第四季）</b>
+          <p>从图像里提出特征点（或直接用像素灰度），和地图里的点/线/面做匹配，算出<b>重投影误差</b>，再最小化它。误差里显式含有「相机位姿」这个未知数。</p>
+        </div>
+        <div class="mini-card">
+          <b>这一篇的做法</b>
+          <p>拿当前估计的位姿，<b>把地图渲染成一张图</b>，和真实拍到的照片直接相减。这个差就是误差——<b>没有提取任何特征，也没有做数据关联</b>。</p>
+        </div>
+      </div>
+
+      <p>论文把跟踪时的损失写得非常朴素，就是一张渲染图减去一张实拍图的 L1 距离：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$E_{pho}=\left\| I(\mathcal{G},T_{CW})-\bar{I} \right\|_1$$</div>
+      </div>
+
+      <p>符号逐个解释：$\mathcal{G}$ 是当前地图（所有高斯）；$T_{CW}$ 是相机位姿（从世界坐标到相机坐标的变换）；$I(\mathcal{G},T_{CW})$ 是<b>从当前位姿把地图渲染出来的那张图</b>；$\bar{I}$ 是传感器真实拍到的图。两者相减、取绝对值、求和——就是「我这幅画和你那张照片差了多少」。</p>
+
+      <p>关键在下一步：<b>这个误差是可以对位姿求导的。</b>因为整个渲染过程（投影、排序、α 混合）都是可微的，所以梯度能一路回传到 $T_{CW}$ 上，用梯度下降把位姿往下调一点、再调一点。</p>
+
+      <p>不过论文在这里做了一件硬功夫，值得单独说：<b>它自己手推了「高斯地图对 SE(3) 位姿」的解析雅可比（analytic Jacobian）。</b>原文原话是：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「据我们所知，我们给出了 EWA splatting 与 3DGS 中<b>第一个关于 3D 高斯的 SE(3) 相机位姿的解析雅可比</b>。」</p>
+
+      <p>为什么要手推而不是让 PyTorch 自动微分去算？论文给了两个理由：<b>① 光栅化是性能关键路径</b>，3DGS 原本就是用 CUDA 手写导数的；<b>② 用李代数推最小雅可比</b>，可以让雅可比的维度和自由度严格对上（位姿 6 个自由度），「消除任何多余的计算」。论文的硬结论是——这个解析梯度带来了<b>很大的收敛盆地</b>，位姿从一个相当偏的初值也能被拉回来。这一点后面还会看到一张实验图。</p>
+
+      <p>现在把整件事画出来看。下面这张自绘图要讲的是：<b>同一个误差，同时推动两样东西。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">渲染误差往回推：一次推动两个未知数</text>
+
+          <!-- 格 1：渲染出的画面 -->
+          <rect x="150" y="50" width="230" height="122" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="162" y="70" font-size="12" font-weight="700" fill="#3b4a5e">① 渲染出的画面</text>
+          <text x="162" y="88" font-size="10.5" fill="#7a8a99">相机按现在的参数猜的</text>
+          <line x1="170" y1="145" x2="362" y2="145" stroke="#9aa7b2" stroke-width="2"/>
+          <rect x="240" y="108" width="26" height="36" rx="5" fill="none" stroke="#9aa7b2" stroke-width="2"/>
+          <text x="162" y="164" font-size="10" fill="#9aa7b2">（画歪了一点点）</text>
+
+          <!-- 格 2：真实照片 -->
+          <rect x="520" y="50" width="230" height="122" rx="8" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="532" y="70" font-size="12" font-weight="700" fill="#3b4a5e">② 真实拍到的照片</text>
+          <text x="532" y="88" font-size="10.5" fill="#7a8a99">世界真正的样子</text>
+          <line x1="540" y1="145" x2="732" y2="145" stroke="#37474f" stroke-width="2"/>
+          <rect x="604" y="110" width="26" height="34" rx="5" fill="none" stroke="#37474f" stroke-width="2"/>
+          <text x="532" y="164" font-size="10" fill="#90a4ae">（这是标准答案）</text>
+
+          <!-- 中间：像素差 -->
+          <line x1="392" y1="126" x2="508" y2="126" stroke="#c0392b" stroke-width="1.8" stroke-dasharray="6 4"/>
+          <path d="M392 126 L402 121 L402 131 Z" fill="#c0392b"/>
+          <path d="M508 126 L498 121 L498 131 Z" fill="#c0392b"/>
+          <text x="450" y="112" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c0392b">像素差</text>
+          <text x="450" y="150" text-anchor="middle" font-size="10.5" fill="#a8563a">一减就是误差</text>
+
+          <!-- 两个反向箭头 -->
+          <path d="M430 178 C 350 206, 200 214, 124 240" fill="none" stroke="#2c5f8a" stroke-width="2"/>
+          <path d="M124 240 L136 236 L131 247 Z" fill="#2c5f8a"/>
+          <text x="124" y="230" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2c5f8a">相机挪一点</text>
+
+          <path d="M472 178 C 552 206, 600 234, 628 278" fill="none" stroke="#2f6d51" stroke-width="2"/>
+          <path d="M628 278 L618 271 L630 269 Z" fill="#2f6d51"/>
+          <text x="700" y="262" font-size="11.5" font-weight="700" fill="#2f6d51">高斯也改一点</text>
+
+          <!-- 相机 -->
+          <rect x="60" y="252" width="86" height="52" rx="8" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.5"/>
+          <circle cx="150" cy="278" r="14" fill="#dfe9f3" stroke="#2c5f8a" stroke-width="1.5"/>
+          <text x="103" y="326" text-anchor="middle" font-size="11.5" fill="#2c5f8a">相机（位姿未知）</text>
+
+          <!-- 视锥 -->
+          <path d="M164 264 L400 202 L400 358 L164 292 Z" fill="#7fc4a0" opacity="0.15" stroke="#4a9c76" stroke-width="1" stroke-dasharray="4 3"/>
+
+          <!-- 桌子 -->
+          <rect x="430" y="300" width="250" height="12" fill="#c8a887" stroke="#a1795a" stroke-width="1.2"/>
+          <rect x="442" y="312" width="9" height="66" fill="#a1795a"/>
+          <rect x="660" y="312" width="9" height="66" fill="#a1795a"/>
+          <!-- 桌上物体 -->
+          <rect x="482" y="262" width="30" height="38" rx="5" fill="#e8dccb" stroke="#a1795a" stroke-width="1.2"/>
+          <rect x="562" y="282" width="76" height="18" fill="#d7c3a8" stroke="#a1795a" stroke-width="1.2"/>
+          <!-- 高斯椭球 -->
+          <g fill="#2f6d51" opacity="0.45">
+            <ellipse cx="478" cy="258" rx="12" ry="7"/>
+            <ellipse cx="508" cy="250" rx="11" ry="6"/>
+            <ellipse cx="520" cy="286" rx="13" ry="6"/>
+            <ellipse cx="566" cy="278" rx="14" ry="7"/>
+            <ellipse cx="606" cy="292" rx="12" ry="6"/>
+            <ellipse cx="642" cy="294" rx="13" ry="6"/>
+          </g>
+          <text x="700" y="308" font-size="11" fill="#2f6d51">高斯（形状未知）</text>
+
+          <text x="450" y="418" text-anchor="middle" font-size="12" fill="#5a4a42">同一个误差，同时推动两样东西：位姿挪一点、高斯改一点，两步一起做</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>SLAM 里最难的那件事——「我在哪」和「世界长什么样」互为条件——在这篇论文里是怎么被一个误差同时解决的。<br>
+          <b>怎么看这张图：</b>① 上面两个小框，左边是「用当前参数渲染出来的画面」，右边是「真实拍到的照片」，它们之间那根红色虚线就是<b>像素差（误差）</b>；② 注意从这根红线往下伸出的<b>两根箭头是反着的</b>——误差不是被拿去显示，而是被<b>反传回去</b>；③ 左箭头落在相机上，标着「相机挪一点」，右箭头落在桌上那几团绿色椭球上，标着「高斯也改一点」；④ 最关键的一步是：这两件事<b>不是在两个模块里分别做的</b>，而是同一个梯度、同一次反向传播里一起做的——这正是「高斯是唯一表示」换来的好处。<br>
+          <b>要记住的一句话：</b>高斯在这里不只是「地图」，它还是一个<b>可微分的传感器模型</b>：你问它「从这个位姿看过去会看到什么」，它答一张图，答错了就告诉你该往哪边改。
+        </figcaption>
+      </figure>
+
+      <p>文中还提到一个很实在的工程事实：<b>每一帧通常需要至少 50 次梯度下降迭代。</b>原文用这句话反过来论证表示的选择：既然一帧要跑 50 次「渲染 + 求梯度」，那么「一个渲染快、求梯度快的表示」就成了系统设计的决定因素——这也就是它选高斯而不选 NeRF 的直接理由。</p>
+
+      <p>建图那一侧的目标函数是类似的，只是把位姿和高斯参数<b>一起</b>放进了未知数：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\min_{T_{CW}^{k}\in SE(3),\ \mathcal{G}} \sum_{k\in\mathcal{W}} E_{pho}^{k} + \lambda_{iso}E_{iso}$$</div>
+      </div>
+
+      <p>其中 $\mathcal{W}$ 是当前关键帧窗口里的帧（外加每次迭代随机抽的两个<b>过去</b>关键帧——原文说这是为了防止「忘记全局地图」）。有深度输入时（RGB-D 模式），再加一项几何残差 $E_{geo}=\|D(\mathcal{G},T_{CW})-\bar{D}\|_1$，位姿估计会更稳。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>在跟踪阶段（tracking），论文原话是「只优化当前相机位姿，<b>不更新地图表示</b>」。那为什么它还要把地图渲染一遍？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="跟踪阶段确实不动地图参数，但渲染地图不是为了显示给人看，它是误差的来源。不渲染就无从比较。" onclick="lessonKit.answer(this,'q0117a')">为了让渲染图显示给人看</button>
+          <button data-correct="yes" data-explanation="对。误差的定义就是「渲染图减实拍图」，而渲染图必须由地图生成。地图在这时扮演的是一个固定的参照物——正因为它不动，渲染图的变化才能干净地反映「位姿错在哪」。" onclick="lessonKit.answer(this,'q0117a')">为了造出可比较的渲染图</button>
+          <button data-correct="no" data-explanation="跟踪和建图是分开的两步。跟踪时地图被冻结，就是为了避免「地图和位姿一起动、互相掩盖错误」这种病态情况。" onclick="lessonKit.answer(this,'q0117a')">为了让地图跟着位姿更新</button>
+        </div>
+        <div class="quiz-feedback" id="q0117a"></div>
+      </div>
+
+      <h2 id="live">4. 单目 · 3 fps：它靠什么撑住</h2>
+
+      <p>论文摘要里最抓眼球的一句话是：<b>「runs live at 3fps」</b>——单目相机、实时（按论文的说法是 near real-time），每秒处理约 3 帧。图 1 就是它的现场展示：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_MonoGS/ad4e532d535d8d4f90c607de363bc080039fdd24145636fcc61fca9fbbf8d32a.jpg" alt="MonoGS Fig.1 live monocular reconstruction at 3fps">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>From a single monocular camera, we reconstruct a high fidelity 3D scene live at 3fps. … Thin structures such as wires are accurately represented by numerous small, elongated Gaussians, and transparent objects are effectively represented by placing the Gaussians along the rim.<br>
+          （中译：用一台单目相机，我们以 3 fps 实时重建高保真三维场景。每来一帧 RGB，3D 高斯就被增量地生成，并与相机位姿一起被优化。左图是光栅化后的高斯，右图是把高斯按几何着色。注意它捕捉到的细节与复杂材质（例如透明）。像电线这样的细结构由大量细长的小高斯准确表示；透明物体则通过把高斯摆在其轮廓边缘来有效表示。）<br>
+          <b>怎么看这张图：</b>① 比较左右两半：左边是<b>渲染效果</b>，右边是把同样的高斯<b>按几何着色</b>——右边能看出城市的形状是由一团团椭球堆出来的；② 找图注点名的两处细节：<b>细长的电线</b>和<b>透明物体</b>。前者靠「很多个细长小高斯」，后者靠「把高斯贴在轮廓边缘」；③ 想想这意味着什么——它<b>没有去显式地建模表面</b>，所以反而绕开了「透明物体算不出深度」这个传统难题。原文在定性结果那节明确说了这一点。<br>
+          <b>怎么和 3 fps 对上：</b>3 fps 是「端到端跑完一帧（跟踪 + 建图 + 渲染）」的速度，不是纯渲染速度。论文在 RGB-D 设定下另报了渲染帧率 769 fps（Replica 数据集），那是「地图已经建好、只渲染」的速度——两个数字不要混。
+        </figcaption>
+      </figure>
+
+      <p>那么，单目凭什么能跑起来？单目的困难在于<b>没有尺度</b>：一张照片里，远近是分不清的。论文靠三件事把这件事撑住。</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 省掉球谐</b>
+          <p>3DGS 原著用球谐系数（SH）表示「同一个点从不同角度看颜色会变」。这一篇原话是「为简单和速度，我们省略表示视角相关辐射的球谐」——因为单目序列里，多视角的外观监督本来就不足，留着它收益小、开销大。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 靠渲染深度插高斯</b>
+          <p>新高斯怎么放？有深度传感器时直接反投影深度；单目时<b>用自己渲染出的深度图</b>——有深度估计的像素，就在那个深度附近放高斯；没估计的像素，就放在渲染图的中位深度附近，并给一个很大的方差。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 关键帧窗口</b>
+          <p>不可能把所有历史帧一起优化。它维护一个很小的关键帧窗口，选帧标准是<b>共同可见性</b>：新帧和上一个关键帧看到的高斯重合度掉到阈值以下、或者平移相对中位深度太大，就登记为新关键帧。窗口管理沿用了 DSO（第三季 <b>0049</b> 课）的启发式。</p>
+        </div>
+      </div>
+
+      <p>这里有一处非常漂亮的工程细节值得单独拎出来：<b>共同可见性是怎么算的？</b>高斯在渲染时本来就会沿光线排序，遮挡天然被处理掉了。所以论文规定：<b>只要某个高斯在光栅化里被用到、并且该像素累积的 α 还没到 0.5，就算它从这个视角可见。</b>换句话说——<b>渲染器顺手就给出了一份带遮挡关系的可见性表</b>，不需要额外的启发式去猜。原文专门夸了这一点。</p>
+
+      <p>另外，单目下会有大量位置放错的新高斯。论文的处理是：绝大多数会在优化中因为不满足多视角一致性而自己消失；剩下那些顽固的，就查可见性——<b>如果某个高斯是在最近 3 个关键帧里插入的，却至少被其他 3 帧看见过而没被观测到，就判定它几何不稳定，直接剪掉。</b></p>
+
+      <h2 id="floaters">5. 高斯没有「面」的麻烦</h2>
+
+      <p>现在讲这一课最值得琢磨的一个技术点，也是高斯表示真正的软肋。</p>
+
+      <p>回忆上一课：3DGS 用一堆各向异性的椭球来表示场景。椭球是<b>体积元</b>，它没有「表面」这个属性——不像网格有面片、也不像 TSDF 有零等值面。这会带来两个后果，论文都写明了。</p>
+
+      <div class="callout">
+        <h4>后果一：沿视线方向的高斯没人管</h4>
+        <p>论文原话：<b>「3DGS 的光栅化对沿视线方向的高斯不施加任何约束，即使有深度观测也一样。」</b>在离线的场景重建里，因为视角足够多、挑得足够好，这不是问题；但在连续运行的 SLAM 里，「这会造成很多伪影，让跟踪变得困难」。</p>
+        <p>论文的对策是一个叫<b>各向同性正则</b>（isotropic regularisation）的项：</p>
+        <div class="formula-box">
+          <div class="flow-formula">$$E_{iso}=\sum_{i=1}^{|\mathcal{G}|}\left\| \mathbf{s}_i-\tilde{\mathbf{s}}_i\cdot\mathbf{1} \right\|_1$$</div>
+        </div>
+        <p>$\mathbf{s}_i$ 是第 $i$ 个高斯三个轴的长度（尺度参数），$\tilde{\mathbf{s}}_i$ 是它的均值。这个式子做的就是：<b>惩罚三个轴长短不一致——鼓励椭球长得像球。</b>论文说得很直白：这「鼓励球形化，避免高斯沿视线方向被极度拉长而产生伪影」。</p>
+      </div>
+
+      <p>下面的原图就是这项正则的消融可视化——它把「有正则」与「无正则」摆在一起，非常有说服力：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_MonoGS/d2deae6024d231916c5fe65cc70913d7603575e6f0b8bc2fe642420a671331ab.jpg" alt="MonoGS Fig.3 effect of isotropic regularisation">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Effect of isotropic regularisation: Top: Rendering close to a training view (looking at the keyboard). Bottom: Rendering 3D Gaussians far from the training views (view from a side of the keyboard) without (left) and with (right) the isotropic loss.<br>
+          （中译：各向同性正则的效果。上排：靠近训练视角的渲染（看着键盘）。下排：从远离训练视角的地方渲染 3D 高斯（从键盘侧面看），左为<b>不用</b>各向同性损失，右为<b>使用</b>。<br>
+          <b>怎么看这张图：</b>① 先看上排——那是「从训练时用过的视角看」，有没有正则几乎看不出差别，说明这项正则<b>不以牺牲正常视角的画质为代价</b>；② 再看下排——那是「从一个没有训练过的侧面看」，左边（无正则）出现了明显的涂抹与拉长，右边（有正则）干净得多；③ 结论：正则约束的是<b>你没看到过的那部分几何</b>，它把「为了凑合当前视角而把高斯拉成一根长条」这条捷径堵住了。<br>
+          <b>一个诚实的说明：</b>本地 md 文件里这张图的说明文字在排版上被「w/o / w/」两个小标签挤到了图片的<b>下一行</b>，图注定位工具因此报了「附近无图注行」。上面这段图注是从紧随其后的正文里逐字还原的，不是我们编的。
+        </figcaption>
+      </figure>
+
+      <p>第二个后果，就是我们这一课标题里说的「浮空团」——它其实是<b>纯单目的必然产物</b>：既然一个像素的深度是猜的，就一定会有一些高斯被放到了「其实什么都没有」的半空中。它们会让渲染出鬼影，也会把位姿估计带偏。原文对这类东西用的是剪枝（上一节讲的三帧规则），而 3DGS 原著用的是「每 3000 次迭代把不透明度压回接近 0、让它们重新竞争」——那是上一课 <b>0116</b> 的重点。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">高斯是一团云，不是一层皮：浮空团是怎么来的</text>
+
+          <!-- 左格 -->
+          <rect x="20" y="46" width="420" height="336" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 没有面，就没有东西管住云</text>
+          <text x="230" y="88" text-anchor="middle" font-size="10.5" fill="#a8846f">单目还要猜深度，更容易飘</text>
+
+          <!-- 墙与地 -->
+          <rect x="42" y="140" width="376" height="150" fill="#f0f4f7" stroke="#cfd8dc" stroke-width="1"/>
+          <rect x="42" y="290" width="376" height="70" fill="#e8eaed" stroke="#cfd8dc" stroke-width="1"/>
+          <!-- 桌子 -->
+          <rect x="150" y="250" width="170" height="10" fill="#d7c3a8" stroke="#a1795a" stroke-width="1.1"/>
+          <rect x="162" y="260" width="8" height="58" fill="#a1795a"/>
+          <rect x="300" y="260" width="8" height="58" fill="#a1795a"/>
+          <!-- 贴在表面的高斯 -->
+          <g fill="#4a9c76" opacity="0.5">
+            <ellipse cx="70" cy="200" rx="13" ry="7"/><ellipse cx="110" cy="215" rx="12" ry="6"/>
+            <ellipse cx="150" cy="180" rx="13" ry="7"/><ellipse cx="196" cy="205" rx="12" ry="6"/>
+            <ellipse cx="240" cy="185" rx="13" ry="7"/><ellipse cx="286" cy="212" rx="12" ry="6"/>
+            <ellipse cx="330" cy="190" rx="13" ry="7"/><ellipse cx="372" cy="215" rx="12" ry="6"/>
+            <ellipse cx="196" cy="245" rx="13" ry="6"/><ellipse cx="268" cy="246" rx="12" ry="6"/>
+          </g>
+          <!-- 浮空团 -->
+          <g fill="#c0392b" opacity="0.6">
+            <ellipse cx="120" cy="150" rx="15" ry="8"/>
+            <ellipse cx="240" cy="132" rx="14" ry="8"/>
+            <ellipse cx="330" cy="152" rx="15" ry="8"/>
+          </g>
+          <rect x="92" y="118" width="270" height="52" fill="none" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="6 4"/>
+          <text x="230" y="110" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">虚线框里这几团是浮空团，不是真东西</text>
+          <text x="230" y="368" text-anchor="middle" font-size="11.5" fill="#a8563a">它们落在渲染图上就是鬼影</text>
+
+          <!-- 右格 -->
+          <rect x="460" y="46" width="420" height="336" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 加了正则与剪枝之后</text>
+          <text x="670" y="88" text-anchor="middle" font-size="10.5" fill="#5f8a72">云被压回表面附近，垃圾被清掉</text>
+
+          <rect x="482" y="140" width="376" height="150" fill="#f0f4f7" stroke="#cfd8dc" stroke-width="1"/>
+          <rect x="482" y="290" width="376" height="70" fill="#e8eaed" stroke="#cfd8dc" stroke-width="1"/>
+          <rect x="590" y="250" width="170" height="10" fill="#d7c3a8" stroke="#a1795a" stroke-width="1.1"/>
+          <rect x="602" y="260" width="8" height="58" fill="#a1795a"/>
+          <rect x="740" y="260" width="8" height="58" fill="#a1795a"/>
+          <g fill="#2f6d51" opacity="0.5">
+            <ellipse cx="510" cy="200" rx="13" ry="6"/><ellipse cx="550" cy="214" rx="12" ry="6"/>
+            <ellipse cx="590" cy="182" rx="13" ry="6"/><ellipse cx="636" cy="206" rx="12" ry="6"/>
+            <ellipse cx="680" cy="186" rx="13" ry="6"/><ellipse cx="726" cy="212" rx="12" ry="6"/>
+            <ellipse cx="770" cy="190" rx="13" ry="6"/><ellipse cx="812" cy="214" rx="12" ry="6"/>
+            <ellipse cx="636" cy="244" rx="13" ry="6"/><ellipse cx="708" cy="245" rx="12" ry="6"/>
+          </g>
+          <g fill="#4a9c76" opacity="0.35">
+            <ellipse cx="516" cy="152" rx="12" ry="5"/>
+            <ellipse cx="636" cy="138" rx="11" ry="5"/>
+            <ellipse cx="726" cy="154" rx="12" ry="5"/>
+          </g>
+          <text x="670" y="110" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">飘出去的那几团被拉回来贴在表面附近</text>
+          <text x="670" y="368" text-anchor="middle" font-size="11.5" fill="#2f6d51">渲染不再有鬼影，几何干净多了</text>
+
+          <text x="450" y="410" text-anchor="middle" font-size="12" fill="#5a4a42">高斯不是一层皮，是一团云；云能不能只贴着表面，得靠额外的约束去管</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「高斯没有面」这件事在连续 SLAM 里会造成什么后果，以及约束加上之后会变成什么样。<br>
+          <b>怎么看这张图：</b>① 左格里，大部分绿色椭球都贴着墙和桌面（它们是合理的重建），但有<b>三团红色椭球飘在半空中</b>，被红虚线框圈出来了——它们不是任何真实物体的几何，只是「这个像素的深度猜错了」留下的东西；② 右格是加上各向同性正则、并配合剪枝之后：飘出去的椭球被拉回表面附近（图中画得扁一些，表示它们不再沿视线方向疯长），多余的被清掉；③ 注意右格上方仍有三团<b>更淡</b>的椭球——它们是新插入、还没收敛的，说明这套机制是<b>边跑边清</b>，不是一次性的。<br>
+          <b>要记住的一句话：</b>网格或 TSDF 的「表面」是内建的，高斯没有这个内建约束，所以必须<b>额外加一条正则、额外加一套剪枝规则</b>——这是所有高斯 SLAM 都要还的一笔债。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>各向同性正则 $E_{iso}$ 是「让椭球三个轴长尽量相等」。如果把它用到极致、让每个高斯都变成正球，会出什么问题？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="球体一样可以被光栅化和 α 混合，渲染流程完全不受影响。问题不在能不能跑，而在跑出来像不像。" onclick="lessonKit.answer(this,'q0117b')">渲染流程会无法执行</button>
+          <button data-correct="no" data-explanation="正球在显存里占的参数和前一样多（位置 3 + 尺度 3 + 旋转 4 + 不透明度 1），并不会更省。" onclick="lessonKit.answer(this,'q0117b')">显存占用会大幅上升</button>
+          <button data-correct="yes" data-explanation="对。3DGS 能用较少的高斯表达复杂几何，靠的正是「椭球可以各向异性、可以顺着表面摊开」。全部退化成正球，就等于放弃了这项表达能力，只能用更多球来凑——论文把它当正则项来用（λ_iso 加权），而不是当硬约束，就是这个道理。" onclick="lessonKit.answer(this,'q0117b')">贴合复杂表面会变差</button>
+        </div>
+        <div class="quiz-feedback" id="q0117b"></div>
+      </div>
+
+      <h2 id="davison">6. 一个跨越 17 年的呼应</h2>
+
+      <p>现在说这节课我最想让你记住的一件事——它不是技术，是<b>人</b>。</p>
+
+      <p>这篇论文的作者名单里，最后一位是 <b>Andrew J. Davison</b>，单位是帝国理工 Dyson 机器人实验室。而你还记得第三季的第一课吗？那是 <b>0041</b> 课，讲的是 <b>MonoSLAM</b>——2007 年那篇把「单目相机实时 SLAM」第一次做出来的论文。它的第一作者，正是 Davison。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>2007 · MonoSLAM（第三季 0041 课）</b>
+          <p>地图是一串<b>稀疏的特征点（路标）</b>，塞进一个巨大的<b>状态向量</b>里；位姿和路标一起用扩展卡尔曼滤波递推。那时候「地图」= 几百个三维点。</p>
+        </div>
+        <div class="mini-card">
+          <b>2024 · 这一篇（0117 课）</b>
+          <p>地图是<b>几十万到上百万个各向异性高斯</b>，每个有自己的位置、形状、颜色、不透明度；位姿不再是滤波里的一个状态，而是<b>跟着渲染误差一起被梯度下降推着走</b>。</p>
+        </div>
+      </div>
+
+      <p>十七年，同一个实验室，同一个作者。「单目实时 SLAM」这个问题没变，<b>变的是「地图」这两个字的含义</b>：从「状态向量里塞进去的一串路标」，变成了「一堆可以被渲染、被求导、被裁剪、被扭曲的椭球」。而位姿估计的方式也从「滤波」换成了「渲染误差反传」——我们在第三节讲的那个机制。</p>
+
+      <p>你可以把这条线和我们四季以来的主线对上：第二季 <b>0018 / 0019</b> 讲 BA 与滤波的分野，第三季 <b>0049</b> DSO 把「直接法」推到极致（用像素灰度差直接优化位姿，同样不提特征），第四季 <b>0084</b> FAST-LIO2 用「直接配准 + ikd-Tree」把激光侧的效率拉满。这一篇做的事情，本质上是把<b>直接法那条线</b>推到它的极端：<b>连「像素灰度差」都不用了，直接比「渲染图与照片的差」</b>——而渲染图的来源，就是地图本身。</p>
+
+      <h2 id="result">7. 结果与边界</h2>
+
+      <p>论文在 TUM RGB-D（3 个序列）与 Replica（8 个序列）上做了定量评测。几个值得记住的数字：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">项目</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">数字</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">实时速度</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>约 3 fps</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">端到端（跟踪 + 建图 + 渲染），单目</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">渲染速度（RGB-D，Replica）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>769 fps</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">地图已建好时纯渲染；对比 NICE-SLAM 0.54 fps、Vox-Fusion 2.17 fps、Point-SLAM 1.33 fps</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">渲染质量（RGB-D，Replica）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">PSNR <b>38.94</b> / SSIM 0.968 / LPIPS 0.070</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Point-SLAM 为 35.17 / 0.975 / 0.124（注意 Point-SLAM 用了真值深度引导采样）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">地图内存</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">单目 <b>2.6 MB</b>；RGB-D <b>3.97 MB</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">同表里 iMAP 0.8 MB、NICE-SLAM 40.3 MB、Co-SLAM 6.4 MB</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>内存这一行特别值得看：<b>单目只要 2.6 MB。</b>对比一下同表的 NICE-SLAM 要 40.3 MB（它存的是多层特征网格）——这正是「显式椭球比隐式特征网格省内存」的一个直接证据。但论文也诚实地说，iMAP 那种纯 MLP 反而只要 0.8 MB，只是「受限于小 MLP 的容量，表达高保真场景很吃力」。</p>
+
+      <p>下面这张是真实数据上的结果：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_MonoGS/13adf4ee0280b864f814ec829036a8fe8f3608ece5a80b2244a0259d9e62f041.jpg" alt="MonoGS Fig.6 monocular SLAM result on fr1/desk">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Monocular SLAM result on fr1/desk sequence: We show the reconstructed 3D Gaussian maps (Left) and novel view synthesis result (Right).<br>
+          （中译：fr1/desk 序列上的单目 SLAM 结果。左边是重建出的 3D 高斯地图，右边是新视角合成结果。）<br>
+          <b>怎么看这张图：</b>① fr1/desk 是 TUM RGB-D 里最经典的办公桌序列（第三季 <b>0057</b> VINS-Mono 那节课也用过它），现在被<b>纯单目</b>跑出了这样一张高斯地图；② 左边请盯着高斯的<b>摆放位置</b>看——论文的原话是它们「几何上合理且三维一致」，也就是说没有大面积的浮空团；③ 右边这张「新视角合成」是 <b>SLAM 系统顺手产出的副产品</b>：传统 SLAM 只能给你一条轨迹和一张点云，这里你能从任意角度重新看一遍这个房间。<br>
+          <b>要记住的一句话：</b>在同一个系统里，<b>建图、定位、照片级渲染是同一件事的三种输出</b>——这是「高斯作唯一表示」最直观的好处。
+        </figcaption>
+      </figure>
+
+      <h3>原文承认的边界（逐条）</h3>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 没有回环</b>
+          <p>结论一节把「为大尺度场景集成回环检测」列为未来方向。所以跑得越远，漂移越大——这一点和第四季 <b>0074</b> LOAM 当年留下的问题一模一样。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 实时性只有 3 fps</b>
+          <p>「near real-time」在摘要里是明确加了限定词的。3 fps 对一台匀速走的机器人而言，帧间位移已经不小了。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 单目缺尺度与深度先验</b>
+          <p>论文明确说它<b>不使用任何预训练的单目深度预测器</b>、也不依赖其他跟踪模块，只用 RGB。这是为了证明 3DGS 本身的能力——代价就是尺度要靠自己慢慢收敛，早期容易飘。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 提不出表面</b>
+          <p>原文在结论里写了：高斯「并不显式表示表面」，所以像<b>表面法向</b>这样的几何量是拿不到的。这个问题会在后面的 <b>0122</b> 课（SuGaR / GS-IR）被正面处理。</p>
+        </div>
+      </div>
+
+      <p>还值得补一句：论文用来对比的基线，主要是「同样没有回环」的方法（DSO、DepthCov、DROID-SLAM 的 VO 配置），以及 NICE-SLAM / Vox-Fusion / Point-SLAM 这些同样基于渲染的隐式方法。原文特别提到：它的单目结果<b>已经可以与那些做了显式回环的系统相比</b>——这句话其实是在暗示，这条路还有余量。</p>
+
+      <h3>关于 OCR 的说明</h3>
+
+      <p>本地 md 文件由 OCR 生成，这一篇有两处需要提醒：① 通篇存在把连字（fi / ti / ff）吃掉的情况，例如 <code>transparent</code> 偶发被拆成带 <code>&lt;sub&gt;</code> 的形式；② 图 3 的说明文字在排版上被「w/o」「w/」两个小标签挤到了图片<b>下一行</b>，自动定位图注的工具因此报了「附近无图注行」——本课图 3 的图注是回原文逐字核对后补上的。此外，标题本身没有 OCR 错误，它确实就是 <i>Gaussian Splatting SLAM</i>。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请用自己的话解释：为什么这篇论文要让地图「渲染一张图出来」再和照片比，而不是像 ORB-SLAM 那样提取特征点做重投影误差？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>两者都要最小化一个误差，但<b>误差的定义方式不同</b>。</p>
+              <p>① 特征法（第三季 <b>0043</b> 那一族）的误差是「<b>地图里的三维点投影到图像上，应该落在哪个像素</b>」——它要求先建立「这个像素对应地图里哪个点」这种<b>数据关联</b>，关联错了误差就失去意义。而且它只看得到有特征的地方，纹理弱的墙面基本不贡献约束。</p>
+              <p>② 渲染法（这一篇）的误差是「<b>整张渲染图减去整张照片</b>」——<b>每一个像素都在贡献约束</b>，包括墙面、地面这些没有特征的地方；也不需要任何数据关联，因为「渲染」这个动作本身就隐含了「谁挡着谁」。</p>
+              <p>③ 之所以能做到这一点，前提是<b>渲染过程可微</b>：投影、排序、α 混合全都能求导，所以误差能一路回传到相机位姿上。论文为此专门手推了 SE(3) 位姿的解析雅可比，并说这是 3DGS 与 EWA splatting 上的第一次。</p>
+              <p>④ 代价也要说清：一帧至少要 50 次梯度迭代，每次都要完整渲染一遍，所以它只有 3 fps；而特征法在有特征的地方往往快得多。</p>
+            </div></details>
+          </li>
+          <li>「高斯是唯一表示」这句话，如果换成「点云 + 神经场双层表示」，会失去什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>会失去<b>「一个误差同时修正位姿和地图」这条通路</b>。</p>
+              <p>① 如果是双层表示，比如前端用特征点算位姿、后端用神经场建图，那渲染误差只能用来改后端的地图，<b>改不动前端</b>——位姿是前端算完再传过去的，误差传不回去。这样系统的上限就被前端锁死了。</p>
+              <p>② 高斯作为唯一表示时，位姿和地图参数<b>在同一个可微计算图里</b>：渲染误差一求导，两边的梯度同时得到，跟踪和建图可以在同一次反向传播里一起更新（论文的建图目标 $E_{pho}^k + \lambda_{iso}E_{iso}$ 就是位姿与高斯联合优化）。</p>
+              <p>③ 另外还有几个顺带的好处：渲染器顺手给出了带遮挡的可见性表（用于关键帧选择与共同可见性估计）；地图「可以被扭曲修改」，这一点对将来上回环很关键；以及显存只需几 MB。</p>
+              <p>④ 所以「唯一」不是洁癖，而是把<b>误差反传的通道打通</b>了这个具体的技术收益。</p>
+            </div></details>
+          </li>
+          <li>各向同性正则 $E_{iso}$ 为什么要用「三个轴长与它们均值的差」这种形式，而不是直接规定「轴长必须相等」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为这是一个<b>正则项（软约束）</b>，不是硬约束。</p>
+              <p>① 写成 $\|\mathbf{s}_i-\tilde{\mathbf{s}}_i\cdot\mathbf{1}\|_1$ 的意思是：三个轴长偏离它们自己的均值越远，罚得越多。它<b>不关心高斯整体有多大</b>，只关心三个轴是不是长短不一。所以一个小高斯和一个大高斯，只要各自形状接近球形，罚值都接近 0。</p>
+              <p>② 如果是「轴长必须相等」的硬约束，就等于把每个高斯强制压成正球——那就放弃了各向异性椭球「顺着表面摊开」的表达能力，复杂几何要靠更多的球去凑（本节互动判断里正好讨论过这件事）。</p>
+              <p>③ 它在目标函数里是带权重的：$\lambda_{iso}$ 越大越偏向球。所以这是一个<b>可以调的折中</b>：既压住「沿视线方向被拉成长条」这条捷径，又允许椭球保持一定的各向异性。</p>
+              <p>④ 论文对它的定位也很明确：这是为<b>增量重建</b>准备的一致性约束——离线重建有很多挑好的视角，不需要它；连续 SLAM 只有一个视角窗口，才需要它来兜底。</p>
+            </div></details>
+          </li>
+          <li>单目模式下，新插入的高斯有大量位置是错的。请说出论文的两道防线，并解释第二道为什么有效。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>第一道防线：优化本身会淘汰大多数。</b>位置严重错误的高斯，在多个视角的渲染里都会和实拍对不上，梯度会推着它要么移动、要么把不透明度降下去。论文原话是「绝大多数会因为在优化中违反多视角一致性而迅速消失」。</p>
+              <p><b>第二道防线：可见性剪枝。</b>规则是：如果某个高斯是在<b>最近 3 个关键帧</b>里插入的，却<b>没有被至少 3 个其他帧观测到</b>，就判定它「几何不稳定」，直接剪掉。</p>
+              <p>为什么有效？因为「被看见」这件事，在高斯渲染里有精确的定义：<b>一个高斯在光栅化中被用到、且它所在像素的累积 α 还没到 0.5，就算可见。</b>于是「一个本来该被看到、却压根没参与渲染」的高斯，就是一个孤立的、和别的东西都对不上的东西——它在物理上大概什么都不对应。反过来，真正重建出了表面的高斯，周围会有其他帧反复看到它。</p>
+              <p>用大白话说：<b>「只有你一个人说它在，那就当它不在」</b>——这就是多视角一致性在工程上最省事的实现方式。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0116-3DGS原著2023-可微光栅化与自适应密度控制.html">← 3DGS 原著（2023）：可微光栅化与自适应密度控制</a>
+        <a class="next" href="0118-SplaTAM与GS-SLAM-轮廓掩码与自适应增删.html">SplaTAM 与 GS-SLAM：轮廓掩码与自适应增删 →</a>
+      </div>
+      <p class="foot-note">这一课把「地图」和「位姿」焊进了同一个误差里。下一课看两种更务实的做法——它们决定「什么时候该加一个新高斯」🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

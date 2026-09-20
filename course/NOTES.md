@@ -626,3 +626,227 @@ document.querySelectorAll(".reveal:not(.is-visible)").forEach(n => revealObserve
 - **修法**：加一条 `.holo-card.locked { opacity: 1; }`。
 - **这与第 32 条是同族问题**：**「内容是否可见」不能只由某个类决定，而那个类没人加。**
   以后写展示型组件时，**默认态就该是「可见」，需要隐藏才显式加类**。
+
+
+---
+
+## 九、第六季（阶段 F）与两项全站补齐（2026-09-20）
+
+### 36. ★ 又抓到一处「路线图条目根本不是论文」
+
+阶段 F 的清单有 39 行，逐行解析后**只有 36 篇是唯一论文**，三类要剔除：
+
+| 路线图写法 | 实际情况 |
+|---|---|
+| 「Co-SLAM」＋「Co-SLAM 期刊版」两行 | **同一篇的重复录入**（正文词数完全相同，两个图片目录内容也相同）；语料库里**没有**期刊版。另外按文件名模糊匹配会误命中 `2022_DiSCo-SLAM.md`（那是**多机器人激光 SLAM**，与 Co-SLAM 无关） |
+| 「NeRF-SLAM」＋「实时稠密单目 NeRF-SLAM」两行 | **同一篇的重复录入**（同上） |
+| 「前馈式（免优化）高斯重建网络」 | `2024_GridFormer__Residual_Dense_Transformer_with_Grid_Structu.md` 的正文是**图像去雨 / 去雾**（Image Restoration in Adverse Weather Conditions），与 3D 高斯**完全无关** |
+
+**判定方法**（可复用）：① 比较两篇 md 的**去空白词数**是否完全相同；② 比较两个图片目录的文件名集合是否相同；
+③ 对可疑篇 `grep -m1 '^# '` 读标题 + 读摘要。本次还用 `ls *.md | grep -iE 'pixelsplat|mvsplat|generaliz|feed'`
+去语料库里找**真正的**前馈式高斯重建工作（结论：没有，所以「可泛化」这条线改由论文自身确实做前馈高斯的
+`0124` GPS-Gaussian 承担）。
+
+> 这是本项目第 6–8 处路线图问题（前五处见 skill 第 13 节）。**"文件夹里有这个文件名"不等于"存在这篇论文"。**
+
+### 37. ★ 深色模式：一个开关 + 三个坑
+
+**开关**：headless Chrome 里**只有 `--force-dark-mode` 能让页面看到 `prefers-color-scheme: dark`**
+（实测 `DARK=true`）。反过来 `--blink-settings=preferredColorScheme=1` 与
+`--force-prefers-color-scheme=dark` **实测都无效**，别浪费时间去试。
+
+**坑**：
+1. **`--user-data-dir` 不要与截图文件名相同** —— 写成 `--user-data-dir="$OUT/idx_dark.png"` 时，
+   Chrome 先建了同名**目录**，随后截图报 `拒绝访问 (0x5)`（看起来像权限问题，其实是路径自撞）。
+2. **`.figure` 在深色模式下必须保持浅色**。全站 200+ 张自绘 SVG 的颜色是**写死在文件里**的
+   （浅底 + 深笔画），浮在深色页面上笔画会看不见。图框留浅色 = "深色版面上贴一张浅色印刷图"。
+3. **深色块要写成 `@media screen and (...)`**，漏了 `screen` 的话，深色模式下打印会整页铺黑
+   （`theme.css` 里 `@media print{body{background:white}}` 的意愿会被覆盖）。
+
+**验证的硬证据不是肉眼，是探针**：在 `</body>` 前注入一小段脚本，把
+`matchMedia('(prefers-color-scheme: dark)').matches`、`getComputedStyle(body).backgroundColor`、
+`getPropertyValue('--paper')` 写进 `document.title`，再 `--dump-dom` 读回来。
+基准值：首页浅色 `--paper` = `#F7F4EE` / 深色 `#1b1614`。
+
+### 38. ★★ 窄屏：真凶只有两个，而且都很反直觉
+
+**现象**：手机上打开某页，**连正文都被切掉一半**（不是"字排得难看"，是整页变宽、居中失效、左侧被裁）。
+
+**真凶**（390px 实测全站 139 页，只有这两类）：
+1. **表格** —— 多列 + 单元格里有 `/camera/image_raw` 这种**不可断的长串**；
+2. **超长行内 `<code>`** —— 论文路径 `md/2016_Past__Present__...`；
+3. （修完上面两条后又暴露的）**网格子项的 `min-width:auto`** —— 格子里有一个不可断的长英文词，
+   整列就被撑宽（`0027` 与 `0037` 两页是这样，各差 27px / 2px）。
+
+**修法**：
+```css
+th,td{overflow-wrap:anywhere;word-break:break-word}
+code{overflow-wrap:anywhere}
+@media (max-width:820px){
+  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .lead-grid > *, .grid-2 > *, .grid-3 > *, .summary-grid > *{min-width:0}
+  .section-card p, .section-card li, .callout, .mini-card{overflow-wrap:anywhere}
+}
+```
+`table{display:block}` 会让 `thead/tbody` 共同生成一个**匿名 table 包裹盒**，
+所以**列宽仍共享、对齐不破**，同时表格自己可横向滚动。
+
+### 39. ★ 新增工具 `course/tools/responsive_check.py`——为什么不能用 `--window-size`
+
+**headless Chrome 的 `--window-size` 对 `--dump-dom` 不生效**（实测视口恒为 485，
+且受 Windows 显示缩放影响；`--force-device-scale-factor=1` 也压不住）。
+所以窄屏测量必须走「**探针页 + 精确宽度 iframe**」：逐页量 `scrollWidth - clientWidth`，
+并**定位真正越界的元素**（排除被祖先 `overflow` 裁掉的那些，否则满屏假警报）。
+
+工具自身也有两个坑：
+- 探针写在 `_tmp/_rwd_probe.html`（gitignore 内）并**故意不删** —— 本机有 **safe-delete 钩子**，
+  脚本内删除文件会被拦下，并把钩子提示写进重定向文件，**看起来"跑完了"其实什么都没测**。
+- iframe 的 `src` **必须用绝对 `file://` URL**。用相对路径会相对探针所在目录（`_tmp/`）解析，
+  全部 404 → 报 `Blocked a frame with origin "file://" from accessing a cross-origin frame`（像跨域问题，其实是路径问题）。
+
+### 40. 自包含页面是适配的"盲区"
+
+`qa/qa-0002b`、`qa-qa0002c`、`reference/成就卡-*.html` **不引课程样式表**，
+所以课程样式表里的窄屏块与深色块**对它们无效**——必须自己再写一遍。
+规则见 skill 第 12.7 节。**新增自包含页面时，这两块是必填项。**
+
+（顺带发现：6 张成就卡里，**第一、二季本来就是深底设计**，无需深色适配；
+第三～六季是浅底页面，需要。）
+
+
+---
+
+## 十、窄屏收口的二次返工（2026-09-20 晚，同日）
+
+> 第 38、39 条是同一晚**写早了的结论**，其中两处是错的。本节把它们改对，
+> 并补上真正解决问题的那几块拼图。**以本节为准。**
+
+### 41. ★★ 修正第 38 条：`anywhere` 有代价，正确做法是「分层」
+
+第 38 条说"修法是 `th,td{overflow-wrap:anywhere}`"。**这条只对了一半** ——
+它确实能收回溢出，但 `anywhere` 不只会断长串，它是**一条"允许在任意处断行"的许可**，
+和容器多宽无关。后果实测：
+
+- 术语表的「课次」列在**桌面宽度**下被压成竖排，`0001` 断成 `000` + `1`
+  （不是"窄屏才有的毛病"）；
+- 列宽会被压到最窄，因为 `anywhere` **把「最小内容宽度」也算成 1 个字符**。
+
+**正确分层**（现在样式表里就是这么写的）：
+
+| 位置 | 用哪个 | 理由 |
+|---|---|---|
+| 全局 `th,td` / `code` | `break-word` | 只在"这一整行放不下"时断，`0001` 永远不会被拆 |
+| `@media (max-width:820px) th,td` | `anywhere` | 窄屏必须压 min-content（见第 43 条），代价用下一条兜住 |
+| `@media (max-width:820px) .term-group td:last-child` | `white-space:nowrap` | 术语表「课次」列显式保护，min-content 固定为几个字符宽 |
+
+> 一句话记法：**能放得下就别断**（break-word）是常态，**必须压到最窄**（anywhere）
+> 只在窄屏、且必须点名保护那几个"短而被拆"的列。
+
+### 42. ★★ 修正第 39 条：`--window-size` 的真实行为（我因此误判过一轮）
+
+第 39 条说"`--window-size` 对 `--dump-dom` 不生效、视口恒为 485"。**不准确。**实测：
+
+- `--window-size=390,900` + `--dump-dom` → `clientWidth` = **500**（不是 485）；
+  `--window-size=800,900` → 784；`--window-size=1440,900` → 1424。
+  也就是说**它生效，但 headless 有「最小窗口宽度 500px」的下限**，
+  比 500 小的值一律被夹到 500。
+- 更要命的是**截图**：`--window-size=390,2600` 输出的图确实是 390px 宽，
+  但**布局视口仍是 500px**，只是把 500px 的画面裁到 390px 输出。
+  → 截图里"右侧内容被切掉"是**裁剪**，不是页面溢出。
+  我据此写过一次错误的 A/B 结论（"旧版整页被撑宽"），白做了一轮。
+
+**所以视觉验证只有一条可靠路径**：造一个探针页，里面放一个**恰好 N px 宽**的 iframe，
+再整页截图 —— iframe 内部就是真实的 N px 布局。工具：`_tmp/shot_narrow.py`。
+
+（测量仍然走 iframe；这条只是补上"截图"这一环的坑。）
+
+### 43. ★★★ 一个反直觉的现象：**文档级 scrollWidth 收不住**
+
+窄屏下 qa-0002b 的表格溢出 164px。表格**自己**明明已经是滚动容器
+（`display:block; overflow-x:auto`，自身 rect 只有 444px，`scrollWidth` 552、内部确实在滚），
+但文档级 `scrollWidth` 仍然是 554。**试过、全部实测无效**：
+
+| 尝试 | 结果 |
+|---|---|
+| `html{overflow-x:clip}` | sw 仍 554 |
+| `body{overflow-x:clip}` | sw 仍 554 |
+| `.page{overflow-x:clip}` | sw 仍 554 |
+| `.section-card{overflow-x:hidden}` | sw 仍 554 |
+| `.section-card{overflow-x:clip}` | sw 仍 554 |
+| 把 `<table>` 包进 `<div style="overflow-x:auto">`，表格改回 `display:table` | sw 仍 456 |
+| 让 `.katex` 自己 `overflow-x:auto` 横滚 | sw 仍 456 |
+| **`th,td{overflow-wrap:anywhere}`** | **sw → 390 ✓** |
+
+结论：这**不是普通盒树溢出**（否则 clip 一定收得住），而是
+**「单元格的最小内容宽度在撑表格」**——溢出量是**内在宽度**决定的，
+所以唯一有效的杠杆是**把 min-content 压下去**，而不是"再加一层滚动容器"。
+
+**归因方法**也值得记：不要猜，用「隐藏法」——借 iframe 精确定宽，
+依次 `display:none` 掉一类元素再量 `documentElement.scrollWidth`，
+谁让数值回落谁就是元凶（工具 `_tmp/hide_iframe.py`）。
+本次就是靠它一步步定位到「表格 → 单元格里的长不可断 ASCII 串（KaTeX 源码/长路径）」。
+
+> 另外一个**探针写重了会被静默截断**的坑：`--dump-dom` 的 virtual-time 快照时机不稳，
+> 探针里若有"遍历几千个元素 + 逐个 getComputedStyle"的循环，报告经常停在 `pending`。
+> 一次只测一个假设、循环尽量短，反而稳定得多。
+
+### 44. ★ `min-width:0` 必须放全局——第 38 条把它放进 media query 返工了一次
+
+第 38 条把 `.lead-grid > *{min-width:0}` 写在 `@media (max-width:820px)` 里。
+**1024px 下它不生效**，于是 0060 溢出了 14px（元凶：23 个 `.mini-card`）。
+
+判断标准很简单：**这条规则和视口宽度有关吗？**
+- 「能不能收缩」（`min-width:0`）、「长 token 能不能断」（`overflow-wrap`）
+  → 与宽度无关，**全局**；
+- 「表格要不要变成横滚块」「字号要不要变小」→ 与宽度有关，**media query**。
+
+### 45. ★ KaTeX 的两处约束（表格被撑宽的最后一块拼图）
+
+全部 127 节 + 3 页答疑都从 CDN 引 KaTeX 渲染 `$...$`。它带来两个约束：
+
+1. **`.katex .base{width:min-content; white-space:nowrap}`**
+   —— 公式成了一个"恰好等于自身宽度"的**不可断** inline-block，
+   于是**单元格的 min-content 被锁死在公式宽度上**（qa-0002b 实测 456px）。
+   `overflow-wrap` 对它完全无效（那是"文本断行"属性，管不了 nowrap 的 inline-block）。
+   解法：窄屏把 base 放回可换行 —— `.katex .base{white-space:normal;width:auto}`
+   （仅窄屏；桌面保持原排版）。**这一条加上后，全站 390px 溢出归零。**
+2. **`.katex-display` 的 center-overflow 问题**
+   —— `.katex-display > .katex` 是 `text-align:center`。一旦给它加
+   `overflow-x:auto` 让它横滚，**溢出到左侧的那段是滚不到的**（经典问题）。
+   所以必须同时 `.katex-display > .katex{text-align:left}`。
+
+### 46. 术语表原来一直是"裸表格"
+
+`reference/glossary.html` 一直在用 `.term-group / .term / .en / .note` 四个类，
+**而样式表里从来没有定义过它们**——一直靠 `th,td` 的默认对齐在撑。
+本次补齐（第 12.8 节），并踩到列宽的一个细节：
+
+窄屏下表格是 `display:block`，列宽百分比要在**匿名内表**的宽度上解析，
+而匿名内表宽度是 `auto`（不确定）→ **百分比被当 `auto` 丢掉**，
+实测写 `width:26%` 毫无效果；**能用的是 `min-width`**（自动布局里它是硬下限）。
+5.5em 让「中文」列从"三个字一行"回到"四个字一行"。
+
+### 47. 工具升级：`_tmp/validate_all_f.py` → `course/tools/validate_delivery.py`
+
+从临时脚本提升为正式工具（和 `svgcheck.py` / `responsive_check.py` 并列）。
+修掉三类**假阳性**，每一类都值得记住：
+
+| 假阳性 | 原因 | 修法 |
+|---|---|---|
+| 报一堆「未定义 CSS 变量」（成就卡自包含页） | 只拿全局两个样式表当"全部定义"，忽略了页面**自带的 `<style>` 与内联 `style="--x:…"`** | 按"该页可见范围"判定：全局(若引用) + 自带 style + 内联 |
+| 报「未定义 CSS 类 `.stage-badge` / `.yes` / `.no`」（路线图总览） | 同上，类定义在页面自带 `<style>` 里 | 同上 |
+| 报 `.(done` / `.?` / `.+` 这种鬼类名 | 裸抓 `class="…"`，把 JS 字符串片段也抓进来 | 类名 token 必须过 `^[A-Za-z_][A-Za-z0-9_-]*$` |
+| 报「未定义 `.qa-patch`」（0002/0006 课页） | 断言里加了 `(?<![\w-])\.`，把 `details.qa-patch` 这种**类型选择器 + 类选择器**的合法写法挡掉了 | 去掉前面的负向回看，只保留"类名后面不再接标识符字符" |
+
+### 48. 本次最终实测数据
+
+```
+responsive_check.py --widths 390,768,1024
+  宽度 390 px   共 139 页，溢出 0 页   ✓
+  宽度 768 px   共 139 页，溢出 0 页   ✓
+  宽度 1024 px  共 139 页，溢出 0 页   ✓
+validate_delivery.py → 问题总数 0，139 文件 / 538 张本地图片全部存在
+```
+
+（起点的状态是：qa-0002b 在 390px 溢出 164px、0027 差 27px、0037 差 2px、
+0060 在 1024px 差 14px、术语表「课次」列被 `anywhere` 拆成两行。）

@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuGaR 与 GS-IR：表面对齐与逆渲染 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0122</div>
+      <h1>SuGaR 与 GS-IR：表面对齐与逆渲染</h1>
+      <p class="subtitle">高斯渲染得再好看，它也不是「一个表面」——这两篇分别去补「几何」和「光照」两块短板 🧱</p>
+      <div class="hero-meta">
+        <span>🎯 主题：表面对齐 · SDF 从密度导出 · Poisson 抽网格 · 逆渲染与 BRDF</span>
+        <span>👥 作者：Guedon &amp; Lepetit（Ecole des Ponts）／腾讯 AI Lab 等</span>
+        <span>📅 2024 · <i>SuGaR</i> &amp; <i>GS-IR</i>（均 CVPR 2024）</span>
+      </div>
+      <div class="toc">
+        <a href="#debt">0015 课欠的两条账</a>
+        <a href="#align">让高斯贴着表面站</a>
+        <a href="#sdf">SDF 是从密度里倒出来的</a>
+        <a href="#mesh">抽网格：Poisson 不是 MC</a>
+        <a href="#gsir">逆渲染在解什么</a>
+        <a href="#normal">法向从哪来</a>
+        <a href="#compare">对比与判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="debt">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「高斯为什么没有面」；解释 SuGaR 怎么把一个距离场从高斯密度里导出来、又为什么必须用 Poisson 而不是 Marching Cubes 抽网格；说清「逆渲染」要解的三个未知量；并知道 GS-IR 的法向究竟是从哪来的。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本节是在还第一季 <b>0015</b> 课那张「整条赛道卡在哪」的表里欠下的两条账。SuGaR 的「零交叉就是表面」与第二季 <b>0033</b> KinectFusion 的 TSDF、<b>0035</b> Voxblox 的「表面在哪」是同一个思想；GS-IR 的 PBR 与第五季 <b>0097</b> R³LIVE++ 的辐射重建冲着同一件事去。</p>
+        </div>
+      </div>
+
+      <h2>1. 题眼：先把 0015 课欠下的两条账翻出来</h2>
+
+      <p>这一节不是凭空来的。第一季 <b>0015</b> 课（3D 高斯泼溅全景）在末尾摊开过一张表——两篇综述每节末尾的 Challenges / Opportunities 汇总成的「整条赛道卡在哪」。那张表里有两条，正好就是本节的靶子。先把原话抄在这里，我们逐字对照：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>原话一（「重建」那一格）</b>
+          <p>「难捕捉精细几何、<b>提取网格困难</b>；<b>约束高斯贴合表面会降渲染质量，融合 SDF 会降速度</b>。」</p>
+          <p>这就是 SuGaR 的靶子：高斯一团云，抽不出网格；可你要是硬把 SDF 融进去，速度又没了。</p>
+        </div>
+        <div class="mini-card">
+          <b>原话二（「真实感」那一格）</b>
+          <p>「投影到 2D 加速渲染却让<b>遮挡计算变复杂</b>→<b>光照估计差</b>；对精确几何/法线欠正则；过建高斯导致 aliasing 与伪影；<b>镜面/复杂反射差</b>。」</p>
+          <p>这就是 GS-IR 的靶子：高斯把渲染加速了，代价是「谁挡住谁」变难算，于是真正的光照与材质解不出来。</p>
+        </div>
+      </div>
+
+      <p>把这两条翻译成人话，就是两个非常朴素的问题：<b>第一，这一堆椭球能不能给我一个「表面」？第二，这一堆椭球能不能告诉我「这里的光是从哪来的、这块是什么材质」？</b></p>
+
+      <p>这一节的两篇论文（都是 2024 年 CVPR）分别回答了这两个问题。它们都属于「<b>组课</b>」——也就是说，两篇论文各自只解决一个很具体的小问题，我们先把问题意识立起来，再看每篇给的那一句话招式。</p>
+    </main>
+
+    <section class="section-card" id="align">
+      <h2>2. SuGaR：先让高斯学会「贴着表面站」</h2>
+
+      <p>先说一件在 3DGS 课程里已经反复强调过、但这里必须再强调一次的事：<b>高斯没有「面」这个概念。</b></p>
+
+      <p>每个高斯是一个各向异性的椭球——它可以被拉得很扁、很长、朝任意方向。优化完之后，几百万个这样的椭球散落在空间里，它们能渲染出非常好看的图，但它们是<b>无组织的</b>。原文 §1 的原话说得很直白：优化后的高斯是「无组织」的（unordered），导致抽不出一个干净表面。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">从「一团椭球云」到「一层薄壳」再到「一张网格」</text>
+
+          <!-- ===== 格 1 ===== -->
+          <rect x="18" y="46" width="272" height="336" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="154" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">① 高斯优化完的样子</text>
+          <text x="154" y="88" text-anchor="middle" font-size="11" fill="#7a8a99">椭球朝向乱，还有飘在椅子外的</text>
+
+          <!-- 椅子轮廓（虚） -->
+          <g fill="none" stroke="#b9c6d2" stroke-width="1.4" stroke-dasharray="5 4">
+            <rect x="96" y="140" width="116" height="92" rx="6"/>
+            <rect x="86" y="236" width="136" height="14" rx="4"/>
+            <rect x="92" y="250" width="10" height="76"/>
+            <rect x="206" y="250" width="10" height="76"/>
+          </g>
+
+          <!-- 贴着的椭球 -->
+          <g fill="#8fb8dd" opacity="0.6" stroke="#4a7fae" stroke-width="1">
+            <ellipse cx="120" cy="180" rx="22" ry="8" transform="rotate(-20 120 180)"/>
+            <ellipse cx="186" cy="166" rx="22" ry="8" transform="rotate(15 186 166)"/>
+            <ellipse cx="150" cy="200" rx="20" ry="8" transform="rotate(48 150 200)"/>
+            <ellipse cx="146" cy="243" rx="24" ry="8" transform="rotate(5 146 243)"/>
+            <ellipse cx="196" cy="286" rx="20" ry="7" transform="rotate(-62 196 286)"/>
+            <ellipse cx="122" cy="292" rx="20" ry="7" transform="rotate(72 122 292)"/>
+            <ellipse cx="214" cy="204" rx="18" ry="7" transform="rotate(40 214 204)"/>
+          </g>
+
+          <!-- 飘出去的椭球 -->
+          <g fill="#d98a6a" opacity="0.75" stroke="#a8563a" stroke-width="1">
+            <ellipse cx="54" cy="118" rx="22" ry="8" transform="rotate(25 54 118)"/>
+            <ellipse cx="250" cy="112" rx="20" ry="7" transform="rotate(-35 250 112)"/>
+            <ellipse cx="248" cy="320" rx="20" ry="7" transform="rotate(-15 248 320)"/>
+          </g>
+          <text x="54" y="98" text-anchor="middle" font-size="10" fill="#a8563a">浮空</text>
+          <text x="250" y="94" text-anchor="middle" font-size="10" fill="#a8563a">浮空</text>
+
+          <text x="154" y="358" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3b4a5e">高斯没有「面」这个概念</text>
+
+          <!-- ===== 格 2 ===== -->
+          <rect x="306" y="46" width="272" height="336" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="442" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 被正则「拍扁」贴到表面</text>
+          <text x="442" y="88" text-anchor="middle" font-size="11" fill="#5f8a72">每个椭球被拉向最近的表面</text>
+
+          <g fill="none" stroke="#b6d9c4" stroke-width="1.4">
+            <rect x="384" y="140" width="116" height="92" rx="6"/>
+            <rect x="374" y="236" width="136" height="14" rx="4"/>
+            <rect x="380" y="250" width="10" height="76"/>
+            <rect x="494" y="250" width="10" height="76"/>
+          </g>
+
+          <!-- 贴在表面上的薄椭球 -->
+          <g fill="#4a9c76" opacity="0.62" stroke="#2f6d51" stroke-width="0.9">
+            <ellipse cx="400" cy="152" rx="15" ry="6"/><ellipse cx="432" cy="150" rx="15" ry="6"/>
+            <ellipse cx="464" cy="152" rx="15" ry="6"/><ellipse cx="492" cy="150" rx="14" ry="6"/>
+            <ellipse cx="400" cy="184" rx="15" ry="6"/><ellipse cx="432" cy="182" rx="15" ry="6"/>
+            <ellipse cx="464" cy="184" rx="15" ry="6"/><ellipse cx="492" cy="182" rx="14" ry="6"/>
+            <ellipse cx="400" cy="216" rx="15" ry="6"/><ellipse cx="432" cy="214" rx="15" ry="6"/>
+            <ellipse cx="464" cy="216" rx="15" ry="6"/><ellipse cx="492" cy="214" rx="14" ry="6"/>
+            <ellipse cx="392" cy="241" rx="16" ry="4"/><ellipse cx="424" cy="241" rx="16" ry="4"/>
+            <ellipse cx="456" cy="241" rx="16" ry="4"/><ellipse cx="490" cy="241" rx="16" ry="4"/>
+            <ellipse cx="385" cy="272" rx="4" ry="17"/><ellipse cx="385" cy="308" rx="4" ry="17"/>
+            <ellipse cx="499" cy="272" rx="4" ry="17"/><ellipse cx="499" cy="308" rx="4" ry="17"/>
+          </g>
+
+          <!-- 拉扯箭头 -->
+          <g stroke="#a8563a" stroke-width="1.6" fill="#a8563a">
+            <path d="M330 126 L368 152"/><path d="M368 152 L361 148 L363 156 Z"/>
+            <path d="M404 112 L406 138"/><path d="M406 138 L402 131 L410 131 Z"/>
+            <path d="M556 118 L528 146"/><path d="M528 146 L536 143 L532 150 Z"/>
+            <path d="M566 302 L514 292"/><path d="M514 292 L522 288 L521 296 Z"/>
+          </g>
+          <text x="328" y="116" text-anchor="middle" font-size="10" fill="#a8563a">拍扁</text>
+
+          <text x="442" y="358" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6d51">高斯被压成一层薄壳</text>
+
+          <!-- ===== 格 3 ===== -->
+          <rect x="594" y="46" width="272" height="336" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="730" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">③ 抽出来的网格</text>
+          <text x="730" y="88" text-anchor="middle" font-size="11" fill="#a8846f">能看清椅面与椅腿的三角面片</text>
+
+          <!-- 椅背：网格 -->
+          <rect x="672" y="140" width="116" height="92" fill="#e8eef5" stroke="#4a7fae" stroke-width="1.4"/>
+          <g stroke="#4a7fae" stroke-width="0.9">
+            <path d="M672 186 L711 140"/><path d="M711 232 L749 186"/><path d="M749 140 L788 186"/>
+            <path d="M711 140 L749 186"/><path d="M672 186 L711 232"/>
+            <path d="M749 186 L788 232"/><path d="M711 186 L672 140"/>
+          </g>
+          <!-- 椅面：网格 -->
+          <rect x="662" y="236" width="136" height="14" fill="#dbe6f0" stroke="#4a7fae" stroke-width="1.4"/>
+          <g stroke="#4a7fae" stroke-width="0.9">
+            <path d="M696 236 L696 250"/><path d="M730 236 L730 250"/><path d="M764 236 L764 250"/>
+            <path d="M662 236 L696 250"/><path d="M730 236 L764 250"/>
+          </g>
+          <!-- 椅腿：网格 -->
+          <g fill="#dbe6f0" stroke="#4a7fae" stroke-width="1.4">
+            <rect x="668" y="250" width="10" height="76"/>
+            <rect x="782" y="250" width="10" height="76"/>
+          </g>
+          <g stroke="#4a7fae" stroke-width="0.9">
+            <path d="M668 250 L678 288"/><path d="M678 288 L668 326"/>
+            <path d="M782 250 L792 288"/><path d="M792 288 L782 326"/>
+          </g>
+          <text x="730" y="322" text-anchor="middle" font-size="10.5" fill="#a8563a">每个三角面绑一组薄高斯</text>
+
+          <text x="730" y="358" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8563a">于是能编辑、能动画</text>
+
+          <text x="450" y="404" text-anchor="middle" font-size="12.5" fill="#5a4a42">要抽网格，先得让高斯学会「贴着表面站」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一把椅子，在高斯优化完成后、加了表面对齐正则之后、以及抽出网格之后，三种状态分别长什么样。<br>
+          <b>怎么看这张图：</b>① 左格是<b>原版 3DGS 优化完的结果</b>——椭球朝向乱（有横的、有斜的）、还有几个干脆飘到了椅子外面（橙色的那几个，标着「浮空」），这就是「高斯没有面的概念」的直接后果，渲染时边缘会毛、还可能看到悬空的「漂浮物」；② 中格是<b>SuGaR 加上正则之后</b>——椭球被「拍扁」成很薄的片，一片片贴着椅背、椅面、椅腿的表面铺开，红色短箭头表示「每个椭球被拉向离它最近的表面」；③ 右格是<b>从这层薄壳里抽出来的三角网格</b>——椅背和椅面的三角面片都看得清，于是图形学那一套传统工具（编辑、动画、贴材质）就能用上来了。<br>
+          <b>一处必须说明的简化：</b>左格那几个橙色椭球是我为了讲「漂浮物」故意夸大的；实际场景里漂浮物的数量与位置因场景而异，原文并没有给「一团云里有多少个漂浮物」这种统计。<br>
+          <b>要记住的一句话：</b>3DGS 的渲染质量与「它有没有一个表面」是两件事——<b>要抽网格，先得让高斯学会「贴着表面站」</b>。
+        </figcaption>
+      </figure>
+
+      <p>SuGaR 的办法就是给优化过程加一条<b>正则项</b>。原文 §4.1 说得非常清楚：它希望优化出来的高斯满足三条理想假设——</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① 扁平</b>
+          <p>每一个高斯的某一个缩放因子 $s_g \to 0$，也就是把椭球<b>压成一张薄饼</b>，厚度趋近于零。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 不重叠、均匀铺在表面</b>
+          <p>这些薄饼要<b>一片挨着一片</b>，正好把表面铺满，而不是你压着我我压着你。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 不透明</b>
+          <p>每个高斯的 $\alpha_g = 1$，也就是<b>完全不透明</b>。一层薄壳既然铺满了表面，就没必要再半透明。</p>
+        </div>
+      </div>
+
+      <p>这三条一旦成立，几何上就很好办了：<b>这一层薄壳的「外皮」就是表面。</b>原文为了逼出这三条，加了两个正则项：一个叫 $R$（让高斯贴到表面上，Eq.8），一个叫 $R_{\text{Norm}}$（让高斯的法向一致，Eq.10）。</p>
+
+      <p>代价是训练变复杂了。原文的流程是：<b>先优化 15k 次</b>（其中 7k 次无约束、2k 次加熵损失、6k 次加正则），<b>再花 5–10 分钟抽网格</b>。硬件是单张 <b>V100 32G</b>，总时间大约 <b>15–45 分钟</b>。这个数字要记住——它是「几分钟内单卡抽出网格」这个卖点的原始出处，和 NeRF/神经 SDF 那一类动辄 24 小时多卡（原文 §1–§2 的对比）不是一个量级。</p>
+
+      <p>质量上它也没垮。原文 Table 1（Mip-NeRF360 数据集）里，R-SuGaR-15K 平均 <b>PSNR 27.27 / SSIM 0.820 / LPIPS 0.253</b>，在<b>所有能出网格的方法里最好</b>，超过了 NeRFMeshing 的 23.15；同时离纯渲染的 3DGS（28.69）与 Mip-NeRF360（29.09）也不算远。<b>也就是说：你想要表面，只掉一点点渲染质量。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SuGaR__Surface-Aligned_Gaussian_Splatting_for_Efficient_/98eafbc764ad9c5f53a49ce249d8fe513d2d94d90b94260f7bcfbda70d464fa1.jpg" alt="SuGaR Fig.3 extracting a mesh from Gaussians: no regularization, Marching Cubes failure, our method">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Extracting a mesh from Gaussians. Without regularization, the Gaussians have no special arrangement after optimization, which makes extracting a mesh very difficult. Without our regularization term, Marching Cubes fail to extract an acceptable mesh. With our regularization term, Marching Cubes recover an extremely noisy mesh even with a very fine 3D grid. Our scalable extraction method o…<br>
+          （中译：从高斯里抽网格。不加正则时，高斯在优化后没有任何特殊排布，抽网格非常困难；不加我们的正则项，Marching Cubes 抽不出可接受的网格；即使加了我们的正则项，Marching Cubes 用非常细的三维网格也只能恢复出一个极其嘈杂的网格。我们的可扩展抽取方法……）<br>
+          <b>怎么看这张图：</b>这是全篇最有信息量的一张图，也是本课「必须如实写」的证据所在。① 看第一列——<b>优化后无组织的高斯</b>；② 看中间列——<b>Marching Cubes 直接抽的结果</b>，是碎的、穿洞的、不成形的；③ 看第三列——加正则之后 MC 稍微能看，但<b>仍然极其嘈杂</b>；④ 只有最后一列（SuGaR 自己的方法）才是干净表面。<br>
+          <b>一句话提醒：</b>很多二手介绍会说「SuGaR 用 Marching Cubes 抽网格」——<b>原文这张图恰恰是在证明 Marching Cubes 不行</b>。这一点下一节会展开。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="sdf">
+      <h2>3. SuGaR 怎么从密度里「倒」出一个距离场</h2>
+
+      <p>这里要纠正一个很常见的误传：<b>SuGaR 并没有另外训练一个神经 SDF 网络</b>（像 NeuS 那样）。它做的事情是「<b>从已有的高斯密度里，数学地把一个距离场推导出来</b>」。</p>
+
+      <p>这件事分三步走，我们先看公式，再看它凭什么成立。</p>
+
+      <p><b>第一步，写出密度函数。</b>一堆高斯叠在一块，天然就定义了一个空间中的「密度」——某个位置上「高斯们加起来有多浓」：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$d(p)=\sum_g \alpha_g \exp\!\left(-\tfrac{1}{2}(p-\mu_g)^{\!\top}\Sigma_g^{-1}(p-\mu_g)\right)$$</div>
+      </div>
+
+      <p>也就是「把所有高斯在点 $p$ 处的贡献加起来」。密度大的地方，说明高斯们在那儿堆得厚。</p>
+
+      <p><b>第二步，算理想密度。</b>如果第 2 节说的那三条理想假设成立（薄饼、铺满、不透明），那么某一层薄壳附近的密度会退化成一个只跟「离表面多远」有关的钟形函数：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\bar d(p)=\exp\!\left(-\frac{1}{2s_{g*}^2}\langle p-\mu_{g*},\,n_{g*}\rangle^2\right)$$</div>
+      </div>
+
+      <p>$\langle p-\mu,\,n\rangle$ 就是点 $p$ 到那张薄饼所在平面的<b>垂直距离</b>。所以这个式子的意思是：<b>离表面越远，密度越小，而且是按钟形衰减的。</b></p>
+
+      <p><b>第三步，取对数、开根号，把它变成距离。</b>钟形函数里距离是「藏在指数上」的，取一次对数就能把它拎出来：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f(p)=\pm\,s_{g*}\sqrt{-2\log d(p)}$$</div>
+      </div>
+
+      <p>这个 $f(p)$ 就是 SuGaR 的「有符号距离」——<b>它的零交叉（$f(p)=0$）就是表面</b>。这是一个非常漂亮的等价转换：<b>原本你手上只有一堆高斯，现在你手上有了一个距离场。</b></p>
+
+      <p>这个思路听起来是不是有点熟？第二季 <b>0033</b> KinectFusion 的 TSDF 讲的就是「<b>表面在哪 = 距离场等于零的地方</b>」，<b>0035</b> Voxblox 从 TSDF 推 ESDF 也是同一套思想。区别在于：<b>TSDF 的距离是深度相机一次一次测出来的，SuGaR 的距离是从高斯密度算出来的。</b>一个来自传感器，一个来自表示本身。</p>
+
+      <p>那问题来了：这个 $f(p)$ 的<b>数值</b>怎么算？你总不能真的在每个点上把所有高斯求一遍和吧。原文 §4.2 的答案是——<b>渲染深度图</b>。它把高斯渲染成各视角的深度图，然后对每个采样点 $p$，取「$p$ 到视线的交点与深度图的交点」之间的三维距离，作为 $\hat f(p)$ 的估计。这就是 Fig. 5 讲的事：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SuGaR__Surface-Aligned_Gaussian_Splatting_for_Efficient_/1fd37c87d7009b6367cf056bc349b40a231069cb4b96cc56a5a4877602049808.jpg" alt="SuGaR Fig.5 estimating SDF values from rendered depth maps">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Efficiently estimating $\hat f(p)$ of the SDF of the surface generated from Gaussians. We render depth maps of the Gaussians, sample points $p$ in the viewpoint according to the distribution of the Gaussians. Value $\hat f(p)$ is taken as the 3D distance between $p$ and the intersection between the line of sight for $p$ and the depth map.<br>
+          （中译：高效估计由高斯生成的表面的 SDF 值 $\hat f(p)$。我们渲染高斯的深度图，按高斯的分布在视角内采样点 $p$；$\hat f(p)$ 取为 $p$ 与该点视线和深度图交点之间的三维距离。）<br>
+          <b>怎么看这张图：</b>这张图回答的正是「你不是说有个距离场吗，那距离怎么算」。① 看图里的<b>深度图</b>——它是渲染出来的一张灰度图，每个像素一个深度值；② 看那些<b>采样点 $p$</b>——它们是沿着视线撒下来的；③ 每个点的距离，就是<b>它到「视线打中深度图那一点」的距离</b>。<br>
+          <b>要记住的一句话：</b>这让 SDF 的估计变成了「渲染一次深度图 + 算几段距离」，<b>不需要额外跑一个网络</b>——这正是 SuGaR 说「约束高斯贴合表面会降速度，融合 SDF 也会降速度」（0015 课的原话）之后给出的那一条折中路线。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面哪一句，才是对 SuGaR 正确的描述？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="这是 NeuS 那一类做法：另起一个网络去学距离场，再用密度做辅助监督。SuGaR 没有这样做——它把距离场直接从高斯密度里算出来，代价是公式要成立得靠「薄饼、铺满、不透明」三条假设。" onclick="lessonKit.answer(this,'q0122a')">它外挂了一个神经 SDF 网络</button>
+          <button data-correct="yes" data-explanation="对。原文的 Eq.7 给的是 f(p) 等于正负 s 乘以「负二倍对数密度开根号」——纯粹是数学推导，不是网络输出；数值上再用渲染的深度图去估（Fig.5）。记住这条，你就不会把它和 NeuS / Neural-SDF 类方法混起来。" onclick="lessonKit.answer(this,'q0122a')">它从高斯密度里推出距离场</button>
+          <button data-correct="no" data-explanation="原文明确说深度图是用来「估计距离场数值」的工具（Fig.5），而不是最终要抽的东西。直接用深度点做重建，原文 §4.2 指出会得到很差的网格，必须先做一层点位置细化。" onclick="lessonKit.answer(this,'q0122a')">它把深度图直接拼成网格</button>
+        </div>
+        <div class="quiz-feedback" id="q0122a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="mesh">
+      <h2>4. 抽网格：主方法是 Poisson 重建，不是 Marching Cubes</h2>
+
+      <p>有了距离场，下一步是「把等值面变成三角网格」。这里必须把话说准，因为这是本课要纠正的第二个常见误传。</p>
+
+      <p>教科书式的答案是 <b>Marching Cubes（MC）</b>：把空间切成细密的立方体格子，逐格看「八个顶点里有没有正有负」，有就生成面片。上一节 Fig. 3 已经看到了——<b>在 SuGaR 这个问题上，MC 是失败的</b>：不加正则抽不出来，加了正则也只能得到「极其嘈杂」的网格，哪怕把三维格子切得非常细也没用。</p>
+
+      <p>原因其实很好理解：MC 要求你在整个空间里<b>到处都有靠谱的距离值</b>；可高斯的密度是稀疏的、并且集中在物体附近，离物体远一点的地方几乎处处是零密度，取对数开根号会不稳定。原文的应对是换一条路——<b>在距离场的等值面上采样点，再用 Poisson 重建长出网格</b>（原文 §4.2 + Fig. 6）。</p>
+
+      <p>Poisson 重建是图形学里的老技术：<b>我给你一堆「带法向的点」，你还我一张光滑的水密网格。</b>SuGaR 做的事情就是先把高斯的那层薄壳变成这样一堆点。原文还多做了一步「细化」：因为渲染出来的深度图并不精确，直接用深度点去重建，结果通常很差，所以要把点的位置再挪一挪，挪到真正的等值面上（Fig. 6 的 refine 步骤）。</p>
+
+      <p>数字也支持这个选择。原文 Table 2 的抽网格对比里：<b>Poisson（level 0.3）PSNR 24.87 &gt; Marching Cubes 23.91 &gt; Poisson（用高斯中心点）23.76</b>。注意最后一项——不是「Poisson 就一定好」，<b>点的质量才是关键</b>，所以那个「细化」步骤不能省。</p>
+
+      <p>最后还有一步，它对应标题里的「High-Quality Mesh Rendering」：<b>把高斯绑到三角面上</b>（§4.3 / Fig. 7）。抽完网格之后，SuGaR 给每个三角面绑一组新的薄高斯——位置由网格顶点加重心坐标算出来，而且每个高斯<b>只保留 2 个可学的缩放 + 1 个二维旋转</b>（用复数表示）。这么一限制，这些高斯就<b>永远贴着那个三角面</b>，不会跑掉。</p>
+
+      <p>于是你得到的东西非常实用：<b>一张可以用 Blender 之类工具改的水密网格，而且渲染的时候还是用高斯在渲染</b>——保留了 3DGS 那种真实的观感。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SuGaR__Surface-Aligned_Gaussian_Splatting_for_Efficient_/a99a311af95a007e01f69dfe00524f7bd88cd4018607b910383163ea2bff807d.jpg" alt="SuGaR Fig.1 editable meshes extracted from 3DGS within minutes on a single GPU">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We introduce a method that extracts accurate and editable meshes from 3D Gaussian Splatting representations within minutes on a single GPU. The meshes can be edited, animated, composited, etc. with very realistic Gaussian Splatting rendering, offering new possibilities for Computer Graphics. Note for example that we changed the posture of the robot between the captured scene on the botto…<br>
+          （中译：我们提出一种方法，能在单张 GPU 上于几分钟内从 3D 高斯泼溅表示中抽出准确、可编辑的网格。这些网格可以编辑、做动画、合成等，并且用非常真实的高斯泼溅渲染，为计算机图形学提供了新的可能。注意例如我们在下图与原始拍摄场景之间改变了机器人的姿态……）<br>
+          <b>怎么看这张图：</b>这是全篇的「点题图」。① 请重点看<b>同一个场景被改过</b>这件事——机器人被摆成了另一个姿势，而渲染质感没变；② 这说明抽出来的确实是<b>网格</b>（能被传统工具搬动），而不是又一层高斯云；③ 再回头看本节开头 0015 课的那句原话「提取网格困难」——这张图就是它被解开的样子。<br>
+          <b>要记住的一句话：</b>SuGaR 的价值不在「多了一个更好的渲染器」，而在于<b>它把高斯接回了图形学那条老流水线</b>。
+        </figcaption>
+      </figure>
+
+      <p>原文自己承认的边界也要如实写。§6 结论里列了两条：<b>① 高斯会「作弊」</b>——为了重现镜面效果，它会去<b>挖空腔（cavities）</b>，而不是老老实实靠球谐去表示，正则只能缓解这个现象，<b>高镜面区域的表面仍会被扭曲</b>；<b>② 它假设场景可以被表示为「一个表面」</b>，所以体效应、毛玻璃这类模糊材质很难渲染好。</p>
+
+      <p>第 ① 条特别有意思：它正好说明 0015 课那句「镜面与复杂反射差」并没有被 SuGaR 解决——<b>SuGaR 是绕过去，而不是解出来。</b>真正正面去解「光照与反射」的，是本节的第二篇。</p>
+    </section>
+
+    <section class="section-card" id="gsir">
+      <h2>5. GS-IR：先说清「逆渲染」是什么</h2>
+
+      <p>「逆渲染」（inverse rendering）这个词听起来很玄，其实它问的是一个我们每天都会遇到、但从没细想过的问题：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「我们能不能从多视角图像里，反推出场景的物理属性？」（原文 §1 引用的原话大意）</p>
+
+      <p>要做这件事，得先接受一个事实：<b>你眼睛看到的那张照片，是三个东西乘起来的结果。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">逆渲染：一张照片 = 光照 × 材质 × 几何</text>
+
+          <!-- 左：一张照片 -->
+          <rect x="40" y="60" width="200" height="150" rx="6" fill="#eef3f8" stroke="#8fa6bb" stroke-width="1.6"/>
+          <rect x="62" y="150" width="156" height="12" fill="#c8a887"/>
+          <rect x="74" y="162" width="8" height="34" fill="#a1795a"/>
+          <rect x="198" y="162" width="8" height="34" fill="#a1795a"/>
+          <path d="M96 150 L96 116 L134 116 L134 150 Z" fill="#e8e0d0" stroke="#b0a08a" stroke-width="1.2"/>
+          <ellipse cx="115" cy="112" rx="24" ry="7" fill="#f6efe3" stroke="#b0a08a" stroke-width="1.2"/>
+          <path d="M150 84 L186 84 L186 138 L150 138 Z" fill="#fff6d8" stroke="#d8c78a" stroke-width="1.2"/>
+          <text x="140" y="234" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">一张照片</text>
+          <text x="140" y="252" text-anchor="middle" font-size="10.5" fill="#7a8a99">你只看到合成后的亮度</text>
+
+          <!-- 箭头 1 -->
+          <path d="M248 135 L330 135" stroke="#5a8fc7" stroke-width="1.8"/>
+          <path d="M330 135 L321 130 L321 140 Z" fill="#5a8fc7"/>
+          <text x="289" y="124" text-anchor="middle" font-size="10.5" fill="#2c5f8a">要反推</text>
+
+          <!-- 中：三个未知 -->
+          <rect x="340" y="70" width="220" height="40" rx="6" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="358" y="95" font-size="12.5" fill="#a8563a">光照</text>
+          <text x="530" y="97" text-anchor="middle" font-size="19" font-weight="700" fill="#c0392b">？</text>
+          <rect x="340" y="118" width="220" height="40" rx="6" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="358" y="143" font-size="12.5" fill="#a8563a">材质</text>
+          <text x="530" y="145" text-anchor="middle" font-size="19" font-weight="700" fill="#c0392b">？</text>
+          <rect x="340" y="166" width="220" height="40" rx="6" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="358" y="191" font-size="12.5" fill="#a8563a">几何</text>
+          <text x="530" y="193" text-anchor="middle" font-size="19" font-weight="700" fill="#c0392b">？</text>
+
+          <!-- 箭头 2 -->
+          <path d="M568 138 L632 138" stroke="#4a9c76" stroke-width="1.8"/>
+          <path d="M632 138 L623 133 L623 143 Z" fill="#4a9c76"/>
+          <text x="600" y="127" text-anchor="middle" font-size="10.5" fill="#2f6d51">解出来</text>
+
+          <!-- 右：三个结果 -->
+          <rect x="640" y="58" width="236" height="212" rx="8" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <!-- 光照贴图 -->
+          <rect x="652" y="72" width="68" height="86" rx="5" fill="#fff9e8" stroke="#d8c78a" stroke-width="1.2"/>
+          <circle cx="686" cy="108" r="18" fill="#f2d98a" stroke="#c9a94a" stroke-width="1.2"/>
+          <g stroke="#d8b64a" stroke-width="1.4">
+            <path d="M686 82 L686 74"/><path d="M712 108 L720 108"/><path d="M686 134 L686 142"/>
+            <path d="M660 108 L652 108"/><path d="M704 90 L710 84"/><path d="M668 126 L662 132"/>
+          </g>
+          <text x="686" y="174" text-anchor="middle" font-size="11" font-weight="700" fill="#8a6a12">光照</text>
+          <!-- 材质参数图 -->
+          <rect x="732" y="72" width="68" height="86" rx="5" fill="#fdf2ea" stroke="#d8b8a4" stroke-width="1.2"/>
+          <g stroke="#c08a5a" stroke-width="3" opacity="0.7">
+            <path d="M738 88 C756 82 776 94 794 88"/>
+            <path d="M738 104 C756 98 776 110 794 104"/>
+            <path d="M738 120 C756 114 776 126 794 120"/>
+            <path d="M738 136 C756 130 776 142 794 136"/>
+          </g>
+          <text x="766" y="174" text-anchor="middle" font-size="11" font-weight="700" fill="#a8563a">材质</text>
+          <!-- 法向图 -->
+          <rect x="812" y="72" width="52" height="86" rx="5" fill="#f0f2fa" stroke="#a8b0d0" stroke-width="1.2"/>
+          <circle cx="838" cy="115" r="22" fill="#7f9ee0"/>
+          <path d="M820 100 A22 22 0 0 1 856 100" fill="#d98a8a" opacity="0.85"/>
+          <path d="M820 130 A22 22 0 0 0 856 130" fill="#8ad9a0" opacity="0.75"/>
+          <text x="838" y="174" text-anchor="middle" font-size="11" font-weight="700" fill="#3f4e88">法向</text>
+          <text x="758" y="204" text-anchor="middle" font-size="10.5" fill="#5f8a72">同一块表面，三张图分开显示</text>
+          <text x="758" y="222" text-anchor="middle" font-size="10.5" fill="#5f8a72">就能拿去换光照、换材质</text>
+
+          <!-- 底部说明 -->
+          <path d="M40 276 L860 276" stroke="#e0d5c8" stroke-width="1"/>
+          <text x="450" y="300" text-anchor="middle" font-size="12.5" fill="#5a4a42">你看到的是三者相乘的结果；逆渲染就是把这个乘积，倒推回三个因子</text>
+          <text x="450" y="330" text-anchor="middle" font-size="12.5" fill="#5a4a42">只要三个因子被分开，就能「只换光照、不动材质」地重新渲一遍</text>
+          <text x="450" y="368" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b2b2b">这件事在渲染里叫重光照（relighting）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「一张照片 = 光照 × 材质 × 几何」这个乘法关系，以及逆渲染要把它倒推成三张独立的图。<br>
+          <b>怎么看这张图：</b>① 左格是一张普通的照片（一张木桌上的杯子），你看到的只是<b>最终合成出来的亮度</b>；② 中格是三个未知量——<b>光照（光从哪来、什么颜色）、材质（这块表面是木头还是金属、粗糙还是光滑）、几何（这个表面朝哪边）</b>，三个都不知道，你手上只有一个观测；③ 右格是解出来的结果——<b>光照贴图</b>（一个发光球加方向线）、<b>材质参数图</b>（一块颜色/粗糙度）、<b>法向图</b>（用红绿蓝编码朝向），三样分开显示。<br>
+          <b>要记住的一句话：</b>逆渲染的价值不在「多解出一个东西」，而在于<b>解耦</b>——一旦光照和材质分开了，你就能换一个光源、保持材质不变，重新渲染一遍。这就是原图标题里那个 relighting。
+        </figcaption>
+      </figure>
+
+      <p>为什么这件事以前做不好？GS-IR 在 §1 里点了 3DGS 的两个具体困难：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>困难一：高斯原生不支持合理法向</b>
+          <p>每个高斯是一个椭球，它当然有朝向，但它不是「一个表面上的法向」。想拿到法向得另外想办法（下一节专门讲）。</p>
+        </div>
+        <div class="mini-card">
+          <b>困难二：前向光栅化不能算遮挡</b>
+          <p>NeRF 那一类是从相机出发<b>沿光线步进</b>，所以「这条光线被谁挡住」是自然算出来的。可高斯的渲染是<b>把椭球投到屏幕上、按顺序叠加</b>（前向映射，forward mapping），它并不能方便地反过来问「从这个点出发、往那个方向看，是不是被挡住了」。<b>而没有遮挡信息，就解不出间接光照。</b></p>
+        </div>
+      </div>
+
+      <p>GS-IR 的整体流程分三阶段，看下面这张原图最清楚：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GS-IR__3D_Gaussian_Splatting_for_Inverse_Rendering/33ea77198a493cbdf7d214c95a3a2d5d2914dceb4d23ecb868b1a53df3b5116d.jpg" alt="GS-IR Fig.2 pipeline: three stages, gaussian stores normal and material">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>GS-IR Pipeline. We propose a novel GS-based inverse rendering framework, called GS-IR, to reconstruct scene geometry, materials, and unknown natural illumination from multi-view captured images. Our GS-IR consists of three well-designed stage strategie using 3D Gaussian and differentiable forward mapping splatting to achieve physical-based rendering. In our approach, the Gaussian stores …<br>
+          （中译：GS-IR 流程图。我们提出一个基于高斯的逆渲染框架 GS-IR，从多视角图像重建场景几何、材质与未知自然光照。它由三个阶段组成，用 3D 高斯与可微前向映射泼溅来实现基于物理的渲染。在我们的方法里，每个高斯存储了……）<br>
+          <b>怎么看这张图：</b>看这张图只要盯住一个问题——<b>「每个高斯身上比原来多了什么」</b>。① 找到图里描述高斯属性的那一块，你会发现它不再只有颜色和透明度，还多了<b>法向</b>与<b>材质</b>；② 找三阶段的划分，看它怎么从「先重建几何」走到「再解材质与光照」；③ 图里那几张「深度 / 法向 / albedo」的小图，就是三个未知量被解出来的样子。<br>
+          <b>一处诚实提醒：</b>原文图注在 OCR 里被截断（结尾的「the Gaussian stores …」没了下文），上面中译里我保留了省略号，没有补写——因为补出来的内容就是编的。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="normal">
+      <h2>6. GS-IR 给高斯加了什么，法向又是从哪来的</h2>
+
+      <p>先说加了什么（§3 末尾 + Fig. 2）：<b>在 3DGS 原本的球谐颜色与透明度之外，GS-IR 给每个高斯又存了法向 $\hat n$ 和材质 $M$</b>。材质用经典的微表面参数化：<b>albedo（基础反照率）$a$、metallic（金属度）$m$、roughness（粗糙度）$\rho$</b>。场景层面再加两样：一张<b>环境贴图</b>和一组<b>光照 / 遮挡体素</b>。</p>
+
+      <p>它要解的渲染方程，就是图形学里那条老方程（Cookie-Torrance 微表面 BRDF）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$L_o(x,v)=\int_{\Omega} L_i(x,l)\,f_r(l,v)\,(l\cdot n)\,dl,\qquad f_r=(1-m)\frac{a}{\pi}+\frac{DFG}{4(n\cdot l)(n\cdot v)}$$</div>
+      </div>
+
+      <p>式子不用会推，看懂它的形状就够了：<b>我在 $x$ 点朝 $v$ 方向看到的出射光 $L_o$，等于来自各个方向 $l$ 的入射光 $L_i$，乘上这块材质的反射方式 $f_r$，再乘上一个「入射角余弦」$(l\cdot n)$，然后对整个半球积分。</b>其中 $f_r$ 被拆成「漫反射那部分」$+$「镜面反射那部分」——这正是逆渲染能把光照与材质拆开的物理依据。</p>
+
+      <p>接下来是本节要纠正的第三个（也是最重要的）地方：<b>法向到底从哪来？</b></p>
+
+      <p>有一种流传很广的说法是「用神经 SDF 蒸馏出来的」。<b>原文不是这样做的。</b>GS-IR 走的是「<b>基于深度推导的正则</b>」（depth-derivation-based regularization），路径一共三段：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{渲染深度} \;\to\; \text{深度梯度当伪法向} \;\to\; \text{监督高斯里存的可学法向}$$</div>
+      </div>
+
+      <ol>
+        <li><b>先算深度。</b>把各个高斯的深度按权重加权，得到像素深度 $\hat D=\sum_i \hat w_i d_i$，其中权重 $\hat w_i = T_i\alpha_i / \sum T_i\alpha_i$。注意这里是<b>线性插值</b>，而且把结果限制在最小与最大距离之间——原文说这样能避免「深度漂浮」和圆盘锯齿（Eq.6）。</li>
+        <li><b>再取梯度当伪法向。</b>对深度图求梯度 $\hat n_D=\nabla_{uv}\hat D$，得到一张「伪法向图」。</li>
+        <li><b>最后让高斯去对齐它。</b>用损失 $L_{n-p}=\|\hat n-\hat n_D\|$ 让每个高斯里存的可学法向 $\hat n$ 去逼近这张伪法向图，并额外加 TV 平滑正则（Eq.7–8）。</li>
+      </ol>
+
+      <p>所以正确的说法是：<b>GS-IR 的法向来自深度梯度监督，不是神经 SDF 蒸馏。</b>这两条路看起来很像是「都要一个法向」，但机制完全不同：SDF 那套是另建一个隐式场、用体积渲染的梯度当法向；GS-IR 是<b>拿自己渲染出来的深度图，在图像平面上求个梯度</b>，成本低得多。</p>
+
+      <p>再说「间接光照」这个难点怎么绕。前面说过前向光栅化不能沿光线算遮挡，GS-IR 的答案是<b>把遮挡「烘焙」成一堆球谐系数</b>（§4.3 / Fig. 4）：对空间里每个格子，先用高斯做六次前向泼溅得到深度立方图，按阈值把它二值化成「挡 / 不挡」的遮挡立方图，再把这张遮挡图卷成球谐系数存起来。等真正渲染的时候，<b>直接查这组系数就知道「这个格子能不能被光打到」</b>，不必现场追光线。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GS-IR__3D_Gaussian_Splatting_for_Inverse_Rendering/18e103fe9a101764d88e5efcc1d25010ce470b887810fb4d59dfa875c61fcfde.jpg" alt="GS-IR Fig.4 baking occlusion volumes as spherical harmonics">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Baking. We employ the spherical harmonics (SH) architecture to bake occlusion volumes for modeling indirect illumination. For each grid of occlusion volumes, we initially use 3D Gaussians to compute the depth cubemap by performing six forward mapping splatting passes. Next, we convert the depth cubemap into a binary occlusion cubemap based on a distance threshold. Finally, the occlusion …<br>
+          （中译：烘焙。我们用球谐结构来把遮挡体素烘焙出来，用于建模间接光照。对每个遮挡体素格，我们先做六次前向映射泼溅，用 3D 高斯算出深度立方图；接着按一个距离阈值把深度立方图转成二值遮挡立方图；最后把遮挡……）<br>
+          <b>怎么看这张图：</b>这张图解释的是「前向渲染算不了遮挡，那怎么办」。① 先看那个<b>立方图</b>——想象你站在空间里的一个小格子里，朝前后左右上下六个方向各拍一张深度图；② 再看它被<b>二值化</b>成「这里被挡住 / 这里没被挡住」；③ 最后这些「挡不挡」的信息被压成一组<b>球谐系数</b>，像贴图一样贴在格子上。<br>
+          <b>要记住的一句话：</b>这是图形学里非常典型的「<b>用空间换时间</b>」——把昂贵的可见性查询<b>提前算好缓存起来</b>，渲染时只查表。对照第五季 <b>0097</b> R³LIVE++ 的辐射重建，你会发现大家都在想办法把「光照」这件事从「实时算」变成「提前存」。
+        </figcaption>
+      </figure>
+
+      <p>实验数字与局限也一并说清。数据集用了 TensoIR Synthetic（4 个物体，有参考材质）与 Mip-NeRF360（7 个场景）。在 TensoIR Synthetic 上：<b>法向 MAE 4.948</b>（略逊于 TensoIR 的 4.100）、<b>新视角 PSNR 35.333 最优</b>、<b>albedo PSNR 30.286 最优</b>、<b>重光照 PSNR 24.374 排第二</b>（TensoIR 是 28.580），但训练耗时 <b>不到 1 小时，比 TensoIR 快约 5 倍</b>。在 Mip-NeRF360 上 PSNR 25.381 / SSIM 0.757 / LPIPS 0.267，约 45 分钟——原文说这个成绩甚至超过了部分纯做新视角合成的 NeRF 变体。</p>
+
+      <p>原文 §6 的 Limitations 写得很克制，只有两条，但两条都很致命：<b>① 球谐只适合低频</b>，所以 GS-IR 用 SH 表示的遮挡只能拿来建模间接光照的<b>漫反射项</b>；<b>② 间接光照的镜面项仍然无法建模</b>——原文说这是图形学的长期难题，建议未来用屏幕空间全局光照（SSGI）来做。</p>
+
+      <p>回到 0015 课那张表：「<b>光照估计差</b>」这一条，GS-IR 算是正面回应了；但「<b>镜面与复杂反射差</b>」这一条，它自己承认还没解掉。<b>这一点必须如实讲——不要把它写成「解决了光照问题」。</b></p>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>7. 两篇横向对比，以及我们的判断</h2>
+
+      <p>两篇论文都非常「专一」：各自只咬 0015 课那张表里的一格。先把它们摆在一起看：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">对比项</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">SuGaR（2024, CVPR）</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">GS-IR（2024, CVPR）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>回应 0015 哪一条</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">「难捕捉精细几何、提取网格困难」</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">「遮挡计算变复杂 → 光照估计差；镜面/复杂反射差」</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>给高斯加了什么</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">不新增属性；靠正则把高斯压扁贴面，抽完网格后每个三角面绑一组<b>只留 2 缩放 + 1 个二维旋转</b>的薄高斯</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">每个高斯加<b>法向 $\hat n$</b> 与<b>材质 BRDF（albedo、metallic、roughness）</b>；场景级加环境贴图与光照/遮挡体素</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>距离场 / 法向从哪来</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>从高斯密度数学地导出</b>（$f=\pm s\sqrt{-2\log d}$），数值靠渲染深度图估计——<b>不是独立 SDF 网络</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">深度线性插值得到 $\hat D$，取深度梯度得伪法向，再监督高斯里的可学法向——<b>不是 SDF 蒸馏</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>抽网格 / 建模光照</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">在等值面上采样点 + <b>Poisson 重建</b>；<b>Marching Cubes 被原文证明失败</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">前向光栅化不能追光线 → 把遮挡<b>烘焙成球谐体素</b>，渲染时查表</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>输入</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">多视角 RGB（与 3DGS 相同），只多了正则与后续步骤</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">多视角 RGB，<b>光照未知</b>，三阶段训练</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>输出</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">可编辑、可动画的<b>水密网格</b>，且在网格上继续用高斯渲染</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">法向图 / albedo / 光照，可<b>重光照与材质编辑</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>速度与质量</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">单卡 15–45 分钟 + 抽网格 5–10 分钟；Mip-NeRF360 平均 PSNR 27.27（有网格方法里最佳）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">不到 1 小时，比 TensoIR 快约 5×；新视角与 albedo PSNR 最优，法向 MAE 略逊 TensoIR</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>原文承认的短板</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">高镜面区靠「挖空腔」作弊、表面被扭曲；难处理体效应与模糊材质</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">球谐只适合低频；<b>间接光照的镜面项未建模</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>最后是我们的一句判断——<b>请注意，这是教学判断，不是原文的自评</b>：</p>
+
+      <div class="callout">
+        <h4>我们的判断</h4>
+        <p><b>SuGaR 更「新」</b>：它给了一条之前没有人走过的路——不引入新网络、不引入新传感器，只是<b>加一条正则把已有表示驯服成表面</b>，然后再顺手把高斯绑回网格。这条路的价值在于它把「高斯」和「图形学老流水线」重新接通了，后面很多做可编辑/可动画高斯的工作都要引用它。</p>
+        <p><b>GS-IR 偏「增量但必需」</b>：PBR、BRDF、环境贴图、球谐烘焙——这些在图形学与 NeRF 逆渲染里都不是新东西（比如 NeRF 系早就有 NeRFs-inverse 那一类）。GS-IR 的贡献是<b>把这些老工具搬进高斯这个表示里</b>，并且老实处理了「前向光栅化算不了遮挡」这个高斯特有的坎。它的成绩单也很诚实：法向不如 TensoIR，重光照不如 TensoIR，赢在速度与 albedo/新视角。</p>
+        <p>一句话收束：<b>这两篇都没有「解决」3DGS，它们各自补了一个洞，而且都把自己的洞有多大写清楚了。</b></p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请用自己的话解释：为什么「高斯优化完之后没有表面」？这和渲染质量好不好有什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>高斯的本质是一堆<b>各向异性的椭球</b>——每个椭球有位置、朝向、三个缩放、不透明度和颜色。它<b>天生只描述「空间里哪块地方有东西、有多浓、什么颜色」</b>，并没有「这里是一张面」这种语义。椭球可以有任意朝向，也可以互相重叠、飘在物体外面。</p>
+              <p>所以优化完成后，几百万个高斯能渲染出非常真实的图像，但它们是<b>无组织的</b>（原文 §1 用词就是 unordered）。而抽网格需要的是「一张有内外的面」，这在高斯里根本不存在，得先想办法造出来。</p>
+              <p><b>「渲染质量好」和「有表面」是两件独立的事</b>：渲染只需要「从这个角度看对」，它甚至可以用挖空腔、加漂浮物、过建高斯来「作弊」把图凑对；而表面要求的是「从任何角度看都对，并且能被别人拿去用」。这就是 SuGaR 要补的洞。</p>
+            </div></details>
+          </li>
+          <li>SuGaR 的距离场 $f(p)=\pm s\sqrt{-2\log d(p)}$ 是从高斯密度推出来的。请说明：为什么取对数和开根号能把它变成一个「距离」？这个距离场的零交叉代表什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>关键在于<b>理想密度本身就是一个含距离的钟形函数</b>。在第 2 节的三条假设下，一个点 $p$ 的密度只跟它到表面所在平面的垂直距离有关，形式是「负二分之一乘以距离平方，再取指数」。指数上带着距离，所以只要<b>取一次对数</b>，就能把那个平方项拎下来变成「距离的平方乘以一个负常数」；再<b>乘以 $-2$ 开根号</b>，就把「距离平方」还原成「距离」本身，外面再乘一个尺度因子 $s_{g*}$ 做量纲归一。</p>
+              <p>所以这个变换不是变魔术，而是<b>沿着钟形函数的「逆」走回去</b>：密度→对数→乘常数→开根号→距离。原文 Eq.6–7 就是这个推导的结果。</p>
+              <p><b>零交叉就是表面。</b>因为 $f(p)$ 的意思是「到表面的有符号距离」，距离为零当然就在表面上。这和第二季 <b>0033</b> KinectFusion 的 TSDF「表面在哪 = 距离场等于零的地方」是同一个思想。</p>
+            </div></details>
+          </li>
+          <li>原文的 Fig. 3 显示 Marching Cubes 在 SuGaR 这个问题上失败，主方法改用 Poisson 重建。请解释 MC 为什么会失败，以及为什么必须加「点位置细化」这一步。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>MC 失败的原因</b>：Marching Cubes 是在一个规整的三维体素格子上工作的，它<b>要求格子上到处都有可用的距离值</b>。但高斯的密度是稀疏的，只在物体附近浓、离物体远就几乎处处为零。而 SuGaR 的距离是「对数再开根号」，密度接近零时这个数值会很不稳定、噪声极大。结果就是：格子切得再细，抽出来的也是一堆破碎、嘈杂、穿洞的面片——原文的原话就是「极其嘈杂的网格（extremely noisy mesh），哪怕三维格子非常细」。</p>
+              <p><b>Poisson 重建为什么好使</b>：它不要求「处处有距离」，而是要求「有一堆<b>带法向的点</b>」。SuGaR 正好可以只在距离场的等值面附近采样点——那里密度够大、数值稳定、而且梯度能给出法向。于是问题从「全域稠密采样」变成了「在正确的地方采到干净的点」，这对高斯这种稀疏表示友好得多。</p>
+              <p><b>为什么必须细化点位置</b>：原文说得很直接——渲染出来的深度图<b>并不精确</b>，如果你直接把深度点丢给 Poisson，重建结果通常会很差（Table 2 里 Poisson 用高斯中心点只有 23.76，比 MC 的 23.91 还低）。所以要多做一步：把采样点挪一挪，挪到真正的等值面上，点的质量上去了，网格才干净（Poisson level 0.3 达到 24.87）。<b>这一步不能省。</b></p>
+            </div></details>
+          </li>
+          <li>GS-IR 的法向来自「深度梯度监督」而不是「神经 SDF 蒸馏」。请说明这两种做法的区别，以及为什么 GS-IR 选择前者。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>SDF 蒸馏那条路</b>（NeuS 及其同类）：另外训练一个隐式场，让它的零水平集对准表面；法向就是这个场的空间梯度。它的好处是几何约束强、表面质量高；代价是<b>要多练一个场</b>，训练慢、实现复杂，而且这个场跟高斯表示是两套东西，得来回对齐。</p>
+              <p><b>GS-IR 的深度梯度那条路</b>：先用各高斯的深度加权插值出像素深度 $\hat D=\sum_i \hat w_i d_i$（线性插值并限制在最小/最大距离之间，避免深度漂浮与圆盘锯齿），再在图像平面上对深度图求梯度得到伪法向 $\hat n_D=\nabla_{uv}\hat D$，最后用损失 $L_{n-p}$ 让每个高斯里存的可学法向 $\hat n$ 去逼近它，并加 TV 平滑。</p>
+              <p><b>为什么选后者</b>：因为 GS-IR 的目标是<b>逆渲染</b>，不是「抽一张最准的网格」。它需要一个「够用的法向」来支撑 BRDF 计算，而这个法向可以直接从自己已经渲染出来的深度图里顺手得出来——<b>不需要额外网络、不增加多少开销</b>。原文 §1 也把「高斯原生不支持合理法向」列为它要解决的问题，它的解法就是这条轻量路线。</p>
+              <p>要记住这个区别：<b>SDF 沿空间求梯度，GS-IR 沿图像平面求梯度。</b></p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0121-WildGS-SLAM与Splat-SLAM-动态剔除与纯RGB全局优化.html">← WildGS-SLAM 与 Splat-SLAM：动态剔除与纯 RGB 全局优化</a>
+        <a class="next" href="0123-LangSplat与GaussianGrasper-语言高斯与机器人抓取.html">LangSplat 与 GaussianGrasper：语言高斯与机器人抓取 →</a>
+      </div>
+      <p class="foot-note">这一节里有两处「大家都说错」的地方——SDF 不是网络、抽网格不是 Marching Cubes。读原文比读二手介绍慢，但只有原文会告诉你它在哪儿失败了 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

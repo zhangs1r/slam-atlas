@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LangSplat 与 GaussianGrasper：语言高斯与机器人抓取 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0123</div>
+      <h1>LangSplat 与 GaussianGrasper：语言高斯与机器人抓取</h1>
+      <p class="subtitle">地图上不只有位置和颜色，还能挂上一串「这句话说的是什么」的数——于是你可以直接问它 🗣️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：语言高斯 · SAM 三层语义 · 开放词汇查询 · 法向导抓</span>
+        <span>👥 两篇：LangSplat（清华 + 哈佛）／GaussianGrasper（<b>另一支团队</b>）</span>
+        <span>📅 2024 · <i>3D Language Gaussian Splatting</i> &amp; <i>…for Open-Vocabulary Robotic Grasping</i></span>
+      </div>
+      <div class="toc">
+        <a href="#line">这条线索的第四站</a>
+        <a href="#what">什么是「语言高斯」</a>
+        <a href="#feature">语言特征从哪来</a>
+        <a href="#query">怎么查、有多快</a>
+        <a href="#grasper">语言高斯搬上机械臂</a>
+        <a href="#team">★ 两篇不是同一个团队</a>
+        <a href="#compare">对比与收束</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="line">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「语言高斯」到底给每个高斯挂了什么；解释为什么必须先用 SAM 分出三层再喂给 CLIP；知道 199× 这个速度数字是在什么分辨率下、跟谁比；并说清一个语言高斯场要变成机械臂的抓取动作，中间还差哪几步。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这是「<b>给地图挂语义</b>」这条线上的新一站：第一季 <b>0011</b> 课点出「深度学习先吃下匹配与检索」；第三季 <b>0062</b> Kimera 第一次做到「面片带标签」；第四季 <b>0082</b> SuMa++ 用语义剔动态；本季 <b>0120</b> 把语义做进了表示本身。<b>而 0123 是第一次挂上「语言」这种可以自由查询的表示。</b></p>
+        </div>
+      </div>
+
+      <h2>1. 题眼：语义这条线，走到「语言」这一站了</h2>
+
+      <p>先把这条线索摆清楚。它不是本节新开的，而是前五季一路走过来的：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">站</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">课</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">它做了什么</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">瓶颈在哪</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">1</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0011</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">指出「深度学习先吃下匹配与检索」——分类预训练白送「认」的能力</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">「认」是像素/图像级的，还没进地图</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">2</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0062</b> Kimera</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">把分割结果贴到重建网格上，每个<b>面片</b>带一个类别标签</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">标签是<b>封闭集</b>的（就那几类），面片也只能回答「这块表面是什么」</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">3</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0082</b> SuMa++</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">用语义把动态物体从面片地图里剔掉</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">语义只是<b>工具</b>，用完就丢，不留在最终地图里</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">4</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0120</b> SNI-SLAM</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">把语义做<b>进表示里</b>，让它在优化中一起收敛，而不是「贴上去的注释」</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">仍然是类别；查询只能按类别查</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>5</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0123</b>（本节）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">给每个高斯挂一串<b>语言特征</b>——不再是「第 3 类」，而是「一个能跟任意句子比相似度的向量」</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">显存、以及对分割质量的强依赖（见后文）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>前四站有一个共同点：<b>它们挂上去的都是「标签」——一个从有限集合里挑出来的编号。</b>你可以问地图「杯子在哪」，但前提是「杯子」这一类在训练集里出现过，而且地图里真的存了「杯子」这个编号。</p>
+
+      <p>第五站不一样。LangSplat 挂上去的不是编号，而是<b>一串数（一个向量）</b>。这串数来自一个被海量图文对训练过的语言模型（CLIP），它的性质是：<b>意思相近的东西，向量也相近。</b>于是「红色的杯子」「能装水的容器」「桌上那个东西」这三句话算出来的向量，都会离杯子那块表面的向量比较近——哪怕地图里从来没有出现过「杯子」这个类别。</p>
+
+      <p>这就是本节最大的看点：<b>第一次，地图可以被一句自由写出来的话查询。</b></p>
+
+      <p>顺便做一处诚实说明：本节开头我在「和前面课程怎么接」里点了 <b>0011 → 0062 → 0082 → 0120</b> 四站。原先的材料里还提到第五季 <b>0102</b> 课，但我核对过：<b>0102 课其实是 FusionPortable 那篇多传感器评测基准（外加 AdaFusion 地点识别），全文没有语义或语言的内容</b>，所以它不能算这条线上的站。我把这一站的锚点换成了第四季 <b>0082</b> SuMa++——那才是「面片地图 + 语义」的下一站。</p>
+    </main>
+
+    <section class="section-card" id="what">
+      <h2>2. LangSplat：什么叫「语言高斯」</h2>
+
+      <p>先把词说清楚。<b>「语言高斯」（3D language Gaussian）不是一个新形状的高斯</b>——它的几何参数（位置、缩放、旋转）和高斯渲染那套完全一样。变的只是：<b>每个高斯身上除了颜色，还多挂了一串语言特征。</b></p>
+
+      <p>看下面这张自绘图，一眼就懂：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">给地图挂上「语言」：一句话就能指到一块表面</text>
+
+          <!-- 房间 -->
+          <rect x="40" y="60" width="820" height="192" fill="#f4f7fa" stroke="#d5dee7" stroke-width="1.2"/>
+          <rect x="40" y="252" width="820" height="14" fill="#e8dcc8"/>
+          <!-- 窗户 -->
+          <rect x="64" y="86" width="76" height="52" rx="3" fill="#dceaf7" stroke="#a8bed2" stroke-width="1.4"/>
+          <path d="M102 86 L102 138" stroke="#a8bed2" stroke-width="1.2"/>
+          <path d="M64 112 L140 112" stroke="#a8bed2" stroke-width="1.2"/>
+
+          <!-- 墙面高斯 -->
+          <g fill="#b8c8d8" opacity="0.22">
+            <ellipse cx="230" cy="104" rx="30" ry="11"/><ellipse cx="292" cy="100" rx="30" ry="11"/>
+            <ellipse cx="354" cy="104" rx="30" ry="11"/><ellipse cx="416" cy="100" rx="30" ry="11"/>
+            <ellipse cx="478" cy="104" rx="30" ry="11"/><ellipse cx="540" cy="100" rx="30" ry="11"/>
+            <ellipse cx="602" cy="104" rx="30" ry="11"/><ellipse cx="664" cy="100" rx="30" ry="11"/>
+          </g>
+
+          <!-- 桌子 -->
+          <rect x="200" y="206" width="300" height="12" rx="3" fill="#c8a887" stroke="#a1795a" stroke-width="1.3"/>
+          <rect x="212" y="218" width="10" height="44" fill="#a1795a"/>
+          <rect x="478" y="218" width="10" height="44" fill="#a1795a"/>
+          <g fill="#8fb8dd" opacity="0.35">
+            <ellipse cx="232" cy="200" rx="26" ry="9"/><ellipse cx="272" cy="198" rx="26" ry="9"/>
+            <ellipse cx="368" cy="198" rx="26" ry="9"/><ellipse cx="446" cy="200" rx="26" ry="9"/>
+            <ellipse cx="486" cy="198" rx="26" ry="9"/>
+          </g>
+
+          <!-- 红杯子 -->
+          <path d="M290 168 L290 200 L322 200 L322 168 Z" fill="#d0503c" stroke="#9c3325" stroke-width="1.3"/>
+          <path d="M322 176 A10 10 0 0 1 322 194" fill="none" stroke="#9c3325" stroke-width="2.2"/>
+          <ellipse cx="306" cy="168" rx="16" ry="5" fill="#e2765f" stroke="#9c3325" stroke-width="1.2"/>
+          <g fill="#d0503c" opacity="0.5">
+            <ellipse cx="298" cy="180" rx="14" ry="7"/><ellipse cx="314" cy="192" rx="14" ry="7"/>
+          </g>
+          <ellipse cx="306" cy="186" rx="34" ry="26" fill="none" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="5 4"/>
+
+          <!-- 书本 -->
+          <rect x="380" y="188" width="96" height="18" rx="2" fill="#7f9ec4" stroke="#4a6f9a" stroke-width="1.3"/>
+          <g fill="#7f9ec4" opacity="0.5">
+            <ellipse cx="402" cy="186" rx="16" ry="7"/><ellipse cx="438" cy="186" rx="16" ry="7"/>
+            <ellipse cx="470" cy="188" rx="16" ry="7"/>
+          </g>
+
+          <!-- 椅子 -->
+          <rect x="620" y="140" width="90" height="70" rx="6" fill="#dfe6ec" stroke="#8a9aa8" stroke-width="1.4"/>
+          <rect x="608" y="210" width="114" height="12" rx="3" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.4"/>
+          <rect x="616" y="222" width="10" height="40" fill="#8a9aa8"/>
+          <rect x="704" y="222" width="10" height="40" fill="#8a9aa8"/>
+          <g fill="#8fb8dd" opacity="0.3">
+            <ellipse cx="644" cy="160" rx="20" ry="8"/><ellipse cx="684" cy="158" rx="20" ry="8"/>
+            <ellipse cx="716" cy="160" rx="20" ry="8"/><ellipse cx="664" cy="186" rx="20" ry="8"/>
+          </g>
+
+          <!-- 语言向量条 callout -->
+          <path d="M330 174 L420 130" stroke="#8a5c1f" stroke-width="1.3"/>
+          <g>
+            <rect x="420" y="122" width="10" height="14" fill="#d0503c"/>
+            <rect x="430" y="122" width="10" height="14" fill="#e0a34a"/>
+            <rect x="440" y="122" width="10" height="14" fill="#c9d94a"/>
+            <rect x="450" y="122" width="10" height="14" fill="#5cc98a"/>
+            <rect x="460" y="122" width="10" height="14" fill="#4a9cd0"/>
+            <rect x="470" y="122" width="10" height="14" fill="#8f6fd0"/>
+            <rect x="480" y="122" width="10" height="14" fill="#d05fa0"/>
+            <rect x="490" y="122" width="10" height="14" fill="#6f8fa8"/>
+          </g>
+          <text x="460" y="112" text-anchor="middle" font-size="10.5" fill="#8a5c1f">这串数描述它的含义</text>
+
+          <!-- 每块表面旁边的小向量条 -->
+          <g opacity="0.9">
+            <rect x="516" y="192" width="6" height="8" fill="#4a9cd0"/><rect x="522" y="192" width="6" height="8" fill="#5cc98a"/>
+            <rect x="528" y="192" width="6" height="8" fill="#c9d94a"/><rect x="534" y="192" width="6" height="8" fill="#8f6fd0"/>
+          </g>
+          <g opacity="0.9">
+            <rect x="722" y="150" width="6" height="8" fill="#e0a34a"/><rect x="728" y="150" width="6" height="8" fill="#5cc98a"/>
+            <rect x="734" y="150" width="6" height="8" fill="#4a9cd0"/><rect x="740" y="150" width="6" height="8" fill="#d05fa0"/>
+          </g>
+
+          <text x="60" y="288" font-size="10.5" fill="#a8563a">只有被这句话指到的高斯才亮起来</text>
+
+          <!-- 查询句 -->
+          <rect x="200" y="306" width="500" height="48" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.6"/>
+          <text x="450" y="336" text-anchor="middle" font-size="15" font-weight="700" fill="#a8563a">把桌上那个红色的杯子给我</text>
+          <path d="M430 306 C 412 268, 372 236, 336 208" fill="none" stroke="#a8563a" stroke-width="1.8"/>
+          <path d="M336 208 L341 219 L330 214 Z" fill="#a8563a"/>
+
+          <text x="450" y="396" text-anchor="middle" font-size="12.5" fill="#5a4a42">它把「这句话」和「那块表面」对上了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个普通室内场景（桌子、红杯子、书、椅子），怎样在「给高斯挂上语言特征」之后，变成可以被一句自然语言点名的地图。<br>
+          <b>怎么看这张图：</b>① 先看<b>半透明的蓝色椭球</b>——它们铺在桌面上、椅背上、墙面上，就是场景里的高斯；② 再看杯子旁边那根引线牵出的一条<b>彩色短条</b>——那是一条语言特征向量，每一小格代表向量的一个分量，<b>这串数描述的是「这块表面是什么意思」</b>，而不是它的颜色；③ 最后看下方那句话和它伸出去的箭头——「把桌上那个红色的杯子给我」这句文本被编码成同一种向量，跟场景里每个高斯的向量比相似度，<b>只有杯子上那几个高斯的相似度够高，于是被红色虚线圈出来</b>。<br>
+          <b>一处必须说明的简化：</b>真实的语言特征向量不是 8 维而是几百维（CLIP 是 512 维，LangSplat 把它压到 3 维再解码），画成 8 个小格只是为了让你看见「它是一串数」。<br>
+          <b>要记住的一句话：</b>这一步之所以叫「革命」，是因为<b>地图第一次能回答一个没有事先写进类别表的问题</b>。
+        </figcaption>
+      </figure>
+
+      <p>具体到实现，LangSplat 给每个高斯挂的是<b>三串</b>语言特征，而不是一串：$\{f^s, f^p, f^w\}$，分别对应同一个物体的<b>子部件、部件、整体</b>三个层级。渲染语言特征的方式和渲染颜色一模一样——同一个 $\alpha$ 混合公式（原文 Eq.4）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$F^l(v)=\sum_{i\in N} f_i^l\,\alpha_i\prod_{j<i}(1-\alpha_j)$$</div>
+      </div>
+
+      <p>也就是说：<b>颜色怎么叠出来的，语言特征就怎么叠出来。</b>你给一个查询，把查询句编码成向量，就能得到一张和渲染图一样大的「相关度图」（relevance map），哪个像素亮就说明那块地方跟这句话像。</p>
+
+      <p>为什么要分三层？因为语言模型有一个很麻烦的毛病，原文叫<b>点歧义（point ambiguity）</b>：CLIP 是「对齐整张图」的，不是「对齐到像素」的。你把一只猫的整张图喂给它，它给你一个向量；但猫耳朵这一个点，它究竟属于「耳朵」「猫头」还是「整只猫」？说不清。于是 LangSplat 用 <b>SAM（Segment Anything）</b>先把图像分割成不同粗细的区域，再分别喂给 CLIP，得到三个层级的向量——<b>这样同一个点就能对三个层级的查询都有响应。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一把椅子，三层语义：查询越细，命中的层越往里</text>
+
+          <!-- 外层：整间房间 -->
+          <rect x="40" y="70" width="520" height="270" rx="8" fill="#f2faf5" stroke="#4a9c76" stroke-width="2"/>
+          <text x="58" y="94" font-size="12" font-weight="700" fill="#2f6d51">最外层：整间房间</text>
+          <rect x="56" y="316" width="488" height="10" fill="#d8e8dd"/>
+          <rect x="70" y="106" width="70" height="46" rx="3" fill="#dceaf7" stroke="#a8bed2" stroke-width="1.2"/>
+
+          <!-- 中层：这把椅子 -->
+          <rect x="170" y="130" width="280" height="190" rx="8" fill="#fdf6f3" stroke="#d98a6a" stroke-width="2"/>
+          <text x="188" y="154" font-size="12" font-weight="700" fill="#a8563a">中间层：这把椅子</text>
+
+          <!-- 内层：椅背 / 椅腿 -->
+          <rect x="270" y="190" width="140" height="110" rx="8" fill="#eef3fb" stroke="#5a8fc7" stroke-width="2"/>
+          <text x="288" y="212" font-size="12" font-weight="700" fill="#2c5f8a">最内层：椅背 / 椅腿</text>
+
+          <!-- 椅子 -->
+          <rect x="286" y="222" width="80" height="42" rx="4" fill="#dfe6ec" stroke="#8a9aa8" stroke-width="1.3"/>
+          <rect x="278" y="264" width="98" height="9" rx="2" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.3"/>
+          <rect x="286" y="273" width="8" height="22" fill="#8a9aa8"/>
+          <rect x="360" y="273" width="8" height="22" fill="#8a9aa8"/>
+
+          <!-- 右侧三层查询 -->
+          <rect x="600" y="86" width="270" height="56" rx="8" fill="#f2faf5" stroke="#4a9c76" stroke-width="1.5"/>
+          <text x="735" y="112" text-anchor="middle" font-size="12.5" fill="#2f6d51">「找个能坐的地方」</text>
+          <text x="735" y="130" text-anchor="middle" font-size="10.5" fill="#5f8a72">粗一点的查询，落在最外层</text>
+          <path d="M600 114 L564 114" stroke="#4a9c76" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+          <rect x="600" y="166" width="270" height="56" rx="8" fill="#fdf6f3" stroke="#d98a6a" stroke-width="1.5"/>
+          <text x="735" y="192" text-anchor="middle" font-size="12.5" fill="#a8563a">「椅子在哪」</text>
+          <text x="735" y="210" text-anchor="middle" font-size="10.5" fill="#a8846f">中等查询，落在中间层</text>
+          <path d="M600 194 L454 194" stroke="#d98a6a" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+          <rect x="600" y="246" width="270" height="56" rx="8" fill="#eef3fb" stroke="#5a8fc7" stroke-width="1.5"/>
+          <text x="735" y="272" text-anchor="middle" font-size="12.5" fill="#2c5f8a">「椅背上有没有挂钩」</text>
+          <text x="735" y="290" text-anchor="middle" font-size="10.5" fill="#5f7f9f">细查询，落在最内层</text>
+          <path d="M600 274 L414 274" stroke="#5a8fc7" stroke-width="1.4" stroke-dasharray="5 4"/>
+
+          <text x="450" y="374" text-anchor="middle" font-size="12.5" fill="#5a4a42">查得越细，能对上的层就越往里；粗问题去问最外层</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一把椅子，在三层不同粗细的语义划分下，分别属于哪个「框」；以及不同粗细的查询，应该落到哪一层。<br>
+          <b>怎么看这张图：</b>① 最外层的绿框是<b>整间房间</b>——「找个能坐的地方」这种粗问题应该在这一层回答；② 中间的橙框是<b>这把椅子</b>——「椅子在哪」这种指名道姓的问题落在这里；③ 最内层的蓝框是<b>椅背 / 椅腿</b>——「椅背上有没有挂钩」这种抠部件的细问题落在这里。三层的向量各自渲染出一张相关度图，<b>哪一层的分数最高就用哪一层</b>。<br>
+          <b>★ 一处必须纠正的说法：</b>很多介绍会把这三层写成「scene / object / part」（场景 / 物体 / 部件）。<b>原文的层级其实是 subpart / part / whole（子部件 / 部件 / 整体），来自 SAM 的分割粒度，并没有一个独立的「整间场景」层。</b>所以本图最外层那个「整间房间」的框是<b>我为了教学补的示意</b>——真实系统里「房间」这个概念不会作为一个单独的层级存在，它只会作为「whole 层」被更大范围的分割覆盖。这一点请务必分清。<br>
+          <b>要记住的一句话：</b>三层语义的作用只有一个——<b>解决「一个点到底属于谁」这个歧义</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="feature">
+      <h2>3. 语言特征从哪来：SAM 三层 + CLIP + 自编码器</h2>
+
+      <p>这一节把流水线走一遍。原文的流程一共四步，看下面这张原图的框架图最直观：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LangSplat__3D_Language_Gaussian_Splatting/2acff0825f0fc450b570f642f600fa2149f4c5c88cba0412a048a4675b88d2d5.jpg" alt="LangSplat Fig.2 framework: SAM hierarchical semantics, CLIP, autoencoder, language gaussians">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The framework of our LangSplat. Our LangSplat leverages SAM to learn hierarchical semantics to address the point ambiguity issue. Then segment masks are sent to the CLIP image encoder to extract the corresponding CLIP embeddings. We learn an autoencoder with these obtained CLIP embeddings. Our 3D language Gaussian learn language features on the scene-specific latent space to reduce the m…<br>
+          （中译：LangSplat 的框架。我们用 SAM 学习层级语义，以解决点歧义问题；然后把分割掩码送进 CLIP 图像编码器抽取对应的 CLIP 嵌入；再用这些 CLIP 嵌入训练一个自编码器；我们的 3D 语言高斯在「场景专属的隐空间」上学语言特征，以降低内……）<br>
+          <b>怎么看这张图：</b>沿着箭头从左走到右就是完整流程。① <b>SAM 出三层掩码</b>——同一个物体被分出不同粗细的几块；② <b>每块掩码连同图像一起送进 CLIP</b>，得到一串语言嵌入；③ <b>自编码器把这串高维嵌入压到很低的维度</b>（这是省显存的关键）；④ <b>高斯只在低维隐空间里学</b>，查询的时候再由解码器还原回 CLIP 空间去比相似度。<br>
+          <b>一处诚实提醒：</b>原文图注在 OCR 里被截断（结尾的「to reduce the m…」没了下文），我保留了省略号，没有替它补「memory footprint」之类的内容——虽然从上下文看多半是这个意思，但补上就是编了。
+        </figcaption>
+      </figure>
+
+      <p>四步拆开讲：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>① SAM 分出三层</b>
+          <p>原文 §3.2 用 SAM 在图像上撒 <b>32×32 的网格点</b>作为 prompt，分割出 whole / part / subpart 三层掩码，得到 pixel-aligned 的区域 $M^l(v)$。这一步是「消歧义」的关键：<b>把「整只猫」「猫头」「猫耳」分开抠出来。</b></p>
+        </div>
+        <div class="mini-card">
+          <b>② CLIP 出语言向量</b>
+          <p>把每一块掩码抠出来（$I_t \odot M^l(v)$）单独送进 CLIP 图像编码器，得到 $L_t^l(v)$。这是<b>pixel-aligned</b> 而非 image-aligned 的特征——因为它是「对着一块区域」算出来的。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 自编码器压缩</b>
+          <p>CLIP 的特征是 <b>512 维</b>。给几百万个高斯每个挂三串 512 维向量，显存会直接爆。所以原文先用这些特征训练一个<b>场景专属自编码器</b>，把它压到 <b>$d=3$</b> 维，即 $H=E(L)\in\mathbb{R}^3$；查询时再用解码器 $\Psi$ 还原回 CLIP。</p>
+        </div>
+        <div class="mini-card">
+          <b>④ 高斯只学低维潜码</b>
+          <p>每个高斯实际学的是那个 3 维潜码。语言损失就是「渲染出来的特征」去逼近「压缩后的特征」：$L_{\text{lang}}=\sum d_{\text{lang}}(F,\,H)$。</p>
+        </div>
+      </div>
+
+      <p>这里有一处对照很有意思，值得单独说一句：<b>LangSplat 没有用球谐来存语言特征。</b>球谐是颜色的表示方式（第二季 <b>0039</b> Plenoxels 那一课见过），而语言特征是<b>独立的一条通道</b>——它跟「视角方向」没关系，只跟「这句话是什么意思」有关。这说明一件更大的事：<b>高斯身上可以挂任意属性</b>，挂什么取决于你想要它回答什么问题。</p>
+
+      <p>训练流程也要说清，因为它很能说明成本：<b>先按标准流程训一遍 3DGS 的 RGB（30k 次迭代，约 250 万点），然后冻结其余部分，只学语言特征，再训 30k 次。</b>语言模型用 OpenCLIP ViT-B/16 提特征，分割用 SAM ViT-H。也就是说，<b>它并不是零成本——语言的代价是「在已有高斯之上再训一遍」。</b></p>
+
+      <p>还有一个细节值得记：原文的消融里提到，<b>如果不加自编码器直接用高维 CLIP，会 OOM（显存爆掉）</b>；加上自编码器之后每查询只要 <b>0.26 秒</b>。这条消融把「为什么要压到 3 维」这个设计选择的理由说得非常清楚——不是「为了优雅」，是<b>不加就跑不起来</b>。</p>
+    </section>
+
+    <section class="section-card" id="query">
+      <h2>4. 怎么查、有多快：199× 是怎么来的</h2>
+
+      <p>查询的机制其实不复杂：把你要问的那句话（比如「红色的杯子」）用 CLIP 的文本编码器编成向量，然后跟场景里每个高斯挂着的语言向量算相似度，得到一张相关度图。原文沿用 LERF 的做法，对三个层级各算一次，取分数最高的那一层：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$s=\min_i \frac{\exp(\phi_{\text{img}}\cdot\phi_{\text{qry}})}{\exp(\phi_{\text{img}}\cdot\phi_{\text{qry}})+\exp(\phi_{\text{img}}\cdot\phi_{\text{canon}}^{i})}$$</div>
+      </div>
+
+      <p>这个式子里带了个 $\phi_{\text{canon}}$（几个「标准答案」提示词），作用是把「跟这句话像」和「跟别的典型提示像」相比——<b>光看相似度高不够，得看它相对别的候选有多突出。</b>细节不用记，知道查询是「比向量」就够了。</p>
+
+      <p>那 <b>199×</b> 这个数字是怎么来的？原文 Fig. 1 的图注写得很精确：<b>在 1440×1080 分辨率下，LangSplat 比 LERF 快 199 倍。</b>注意三个限定条件，缺一个这个数字就不成立：</p>
+
+      <ul>
+        <li><b>比的是 LERF</b>——把 CLIP 蒸馏进 NeRF 的那条隐式路线；</li>
+        <li><b>比的是渲染/查询速度</b>，不是训练速度；</li>
+        <li><b>在 1440×1080 这个分辨率下</b>——分辨率越高，显式光栅化相对体积渲染的优势越大，因为 NeRF 要沿每条光线采样很多次。</li>
+      </ul>
+
+      <p>说到底，这 199× 就是第一季 <b>0015</b> 课讲的「显式 vs 隐式」这个老矛盾，在<b>语义表示</b>上又上演了一遍。这几乎是本季的一条暗线：<b>只要把要存的东西挪到「可数、可光栅化」的显式表示上，就得来一次这样的加速。</b></p>
+
+      <p>质量上也不含糊（LERF 数据集 + 3D-OVS 数据集）：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">指标</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">LangSplat</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">LERF（对照）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">LERF 上的开放词汇 3D 定位精度</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>84.3%</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">73.6%</td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">LERF 上的 3D 语义分割 mIoU</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>51.4%</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">37.4%</td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">3D-OVS 上的 mIoU</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>93.4%</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">54.8%（3D-OVS 原方法 86.8%）</td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">查询耗时（1440×1080）</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>0.26 秒/次</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">—（整体比它慢 199×）</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LangSplat__3D_Language_Gaussian_Splatting/927ebe82114958067811818ab100764cbc4c527271671e6d6309d167530222a7.jpg" alt="LangSplat Fig.1 LERF vague boundaries vs LangSplat precise, 199x faster">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Visualization of learned 3D language features of the previous SOTA method LERF and our LangSplat. While LERF generate imprecise and vague 3D features, our LangSplat accurately captures object boundaries and provides precise 3D language fields. Whil being effective, our LangSplat is also 199 × faster than LERF at the resolution of 1440 × 1080.<br>
+          （中译：上一代 SOTA 方法 LERF 与我们 LangSplat 学到的 3D 语言特征可视化。LERF 生成的特征不精确、含糊，而我们的 LangSplat 准确捕捉物体边界、给出精确的 3D 语言场。在有效的同时，在 1440 × 1080 分辨率下我们还比 LERF 快 199 倍。）<br>
+          <b>怎么看这张图：</b>这张图是「语义边界」这件事最直接的展示。① 左右两边是<b>同一个场景、同一个查询</b>的对比；② 看 LERF 那一边的色彩——是<b>糊开的一团</b>，物体的边界被糊掉了；③ 再看 LangSplat 这一边——<b>边界收得很紧</b>，物体的轮廓清楚。为什么会这样？回到上一节：因为 LangSplat 用 SAM 先把物体抠出来再喂 CLIP，<b>一个像素的语言特征来自「它属于哪块掩码」，而不是来自「附近的特征随便插值」</b>。<br>
+          <b>一处小提醒：</b>原文图注里有一个拼写错误（「Whil being effective」应为「While being effective」），这是 OCR/排版问题，不影响结论。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_LangSplat__3D_Language_Gaussian_Splatting/13306b10281212967d301547ab8447a283cc122abf8db32bbbeecb7073636157.jpg" alt="LangSplat Fig.3 open-vocabulary 3D object localization on LERF dataset">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Qualitative comparisons of open-vocabulary 3D object localization on the LERF dataset. The red points are the model predictions and the black dashed bounding boxes denote the annotations.<br>
+          （中译：在 LERF 数据集上的开放词汇 3D 物体定位定性对比。红点是模型预测，黑色虚线框是真值标注。）<br>
+          <b>怎么看这张图：</b>这是「查询到底准不准」的直观证据。① 看<b>红点</b>——模型预测出来的目标位置；② 看<b>黑色虚线框</b>——人工标的真值；③ 好的结果是红点<b>整团落在虚线框里</b>。这几个例子用的都是自由文本查询（不是固定类别），所以它展示的就是「开放词汇」这件事本身。<br>
+          <b>要记住的一句话：</b>红点与虚线框对得上，说明「一句话指向一块表面」这件事真的成立了——而不只是渲染出好看的相关度图。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>LangSplat 用自编码器把 CLIP 特征从 512 维压到 3 维。关于这个设计，下面哪种说法是对的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="原文的消融里说得很直白：直接给高斯挂高维 CLIP 特征会 OOM（显存爆掉）。这不是「更慢一点」的问题，是根本跑不起来。省显存才是这个设计的第一动机。" onclick="lessonKit.answer(this,'q0123a')">只是为了训练时快一点</button>
+          <button data-correct="yes" data-explanation="对。原文用自编码器把场景里的 CLIP 特征压到 3 维，高斯只学这个低维潜码，查询时再用解码器还原。原文注明：不这样做会 OOM，加上之后每次查询 0.26 秒。这就是「显式表示省了渲染时间，却把账算到了显存上」的典型例子。" onclick="lessonKit.answer(this,'q0123a')">压维是为省显存不爆掉</button>
+          <button data-correct="no" data-explanation="恰恰相反：压缩是有代价的，3 维很可能丢语义细节（这一点原文没有单列局限小节，属于教学推断）。它的收益是「跑得起来」，不是「更准」——精度提升主要来自 SAM 的三层分割，原文消融显示引入 SAM 后 IoU 提升约 18.5 个点。" onclick="lessonKit.answer(this,'q0123a')">压维让语义精度更高</button>
+        </div>
+        <div class="quiz-feedback" id="q0123a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="grasper">
+      <h2>5. GaussianGrasper：把语言高斯搬上机械臂</h2>
+
+      <p>LangSplat 解决的是「能不能用一句话找到东西」。可如果你是一个机器人，找到还不算完——<b>你还得知道怎么把爪子伸过去、从哪儿夹住它。</b>这就是 GaussianGrasper 加的那一层。</p>
+
+      <p>先说它面对的问题，原文 §I 列得很清楚：语言引导的机器人抓取需要两件事，<b>① 用语言定位物体；② 有可靠的几何来稳定地抓。</b>而此前基于 DFF / NeRF 的做法（F3RM、LERF-TOGO 等）有四个毛病：patch 级特征导致<b>边界模糊</b>；需要<b>大量视角</b>（比如 50 个视角）；<b>推理慢</b>；<b>抓完之后场景变了，它跟不上</b>。</p>
+
+      <p>它给高斯加的东西也不复杂：<b>① 每个高斯挂一串低维语言特征</b>（和高维 CLIP 之间靠解码器 $\Psi$ 还原，思路与 LangSplat 的自编码器同源）；<b>② 渲染深度 $D(u)$ 与表面法向 $N(u)$</b>——法向直接取<b>高斯的最短轴方向</b>（这是几何属性，不是语义），并用深度相机的 Sobel 梯度做真值监督。</p>
+
+      <p>训练上有两个小设计值得记：一个叫 <b>EFD</b>（高效特征蒸馏），做法是<b>在同一个 SAM 掩码里随机采几对像素，强制它们渲染出来的潜码一致</b>（对比损失 $L_{\text{contr}}$），然后只对这些点解码回高维去算蒸馏损失——这样就不必逐像素算高维距离，省算力；另一个是<b>法向导抓</b>：一个候选抓取有两个接触点，如果这两点的法向与抓取线的夹角之和超过阈值 $\theta_{\text{thr}}$，这个位姿就判为不可行，直接剔掉。</p>
+
+      <p>真机实验是这一篇最有说服力的地方：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>硬件与数据</b>
+          <p><b>UR5 机械臂 + ROBOTIQ 二指夹爪 + RealSense D455</b>，单张 RTX 3090。采集 <b>16 视角 RGB-D</b>（场景更新时只用 5 视角），点云下采样到约 <b>300k</b> 初始化；共 <b>10 个桌面场景、44 个物体（其中 40 个可抓）</b>，完成 <b>120 次</b>语言引导操作。</p>
+        </div>
+        <div class="mini-card">
+          <b>语义指标</b>
+          <p>mIoU <b>58.2%</b>、Acc <b>87.5%</b>；查询耗时 <b>0.22 秒</b>（LERF* 要 40.27 秒）；显存 <b>6 GB</b>（LERF 要 15 GB）。</p>
+        </div>
+        <div class="mini-card">
+          <b>抓取成功率</b>
+          <p><b>85.0%</b>。对照：LSeg+AnyGrasp 只有 26.7%、LERF+AnyGrasp 55.8%；<b>去掉法向滤波之后掉到 78.3%</b>——这一条直接说明「法向」那一步是有用的，不是装饰。</p>
+        </div>
+        <div class="mini-card">
+          <b>场景更新</b>
+          <p>抓走一个物体之后，要把场景改过来。<b>LERF：16 视角 / 15 GB / 30 分钟；本方法：5 视角 / 4 GB / 1 分钟。</b>显式表示的好处在这里体现得很直接——<b>搬点就行。</b></p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GaussianGrasper__3D_Language_Gaussian_Splatting_for_Open/f0f2f69e41154797a3209a15e1222dc0c4151571400276ae305d08a11c856cf8.jpg" alt="GaussianGrasper Fig.2 architecture: pipeline, EFD, normal-guided grasp">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The architecture of our proposed method. (a) Is our proposed pipeline where we scan multi-view RGBD images for initialization and reconstruct 3D Gaussian field via feature distillation and geometry reconstruction. Subsequently, given a language instruction, we locate the target object via open-vocabulary querying. Grasp pose candidates for grasping the target object are then generated by a …<br>
+          （中译：本方法的架构。(a) 是整体流程：我们扫描多视角 RGB-D 图像做初始化，通过特征蒸馏与几何重建重建出 3D 高斯场；随后给定一条语言指令，用开放词汇查询定位目标物体；接着由……生成抓取位姿候选。）<br>
+          <b>怎么看这张图：</b>把这张图与上一节 LangSplat 的框架图并排看，差别就很清楚。<b>LangSplat 的流程到「相关度图」就结束了；这张图在相关度图之后还有一大段。</b>① 前半段（输入 RGB-D → 高斯场 → 语言查询定位）和 LangSplat 思路同源，但输入是 <b>RGB-D</b>，多了真值深度可用；② 后半段是它独有的：<b>抓取候选生成 → 用法向筛掉不可行的 → 执行抓取 → 抓完更新场景</b>；③ 中间那个 EFD 模块，就是把「语言特征怎么省着学」这件事单独画出来。<br>
+          <b>要记住的一句话：</b>这一篇真正加进去的不是「语言」，而是<b>「语言之后的那个动作」</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GaussianGrasper__3D_Language_Gaussian_Splatting_for_Open/fff90986cd52fff3b3040c6f84f652d5dbea7909f1b14623fe4e7bc188b2541b.jpg" alt="GaussianGrasper Fig.5 normal-guided grasp filters infeasible poses">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Effectiveness of our proposed normal-guided grasp. The left column shows the top 5 grasp pose candidates and the color bar which represents the grasping score. The middle column displays the surface normal of the object, with purple arrows indicating the normal of the contact points. The right column shows the successful execution of grasping the knife utilizing the selected final grasp po…<br>
+          （中译：法向导抓的有效性。左列是排名前 5 的抓取位姿候选与表示抓取得分的色条；中列是物体的表面法向，紫色箭头标出接触点处的法向；右列是用选定的最终抓取位姿成功抓起刀的过程。）<br>
+          <b>怎么看这张图：</b>这张图回答的是「法向到底有什么用」。① 看左列的<b>五个候选夹爪</b>——它们是通用的抓取检测器给出的，只考虑「能不能夹住」，不管这块表面朝哪儿；② 看中列的<b>紫色法向箭头</b>——接触点上的表面朝向；③ 如果两个接触点的法向跟抓取线夹角太大，<b>夹爪实际会打滑或撞上物体</b>，所以这一步把它们剔掉；④ 右列就是筛完之后真正抓起来的结果。<br>
+          <b>要记住的一句话：</b>这一条也解释了为什么它的成功率能从 78.3% 提到 85.0%——<b>加的不是「更聪明的抓取检测器」，而是「多看了一眼表面朝向」</b>。
+        </figcaption>
+      </figure>
+
+      <p>原文 §V 也老老实实写了局限，两条：<b>① 透明与高反光物体的几何无法高质量重建</b>（这和 0015 课「感知 / SLAM」那一格说的「高反光/半透明物体建模有限」是同一件事）；<b>② 杂乱场景中严重遮挡的物体</b>，特征场与几何都补不完整。</p>
+    </section>
+
+    <section class="section-card" id="team">
+      <h2>6. ★ 两篇不是同一个团队，只是「引用关系」</h2>
+
+      <p>这一节很短，但必须单独写，因为这是一个很容易传错的点。</p>
+
+      <p>有一种很自然的猜想是：<b>LangSplat 先做出来，然后同一个团队把它推进到机器人抓取，于是有了 GaussianGrasper。</b>这个猜想在叙事上很顺，但<b>它是错的</b>。</p>
+
+      <div class="callout">
+        <h4>事实核对</h4>
+        <p><b>LangSplat</b> 的作者是 Qin、Li、Zhou、Wang、Pfister 等，来自<b>清华与哈佛</b>（CVPR 2024）。</p>
+        <p><b>GaussianGrasper</b> 的作者是 Zheng、Chen、……、Long、Wang 等（通讯作者为 Xiaoxiao Long、Meiqing Wang），<b>机构不同</b>（IEEE RA-L 2024）。</p>
+        <p>两者之间的关系只有一条：<b>GaussianGrasper 在参考文献里引用了 LangSplat（编号 [40]）。</b>也就是说，这是<b>另一支独立团队看到前面的工作之后做的后续与借鉴</b>，不是同一个课题组的延续。</p>
+      </div>
+
+      <p>为什么这件事值得单独讲？因为「同一团队的后续工作」和「别人借鉴之后做的新工作」在技术判断上差别很大：</p>
+
+      <ul>
+        <li>如果是同一团队，那么相似的设计（比如都用低维潜码 + 解码器）很可能来自<b>同一套内部代码与经验的直接复用</b>；</li>
+        <li>既然不是，那么这种相似更说明<b>这个设计思路在 2024 年已经成了这一方向的共识</b>——「显式的高斯挂低维语言潜码」变成了大家共同的做法，而不是某一家的独门技巧。</li>
+      </ul>
+
+      <p>顺便把两者的差异也一次说清，避免把它们当成「同一件事的两个版本」：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">对比项</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">LangSplat</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">GaussianGrasper</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>输入</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">RGB 多视角（无深度真值）</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>RGB-D</b>，少视角（16 视角；更新时 5 视角）</td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>几何监督</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>未提及</b>（没有深度/法向监督）</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">有：深度 L1 + 法向余弦损失，用深度相机真值监督</td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>输出到哪一步</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">开放词汇 3D 定位 / 分割的相关度图</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">定位 <b>+ 抓取位姿 + 抓取后的场景更新</b></td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>验证方式</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">公开数据集上的定量指标</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>真机</b>：UR5 上 120 次操作，85% 成功率</td></tr>
+          <tr><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>原文承认的短板</b></td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>正文未设 Limitations 小节</b>（行文止于结论，只强调速度与精度优势）</td><td style="padding:.5rem .7rem;border:1px solid #e0d5c8">透明/高反光物体几何差；严重遮挡物体重建不全</td></tr>
+        </tbody>
+      </table>
+
+      <p>最后那句「LangSplat 正文未设 Limitations 小节」也要如实说：这不是我漏读，而是原文确实没有这一节。所以下表里 LangSplat 一行能填的只有「未提及」——<b>它的薄弱处（依赖 SAM 分割质量、3 维压缩可能丢细节、仍要先训一个完整 3DGS 作底）属于我们根据方法做的推断，不是原文自评。</b></p>
+    </section>
+
+    <section class="section-card" id="compare">
+      <h2>7. 横向对比与线索收束</h2>
+
+      <p>把这一节的两篇，连同前面几站一起排开，看得更清楚：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">论文</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">给高斯加了什么</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">解决哪个老问题</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">输出什么</th>
+            <th style="padding:.5rem .7rem;border:1px solid #e0d5c8">原文承认短板</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>LangSplat</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">每个高斯 3 个层级的语言嵌入（自编码器压到 3 维）</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">NeRF 语言场慢且边界模糊；显式 vs 隐式在语义上的重演</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">开放词汇 3D 定位 / 分割的相关度图</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">未设 Limitations 小节（未提及）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8"><b>GaussianGrasper</b></td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">每高斯低维语言特征 + 渲染深度 / 法向</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">语言场慢、边界模糊、需多视角；显存要压到机器人能带</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">语言定位 + 稳定抓取位姿 + 场景更新</td>
+            <td style="padding:.5rem .7rem;border:1px solid #e0d5c8">透明/高反光几何差；严重遮挡物体重建不全</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>然后是本节最想说的一句话：<b>「给地图挂语义」这条线，从 0011 走到 0123，最大的变化不是「语义更准了」，而是「语义的种类从一个封闭集合变成了一个开放空间」。</b></p>
+
+      <div class="callout">
+        <h4>我们的判断（教学判断，非原文自评）</h4>
+        <p><b>LangSplat 是这一节里真正新颖的那一篇。</b>它的核心贡献可以压成一句话：<b>用 SAM 的三层分割解决 CLIP 的点歧义，再用显式高斯把语言场做快。</b>这两个动作都不是它发明的（SAM、CLIP、3DGS 都是现成的），但把它们拼成「可以被一句话查询的 3D 地图」，这一步是它先做的。</p>
+        <p><b>GaussianGrasper 更像一次「工程落地 + 必要补充」。</b>语言特征那一半是借鉴；它自己加的是几何监督、法向导抓和场景更新。它的价值不在于提出了新表示，而在于<b>证明这条路线真的能让一台机械臂把东西抓起来</b>——85% 的真机成功率比任何渲染图都有说服力。</p>
+        <p><b>两篇都没解决的问题也一样明显：</b>都严重依赖 SAM 的分割质量（分割错了，语言特征就污染了）；都把特征压到很低维（省显存，但可能丢细节）；都建立在一个已经训好的 3DGS 之上。<b>「语言进地图」这件事才刚刚开头。</b></p>
+      </div>
+
+      <p>下一节我们换一个方向：不再问「地图里挂什么」，而问「<b>能不能不要针对每个场景优化一遍</b>」。那是 GPS-Gaussian 与 Animatable Gaussians 要回答的问题。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请解释 LangSplat 为什么需要 SAM 的三层分割。如果没有 SAM，直接把整张图喂给 CLIP 会出什么问题？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>问题出在 CLIP 的性质上：<b>它是「对齐整张图」的，不是「对齐到像素」的。</b>原文把这个毛病叫 <b>点歧义（point ambiguity）</b>。</p>
+              <p>举一个具体例子：你有一张猫的照片。把整张图喂给 CLIP，它给你<b>一个</b>向量，这个向量描述的是「这是一只猫」。可是如果你现在想问「猫耳朵在哪」，这个向量就说不清了——它把耳朵、头、整只猫混在了一个位置。同一个 3D 点，究竟该对「耳朵」的查询响应，还是对「猫」的查询响应？</p>
+              <p>LangSplat 的解法是<b>先用 SAM 把图像按不同粗细切成一块块掩码</b>（whole / part / subpart 三层），再<b>把每一块掩码单独抠出来</b>送进 CLIP。这样得到的向量就是 pixel-aligned 的了：一个像素的语言特征来自「它属于哪块掩码」，而不是「附近特征插值出来的平均」。</p>
+              <p>效果也可以量化：原文的消融显示，<b>引入 SAM 之后 IoU 提升了约 18.5 个点</b>。而视觉上最直观的证据就是 Fig. 1——LERF 的语义边界是糊的，LangSplat 的边界是紧的。</p>
+              <p>代价也要记住：<b>它把整条流水线的质量绑在了 SAM 身上。</b>SAM 漏分或错分，语言特征就被污染了。</p>
+            </div></details>
+          </li>
+          <li>LangSplat 给每个高斯挂三个层级的语言特征，而不是一个。请说明这三层分别是什么，以及查询时怎么用它们。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>三层是 <b>subpart / part / whole</b>——<b>子部件、部件、整体</b>，来自 SAM 按不同粒度给出的分割掩码。对应到公式里就是每个高斯存 $\{f^s, f^p, f^w\}$ 三串向量。</p>
+              <p>查询时，把查询句编码成向量，然后<b>对三个层级分别渲染一张相关度图</b>（渲染语言特征和高斯渲染颜色是同一个 $\alpha$ 混合公式，原文 Eq.4），再按原文 §3.4 的做法<b>取分数最高的那一层</b>作为回答。</p>
+              <p>为什么要这么做？因为不同粗细的问题应该由不同层级来回答：「找个能坐的东西」这种粗问题适合整体层；「椅子在哪」适合部件层；「椅背上有没有挂钩」这种抠细节的问题适合子部件层。三层一起摆着，就避免了「所有问题都去挤同一张图」。</p>
+              <p><b>一处必须纠正</b>：很多二手材料把这三层写成 scene / object / part（场景 / 物体 / 部件）。<b>原文并没有一个独立的「场景」层</b>——层级定义来自 SAM 的 whole / part / subpart，最粗也就到「整只物体」。本节的示意图里最外层那个「整间房间」的框是为了让你理解层次感而补的示意，请以 subpart / part / whole 为准。</p>
+            </div></details>
+          </li>
+          <li>关于「199× 更快」这个数字，请说出它的三个限定条件。为什么分辨率越高，这个倍数越可能大？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>三个限定条件</b>（都能在原文 Fig. 1 的图注里找到）：① 比的对象是 <b>LERF</b>，也就是把 CLIP 蒸馏进 NeRF 的那条隐式路线，不是跟别的比；② 比的是<b>渲染 / 查询速度</b>，不包括训练；③ 前提是<b>在 1440×1080 分辨率下</b>。</p>
+              <p><b>为什么分辨率越高，显式越占便宜</b>：NeRF 那条路要沿每条光线做体积渲染——<b>光线数量随像素数线性增长，每条光线还要采样很多次、每次都跑网络</b>。像素翻倍，成本大约跟着翻倍甚至更多。而高斯走的是光栅化：<b>把椭球投到屏幕上按顺序叠一叠</b>，成本主要跟「覆盖到屏幕上的高斯数量」有关，跟总像素数的关系弱得多。</p>
+              <p>所以分辨率越高，体积渲染那边越吃力，光栅化这边的相对优势就越大。这也正是第一季 <b>0015</b> 课「显式 vs 隐式」那对矛盾在语义表示上的重演。</p>
+            </div></details>
+          </li>
+          <li>GaussianGrasper 把抓取成功率从 78.3%（去掉法向滤波）提到 85.0%。请解释「法向滤波」这一步在做什么，以及它为什么有用。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>它在做什么</b>：通用的抓取位姿检测器（本文用 AnyGrasp）会给你一堆候选夹爪位姿，它关心的是「这个位置夹得住吗」，<b>但不关心「这块表面朝哪边」</b>。GaussianGrasper 的做法是：每个候选抓取有两个接触点，<b>把这两个接触点处的表面法向与抓取线算夹角，两个夹角之和超过阈值 $\theta_{\text{thr}}$ 就把这个候选剔掉</b>。</p>
+              <p><b>为什么有用</b>：想象你要夹起一把刀柄。如果选的接触点法向几乎平行于夹爪的闭合方向（也就是说，你是在「顺着表面推」而不是「对着表面夹」），那实际执行时很容易打滑或者撞上物体。夹爪要稳，接触点的表面最好<b>正对着夹爪的闭合方向</b>。法向就是从几何上判断这件事的量。</p>
+              <p><b>数字上的证据</b>：原文 Table II 显示，去掉法向滤波后成功率从 <b>85.0% 掉到 78.3%</b>；而单靠语言定位 + 通用抓取检测器（LERF+AnyGrasp）只有 55.8%。这说明它加进去的不是「更聪明的抓取检测器」，而是<b>「多看了一眼表面朝向」</b>。</p>
+              <p><b>还有一层关联</b>：这一步能用，前提是高斯场能渲染出<b>靠谱的法向</b>。而它的法向来自「高斯的最短轴方向」，并且用深度相机的 Sobel 梯度做了真值监督——所以这一步实际上是把 <b>RGB-D 的几何信息</b>接进了语言高斯场里。这也是 LangSplat（纯 RGB、无几何监督）做不到的。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0122-SuGaR与GS-IR-表面对齐与逆渲染.html">← SuGaR 与 GS-IR：表面对齐与逆渲染</a>
+        <a class="next" href="0124-GPS-Gaussian与Animatable-Gaussians-前馈泛化与可驱动人体.html">GPS-Gaussian 与 Animatable Gaussians：前馈泛化与可驱动人体 →</a>
+      </div>
+      <p class="foot-note">这一节有一个特别容易传错的点：两篇论文不是同一个团队。查一下作者单位，比记结论更重要 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

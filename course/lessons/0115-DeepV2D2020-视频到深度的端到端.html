@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视频到深度的端到端 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0115</div>
+      <h1>视频到深度的端到端</h1>
+      <p class="subtitle">把经典几何做成可微积木，DeepV2D 证明 SfM 能「整条链子一起训」 🧱</p>
+      <div class="hero-meta">
+        <span>🎯 主题：可微 Structure-from-Motion / 视频深度估计</span>
+        <span>👥 作者：DeepV2D 团队（Teed & Deng）</span>
+        <span>📅 2020 · <i>DeepV2D: Video to Depth with Differentiable Structure from Motion</i></span>
+      </div>
+      <div class="toc">
+        <a href="#problem">1. 深度从哪来</a>
+        <a href="#revisit">2. 传统 SfM 怎么走</a>
+        <a href="#diff">3. 可微 SfM 是什么</a>
+        <a href="#blocks">4. 两块可微积木</a>
+        <a href="#why">5. 为何可微关键</a>
+        <a href="#exp">6. 实验与泛化</a>
+        <a href="#bridge">7. 技术祖先</a>
+        <a href="#close">8. 回到六个环节</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="problem">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：讲清「<b>Differentiable Structure from Motion</b>」具体指什么——SfM 的哪几部分被做成了可微的（可微 BA？可微立体匹配？请按原文如实说）；用「传统流水 vs 端到端」两张自绘图说明「可微 = 整条链子能被一起训」；并把它定位成上一节 <b>DytanVO</b> 等学习式方法的「技术祖先」。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它的方法论根系在第五季 <b>0100 / 0102</b>（可微重建、端到端）。收束处回到第一季 <b>0011</b> 课「六个不成熟环节」里的「可微 / 端到端不成熟」——2020 的 DeepV2D 已经把可微 SfM 跑通，说明这一环相对成熟了。本季内部它还是上一节 <b>0114</b> 中 DytanVO 的底层工具。</p>
+        </div>
+      </div>
+
+      <h2>1. 先问一个生活问题：一张视频怎么「量」出深度</h2>
+
+      <p>想象你举着手机拍一段走路的视频。人类一眼就知道「前面那张桌子离我一米半」，但计算机拿到的是一串平面像素——它怎么知道桌子离多远？这就引出了 SLAM / 三维视觉里一个老问题：<b>Structure from Motion（SfM，运动恢复结构）</b>。名字很学术，意思其实朴素：从「相机运动时的多张照片」里，同时把「相机在哪」和「东西离多远」一起算出来。</p>
+
+      <p>传统做法是一串手工拼起来的几何步骤；而 2020 年的 DeepV2D 想换一种思路——把这些几何步骤<b>直接塞进一个神经网络里，让整条链路可以端到端训练</b>。这一节我们就拆开看它到底「可微」了什么，以及为什么这件事值得专门写一篇论文。</p>
+
+      <div class="callout">
+        <h4>先记住一句话</h4>
+        <p>DeepV2D 不是「又一个纯黑箱 CNN 深度网络」，而是「<b>把经典几何算法做成了可微积木，再拼成一个可训练网络</b>」。它既保留了几何归纳偏置，又能从数据里学习。这正是它泛化好的根源。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="revisit">
+      <h2>2. 回顾：传统 SfM 是怎么「分步走」的</h2>
+
+      <p>在讲「可微」之前，得先知道传统 SfM 是怎么干的。它通常是一串<b>离散的、各管各的步骤</b>：</p>
+
+      <ol>
+        <li><b>提特征</b>：在每张图上找出角点、斑点这类可跟踪的点。</li>
+        <li><b>做匹配</b>：判断「左图的第 5 个点和右图的第几号点是同一个世界点」——常用「最近邻」挑最像的那一个。</li>
+        <li><b>估位姿</b>：用对极几何 / PnP 等算相机在哪、朝哪；经常要 <b>RANSAC</b> 反复随机抽样、挑出「内点」丢掉「外点」。</li>
+        <li><b>三角化</b>：用两条视线反推三维点的位置，里面常涉及 SVD 矩阵分解。</li>
+        <li><b>BA（Bundle Adjustment，光束法平差）</b>：把「重投影误差」整体最小化，微调所有相机位姿和三维点。</li>
+      </ol>
+
+      <p>问题来了：这一串步骤里，至少有三处是<b>「离散决策」或「调用现成求解器」</b>——RANSAC 选内点是「挑 / 不挑」的硬决策；最近邻匹配是「取 argmin」的不可微操作；BA / SVD 是直接调一个迭代求解器拿结果。这些步骤对「导数」是封闭的：你算出了结果，却<b>没法把最终误差的梯度顺着它们一路反传回最前面的参数</b>。换句话说，传统流程里「学习」只能发生在某个子模块里，整条链不能一起被数据调优。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 925 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">把 SfM 塞进网络：传统流水 vs 端到端</text>
+
+          <!-- 左：传统 SfM -->
+          <rect x="40" y="50" width="400" height="345" rx="10" fill="#fbf3f2" stroke="#e0b4ad" stroke-width="1.4"/>
+          <text x="240" y="74" text-anchor="middle" font-size="14" font-weight="700" fill="#c0392b">传统 SfM（步骤串起来，但不可微）</text>
+
+          <rect x="95" y="92" width="180" height="42" rx="8" fill="#ffffff" stroke="#b9c4cf" stroke-width="1.3"/>
+          <text x="185" y="118" text-anchor="middle" font-size="13" fill="#3a3a3a">特征提取</text>
+
+          <rect x="95" y="158" width="180" height="42" rx="8" fill="#ffffff" stroke="#b9c4cf" stroke-width="1.3"/>
+          <text x="185" y="184" text-anchor="middle" font-size="13" fill="#3a3a3a">匹配 / RANSAC</text>
+
+          <rect x="95" y="224" width="180" height="42" rx="8" fill="#ffffff" stroke="#b9c4cf" stroke-width="1.3"/>
+          <text x="185" y="250" text-anchor="middle" font-size="13" fill="#3a3a3a">三角化 / BA</text>
+
+          <rect x="95" y="290" width="180" height="42" rx="8" fill="#ffffff" stroke="#b9c4cf" stroke-width="1.3"/>
+          <text x="185" y="316" text-anchor="middle" font-size="13" fill="#3a3a3a">深度图 + 位姿</text>
+
+          <!-- 箭头 -->
+          <line x1="185" y1="134" x2="185" y2="156" stroke="#7a8794" stroke-width="2"/>
+          <line x1="185" y1="200" x2="185" y2="222" stroke="#7a8794" stroke-width="2"/>
+          <line x1="185" y1="266" x2="185" y2="288" stroke="#7a8794" stroke-width="2"/>
+          <!-- 剪刀：不可微断点 -->
+          <circle cx="300" cy="145" r="13" fill="#e74c3c"/>
+          <text x="300" y="150" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">✂</text>
+          <circle cx="300" cy="211" r="13" fill="#e74c3c"/>
+          <text x="300" y="216" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">✂</text>
+          <circle cx="300" cy="277" r="13" fill="#e74c3c"/>
+          <text x="300" y="282" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">✂</text>
+
+          <text x="240" y="365" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c0392b">误差无法反传回最前面</text>
+
+          <!-- 右：端到端 -->
+          <rect x="470" y="50" width="400" height="345" rx="10" fill="#eef7f0" stroke="#a9d8b8" stroke-width="1.4"/>
+          <text x="670" y="74" text-anchor="middle" font-size="14" font-weight="700" fill="#1f7a45">DeepV2D 端到端（可微积木组合）</text>
+
+          <rect x="525" y="92" width="200" height="42" rx="8" fill="#ffffff" stroke="#9cc7ac" stroke-width="1.3"/>
+          <text x="625" y="118" text-anchor="middle" font-size="13" fill="#3a3a3a">输入视频帧</text>
+
+          <rect x="510" y="158" width="320" height="92" rx="10" fill="#d8efdf" stroke="#1f7a45" stroke-width="1.6"/>
+          <text x="670" y="192" text-anchor="middle" font-size="13.5" font-weight="700" fill="#14532d">一个可微网络</text>
+          <text x="670" y="216" text-anchor="middle" font-size="12" fill="#1f5c39">Motion 模块 + Depth 模块</text>
+          <text x="670" y="236" text-anchor="middle" font-size="11.5" fill="#1f5c39">（几何算法做成了可微积木）</text>
+
+          <rect x="525" y="290" width="200" height="42" rx="8" fill="#ffffff" stroke="#9cc7ac" stroke-width="1.3"/>
+          <text x="625" y="316" text-anchor="middle" font-size="13" fill="#3a3a3a">深度图 + 位姿</text>
+
+          <line x1="625" y1="134" x2="625" y2="156" stroke="#7a8794" stroke-width="2"/>
+          <line x1="625" y1="250" x2="625" y2="288" stroke="#7a8794" stroke-width="2"/>
+          <!-- 绿色反传箭头：从输出贯穿回输入 -->
+          <line x1="850" y1="300" x2="850" y2="110" stroke="#1f7a45" stroke-width="2.6" marker-end="url(#ah)"/>
+          <text x="858" y="205" font-size="11.5" font-weight="700" fill="#1f7a45">误差反传</text>
+
+          <text x="670" y="365" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1f7a45">可微 = 整条链子能被一起训</text>
+
+          <defs>
+            <marker id="ah" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+              <path d="M0,0 L10,5 L0,10 z" fill="#1f7a45"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是传统 SfM 的「步骤串」——每一步之间有一把红剪刀（✂）表示「断点」，梯度传不过去；右边是 DeepV2D，把几何包进一个可微网络，一根绿色箭头把误差从输出一路反传到输入。<br>
+          <b>怎么看这张图：</b>① 左边的红 ✂ 是「离散决策 / 现成求解器」的隐喻，它们让误差<b>无法反传</b>；② 右边的绿箭头是关键——因为每一步都可微，误差能<b>连续地</b>流回最前面的参数；③ 底部那句话就是本节的题眼。<br>
+          <b>要记住的一句话：</b>「可微 = 整条链子能被一起训」，这是 DeepV2D 给后续所有学习式方法铺好的路。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="diff">
+      <h2>3. ★ "Differentiable Structure from Motion" 到底指什么</h2>
+
+      <p>论文标题里的 <b>Differentiable Structure from Motion</b> 听起来玄乎，但原文的意思非常具体，而且<b>必须按原文如实写，不能猜</b>。它指的是：把 SfM 里两个核心子问题——<b>运动估计（Motion）</b>和<b>深度估计（Depth）</b>——各自做成一个<b>可微模块</b>，再拼进一个端到端可训练的网络。具体哪两件事被做成了可微？</p>
+
+      <div class="summary-grid grid-2">
+        <div class="mini-card">
+          <h4>① Motion Module = 可微的 BA</h4>
+          <p>位姿更新被写成一个「最小二乘优化」，并用<b>单次可微 Gauss-Newton（GN）步</b>求位姿增量。注意原文是「single differentiable Gauss-Newton optimization step」——<b>是一次 GN 步的近似，不是反复迭代到收敛的完整 BA</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② Depth Module = 可微立体匹配</h4>
+          <p>多帧之间的深度估计被写成「可微的立体匹配」：把 2D 特征反投影成 <b>cost volume（代价体）</b>，用 3D hourglass 网络做特征匹配，最后用<b>可微的 arg-max</b> 取出深度。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>★ 如实澄清：可微的是「BA」与「立体匹配」，不是「三角化」</h4>
+        <p>精读材料明确点出：DeepV2D 把 SfM 的<b>可微 BA（单次 GN 步）+ 可微立体匹配</b>这两块做成了可微积木。它<b>没有</b>单独宣称「把三角化做成了可微」——深度来自可微立体匹配，位姿来自可微 BA。写课时不要张冠李戴成「可微三角化」。</p>
+      </div>
+
+      <p>所以「Differentiable SfM」的准确含义是：<b>SfM 的两个支柱（算运动、算深度）都被换成了可微操作，使整条视频到深度的链路能用梯度下降一起训练</b>。下面我们把这两块积木拆开看。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{视频帧} \;\to\; \underbrace{\text{Motion 模块}}_{\text{可微 BA（单次 GN 步）}} \;+\; \underbrace{\text{Depth 模块}}_{\text{可微立体匹配}} \;\to\; \text{每帧深度图} + \text{帧间位姿}$$</div>
+      </div>
+    </section>
+
+    <section class="section-card" id="blocks">
+      <h2>4. 两块可微积木：Motion Module 与 Depth Module</h2>
+
+      <p>原文把「视频到深度」拆成两个子问题，分别交给两个模块。我们来看它们各自长什么样、为什么「可微」。</p>
+
+      <h3>4.1 Depth Module：多帧立体匹配，用 cost volume 当桥梁</h3>
+
+      <p>深度怎么从多帧里来？传统立体匹配的思路是：同一场景的不同视角看同一个点，会有「视差」，视差越大离得越近。DeepV2D 把这个思路可微化——先把每张图的 2D 特征<b>反投影</b>成一摞「代价体（cost volume）」，再用 3D hourglass 网络在这些体里做特征匹配，最后用<b>可微的 arg-max</b> 把深度「舀」出来。整条路径都是可微的，所以深度误差能反传回前面的特征网络。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepV2D/494e7c8bd96d70372a914eff05e746409e3a6f102dbc7bfa82df4915c7f41bc2.jpg" alt="DeepV2D Depth Module">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The Depth Module performs stereo matching over multiple frames to estimate depth. First each image is fed through a network to extract a dense feature map. The 2D features are backprojected into a set of cost volumes. The cost volumes are processed by a set of 3D hourglass networks to perform feature matching. The final cost volume is processed by the differentiable arg-max operator to ...（原文 caption 较长，此处为开头部分）<br>
+          <b>怎么看这张图：</b>① 左边是「逐帧提特征」；② 中间把 2D 特征「反投影」成一摞立体的 cost volume；③ 3D hourglass 在这些体里做匹配；④ 末端的「differentiable arg-max」就是那把「软勺子」——它可微，所以深度误差能一路反传。盯着「backproject → cost volume → hourglass → differentiable argmax」这条从左到右的流水线看。
+        </figcaption>
+      </figure>
+
+      <h3>4.2 Motion Module：单次可微 GN 步求位姿增量</h3>
+
+      <p>位姿怎么来？Motion Module 先预测相邻帧之间的「残差流（residual flow）」，用它定义优化目标，然后解一个最小二乘问题来更新位姿。<b>关键点</b>：位姿增量 $\bar{\xi}$ 是由<b>一次可微 Gauss-Newton 步</b>得到的——也就是说，这一步本身是「反向传播穿过了优化器」，是 DeepV2D 里最反直觉、也最需要具象理解的地方。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepV2D/f63d8beae03795b0a7588eccd91236c8cf3588ea8cbc0376524296c770fc6601.jpg" alt="DeepV2D Motion Module">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The Motion Module updates the input pose estimates by solving a least squares optimization problem. The motion module predicts the residual flow between pairs of frames, and uses the residual terms to define the optimization objective. Pose increments $\bar{\xi}$ are found by performing a single differentiable Gauss-Newton optimization step.<br>
+          <b>怎么看这张图：</b>① 上半部分是「预测残差流」；② 下半部分是「用残差流定义最小二乘目标 → 单次可微 GN 步求位姿增量 $\bar{\xi}$」；③ 记住：是「一次 GN 步」，是近似，不是完整 BA 反复迭代到收敛。这正是它和「完整 BA」的区别，也是原文承认的局限之一。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>★ 抽象点：为什么「反向传播穿过优化器」反直觉</h4>
+        <p>通常我们以为「优化 / 求解」是个「黑盒输出结果」的动作，导数进不去。但 GN 步本质是一串矩阵运算（算雅可比、解线性方程），这些运算<b>本身可微</b>。所以 DeepV2D 把「解一步优化」直接写进计算图——误差能穿过这一步继续往前传。这就是为什么它叫 differentible SfM。</p>
+      </div>
+
+      <h3>4.3 整体架构：Encoder + Residual Flow 网络</h3>
+
+      <p>Motion Module 内部还有具体结构：Encoder 给每张输入图提一份 1/4 分辨率的稠密特征图，Residual Flow Network 吃一对特征图，估出残差流和对应权重。这套结构把「位姿更新」彻底落进了网络里。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepV2D/15d2a9fef51d6cfa218a20c0e389d2d8384bb2ee688e8fb50f961679d4380ca2.jpg" alt="DeepV2D Motion Module Architecture">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>Motion Module Architecture: The Encoder (left) extracts a dense 1/4 resolution feature map for each of the input images. The Residual Flow Network (right) takes in a pair of feature maps and estimates the residual flow and corresponding weights. This residual flow is estimated with an encoder-decoder network, with skip connections formed by concatenating feature maps.<br>
+          <b>怎么看这张图：</b>① 左边 Encoder 把每张图变成低分辨率但稠密的特征图；② 右边 Residual Flow Network 拿「一对特征图」进去，输出残差流和权重；③ skip connection（跳跃连接）用拼接特征实现。这张图是 Fig.3 那「单次 GN 步」落地的工程细节。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="why">
+      <h2>5. 为什么「可微」这么关键（两张自绘图）</h2>
+
+      <p>前面那张封面图讲了「能一起训」，这一节再补一张图，专门回答：<b>为什么传统流程里这些步骤会「阻断梯度」？</b> 答案就在那些「离散决策」和「现成求解器」上。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 485" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">为什么可微这么关键：梯度能不能一路反传？</text>
+
+          <!-- 左列标题 -->
+          <text x="225" y="58" text-anchor="middle" font-size="13.5" font-weight="700" fill="#c0392b">传统离散步骤（梯度被掐断）</text>
+          <!-- 右列标题 -->
+          <text x="675" y="58" text-anchor="middle" font-size="13.5" font-weight="700" fill="#1f7a45">DeepV2D 可微版本（梯度畅通）</text>
+
+          <!-- 左箭头 -->
+          <line x1="225" y1="92" x2="225" y2="402" stroke="#c0392b" stroke-width="2.4" marker-end="url(#al)"/>
+          <text x="52" y="250" font-size="11" font-weight="700" fill="#c0392b" transform="rotate(-90 52 250)">误差反传</text>
+          <!-- 右箭头 -->
+          <line x1="675" y1="92" x2="675" y2="402" stroke="#1f7a45" stroke-width="2.4" marker-end="url(#ag)"/>
+          <text x="500" y="250" font-size="11" font-weight="700" fill="#1f7a45" transform="rotate(-90 500 250)">误差反传</text>
+
+          <!-- 左四个闸门 -->
+          <g>
+            <rect x="70" y="104" width="200" height="48" rx="8" fill="#fbeaea" stroke="#e0a8a0" stroke-width="1.3"/>
+            <text x="170" y="124" text-anchor="middle" font-size="12" fill="#7a2e25">RANSAC 选内点</text>
+            <text x="170" y="142" text-anchor="middle" font-size="10.5" fill="#a04438">（离散决策·阈值切）</text>
+            <text x="300" y="133" text-anchor="middle" font-size="16" font-weight="700" fill="#c0392b">✕</text>
+            <text x="332" y="133" font-size="10" fill="#c0392b">阻断</text>
+
+            <rect x="70" y="180" width="200" height="48" rx="8" fill="#fbeaea" stroke="#e0a8a0" stroke-width="1.3"/>
+            <text x="170" y="200" text-anchor="middle" font-size="12" fill="#7a2e25">最近邻匹配</text>
+            <text x="170" y="218" text-anchor="middle" font-size="10.5" fill="#a04438">（argmin 不可微）</text>
+            <text x="300" y="209" text-anchor="middle" font-size="16" font-weight="700" fill="#c0392b">✕</text>
+            <text x="332" y="209" font-size="10" fill="#c0392b">阻断</text>
+
+            <rect x="70" y="256" width="200" height="48" rx="8" fill="#fbeaea" stroke="#e0a8a0" stroke-width="1.3"/>
+            <text x="170" y="276" text-anchor="middle" font-size="12" fill="#7a2e25">三角化 SVD</text>
+            <text x="170" y="294" text-anchor="middle" font-size="10.5" fill="#a04438">（矩阵分解求解）</text>
+            <text x="300" y="285" text-anchor="middle" font-size="16" font-weight="700" fill="#c0392b">✕</text>
+            <text x="332" y="285" font-size="10" fill="#c0392b">阻断</text>
+
+            <rect x="70" y="332" width="200" height="48" rx="8" fill="#fbeaea" stroke="#e0a8a0" stroke-width="1.3"/>
+            <text x="170" y="352" text-anchor="middle" font-size="12" fill="#7a2e25">BA 迭代求解器</text>
+            <text x="170" y="370" text-anchor="middle" font-size="10.5" fill="#a04438">（调现成求解器）</text>
+            <text x="300" y="361" text-anchor="middle" font-size="16" font-weight="700" fill="#c0392b">✕</text>
+            <text x="332" y="361" font-size="10" fill="#c0392b">阻断</text>
+          </g>
+
+          <!-- 右四个可微版 -->
+          <g>
+            <rect x="520" y="104" width="200" height="48" rx="8" fill="#e8f6ec" stroke="#9cc7ac" stroke-width="1.3"/>
+            <text x="620" y="124" text-anchor="middle" font-size="12" fill="#14532d">可微内点权重</text>
+            <text x="620" y="142" text-anchor="middle" font-size="10.5" fill="#1f7a45">（软加权代替硬切）</text>
+            <text x="750" y="133" text-anchor="middle" font-size="16" font-weight="700" fill="#1f7a45">✓</text>
+            <text x="772" y="133" font-size="10" fill="#1f7a45">通过</text>
+
+            <rect x="520" y="180" width="200" height="48" rx="8" fill="#e8f6ec" stroke="#9cc7ac" stroke-width="1.3"/>
+            <text x="620" y="200" text-anchor="middle" font-size="12" fill="#14532d">可微代价体</text>
+            <text x="620" y="218" text-anchor="middle" font-size="10.5" fill="#1f7a45">（cost volume 匹配）</text>
+            <text x="750" y="209" text-anchor="middle" font-size="16" font-weight="700" fill="#1f7a45">✓</text>
+            <text x="772" y="209" font-size="10" fill="#1f7a45">通过</text>
+
+            <rect x="520" y="256" width="200" height="48" rx="8" fill="#e8f6ec" stroke="#9cc7ac" stroke-width="1.3"/>
+            <text x="620" y="276" text-anchor="middle" font-size="12" fill="#14532d">可微几何投影</text>
+            <text x="620" y="294" text-anchor="middle" font-size="10.5" fill="#1f7a45">（投影可微化）</text>
+            <text x="750" y="285" text-anchor="middle" font-size="16" font-weight="700" fill="#1f7a45">✓</text>
+            <text x="772" y="285" font-size="10" fill="#1f7a45">通过</text>
+
+            <rect x="520" y="332" width="200" height="48" rx="8" fill="#e8f6ec" stroke="#9cc7ac" stroke-width="1.3"/>
+            <text x="620" y="352" text-anchor="middle" font-size="12" fill="#14532d">单次可微 GN 步</text>
+            <text x="620" y="370" text-anchor="middle" font-size="10.5" fill="#1f7a45">（解算写进图里）</text>
+            <text x="750" y="361" text-anchor="middle" font-size="16" font-weight="700" fill="#1f7a45">✓</text>
+            <text x="772" y="361" font-size="10" fill="#1f7a45">通过</text>
+          </g>
+
+          <text x="450" y="438" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b2b2b">传统流程：离散步骤把梯度掐断 → 整条链没法一起训</text>
+          <text x="450" y="458" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1f7a45">DeepV2D：换成可微版本 → 误差一路反传</text>
+
+          <defs>
+            <marker id="al" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+            <marker id="ag" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f7a45"/></marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边一根红箭头代表「误差想反传」，但沿途四道闸门（RANSAC 选内点、最近邻匹配、三角化 SVD、BA 求解器）各有一个红 ✕——它们都是传统流程里「离散决策 / 现成求解器」，会把梯度掐断；右边对应地换成可微版本（软加权、cost volume、可微投影、单次可微 GN 步），每道都是绿 ✓，梯度畅通。<br>
+          <b>怎么看这张图：</b>① 红 ✕ 不是「这些步骤错了」，而是「它们对导数封闭，梯度过不去」；② 绿 ✓ 表示 DeepV2D 用可微操作替代了它们；③ 上下两句蓝 / 绿字就是结论对比。<br>
+          <b>要记住的一句话：</b>「可微」的价值，就是让误差能穿过这些原本掐断梯度的步骤，回到最前面的参数。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断 1</h3>
+        <p>DeepV2D 标题里的「Differentiable SfM」，指的是把 SfM 的哪些部分做成了可微？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。精读材料明确：可微 BA（单次 GN 步）+ 可微立体匹配两块做成了可微积木，没有单独宣称可微三角化。" onclick="lessonKit.answer(this,'q0115a')">BA与立体匹配可微</button>
+          <button data-correct="no" data-explanation="错。它没把特征提取当核心创新点；可微的是 Motion（可微 BA）与 Depth（可微立体匹配）两块，不是特征提取。" onclick="lessonKit.answer(this,'q0115a')">仅特征提取可微</button>
+        </div>
+        <div class="quiz-feedback" id="q0115a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断 2</h3>
+        <p>DeepV2D 是否专门设计了动态物体剔除模块？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。它假设多视图间场景静态（SfM 前提），基本不专门处理动态；动态以异常残差形式出现，但未设计剔除模块。它是方法论基石，不是动态处理方案。" onclick="lessonKit.answer(this,'q0115b')">否，假设场景静态</button>
+          <button data-correct="yes" data-explanation="错。和上一节 DytanVO 不同，DeepV2D 原文没有动态掩码模块；带动态掩码是 DytanVO 这类下游方法加的。" onclick="lessonKit.answer(this,'q0115b')">是，带动态掩码</button>
+        </div>
+        <div class="quiz-feedback" id="q0115b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="exp">
+      <h2>6. 实验：NYU 单数据集训，零样本泛化三大集</h2>
+
+      <p>DeepV2D 的实验设计很能说明它的卖点——<b>泛化</b>。它在 <b>NYU</b> 一个数据集上训练，然后<b>零样本（zero-shot）</b>直接用到 <b>ScanNet</b>、<b>SUN3D</b>（图中标 *）、<b>KITTI</b> 上，不需要为每个数据集重新调。这背后靠的就是「几何归纳偏置」：它学的不是某个数据集的像素统计，而是「多视图几何」这个结构本身。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepV2D/81cc21635e6c079ba3c31bdb4e221a882ddf1a9710c75ca9775f053f1b677ba6.jpg" alt="DeepV2D overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>DeepV2D predicts depth from video. It is the composition of classical geometric algorithms, made differentiable, and combined into an end-to-end trainable network architecture. Video to depth is broken down into the subproblems of motion estimation and depth estimation, which are solved by the Motion Module and Depth Module respectively.<br>
+          <b>怎么看这张图：</b>① 这是整篇的「总览」：左边视频进，右边拆成 Motion 和 Depth 两个模块；② 注意配色与标注——原文用不同颜色区分两个子问题；③ 它直观对应我们第 2 节那张「把 SfM 塞进网络」的自绘图，可对照着看。
+        </figcaption>
+      </figure>
+
+      <p>另一个亮点是<b>收敛快、且对视图数 / 迭代数灵活</b>。下面这张图（Fig.5）显示：少量迭代就收敛；加更多视图精度持续上升；而且可以用「可变数量的视图、可变次数的迭代」去跑，<b>不用重新训练</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DeepV2D/c3be6bf0570f346691897fd2eba4f588c1677a2db42609ca051da2098057e8a3.jpg" alt="DeepV2D iterations and frames">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Impact of the number of iterations (left) and frames (right) on sc-inv validation accuracy. (left) shows that DeepV2D quickly converges within a small number of iterations. In (right) we see that accuracy consistently improves as more views are added. DeepV2D can be applied to variable numbers of views for a variable number of iterations without retraining.<br>
+          <b>怎么看这张图：</b>① 左图横轴是「迭代次数」，曲线很快压平——说明几次迭代就够；② 右图横轴是「加入的视图数」，精度随视图增多稳步上升；③ 关键结论在 caption 末尾：可变视图数 / 迭代数，无需重训。这和传统「为每个设置重训」形成对照。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>★ 实验数字要诚实：原文怎么写就怎么引</h4>
+        <p>精读材料给出的实验结论是：NYU 训练、零样本泛化 ScanNet / SUN3D（标 *）/ KITTI；少量迭代收敛（Fig.5）；优于同期纯 CNN 深度法与无监督法。这些都是原文的泛化结论，<b>不是具体百分比</b>——原文未给出可逐字引用的精确百分比时，课里只复述「优于同期方法」这一判断，不编造数字。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="bridge">
+      <h2>7. 衔接全季：它是后面学习式方法的「技术祖先」</h2>
+
+      <p>把 DeepV2D 放回本季的脉络里，它的位置是<b>「方法论基石」</b>，而不是某篇应用。理解这一点，就能串起上一节的内容：</p>
+
+      <ul>
+        <li><b>接第五季 0100 / 0102（可微重建、端到端）</b>：DeepV2D 是「端到端深度 + 位姿」路线里把可微 SfM 真正跑通的代表。</li>
+        <li><b>是上一节 DytanVO 的「技术祖先」</b>：<b>0114</b> 课里的 DytanVO 是「学习式 VO + 动态掩码」，它站在「可微几何可行」这个已经被 DeepV2D 证明的前提上——DeepV2D 证明了<b>可微几何</b>这条路走得通，DytanVO 才敢在它上面「加动态掩码」。</li>
+        <li><b>和本季隐式地图（NeRF 系）的关系</b>：DeepV2D 输出的是「每帧深度图 + 帧间位姿」，<b>不维护持久地图</b>，和 iMAP / PIN-SLAM 那种「把场景塞进一个函数」的隐式地图不是一回事。但它证明了「经典几何可微化」这一思想，后来被许多隐式 / 学习式 SLAM 借去当底层工具。</li>
+      </ul>
+
+      <div class="callout">
+        <h4>★ 诚实标注：DeepV2D 不是动态处理方案</h4>
+        <p>在「鲁棒性与动态」这一组里，DeepV2D 的价值是「端到端 / 可微」的<b>方法论基石</b>，<b>不是</b>动态处理方案。它假设多视图间场景静态（SfM 前提），动态物体只会以「异常残差」形式出现，原文并未设计动态剔除模块。把它和 DytanVO（带动态掩码）对照，恰好看清「可微几何」与「可微几何 + 动态掩码」的层级关系。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="close">
+      <h2>8. 横向收束：回到第一季 0011 的「六个不成熟环节」</h2>
+
+      <p>把这一组三节课（Orbeez + NeurAR；DytanVO + RoDyn + OVD；以及本节的 DeepV2D）收个尾，最好的落点是<b>第一季 0011 课</b>。0011 曾把深度学习进 SLAM 拆成「六个不成熟环节」，其中一环就是「<b>可微 / 端到端不成熟</b>」。到 2020 年，DeepV2D 已经把可微 SfM 跑通——这说明<b>这一环相对成熟了</b>。</p>
+
+      <p>但「动态」仍然是没闭环的环节：DeepV2D 假设静态，而 <b>0114</b> 的三篇才专门对付动态（掩码 / 权重降权 / 光线过滤）。所以全组的结论是——</p>
+
+      <div class="callout">
+        <h4>★ 我们的判断（非原文自评）</h4>
+        <p>在「隐式 / 学习式碰动态」这条线上，当前最稳的答案集中在「掩码 / 权重 / 光线过滤」三招；而<b>端到端可微是它们的底层工具</b>。DeepV2D 证明了工具本身可行，DytanVO / RoDyn / OVD 则把工具用到了动态场景上。这是判断，不是论文原文的自评，请读者带着自己的标准再评一次。</p>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;margin-top:.6rem;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef2f6;">
+            <th style="padding:8px 10px;border:1px solid #cdd6df;text-align:left;">论文</th>
+            <th style="padding:8px 10px;border:1px solid #cdd6df;text-align:left;">传感器</th>
+            <th style="padding:8px 10px;border:1px solid #cdd6df;text-align:left;">持久地图</th>
+            <th style="padding:8px 10px;border:1px solid #cdd6df;text-align:left;">动态处理</th>
+            <th style="padding:8px 10px;border:1px solid #cdd6df;text-align:left;">需训练</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">DeepV2D</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">单目视频</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">无（深度图+位姿）</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">不专门处理（假设静态）</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">是（NYU）</td>
+          </tr>
+          <tr style="background:#fafbfc;">
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">DytanVO</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">单目/RGB</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">无显式地图</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">掩码加权（见 0114）</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">是</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">RoDyn-SLAM</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">RGB-D</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">隐式（NeRF）</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">光线过滤（见 0114）</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">是</td>
+          </tr>
+          <tr style="background:#fafbfc;">
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">OVD-SLAM</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">RGB-D</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">显式点云</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">权重降权（见 0114）</td>
+            <td style="padding:8px 10px;border:1px solid #e2e8ee;">是（YOLOv5）</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="font-size:.82rem;color:#7a8794;margin-top:.4rem;">注：表中「需训练」指方法核心是否依赖学习权重；动态处理一栏的「见 0114」指对应细节在上一节课展开。这是横向对照，非原文自评。</p>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用自己的话解释「Differentiable Structure from Motion」指什么？它具体把 SfM 的哪两件事做成了可微？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>它指把 SfM 的两个核心子问题——运动估计和深度估计——各自做成一个可微模块，拼进端到端可训练网络。具体两件事是：Motion Module = 可微 BA（用单次可微 Gauss-Newton 步求位姿增量）；Depth Module = 可微立体匹配（cost volume + 可微 arg-max 出深度）。原文没有单独宣称「可微三角化」。</div></details>
+        </li>
+        <li>为什么说传统 SfM 流程里「梯度传不回去」？举出至少两个会阻断梯度的离散步骤。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为传统流程里有多处「离散决策」或「调用现成求解器」：RANSAC 选内点是「挑 / 不挑」的硬决策；最近邻匹配是取 argmin 的不可微操作；三角化里的 SVD 分解、BA 里的迭代求解器都让误差无法连续反传。任一都会掐断梯度，使整条链不能一起训练。</div></details>
+        </li>
+        <li>DeepV2D 的 Motion Module 用的是「完整 BA」还是「单次 GN 步」？这对它意味着什么局限？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>是「单次可微 Gauss-Newton 步」的近似，不是反复迭代到收敛的完整 BA。局限在于：它只是一步近似，位姿更新不如完整 BA 精细；同时整篇依赖多视图静态假设，大动态 / 遮挡下几何残差会失效。</div></details>
+        </li>
+        <li>DeepV2D 在泛化上有什么特点？它靠什么做到「NYU 训、三大集零样本」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>它在 NYU 上训练，零样本直接用到 ScanNet / SUN3D（标 *）/ KITTI。靠的是「几何归纳偏置」：它学的是多视图几何这个结构本身，而非某个数据集的像素统计，所以换数据集也能泛化。另一特点是可用可变视图数 / 迭代数运行而无需重训。</div></details>
+        </li>
+        <li>把 DeepV2D 和上一节（0114）的 DytanVO 摆在一起，它们是什么关系？DeepV2D 算不算「动态处理方案」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>DeepV2D 是「端到端 / 可微」的方法论基石，证明了可微几何可行；DytanVO 是站在它之上的「学习式 VO + 动态掩码」下游。DeepV2D 不算动态处理方案——它假设场景静态（SfM 前提），动态只以异常残差出现，原文未设计动态剔除模块。是基石，不是动态答案。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0114-动态场景三种打法-DytanVO与RoDyn-SLAM与OVD-SLAM.html">← 上一课：动态场景三种打法</a>
+        <a class="next" href="../index.html">课程馆 · 回到本季目录 →</a>
+      </div>
+      <p class="foot-note">可微几何这一环，到 2020 年已经被 DeepV2D 跑通了——下一站，看后来者怎么在它上面加「动态」与「隐式」🚀</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

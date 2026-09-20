@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Point-SLAM（2023）：把特征挂在点云上 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0109</div>
+      <h1>Point-SLAM（2023）：把特征挂在点云上</h1>
+      <p class="subtitle">特征不绑在固定格点上，而是绑在场景自己的点上——图钉跟着墙走 📌</p>
+      <div class="hero-meta">
+        <span>🎯 主题：神经点云 · 数据自适应密度 · 体渲染</span>
+        <span>👥 作者：E. Sandström 等（苏黎世联邦理工 / 查尔姆斯理工）</span>
+        <span>📅 2023 · <i>Point-SLAM: Dense Neural Point Cloud-based SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#what">神经点云存什么</a>
+        <a href="#grow">从深度图长出点</a>
+        <a href="#vs">相对特征网格的好处</a>
+        <a href="#loop">回环与变形：诚实的边界</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="what">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清神经点云每个锚点存的是什么；讲清「从深度图长点」的判据；用数字说明它相对网格表示在高频细节上的提升；并<b>诚实地</b>区分「点表示的好处」与「回环/变形的前瞻框架」。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它是「地图里存什么」线索的<b>第五代终点</b>：权重（iMAP）→ 网格（NICE）→ 八叉树（Vox-Fusion）→ 平面（ESLAM）→ <b>点</b>（Point-SLAM）。这也正好对接第二季 <b>0034</b> Voxel Hashing 的「稀疏」精神，以及下一组 PIN-SLAM 的点云升级。但它<b>没有</b>正面回答回环——那条债还没还。</p>
+        </div>
+      </div>
+
+      <h2>1. 神经点云存什么：每个点带一个特征向量</h2>
+
+      <p>前面几篇的表示都有一个共同点：特征<b>绑在固定的空间结构上</b>——iMAP 绑在 MLP 权重、NICE/Co-SLAM 绑在网格格点、ESLAM 绑在平面像素。Point-SLAM 换了思路：把特征<b>锚定在一团会随探索增长的点云上</b>。</p>
+
+      <p>具体来说，地图是点集 \(P=\{(p_i,f_i^g,f_i^c)\}\)：每个神经点 \(p_i\) 除了位置，还带着</p>
+
+      <ul>
+        <li>一个 <b>32 维几何特征</b> \(f_i^g\in\mathbb R^{32}\)；</li>
+        <li>一个 <b>32 维颜色特征</b> \(f_i^c\in\mathbb R^{32}\)。</li>
+      </ul>
+
+      <p>查询某三维点 \(x_i\) 时，在半径 \(2r\) 内找最近邻（用 FAISS GPU），用反距离平方加权聚合邻点特征：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$P^g(x_i)=\sum_k \frac{w_k}{\sum w_k}f_k^g,\qquad w_k=\frac{1}{\|p_k-x_i\|^2}$$</div>
+      </div>
+
+      <p>聚合出的几何特征再过一层小 MLP \(F_\theta\)（非线性预处理）得 \(P^c\)，最后过几何/颜色解码 MLP 出占用与颜色。注意：<b>没有固定网格、没有固定平面</b>——特征跟着点走，点在哪特征就在哪。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">同一面墙的两种记忆：格子上的特征 vs 点上的特征</text>
+
+          <!-- 左：格子上的特征 -->
+          <rect x="40" y="60" width="380" height="360" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.4"/>
+          <text x="230" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#3b4a5e">NICE：特征绑在固定格点上</text>
+          <g fill="#90caf9" stroke="#42a5f5" stroke-width="0.8">
+            <rect x="80" y="120" width="40" height="40"/><rect x="130" y="120" width="40" height="40"/><rect x="180" y="120" width="40" height="40"/><rect x="230" y="120" width="40" height="40"/><rect x="280" y="120" width="40" height="40"/>
+            <rect x="80" y="170" width="40" height="40"/><rect x="130" y="170" width="40" height="40"/><rect x="180" y="170" width="40" height="40"/><rect x="230" y="170" width="40" height="40"/><rect x="280" y="170" width="40" height="40"/>
+            <rect x="80" y="220" width="40" height="40"/><rect x="130" y="220" width="40" height="40"/><rect x="180" y="220" width="40" height="40"/><rect x="230" y="220" width="40" height="40"/><rect x="280" y="220" width="40" height="40"/>
+            <rect x="80" y="270" width="40" height="40"/><rect x="130" y="270" width="40" height="40"/><rect x="180" y="270" width="40" height="40"/><rect x="230" y="270" width="40" height="40"/><rect x="280" y="270" width="40" height="40"/>
+          </g>
+          <text x="230" y="400" text-anchor="middle" font-size="12" fill="#1565c0">格子与场景内容无关</text>
+          <text x="230" y="420" text-anchor="middle" font-size="12" fill="#1565c0">砖缝处未必正好有格点</text>
+
+          <!-- 右：点上的特征 -->
+          <rect x="480" y="60" width="380" height="360" rx="10" fill="#f3eef9" stroke="#d1c4e9" stroke-width="1.4"/>
+          <text x="670" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#5e35b1">Point-SLAM：特征绑在场景自己的点上</text>
+          <!-- 砖墙轮廓 -->
+          <rect x="520" y="120" width="300" height="280" fill="#efe7e2" stroke="#bcaaa4" stroke-width="1.4"/>
+          <g fill="#7e57c2">
+            <circle cx="560" cy="160" r="6"/><circle cx="640" cy="158" r="6"/><circle cx="720" cy="162" r="6"/><circle cx="790" cy="160" r="6"/>
+            <circle cx="580" cy="210" r="6"/><circle cx="700" cy="208" r="6"/><circle cx="770" cy="212" r="6"/>
+            <circle cx="560" cy="270" r="6"/><circle cx="650" cy="268" r="6"/><circle cx="740" cy="272" r="6"/><circle cx="800" cy="270" r="6"/>
+            <circle cx="600" cy="320" r="6"/><circle cx="690" cy="318" r="6"/><circle cx="780" cy="322" r="6"/>
+            <circle cx="640" cy="370" r="6"/><circle cx="730" cy="372" r="6"/>
+          </g>
+          <!-- 砖缝处密集 -->
+          <g fill="#ef9a9a">
+            <circle cx="620" cy="184" r="4"/><circle cx="760" cy="184" r="4"/>
+            <circle cx="625" cy="240" r="4"/><circle cx="755" cy="244" r="4"/>
+            <circle cx="620" cy="298" r="4"/><circle cx="760" cy="298" r="4"/>
+          </g>
+          <text x="670" y="410" text-anchor="middle" font-size="12" fill="#6a1b9a">点在哪，特征就在哪</text>
+          <text x="670" y="430" text-anchor="middle" font-size="12" fill="#6a1b9a">砖缝处点更密</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一面墙，两种「把特征绑在哪」的方式。<br>
+          <b>怎么看这张图：</b>① 左格是 NICE 式网格——特征是绑在<b>固定格点</b>上的，格点位置与场景内容无关，砖缝处未必正好落在一个格点上；② 右格是 Point-SLAM——特征是绑在<b>场景自己的点</b>上的，点沿墙面铺开，砖缝处点更密（红点）；③ 于是「换成点以后，特征可以跟着点走」——表示与场景内容对齐，而不是与坐标系对齐。<br>
+          <b>要记住的一句话：</b>格子把特征钉死在坐标上，点把特征钉死在世界上。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="grow">
+      <h2>2. 怎么从深度图长出点</h2>
+
+      <p>点云不是预先生成的，而是<b>随相机探索 «数据驱动地长出来»</b>。每来一帧深度图：</p>
+
+      <ul>
+        <li>沿每条射线，在深度 \(D\) 处及其 \((1\pm\rho)D\) 附近钉若干神经点；</li>
+        <li>若该处半径 \(r\) 内<b>已有邻居点</b>，就不再重复钉——「只往还没记录的地方补点」；</li>
+        <li>于是<b>细节多、变化大的地方点更密</b>（砖缝、花纹），空旷墙面点更疏。</li>
+      </ul>
+
+      <p>这就是它的「空间自适应锚定」：表示密度跟着图像梯度走，预算花在刀刃上。下面这张图把「一张深度图 → 每个像素沿射线放一个小点 → 点云密集起来」画出来。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#2b2b2b">从深度图长出点：每个像素沿射线放一个小点</text>
+
+          <!-- 深度图 -->
+          <rect x="40" y="70" width="200" height="150" rx="6" fill="#263238"/>
+          <g fill="#90a4ae">
+            <rect x="60" y="90" width="20" height="20"/><rect x="100" y="90" width="20" height="20"/><rect x="140" y="90" width="20" height="20"/><rect x="180" y="90" width="20" height="20"/>
+            <rect x="60" y="130" width="20" height="20"/><rect x="100" y="130" width="20" height="20"/><rect x="140" y="130" width="20" height="20"/><rect x="180" y="130" width="20" height="20"/>
+            <rect x="60" y="170" width="20" height="20"/><rect x="100" y="170" width="20" height="20"/><rect x="140" y="170" width="20" height="20"/><rect x="180" y="170" width="20" height="20"/>
+          </g>
+          <text x="140" y="240" text-anchor="middle" font-size="12" fill="#37474f">一张深度图</text>
+
+          <!-- 箭头 -->
+          <path d="M240 145 L320 145" stroke="#37474f" stroke-width="2"/>
+          <path d="M320 145 L312 140 L312 150 Z" fill="#37474f"/>
+          <text x="280" y="135" text-anchor="middle" font-size="11" fill="#37474f">逐像素</text>
+
+          <!-- 射线放点 -->
+          <rect x="330" y="70" width="320" height="300" rx="8" fill="#f3eef9" stroke="#d1c4e9" stroke-width="1.4"/>
+          <text x="490" y="92" text-anchor="middle" font-size="12" font-weight="700" fill="#5e35b1">沿射线放点 → 点云密集</text>
+          <!-- 相机 -->
+          <circle cx="345" cy="220" r="8" fill="#5e35b1"/>
+          <text x="345" y="244" text-anchor="middle" font-size="10" fill="#5e35b1">相机</text>
+          <!-- 射线 -->
+          <g stroke="#b39ddb" stroke-width="0.8">
+            <line x1="352" y1="216" x2="500" y2="120"/><line x1="352" y1="218" x2="500" y2="160"/>
+            <line x1="352" y1="220" x2="500" y2="200"/><line x1="352" y1="222" x2="500" y2="240"/>
+            <line x1="352" y1="224" x2="500" y2="280"/><line x1="352" y1="226" x2="500" y2="320"/>
+          </g>
+          <!-- 点沿射线 -->
+          <g fill="#7e57c2">
+            <circle cx="430" cy="170" r="4"/><circle cx="470" cy="148" r="4"/><circle cx="500" cy="130" r="4"/>
+            <circle cx="440" cy="195" r="4"/><circle cx="480" cy="178" r="4"/><circle cx="500" y="0" r="0"/>
+            <circle cx="445" cy="218" r="4"/><circle cx="490" cy="205" r="4"/>
+            <circle cx="440" cy="245" r="4"/><circle cx="480" cy="262" r="4"/>
+            <circle cx="435" cy="280" r="4"/><circle cx="475" cy="305" r="4"/>
+          </g>
+          <g fill="#ef9a9a">
+            <circle cx="500" cy="160" r="4"/><circle cx="500" cy="240" r="4"/><circle cx="500" cy="320" r="4"/>
+          </g>
+
+          <!-- 密集成墙 -->
+          <g fill="#7e57c2" opacity="0.85">
+            <circle cx="600" cy="130" r="4"/><circle cx="615" cy="135" r="4"/><circle cx="630" cy="128" r="4"/><circle cx="645" cy="138" r="4"/>
+            <circle cx="600" cy="180" r="4"/><circle cx="618" cy="185" r="4"/><circle cx="635" cy="178" r="4"/><circle cx="650" cy="188" r="4"/>
+            <circle cx="600" cy="230" r="4"/><circle cx="616" cy="235" r="4"/><circle cx="632" cy="228" r="4"/><circle cx="648" cy="238" r="4"/>
+            <circle cx="600" cy="280" r="4"/><circle cx="617" cy="285" r="4"/><circle cx="634" cy="278" r="4"/><circle cx="650" cy="288" r="4"/>
+          </g>
+          <text x="625" y="340" text-anchor="middle" font-size="11" fill="#6a1b9a">点云密集成墙</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一张深度图如何「长」出一团神经点云。<br>
+          <b>怎么看这张图：</b>① 左上是输入深度图（像素网格）；② 中间从相机出发，每条射线在深度 D 附近钉几个小点（紫点）；③ 右侧这些点密集铺开，形成一面点云墙；④ 红点是「砖缝/边缘」这类高频处——因为点云密度随图像梯度自适应，这些地方点更密。这就是「从深度图长点」的过程。<br>
+          <b>要记住的一句话：</b>点不是预先铺好的，是边看边长、只往没记录的地方补。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Point-SLAM/b2182baf04ed7a1edb69f24d21ab983d44265f80c3fea9c03949b2b8b009df69.jpg" alt="Point-SLAM Figure 2 architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Point-SLAM Architecture. Given an estimated camera pose, mapping is performed as follows. We first add a sparse set of neural points to the neural point cloud, and then render depth and color images via volume rendering along the ray …<br>
+          <b>怎么看这张图：</b>这是唯一把「加点的判据 + 邻域加权聚合 + 双解码器」画全的图。重点看左边「add neural points」那一步——它决定点长在哪、长多少，正是上一节自绘图的理论原版。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="vs">
+      <h2>3. 与特征网格相比的好处：精度提升多少</h2>
+
+      <p>因为点跟着场景内容走、密度自适应，Point-SLAM 在<b>高频细节</b>上明显胜出。原文第 178 行给出相对提升：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">对比项（Depth L1 越低越好）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">相对 NICE</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">相对 Vox-Fusion</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">相对 ESLAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Depth L1 提升</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>85%</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>82%</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>63%</b></td></tr>
+          <tr style="background:#faf7f4"><td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>Replica 绝对数</b></td><td style="border:1px solid #e0d5c8;padding:.5rem .7rem" colspan="3">Depth L1 仅 0.44 cm、F1 96.99 %、PSNR 35.17 dB（表 1/2/3）</td></tr>
+        </tbody>
+      </table>
+
+      <p>也就是说，相对网格一脉，Point-SLAM 在几何精度上提升 <b>63%–85%</b>。内存（表 6）decoder 0.51 MB + embedding 27.23 MB，介于 NICE/Vox 之间；运行每帧 tracking/map 0.85/9.85 秒（RTX 2080 Ti）——注意它<b>不是最快</b>的，赢在精度而非帧率。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Point-SLAM/7a3e4c296c35aa04a3416bad23fe862f288ec687f773793f7bbabb57bc7ee77f.jpg" alt="Point-SLAM Figure 1 benefits spatially adaptive anchoring">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Point-SLAM Benefits. Due to the spatially adaptive anchoring of neural features, Point-SLAM can encode high-frequency details more effectively than NICE-SLAM …<br>
+          <b>怎么看这张图：</b>上排是锚点分布——NICE 的规则网格（均匀）vs Point-SLAM 随深度/梯度疏密；下排是渲染差异，花瓶、百叶、地板、地毯这类高频细节 Point-SLAM 明显更真。这就是「特征跟着数据走」带来的直接收益。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="loop">
+      <h2>4. 一个必须诚实处理的点：回环 / 变形是前瞻框架，非本文结论</h2>
+
+      <div class="callout">
+        <h4>诚实的边界声明</h4>
+        <p>精读材料明确指出：「『点基表示天然对回环/变形友好』是<b>前瞻性框架，正文未证</b>。」Point-SLAM 全文只在 related work 提及他人「incorporated loop closures」，<b>自己明确不做回环</b>（方法/实验均未涉及），也<b>未讨论变形</b>。所谓「点对回环/变形友好」是面向下一组 PIN-SLAM 的前瞻推断，<b>不是本文论断</b>。</p>
+      </div>
+
+      <p>所以写课必须按这个口径：</p>
+
+      <ul>
+        <li>点表示带来的<b>已被证实</b>的好处是：数据自适应密度、高频细节更真、内存有底（搜索半径上限 \(r_u=8\) cm 触底，见 Fig. 6）；</li>
+        <li>「点表示天然利于回环/变形」<b>只是后续工作的延伸方向</b>，应写成「在后续工作中被发扬」，并注明这是推断而非原文论断；</li>
+        <li>本文真正承认的短板：<b>点位置未在线优化</b>（对深度噪声更敏感）；局部点密度是启发式、应可学习；对运动模糊/镜面更敏感；<b>不做回环</b>。</li>
+      </ul>
+
+      <p>把这一点讲清楚，正是本季「诚实标注不确定性」硬规范的体现——不把读者的前瞻期待冒充成论文的贡献。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Point-SLAM/b9440a9ba210d2d43f6c72f37cbdea0db8fa03265d2449db118168c4182e8f17.jpg" alt="Point-SLAM Figure 3 reconstruction performance on Replica">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Reconstruction Performance on Replica. Our method is able to outperform all existing methods … note the fidelity of the rough carpet reconstruction on Office 0.<br>
+          <b>怎么看这张图：</b>左 (a) 是 F1 分数对比，Point-SLAM 高居第一；右 (b) 是 Office 0 里粗糙地毯这类高频细节的重建对照，别人糊成一团、它保住了纹理。这是「点表示已被证实的好处」的量化证据，但请记住：图里没有任何关于回环/变形的内容。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于「Point-SLAM 的点表示天然对回环/变形友好」，下面哪种说法是诚实的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对。原文并未论证这一点：它明确不做回环、也未讨论变形，只在 related work 转述他人工作。说「本文已证明点表示利于回环」是把读者的前瞻期待冒充成了论文贡献，违反本季「诚实标注不确定性」的硬规范。" onclick="lessonKit.answer(this,'q0109a')">原文已证明点表示利于回环</button>
+          <button data-correct="yes" data-explanation="对。点表示「数据自适应、特征可随点移动」的特性，让它在后续工作中被认为有潜力利于回环/变形，但这是面向 PIN-SLAM 等后续工作的前瞻推断，并非 Point-SLAM 本文的论断。原文自己不做回环、也未讨论变形。" onclick="lessonKit.answer(this,'q0109a')">这是后续工作的前瞻框架</button>
+        </div>
+        <div class="quiz-feedback" id="q0109a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="summary">
+      <h2>5. 小结：表示终于跟着数据走</h2>
+
+      <p>把本季前四篇串起来看，「地图里存什么」走完了一条清晰的降级链：iMAP 的<b>权重</b> → NICE 的<b>网格</b> → Vox-Fusion 的<b>八叉树</b> → ESLAM 的<b>平面</b> → Point-SLAM 的<b>点</b>。每一步都在回答同一个问题：怎么让表示既省内存、又跟得上场景的真实结构。</p>
+
+      <p>Point-SLAM 给出的答案是最「贴着数据」的一个：特征不再钉死在固定格点/平面上，而是锚定在一团会随探索增长、密度随图像梯度自适应的点上。它的<b>已被证实</b>收益是高频细节更真（Depth L1 相对网格提升 63%–85%）；而「点表示利于回环/变形」只是面向 PIN-SLAM 等后续工作的前瞻推断，<b>不是本文论断</b>——原文自己不做回环、也未讨论变形。</p>
+
+      <p>至此，隐式表示的「地基」五篇讲完。下一站开始，这条线要面对它一直回避的东西：<b>回环</b>。</p>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>神经点云里每个锚点存的是什么？查询一个三维点时如何聚合出它的特征？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>每个神经点 \(p_i\) 存：<b>位置 + 32 维几何特征 \(f_i^g\) + 32 维颜色特征 \(f_i^c\)</b>。</p>
+            <p>查询点 \(x_i\) 时，在半径 \(2r\) 内找最近邻，用<b>反距离平方加权</b>聚合邻点几何特征：\(P^g(x_i)=\sum_k \frac{w_k}{\sum w_k}f_k^g\)，其中 \(w_k=1/\|p_k-x_i\|^2\)。聚合后再过小 MLP \(F_\theta\) 与非线性解码出占用/颜色。</p>
+          </div></details>
+        </li>
+        <li>「从深度图长点」的判据是什么？为什么这能让高频细节更真？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>判据：沿每条射线在深度 \(D\) 及其 \((1\pm\rho)D\) 附近钉点；若该处半径 \(r\) 内<b>已有邻居点就不再钉</b>，所以只在「还没记录的地方」补点。</p>
+            <p>因为密度随<b>图像梯度自适应</b>——砖缝、花纹、边缘这类高频处梯度大，点长得更密；空旷墙面梯度小，点更疏。于是表示预算集中在高频区，细节自然更真（见 Fig. 1 上排锚点分布对比）。</p>
+          </div></details>
+        </li>
+        <li>Point-SLAM 相对网格表示在精度上提升多少？它赢在速度还是精度？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>Depth L1 相对 NICE / Vox-Fusion / ESLAM 分别提升 <b>85% / 82% / 63%</b>；Replica 上 Depth L1 仅 0.44 cm、F1 96.99%。</p>
+            <p>它<b>赢在精度，不是速度</b>：每帧 tracking/map 要 0.85/9.85 秒（RTX 2080 Ti），远慢于 Co-SLAM 的 15–17 Hz。它的卖点是细节保真，而非实时帧率。</p>
+          </div></details>
+        </li>
+        <li>为什么说「点表示天然对回环/变形友好」不能写成 Point-SLAM 的贡献？请按诚实口径重述。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>
+            <p>因为原文<b>并未论证</b>这一点：它明确不做回环、方法/实验均未涉及变形，只在 related work 提及他人工作。把这句话当成本文贡献，是混淆了「读者/后续工作的前瞻期待」与「论文实际论断」。</p>
+            <p><b>诚实口径：</b>点表示数据自适应、特征可随点移动，这一特性在<b>后续工作（如 PIN-SLAM）中被发扬</b>，用来支持回环/可形变地图；但这是推断与延伸，<b>不是 Point-SLAM 本文的结论</b>。本文真正承认的短板包括点位置未在线优化、对运动模糊/镜面敏感、不做回环。</p>
+          </div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0108-Co-SLAM2023-联合坐标与稀疏参数编码.html">← Co-SLAM（2023）：联合坐标与稀疏参数编码</a>
+        <a class="next" href="0110-Loopy-SLAM与GO-SLAM-隐式地图怎么闭环.html">Loopy-SLAM 与 GO-SLAM：隐式地图怎么闭环 →</a>
+      </div>
+      <p class="foot-note">Point-SLAM 把表示收束到「点」，特征终于跟着世界走。回环的债，下一站开始还 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

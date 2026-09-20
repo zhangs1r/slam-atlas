@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orbeez-SLAM 与 NeurAR：轻量实时与不确定性 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0113</div>
+      <h1>Orbeez-SLAM 与 NeurAR：轻量实时与不确定性</h1>
+      <p class="subtitle">一条让 NeRF 跑成实时的混合路线，一个把「不知道」量化出来的重建方法 🎯</p>
+      <div class="hero-meta">
+        <span>🎯 主题：轻量实时隐式 SLAM · 神经不确定性</span>
+        <span>👥 作者：Orbeez（ICRA 2023）/ NeurAR（ICRA 2023）</span>
+        <span>📅 2023 · <i>Orbeez-SLAM / NeurAR</i></span>
+      </div>
+      <div class="toc">
+        <a href="#two">两条线：实时与不确定性</a>
+        <a href="#orbeez">Orbeez：ORB 管位姿</a>
+        <a href="#fast">为什么能实时</a>
+        <a href="#0011a">接 0011：吃掉匹配</a>
+        <a href="#neurar">NeurAR：不确定性</a>
+        <a href="#nbv">不确定性用来干什么</a>
+        <a href="#table">横向对比</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="two">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：讲清 Orbeez-SLAM「ORB 提特征 + NeRF 建图」的分工、它怎么解决 NeRF 慢；以及 NeurAR 把「不确定性」算成可学习方差、并用来主动规划下一步看哪。两篇都要接第一季 <b>0011</b> 课的两个论断。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第一季 <b>0011</b> 课「深度学习先吃掉匹配与检索」（Orbeez 是具体化）与「六个不成熟环节」里的「置信度 / 概率化」（NeurAR 是具体化）；接上一课 <b>0112</b> 的组合式思路（Orbeez 也是「特征法当后端、NeRF 只管地图」）；接第五季隐式建图基础（Instant-NGP）。</p>
+        </div>
+      </div>
+
+      <h2>1. 先立两条线：轻量实时 vs 不确定性</h2>
+
+      <p>这一课把两篇「看起来都和隐式重建有关、但其实要解决完全不同问题」的论文放一起，是因为它们正好覆盖隐式 SLAM 的两个软肋：<b>太慢</b>，以及<b>不知道自己建得对不对</b>。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>左线：Orbeez-SLAM（轻量实时）</b>
+          <p>隐式地图（NeRF）本来就慢得没法实时。Orbeez 用一套「老派特征法 + 新派 NeRF」的混合路线，把速度拉到 19–22 FPS。它假设<b>静态世界</b>，不处理动态。</p>
+        </div>
+        <div class="mini-card">
+          <b>右线：NeurAR（不确定性）</b>
+          <p>重建时怎么知道「哪块建得靠谱、哪块是蒙的」？NeurAR 给每个像素配一个<b>可学习的方差</b>，用它来主动决定下一步去哪拍。它假设<b>位姿已知</b>，做的是主动重建。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <h4>★ 先打两个预防针（来自精读材料的纠正）</h4>
+        <p>① <b>Orbeez-SLAM 是「静态世界」的实时隐式 SLAM，不是动态方法。</b>它从头到尾假设场景静止，没有运动分割、没有动态掩码。把它放进「隐式碰动态」框架是误配——它回答的是「隐式地图本身怎么做到实时」，不是「碰上动态怎么办」。</p>
+        <p>② <b>NeurAR 假设位姿已知</b>，它做的是<b>主动重建</b>（next-best-view），不是完整的 SLAM 本身。它的「不确定性」来自「观测不足 / 视角少」，不是运动物体。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="orbeez">
+      <h2>2. Orbeez-SLAM：ORB 管位姿，NeRF 管地图</h2>
+
+      <p>Orbeez-SLAM（2023，ICRA）是一条很工程、也很聪明的<b>混合路线</b>。它不追求端到端，而是把两代技术拼起来：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>前端：ORB-SLAM2 跑位姿</b>
+          <p>用成熟的 ORB 特征法（第三季 <b>0043–0045</b> 课讲过的那套）做跟踪，输出相机位姿。位姿估计这个「脏活累活」交给已被验证可靠的特征法。</p>
+        </div>
+        <div class="mini-card">
+          <b>后端：Instant-NGP 当 NeRF 地图</b>
+          <p>拿到位姿后，用 Instant-NGP 的多分辨率哈希网格（第五季隐式建图基础）去建模场景的几何与颜色。建图这一环交给神经辐射场。</p>
+        </div>
+      </div>
+
+      <p>分工的精髓是：<b>「谁擅长什么就干什么」</b>。特征法擅长从图像里稳定地估位姿，NeRF 擅长从位姿 + 图像里建出稠密漂亮的地图。两者用一个明确的接口（相机位姿）连起来——这正是后面第 4 节要接的那句论断。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">Orbeez-SLAM 的分工</text>
+
+          <!-- 左：真实场景 + ORB 特征 + 位姿 -->
+          <rect x="40" y="54" width="370" height="270" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="225" y="80" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">特征法负责：位姿 + 特征点</text>
+          <!-- 房间 -->
+          <rect x="90" y="105" width="180" height="120" fill="none" stroke="#3b4a5e" stroke-width="2"/>
+          <text x="180" y="170" text-anchor="middle" font-size="11" fill="#607d8b">真实场景</text>
+          <!-- ORB 彩色点 -->
+          <g fill="#e74c3c"><circle cx="120" cy="130" r="3.5"/><circle cx="150" cy="125" r="3.5"/><circle cx="180" cy="140" r="3.5"/></g>
+          <g fill="#27ae60"><circle cx="135" cy="165" r="3.5"/><circle cx="170" cy="160" r="3.5"/><circle cx="200" cy="175" r="3.5"/></g>
+          <g fill="#2980b9"><circle cx="115" cy="195" r="3.5"/><circle cx="155" cy="200" r="3.5"/><circle cx="190" cy="195" r="3.5"/></g>
+          <text x="180" y="240" text-anchor="middle" font-size="10.5" fill="#a8563a">彩色小点 = ORB 特征点</text>
+          <!-- 相机图标串 -->
+          <g fill="#5a8fc7">
+            <rect x="100" y="250" width="22" height="13" rx="3"/><rect x="160" y="256" width="22" height="13" rx="3"/><rect x="222" y="248" width="22" height="13" rx="3"/>
+          </g>
+          <text x="180" y="300" text-anchor="middle" font-size="10.5" fill="#2c5f8a">一串相机图标 = 位姿轨迹</text>
+
+          <!-- 箭头 -->
+          <path d="M420 189 L560 189" stroke="#3b4a5e" stroke-width="2.4"/>
+          <path d="M560 189 L548 182 L548 196 Z" fill="#3b4a5e"/>
+          <text x="490" y="176" text-anchor="middle" font-size="11" fill="#3b4a5e">位姿喂给建图</text>
+
+          <!-- 右：贴好纹理的地图 -->
+          <rect x="560" y="54" width="300" height="270" rx="10" fill="#eef6fb" stroke="#9bb8d4" stroke-width="1.4"/>
+          <text x="710" y="80" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">NeRF 负责：贴好纹理的地图</text>
+          <rect x="600" y="110" width="200" height="150" rx="4" fill="#cdb89a"/>
+          <!-- 纹理细节 -->
+          <g stroke="#a8896a" stroke-width="1">
+            <line x1="610" y1="130" x2="790" y2="130"/><line x1="610" y1="160" x2="790" y2="160"/>
+            <line x1="610" y1="190" x2="790" y2="190"/><line x1="610" y1="220" x2="790" y2="220"/>
+            <line x1="640" y1="110" x2="640" y2="260"/><line x1="690" y1="110" x2="690" y2="260"/><line x1="740" y1="110" x2="740" y2="260"/>
+          </g>
+          <text x="700" y="295" text-anchor="middle" font-size="11" fill="#3f78a0">稠密、带纹理的隐式地图</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是真实场景，上面标出「ORB 特征点」（彩色小点）和「位姿」（一串相机图标），由特征法负责；右格是一块「贴好纹理的地图」，由 NeRF 负责；中间箭头是「位姿喂给建图」。<br>
+          <b>怎么看这张图：</b>① 左格想表达「特征和位姿」这种稀疏、结构化的信息，是特征法最擅长的；② 右格想表达「稠密带纹理的地图」是 NeRF 擅长的；③ 箭头说明两者只通过「位姿」这一个干净接口耦合。<br>
+          <b>要记住的一句话：</b>让成熟的特征法当后端管位姿，让 NeRF 只管地图——这是后面要接的那句论断的具体化。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="fast">
+      <h2>3. Orbeez 为什么能实时：Instant-NGP 的功劳</h2>
+
+      <p>隐式建图慢是出了名的（上一季很多方法慢到没法实时）。Orbeez 把速度拉起来的关键，是用了 <b>Instant-NGP 的哈希编码</b> 加两个工程技巧：</p>
+
+      <ul>
+        <li><b>多分辨率哈希网格</b>：把 3D 坐标映射到一个紧凑的哈希表，查询快、显存省；</li>
+        <li><b>Skip voxel（跳过体素）</b>：沿射线采样时，未占用的体素直接跳过，只采样与表面相交的体素——相当于「踩着露出水面的石头过河」，省掉大量无效计算；</li>
+        <li><b>射线三角化</b>：把 NeRF 反解成可用点云（统计每个密度体素的采样数，超阈值的作为稠密地图点）。</li>
+      </ul>
+
+      <p>速度数字很硬：在 TUM RGB-D 上达到 <b>19–22 FPS</b>，而 NICE-SLAM 只有 0.028–0.056 FPS——快了约 <b>360–800 倍</b>。这让它第一次把「隐式稠密 SLAM 实时跑」从设想变成工程现实。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Orbeez-SLAM__A_Real-time_Monocular_Visual_SLAM_with_ORB_/b56029e091c2bafe45758e4a4cd6416b1ccd2f9ddc010e4f00760b9dcb3ca38a.jpg" alt="Orbeez-SLAM Fig.1 process from scratch training">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Orbeez-SLAM process. The left image shows NeRF result at 27 seconds training from scratch. The right image shows that after seeing the unseen region, our NeRF model can update the region in seconds. Our Orbeez-SLAM is real-time and pre-training-free.<br>
+          （中译：Orbeez-SLAM 流程。左图是从零训练 27 秒的 NeRF 结果；右图显示看到未见区域后，模型可在数秒内更新该区域。本方法是实时且免预训练的。）<br>
+          <b>怎么看这张图：</b>① 注意时间戳——左 27 秒、右「数秒更新」，说明它边跑边建、免预训练；② 这正是它「实时、免预训练」主张的视觉证据。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Orbeez-SLAM__A_Real-time_Monocular_Visual_SLAM_with_ORB_/9e25fa04af0ff3263ab2e025d49b0dd60772ff1c6b7b9a0c53f65fb0b47b7516.jpg" alt="Orbeez-SLAM Fig.2 skip voxel strategy">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Skip voxel strategy. When sampling positions along a cast ray, a voxel is skipped if it is unoccupied (mark as 0); we sample voxels which intersect the surface (mark as 1).<br>
+          （中译：Skip voxel 策略。沿投射射线采样时，未占用体素（标 0）被跳过；只采样与表面相交的体素（标 1）。）<br>
+          <b>怎么看这张图：</b>这是提速关键之一。把射线想象一束光，穿过空气的体素（标 0）整段跳过，只在与表面相交的体素（标 1）采样——省掉大量无效 MLP 查询。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Orbeez-SLAM__A_Real-time_Monocular_Visual_SLAM_with_ORB_/83ee651a851e64e538c58829847837fe3172133a5e1a30c0fe60e277374d1c81.jpg" alt="Orbeez-SLAM Fig.3 system pipeline">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>System Pipeline. The tracking and mapping processes run concurrently. A frame must satisfy two conditions to become a keyframe … The tracking process provides camera poses; the mapping process refines the camera poses and the NeRF.<br>
+          （中译：系统管线。跟踪与建图并发运行。一帧需满足两个条件才成为关键帧……跟踪提供相机位姿；建图精修相机位姿与 NeRF。）<br>
+          <b>怎么看这张图：</b>这张图讲清「ORB 跟踪线程」与「NeRF 建图线程」如何并发、关键帧如何被筛选（弱跟踪过滤 + 建图忙时丢弃），是理解它工程调度的钥匙。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Orbeez-SLAM 是端到端用神经网络一次性估计位姿和地图的吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。它是混合路线：ORB-SLAM2 这类特征法负责位姿，Instant-NGP 负责建图，不是端到端学习。这正是它「实时」的来源——把脏活交给成熟特征法。" onclick="lessonKit.answer(this,'q0113a')">是端到端神经网络</button>
+          <button data-correct="yes" data-explanation="对。它用 ORB 特征法跑位姿、Instant-NGP 建图，两套模块拼接，不是端到端。同时它假设静态世界，不处理动态物体。" onclick="lessonKit.answer(this,'q0113a')">是特征法加NeRF混合</button>
+        </div>
+        <div class="quiz-feedback" id="q0113a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="0011a">
+      <h2>4. 接 0011：深度学习先吃掉匹配与检索</h2>
+
+      <p>第一季 <b>0011</b> 课（深度学习视觉 SLAM）有一个著名论断：<b>「深度学习先吃掉匹配与检索」</b>——意思是，传统 SLAM 里最依赖手工设计的两块（特征匹配、重识别检索），会最先被学习模型接管。</p>
+
+      <p>Orbeez-SLAM 恰好是这句话在隐式时代的<b>具体化</b>：</p>
+
+      <div class="callout">
+        <h4>★ 把论断落到地上</h4>
+        <p>0011 说「深度学习先吃掉匹配与检索」。但在这里，<b>「匹配」这一块并没有被深度学习吃掉</b>——Orbeez 反而是把成熟的 ORB 特征法<b>原封不动</b>当后端，只用 NeRF 接管「建图」。这恰恰说明：当隐式建图本身还慢、还脆时，最稳妥的做法是「让老派特征法守住所擅长的位姿，让新派网络只管它最擅长的稠密地图」。</p>
+        <p>换句话说，0011 的论断在「检索 / 重识别」层面成立，但 Orbeez 这一支告诉我们：<b>在隐式 SLAM 里，「匹配」这块暂时还由经典方法牢牢把持</b>，因为把位姿交给尚不鲁棒的学习模型风险太高。</p>
+      </div>
+
+      <p>这也是为什么它在上一课「组合式」思路之外，又给了我们一种更朴素也更可靠的工程范式——<b>不急着端到端，先把成熟模块拼起来跑通</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Orbeez-SLAM__A_Real-time_Monocular_Visual_SLAM_with_ORB_/a79d34aba2a7a2307af5012770c354504ef0b6c4b6c59ead24539ad37a1906bb.jpg" alt="Orbeez-SLAM Fig.5 comparison with NICE-SLAM">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Comparison of Rendering Results. RGB and Depth of NeRF-rendered results from Orbeez-SLAM (ours) and NICE-SLAM. Notably, we do not use depth information for NeRF rendering in the RGB-D setting.<br>
+          （中译：渲染结果对比。Orbeez-SLAM 与 NICE-SLAM 的 NeRF 渲染 RGB 与深度。注意在 RGB-D 设置下，NeRF 渲染不使用深度信息，深度只用于跟踪。）<br>
+          <b>怎么看这张图：</b>看它比 NICE-SLAM 更清晰的渲染，体会「特征法 + NeRF」混合路线的建图质量。注意它 RGB-D 下渲染不用深度——深度只服务于跟踪线程，这再次说明「位姿」与「地图」是解耦的。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="neurar">
+      <h2>5. NeurAR：把不确定性变成可学习的方差</h2>
+
+      <p>NeurAR（2023，ICRA）关心的是另一个问题：<b>重建出来的地方，哪些靠谱、哪些是在「蒙」？</b></p>
+
+      <p>它给每个像素的颜色配一个<b>高斯不确定性 $\sigma^2$</b>——也就是说，渲染出来的不是一个固定颜色，而是一个「颜色的分布」。做法是在 NeRF 式网络上<b>多接一个 128 维的全连接分支</b>，专门预测每个视角的不确定性（原文 Fig.4 说「唯一区别就是多了一个分支」）。</p>
+
+      <p>这个方差不是随便给的，它用一个<b>异方差（heteroscedastic）损失</b>来训练：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$L=\sum\left[\frac{(C_{obs}-\hat C)^2}{2\sigma_I^2}+\frac12\log\sigma_I^2\right]+L_{ratio}$$</div>
+      </div>
+
+      <p>直观讲：<b>观测和预测差得越远，网络就越「心虚」，方差就调得越大</b>；同时逼着网络别无脑把方差调小来作弊（第二项 $\frac12\log\sigma_I^2$ 是防止方差坍缩的正则）。训练完，$\log\sigma_I^2$ 与 PSNR 呈强负相关（PCC 在线 0.96 / 离线 0.92）——也就是说，<b>方差确实能当「这块建得好不好」的代理指标</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeurAR__Neural_Uncertainty_for_Autonomous_3D_Reconstruct/ef9bd793b6a7b6fac88e87487f4f941c55d6289aa16b507e0ba7e9f32fc9ee76.jpg" alt="NeurAR Fig.3 loss curves and log sigma vs PSNR">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Loss curves and linear relationship between log σ²_I and PSNR. PCC value of -1 signifies strong negative correlation.<br>
+          （中译：损失曲线与 log σ²_I 和 PSNR 的线性关系。PCC = -1 表示强负相关。）<br>
+          <b>怎么看这张图：</b>① 看 (b) 子图——$\log\sigma_I^2$ 越高，PSNR 越低，二者近似一条直线；② 这就直接证明了「方差能当 PSNR 的代理」，也就是「哪块建得差」可以被量化出来。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeurAR__Neural_Uncertainty_for_Autonomous_3D_Reconstruct/265d7f287d9492e790d14352d9eb1bb5165e21a525a0c51f79bc0e9216c2c1f2.jpg" alt="NeurAR Fig.1 view paths and uncertainty maps">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>View paths planned by NeurAR and the uncertainty maps used to guide the planner. Given current pose 5 and 15, paths are planned toward viewpoints having higher uncertainties, i.e. pose 6 and 16. Uncertainties shown in red text.<br>
+          （中译：NeurAR 规划的视角路径与用于引导规划器的不确定性图。给定当前位姿 5 和 15，路径被规划朝向不确定性更高的视角，即位姿 6 和 16。不确定性以红字标出。）<br>
+          <b>怎么看这张图：</b>这张图已经预示了下一节的主题——规划器专挑「红字（高不确定性）」的地方走，主动去补全没建好的区域。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="nbv">
+      <h2>6. 不确定性用来干什么：主动重建（并接 0011 的置信度环节）</h2>
+
+      <p>算出不确定的目的是<b>用</b>。NeurAR 用它做<b>主动重建（next-best-view, NBV）</b>：机器人自己决定下一步去哪个视角拍，专门挑「不确定性最高」的地方。原文里它用 RRT* 路径规划，让机器人朝红字区域走。</p>
+
+      <p>这里要诚实标注两点（来自精读材料的纠正）：</p>
+      <ul>
+        <li><b>它不是动态处理方法</b>。它的不确定性来自「观测不足 / 视角少」，不是运动物体。它不分割、不剔除动态。</li>
+        <li><b>它假设位姿已知</b>。位姿由外部提供，它做的是「重建质量主动评估」，<b>不是 SLAM 全栈</b>。它是主动重建，不是完整的 SLAM 本身。</li>
+      </ul>
+
+      <p>接第一季 <b>0011</b> 课：0011 在「六个不成熟环节」里点名了<b>「置信度 / 概率化」</b>这一条尚未成熟。NeurAR 正是这一条在隐式重建里的具体化——它把「地图里哪些地方不可信」用一个可学习的方差<b>显式建模</b>，并直接拿来驱动决策。从「滤波器层面的 NEES 一致性检验（第一季 0022）」到「渲染层面的不确定性预测（NeurAR）」，置信度建模正在从理论走向可用。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">NeurAR 的不确定性</text>
+
+          <!-- 左：反复扫描，颜色稳 -->
+          <rect x="40" y="54" width="380" height="280" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="230" y="80" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">① 被反复扫过很多次</text>
+          <rect x="90" y="110" width="280" height="150" rx="4" fill="#9ec3e6"/>
+          <g stroke="#7aa3c8" stroke-width="1">
+            <line x1="100" y1="140" x2="360" y2="140"/><line x1="100" y1="180" x2="360" y2="180"/><line x1="100" y1="220" x2="360" y2="220"/>
+          </g>
+          <text x="230" y="290" text-anchor="middle" font-size="12" fill="#2f6d51">颜色稳、纹理清晰</text>
+          <!-- 小方差 -->
+          <circle cx="120" cy="320" r="6" fill="#2e9e6b"/>
+          <text x="230" y="325" text-anchor="middle" font-size="11.5" fill="#2f6d51">方差小（投影上标小方差）</text>
+
+          <!-- 右：只瞥过一眼，颜色飘 -->
+          <rect x="480" y="54" width="380" height="280" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="670" y="80" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">② 只从远处瞥过一眼</text>
+          <rect x="530" y="110" width="280" height="150" rx="4" fill="#e6c9b8"/>
+          <g stroke="#c79b86" stroke-width="1" stroke-dasharray="4 3">
+            <line x1="545" y1="140" x2="795" y2="150"/><line x1="540" y1="180" x2="790" y2="172"/><line x1="548" y1="220" x2="792" y2="228"/>
+          </g>
+          <text x="670" y="290" text-anchor="middle" font-size="12" fill="#a8563a">颜色飘、纹理模糊</text>
+          <!-- 大方差 -->
+          <circle cx="560" cy="320" r="14" fill="#c0392b" opacity="0.5"/>
+          <circle cx="560" cy="320" r="14" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+          <text x="670" y="325" text-anchor="middle" font-size="11.5" fill="#a8563a">方差大（投影上标大方差）</text>
+
+          <!-- 底部箭头：主动去补 -->
+          <path d="M460 320 C 430 360, 470 360, 530 320" fill="none" stroke="#e08a2b" stroke-width="2.2"/>
+          <path d="M530 320 L521 314 L521 328 Z" fill="#e08a2b"/>
+          <text x="450" y="362" text-anchor="middle" font-size="11" fill="#a8641a">系统主动去补看那些方差大的地方</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一面墙，左边被反复扫过很多次（颜色稳、方差小），右边只从远处瞥过一眼（颜色飘、方差大）；底部箭头表示系统会主动去补看那些方差大的地方。<br>
+          <b>怎么看这张图：</b>① 左格的「小圆圈」代表小方差——意思是「这块我很有把握」；② 右格的「大圈」代表大方差——意思是「这块我基本在猜」；③ 底部橙色箭头是关键：不确定性不是摆着看的，它直接驱动下一步去哪拍。<br>
+          <b>要记住的一句话：</b>「知道自己不知道」比「建出一张图」更重要——NeurAR 把这句话做成了可学习的方差。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeurAR__Neural_Uncertainty_for_Autonomous_3D_Reconstruct/28b1e96df73533785024ecb088e9199499b8dd6998db32e88367cc80e46dd241.jpg" alt="NeurAR Fig.5 uncertainty maps different viewpoints">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Uncertainty maps from different viewpoints and training iterations. Top: seen viewpoints; Bottom: an unseen viewpoint stays high even when converged.<br>
+          （中译：不同视角与训练迭代下的不确定性图。上：已见视角；下：未见视角即使收敛仍保持高不确定性。）<br>
+          <b>怎么看这张图：</b>看「未见视角即使网络收敛仍高不确定性」——这正好说明它的不确定性是真·盲区检测，不是过拟合产物。再次印证：它知道自己的无知。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_NeurAR__Neural_Uncertainty_for_Autonomous_3D_Reconstruct/11d79fc5260bf0941bbbe6b28c4797b5f90e091ca83b199fe2b8e45d6370c6fc.jpg" alt="NeurAR Fig.2 pipeline of the method">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The pipeline of our method.<br>
+          （中译：本文方法的管线。）<br>
+          <b>怎么看这张图：</b>这张图展示「建图 + 不确定性 + 规划」的闭环：建出地图 → 算出不确定性图 → 规划器挑高不确定性视角 → 再去拍。它是主动重建（NBV）的总纲。注意：它假设位姿已知，不含 SLAM 全栈。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>NeurAR 的「不确定性」主要是用来处理动态物体的吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错。它的不确定性来自「观测不足 / 视角少」，不是运动物体；它不分割也不剔除动态。而且它假设位姿已知，做的是主动重建，不是完整 SLAM。" onclick="lessonKit.answer(this,'q0113b')">是用来处理动态</button>
+          <button data-correct="yes" data-explanation="对。不确定性用于主动 next-best-view 规划（挑高方差处去拍），并量化「哪块建得差」。它面向静态场景的主动扫描，与动态无关，且假设位姿已知。" onclick="lessonKit.answer(this,'q0113b')">是用来主动补看盲区</button>
+        </div>
+        <div class="quiz-feedback" id="q0113b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>7. 横向对比与诚实标注</h2>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">Orbeez-SLAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">NeurAR</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>核心贡献</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">特征法 + NeRF 的实时隐式 SLAM</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">把渲染不确定性量化为可学习方差</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>位姿来源</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ORB-SLAM2（自己估）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>假设已知</b>（外部提供）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>是否处理动态</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>不处理</b>（假设静态世界）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>不处理</b>（不确定性来自视角少）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>关键数字</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">19–22 FPS（比 NICE-SLAM 快约 360–800×）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">log σ² 与 PSNR 强负相关（PCC 0.96/0.92）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>接 0011 哪句</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「深度学习先吃掉匹配与检索」（具体化）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「六个不成熟环节」之置信度 / 概率化</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        <h4>本组判断（非原文自评）</h4>
+        <p>两篇都不是「隐式碰动态」的答案（这点要反复强调）。Orbeez 把隐式 SLAM 第一次跑成实时、免预训练的工程典范，价值在「速度」；NeurAR 把「知道自己不知道」做成可学习信号，价值在「鲁棒性的量化基础」。下一课我们才真正进入「动态三篇」。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>Orbeez-SLAM 的「混合路线」具体怎么分工？谁管位姿、谁管地图？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>前端用 <b>ORB-SLAM2</b>（成熟特征法）估计相机位姿；后端用 <b>Instant-NGP</b> 的多分辨率哈希网格当 NeRF 地图，建模场景几何与颜色。两者只通过「相机位姿」这一个接口耦合。</p>
+              <p>注意：它是静态世界假设，<b>不处理动态</b>；也不是端到端学习，是两套模块拼接。</p>
+            </div></details>
+          </li>
+          <li>Orbeez 把 NeRF 的建图速度拉到实时的关键是什么？给一个速度数字。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>关键是 <b>Instant-NGP 哈希编码</b> + <b>Skip voxel</b>（沿射线跳过未占用体素，只采样表面相交体素）+ <b>射线三角化</b>（把 NeRF 反解成点云）。</p>
+              <p>速度：TUM RGB-D 上 <b>19–22 FPS</b>，而 NICE-SLAM 仅 0.028–0.056 FPS，快约 360–800 倍。免预训练、边跑边建。</p>
+            </div></details>
+          </li>
+          <li>第一季 0011 说「深度学习先吃掉匹配与检索」。Orbeez-SLAM 是印证还是反例？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>在「检索 / 重识别」层面，0011 的论断成立；但 Orbeez 这一支是<b>反例式的具体化</b>——它反而把成熟的 ORB 特征法原封不动当后端管位姿，只用 NeRF 接管建图。</p>
+              <p>这说明：在隐式 SLAM 里，「匹配（位姿）」这块暂时仍由经典方法把持，因为把位姿交给尚不鲁棒的学习模型风险太高。「先吃掉」不是「全吃掉」。</p>
+            </div></details>
+          </li>
+          <li>NeurAR 的不确定性是对哪个量求方差？它被用来干什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它对<b>每个像素的颜色</b>预测一个高斯方差 $\sigma_I^2$（网络多接一个 128 维分支）。训练用异方差损失，使 $\log\sigma_I^2$ 与 PSNR 强负相关，方差能当「建得好不好」的代理。</p>
+              <p>用途：做<b>主动重建（next-best-view）</b>——规划器挑不确定性最高的视角去拍，主动补全盲区。它不处理动态、假设位姿已知。</p>
+            </div></details>
+          </li>
+          <li>NeurAR 能不能算作「隐式碰动态」的方法？它和「完整 SLAM」差在哪？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不能。它的不确定性来自「观测不足 / 视角少」，不是运动物体；它不分割、不剔除动态。而且它<b>假设位姿已知</b>，做的是「重建质量主动评估」，<b>不是 SLAM 全栈</b>，而是主动重建（NBV）。</p>
+              <p>所以它和「隐式碰动态」是两条线；动态三篇留到下一课。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0112-三条规模化路线-NeRF-SLAM与NeRF-LOAM与PLGSLAM.html">← 三条规模化路线：组合、激光、渐进</a>
+        <a class="next" href="0114-动态场景三种打法-DytanVO与RoDyn-SLAM与OVD-SLAM.html">动态场景三种打法 →</a>
+      </div>
+      <p class="foot-note">实时是把隐式跑通的第一步，知道自己不知道则是鲁棒性的地基 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

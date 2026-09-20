@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SNI-SLAM（2024）：高斯带语义标签 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0120</div>
+      <h1>SNI-SLAM（2024）：高斯带语义标签</h1>
+      <p class="subtitle">让地图不只知道「这里有什么形状」，还知道「这是什么东西」🏠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：语义进地图 · 跨注意力特征协同 · 层级语义 · 标签挂在哪</span>
+        <span>👥 作者：Siting Zhu、Guangming Wang、Hermann Blum、Jiuming Liu、Liang Song、Marc Pollefeys、Hesheng Wang（上海交大 / 剑桥 / ETH）</span>
+        <span>📅 2024 · <i>SNI-SLAM: Semantic Neural Implicit SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#truth">先把「高斯」这件事说清楚</a>
+        <a href="#sem">语义怎么进地图</a>
+        <a href="#tri">三合一到底指什么</a>
+        <a href="#what">语义地图能干什么</a>
+        <a href="#line">标签挂在哪：从 0062 到 0082</a>
+        <a href="#result">数字与边界</a>
+        <a href="#ex">课后练习</a>
+      </div>
+    </header>
+
+    <main class="section-card">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「语义进地图」和「给点云上色」的区别；解释 SNI-SLAM 的「三合一」具体合的是哪三样；知道语义地图对下游任务的意义；并能把「标签挂在什么表示上」这条线索从第三季一直串到本季。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>语义这条线接第三季 <b>0062</b> Kimera（度量-语义地图，面片带标签）与第四季 <b>0082</b> SuMa++（面片地图 + 语义剔动态）。表示这条线接第二季 <b>0036</b> NeRF 与 <b>0039</b> Plenoxels（本课的技术底座是 NeRF/SDF，不是高斯），以及本季 <b>0106</b> NICE-SLAM、<b>0107</b> ESLAM（层级特征网格与轴对齐平面）。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">每个椭球除了位置和颜色，还多带一个标签</text>
+
+          <!-- 房间 -->
+          <rect x="40" y="48" width="820" height="336" rx="10" fill="#f7f9fb" stroke="#c3d2de" stroke-width="1.2"/>
+          <rect x="40" y="330" width="820" height="54" fill="#e8eaed"/>
+          <text x="600" y="66" text-anchor="middle" font-size="10.5" fill="#9aa7b2">客厅（示意）</text>
+
+          <!-- 地毯 -->
+          <ellipse cx="450" cy="330" rx="240" ry="34" fill="#d6c3a5" stroke="#b39b78" stroke-width="1.2"/>
+          <g fill="#c9a86f" opacity="0.55">
+            <ellipse cx="360" cy="322" rx="26" ry="12"/><ellipse cx="430" cy="336" rx="26" ry="12"/>
+            <ellipse cx="510" cy="320" rx="26" ry="12"/><ellipse cx="560" cy="340" rx="26" ry="12"/>
+            <ellipse cx="330" cy="342" rx="26" ry="12"/><ellipse cx="612" cy="322" rx="26" ry="12"/>
+          </g>
+          <text x="450" y="398" text-anchor="middle" font-size="11" font-weight="700" fill="#8a7452">地毯：一类</text>
+
+          <!-- 沙发 -->
+          <rect x="80" y="228" width="200" height="66" rx="10" fill="#dfe6ec" stroke="#8a9aa8" stroke-width="1.6"/>
+          <rect x="80" y="204" width="200" height="30" rx="10" fill="#cdd8e2" stroke="#8a9aa8" stroke-width="1.6"/>
+          <g fill="#7f9ec4" opacity="0.55">
+            <ellipse cx="120" cy="216" rx="26" ry="14"/><ellipse cx="176" cy="210" rx="26" ry="14"/>
+            <ellipse cx="232" cy="218" rx="26" ry="14"/><ellipse cx="146" cy="248" rx="26" ry="14"/>
+            <ellipse cx="204" cy="252" rx="26" ry="14"/><ellipse cx="252" cy="246" rx="24" ry="13"/>
+          </g>
+          <text x="180" y="192" text-anchor="middle" font-size="11" font-weight="700" fill="#3f6088">沙发：一类</text>
+
+          <!-- 茶几 -->
+          <rect x="392" y="264" width="140" height="12" fill="#c8a887" stroke="#a1795a" stroke-width="1.2"/>
+          <rect x="404" y="276" width="8" height="46" fill="#a1795a"/>
+          <rect x="512" y="276" width="8" height="46" fill="#a1795a"/>
+          <g fill="#c08a4e" opacity="0.6">
+            <ellipse cx="420" cy="260" rx="22" ry="12"/><ellipse cx="462" cy="256" rx="22" ry="12"/>
+            <ellipse cx="506" cy="260" rx="22" ry="12"/><ellipse cx="462" cy="280" rx="20" ry="11"/>
+          </g>
+          <text x="462" y="240" text-anchor="middle" font-size="11" font-weight="700" fill="#8a5c1f">茶几：一类</text>
+
+          <!-- 落地灯 -->
+          <rect x="686" y="200" width="8" height="128" fill="#8a9aa8"/>
+          <path d="M656 200 L724 200 L706 158 L674 158 Z" fill="#f2e3b8" stroke="#c9b070" stroke-width="1.4"/>
+          <ellipse cx="690" cy="332" rx="34" ry="8" fill="#8a9aa8" opacity="0.5"/>
+          <g fill="#d9a92e" opacity="0.6">
+            <ellipse cx="690" cy="180" rx="24" ry="14"/><ellipse cx="672" cy="204" rx="20" ry="12"/>
+            <ellipse cx="708" cy="206" rx="20" ry="12"/><ellipse cx="690" cy="228" rx="18" ry="11"/>
+          </g>
+          <text x="690" y="146" text-anchor="middle" font-size="11" font-weight="700" fill="#8a6a12">落地灯：一类</text>
+
+          <!-- 墙上的椭球 -->
+          <g fill="#8fa6bb" opacity="0.4">
+            <ellipse cx="330" cy="120" rx="30" ry="16"/><ellipse cx="392" cy="112" rx="30" ry="16"/>
+            <ellipse cx="454" cy="120" rx="30" ry="16"/><ellipse cx="516" cy="112" rx="30" ry="16"/>
+            <ellipse cx="578" cy="120" rx="30" ry="16"/>
+          </g>
+          <text x="454" y="88" text-anchor="middle" font-size="10.5" fill="#6b7f92">墙面：同一类，铺满</text>
+
+          <text x="450" y="420" text-anchor="middle" font-size="12" fill="#5a4a42">除了「在哪、什么颜色」，地图里的每一块还要回答「我是什么」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「语义进地图」之后，地图上多出来的那一个维度。同一个客厅里，沙发、茶几、落地灯、地毯、墙面各自用不同颜色的半透明椭球表示，颜色代表类别而不是外观。<br>
+          <b>怎么看这张图：</b>① 先看颜色——<b>椭球的颜色在这里表示类别</b>（沙发一色、茶几一色、灯一色、地毯一色），不是物体真实的颜色；② 再看每一类内部的椭球是<b>摊在物体表面上</b>的，说明它们是贴着几何走的；③ 右下角那行提示了关键词：地图里的每一块，除了回答「在哪、什么颜色」，还要回答「<b>我是什么</b>」。<br>
+          <b>★ 一处必须说明的简化：</b>这张图的椭球是<b>教学示意</b>。SNI-SLAM 这篇论文并<b>不使用高斯</b>——它的场景表示是可优化的特征平面（下一节详细讲），标签是挂在那种表示上的。用椭球来画，是为了让你一眼看懂「带标签的地图块」是什么样子；而真正「每个高斯带一个标签」的做法，要等到本季后面的 <b>0123</b> 课（LangSplat 一类的语言高斯）才出现。<br>
+          <b>要记住的一句话：</b>语义地图的价值不在「画得好看」，而在<b>机器能对着地图说出一句有意义的话</b>——比如「沙发在灯的左边」「前面那块是地板，可以走」。
+        </figcaption>
+      </figure>
+
+      <h2 id="truth">1. 先把「高斯」这件事说清楚</h2>
+
+      <p>这一节的标题在这一季的目录里写作「高斯带语义标签」。但我们在读原文之前，必须先纠正一个容易误会的地方，否则你后面会一直把技术路线搞混。</p>
+
+      <div class="callout">
+        <h4>★ 一个必须先说清楚的事实</h4>
+        <p><b>这篇论文的正文标题是 <i>SNI-SLAM: Semantic Neural Implicit SLAM</i>，正文里完全没有「高斯」。</b>它使用的是一个<b>基于 NeRF / SDF 的神经隐式表示</b>：用层级特征平面（hierarchical feature planes）存特征，再用解码器输出语义、颜色、TSDF 三类值；渲染方式是<b>体渲染</b>（沿光线采样、逐点问网络），不是 3DGS 的<b>瓦片光栅化</b>。</p>
+        <p><b>判定依据：</b>① 标题里的关键词是 Neural Implicit（神经隐式），摘要全程未提高斯；② 论文自己在相关工作里把 NeRF 系 SLAM 分成三类——MLP-based、Hybrid representation、<b>Explicit</b>，并把「用 3D 高斯表示」的系统明确归入<b>别人那一类</b>（原文原话是「GS-SLAM 则用 3D 高斯表示，用基于泼溅的光栅化高效渲染图像」）；③ 它的场景表示被写成「层级特征平面」加解码器，用的损失是 SDF、颜色、语义、特征这几项，没有任何与协方差、泼溅、瓦片相关的量。</p>
+        <p>所以：<b>本课的标题「高斯带语义标签」是模块的命名，不是论文的自述。</b>严格地说，SNI-SLAM 的标签是挂在<b>「可优化的场景特征表示」</b>上的——而这恰恰是这一课最有意思的问题：<b>标签到底挂在哪？</b>我们会在第 5 节把这条线索完整串一遍。</p>
+      </div>
+
+      <p>那么为什么要把它放进「高斯主干」这个模块里？因为它非常有用：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>它是「表达之争」另一侧的最强音</b>
+          <p>这一季从 <b>0105</b> 到 <b>0116</b> 一直在看隐式与显式两条路。语义这个问题上，高斯那边到 2024 年还基本是「用分割结果去剔动态」的水平（第四季 <b>0082</b> SuMa++ 的思路），而隐式这边已经把语义做成了场景表示的一部分。</p>
+        </div>
+        <div class="mini-card">
+          <b>它给高斯一族立了一个参照系</b>
+          <p>读完这一课你再回头看本季后面的高斯科（尤其 <b>0123</b> 语言高斯），就会很自然地追问：「你这套语义是喂给网络的，还是挂在椭球上的？」——这是一个非常锋利的提问角度。</p>
+        </div>
+      </div>
+
+      <h2 id="sem">2. 语义怎么进地图</h2>
+
+      <p>先讲一个容易搞混的区别。<b>「给点云上色」和「语义进地图」不是一回事。</b></p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>贴上色（常见的简化做法）</b>
+          <p>先把图像分割一遍，得到一张「每个像素属于哪个类别」的图；然后把这张图里的类别当成颜色，投影到三维点上。<b>语义是外挂的</b>——它依赖分割结果的质量，而且和地图本身没有任何优化关系：位姿一漂，标签就错位。</p>
+        </div>
+        <div class="mini-card">
+          <b>语义进表示（这一篇的做法）</b>
+          <p>把语义特征当成<b>场景表示的一个可优化分量</b>，和几何、外观一起被存进特征平面、一起被体渲染、一起被损失函数更新。这样语义也能享受多视角一致性——同一块表面从不同角度看，语义应该稳定。</p>
+        </div>
+      </div>
+
+      <p>论文的说法是：大多数基于 NeRF 的 SLAM 系统「只建立 RGB 地图，而颜色信息并不直接适合导航这类下游任务」；而少数能同时学几何与语义的工作「需要数小时的离线训练才能得到语义场景表示，这对本来就需要实时的语义 SLAM 来说是不现实的」。它要做的，就是<b>把语义塞进实时的 SLAM 优化回路里</b>。</p>
+
+      <p>具体怎么塞？三条线索各有各的来源：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">属性</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">特征从哪来</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">论文原话要点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>语义</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">输入 RGB 过一遍<b>预训练的分割网络</b>（用 DINOv2 做通用特征提取器 + 一个分割头）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「输入 RGB 图像被送进语义特征提取器得到语义特征 $f_s$」</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>外观</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">由一个<b>实时更新的外观 MLP</b> 从语义特征变换而来</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">因为预训练网络提取的语义特征「<b>缺乏环境特异性</b>」，所以要靠这个 MLP 把环境特有的外观信息装进去</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>几何</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">沿光线采样得到三维点，再做 NeRF 式的<b>频率编码</b>，送进几何 MLP</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「几何特征由光线采样导出，再经几何 MLP 处理」</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这里有一处细节很关键，别漏掉：几何与外观的场景表示<b>沿用了 ESLAM（本季 0107 课）的做法</b>——原文照抄式地写了一句「我们参照 [16] 来处理几何与外观的场景表示」。也就是说，这一篇并没有重新发明几何表示，它真正新做的是<b>语义这一层，以及三种特征之间的融合</b>。这一点在评价一篇论文的贡献时很重要。</p>
+
+      <p>另外，它的语义是<b>分层的</b>（hierarchical semantic representation）：粗层抓整体结构与布局，细层抓细节。原文对这项设计的目的说得很清楚：这种表示「既能保持整体场景语义信息的精度，又能兼顾复杂的语义细节」，从而实现「自上而下的结构化语义建图」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SNI-SLAM/ed4c7592e1babc93e6454b39b0b3d8268b03aa3ea82443873a14aeee78e9552f.jpg" alt="SNI-SLAM Fig.2 overview of the method">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>An overview of SNI-SLAM. Our method takes an RGB-D stream as input. RGB images are fed into semantic feature extractor to obtain semantic features. These features are then transformed into appearance features through appearance MLP $H_\theta$. Geometry features are derived from ray sampling and then processed through geometry MLP $E_\theta$. Subsequently, these three types of features are fused using cross-attention based feature fusion and generate feature map. This feature map, the input RGB-D, and the segmentation results obtained from segmentation network serve as supervision signals. Generated features are obtained by interpolation of scene representation, then these features are utilized for feature loss construction as well as to obtain the generated RGB, depth and semantics through decoding and rendering process. … We use hierarchical semantic representation for semantic mapping. For camera tracking, we utilize loss functions to optimize camera pose. We follow [16] for geometry and appearance scene representation.<br>
+          （中译：SNI-SLAM 总览。方法以 RGB-D 流为输入。RGB 图像送入语义特征提取器得到语义特征；这些特征再经外观 MLP $H_\theta$ 变换为外观特征；几何特征由光线采样导出，并经几何 MLP $E_\theta$ 处理。随后这三类特征用<b>基于跨注意力的特征融合</b>合成为一个特征图。这个特征图、输入的 RGB-D、以及分割网络得到的分割结果，共同作为监督信号。对场景表示做插值得到生成特征，这些特征既用来构造<b>特征损失</b>，也用来经过解码与渲染过程得到 RGB、深度与语义。……我们用层级语义表示来做语义建图；相机跟踪则用损失函数优化位姿。<b>几何与外观的场景表示我们沿用了 [16]。</b>）<br>
+          <b>怎么看这张图：</b>① 从左上角的 RGB-D 出发，沿着三条不同的支路走到底——<b>语义支路</b>（分割网络）、<b>外观支路</b>（外观 MLP）、<b>几何支路</b>（光线采样 + 频率编码）；② 三条支路在中间<b>汇进同一个融合模块</b>（跨注意力），输出的是一张统一特征图——这就是「一个表示，三种输入」；③ 右上角那三样监督信号（特征图、RGB-D、分割结果）分别对应不同的损失项，其中<b>特征损失</b>是这一篇新加的，它让监督发生在特征层面而不是只在 RGB / 深度这种低层输出上；④ 最后图注里那句「we follow [16]」是原文自己说的——<b>几何与外观的表示不是这一篇的贡献。</b><br>
+          <b>要记住的一句话：</b>「语义进地图」在这张图上的具体含义就是：语义不是画在结果上的颜色，而是<b>融进特征图、参与插值、参与损失</b>的一条支路。
+        </figcaption>
+      </figure>
+
+      <p>还有一张图能帮你理解「层级」是什么意思：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SNI-SLAM/055383bb131e75652e00a555f9ef27ecf4f6754ed85c6ffffc1ddc40ad38995f.jpg" alt="SNI-SLAM Fig.3 visualization of coarse-level and fine-level features">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Visualization of coarse-level and fine-level features. Coarse-level feature captures general structure and arrangement of components. Fine-level feature provides more fine-grained details.<br>
+          （中译：粗层与细层特征的可视化。粗层特征捕捉整体的结构与各部件的排布；细层特征提供更细粒度的细节。）<br>
+          <b>怎么看这张图：</b>① 左右两栏是同一场景在两个尺度上提取的特征，请重点看<b>哪一栏更能看出「东西的排布」、哪一栏更能看出「边界」</b>；② 粗层像一张概略的布局图——它知道「这里有一片桌子、那边有一片地板」，但边界糊；③ 细层像一张细节图——它把椅子腿、桌沿这类窄结构分得开，但看不出整体布局；④ 这也解释了为什么论文要<b>同时</b>保留两层：只留粗层，语义边界糊成一片；只留细层，类别之间容易碎片化。<br>
+          <b>和前面几课对照：</b>这就是第二季 <b>0036</b>「多分辨率特征网格」的思路在语义上的复用——和 <b>0106</b> NICE-SLAM 用多层特征网格解决「糊成一团」，是同一个药方。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文为什么要专门加一项「特征损失（feature loss）」，而不是只用 RGB 损失和深度损失？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="特征损失不会降低显存——恰恰相反，它要求把中间层的特征也拿出来做监督，计算图更长。论文的理由是「监督的层次」而不是「开销」。" onclick="lessonKit.answer(this,'q0120a')">为了把显存占用降下来</button>
+          <button data-correct="yes" data-explanation="对。论文原话是：与 RGB 损失、深度损失这类低层损失相比，特征损失「能够在更高的层次上引导网络优化」。也就是说，RGB 与深度只是最终的输出，而语义这类信息是在中间特征层面形成的——直接在特征层面监督，等于把「要学什么」讲得更明确。" onclick="lessonKit.answer(this,'q0120a')">为了在更高层次上监督</button>
+          <button data-correct="no" data-explanation="特征损失是在原有损失之外额外加的一项，并不替代颜色或深度监督。原文里 RGB、深度、语义、特征损失是并列存在、加权相加的。" onclick="lessonKit.answer(this,'q0120a')">为了取代颜色深度损失</button>
+        </div>
+        <div class="quiz-feedback" id="q0120a"></div>
+      </div>
+
+      <h2 id="tri">3. 三合一到底指什么</h2>
+
+      <p>现在回答那个最容易被名字带偏的问题：<b>「Semantic-Neural-Implicit」这个名字里的三个词，指的是三个并行的表示，还是一个表示的三种输出？</b></p>
+
+      <p>按原文的写法，正确的理解是<b>后者加上一层</b>：它是一个表示，但这个表示内部<b>有三条并行的特征支路</b>，三条支路先互相「开会」，再一起被解码成三种输出。分两层来说清楚：</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>名字的字面拆解</b>
+          <p><b>Semantic</b> = 语义，回答「这是什么」；<b>Neural</b> = 神经，指整个表示由神经网络（MLP + 特征平面）承载并优化；<b>Implicit</b> = 隐式，指不存点、不存面，信息藏在网络权重与特征里。<br>
+          三个词对应三件事：<b>任务、实现方式、表示类型</b>。</p>
+        </div>
+        <div class="mini-card">
+          <b>机制上的「三合一」</b>
+          <p>外观特征 $f_a$、几何特征 $f_g$、语义特征 $f_s$ 这三种输入，用<b>跨注意力（cross-attention）</b>做<b>特征协同</b>，融合成一张特征图；再由一个<b>融合式解码器（internal fusion-based decoder）</b>从多层级特征里解码出<b>语义、RGB、TSDF</b> 三种值。<br>
+          所以是「<b>三种特征进、一张特征图、三种输出出</b>」。</p>
+        </div>
+      </div>
+
+      <p>论文为这套设计给了两个理由，都很值得读：</p>
+
+      <div class="callout">
+        <h4>理由一：三个属性是互相有关联的，分开处理会丢信息</h4>
+        <p>原文说：外观、几何、语义「是互相关联的，把它们独立处理会丢失交互关系，导致对图像或场景的理解不完整」。它举的例子很具体：<b>物体的外观会随着光照和视角变化，但它的语义通常不变</b>——这种稳定性让语义成为理解物体的重要工具；反过来，看颜色、亮度、纹理也能帮你猜出它属于哪一类。</p>
+        <h4>理由二：互相增强，而且不能让语义优化反过来污染外观</h4>
+        <p>论文提到一个具体的技术困难：语义的多视角一致性可以用来优化外观，但反过来也会影响外观细节；反之亦然。它的解法是一种<b>「单向关联」</b>的设计——通过改进解码器与渲染流程，让「一个模态的有价值信息能增强其他模态，<b>而不影响原来的表示、也不被反向影响</b>」。</p>
+        <p>最终的效果，论文在插图里给了三个例子：融合后的<b>外观</b>消除了椅子上由光照造成的阴影；融合后的<b>几何</b>改善了柜子下边缘的不一致；融合后的<b>语义</b>强化了桌腿与地板之间的区分。</p>
+      </div>
+
+      <p>这张原图正是这三个例子的展示，它是理解「三合一」最直观的一张：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SNI-SLAM/e134fe338d7098545275f33fb33ba8320dfdf4c06307bd49321b4be68a59e914.jpg" alt="SNI-SLAM Fig.1 feature collaboration between appearance geometry and semantics">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Our SNI-SLAM leverages the correlation of multi-modal features in the environment to conduct semantic SLAM based on Neural Radiance Fields (NeRF). … We propose a feature collaboration method between appearance, geometry, and semantics, which significantly enhances the feature representation capabilities. Fused Appearance (orange box): Shadowing on the chair caused by light is eliminated. Fused Geometry (blue box): The inconsistency of the cabinet bottom edge is improved. Fused Semantic (red box): The distinction between table leg and floor is enhanced.<br>
+          （中译：SNI-SLAM 利用环境中多模态特征之间的关联，基于 NeRF 做语义 SLAM。……我们提出外观、几何、语义之间的<b>特征协同</b>方法，显著增强了特征表达能力。<b>融合后的外观</b>（橙框）：椅子上由光照造成的阴影被消除；<b>融合后的几何</b>（蓝框）：柜子下边缘的不一致得到改善；<b>融合后的语义</b>（红框）：桌腿与地板之间的区分被强化。）<br>
+          <b>怎么看这张图：</b>① 请先找图注点名的那<b>三个彩色框</b>（橙、蓝、红），它们分别展示外观、几何、语义三方面各自被「别的模态」帮了一把；② 这说明「三合一」不是你帮我、我帮你各占一半的模糊说法，而是<b>每一项都能指出具体的改善</b>——阴影被消掉、边缘变一致、类别边界更清楚；③ 也请注意这张图同时是论文的门面图：它用「NeRF」这个词来自我定位，再次说明这一篇走的是隐式路线。<br>
+          <b>要记住的一句话：</b>「协同」的价值在于<b>当某一路信号出问题时，别的路能兜住</b>——论文原话说，这让 SNI-SLAM 即使在<b>单个属性有缺陷</b>时仍然保持稳健。
+        </figcaption>
+      </figure>
+
+      <p>下面这张自绘图，把这个「三合一」和第一季讲过的「建图三分类」摆在一起看：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">三条支路汇进同一个表示：几何 + 外观 + 语义</text>
+
+          <!-- 三条支路 -->
+          <rect x="40" y="60" width="150" height="46" rx="8" fill="#e8eef5" stroke="#5a8fc7" stroke-width="1.5"/>
+          <text x="115" y="89" text-anchor="middle" font-size="13" font-weight="700" fill="#2c5f8a">几何</text>
+          <rect x="40" y="164" width="150" height="46" rx="8" fill="#fdf1ec" stroke="#cc785c" stroke-width="1.5"/>
+          <text x="115" y="193" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">外观</text>
+          <rect x="40" y="268" width="150" height="46" rx="8" fill="#eaf6ef" stroke="#2f6d51" stroke-width="1.5"/>
+          <text x="115" y="297" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">语义</text>
+
+          <path d="M190 83 C 260 83, 300 160, 356 176" fill="none" stroke="#5a8fc7" stroke-width="2"/>
+          <path d="M356 176 L344 172 L349 183 Z" fill="#5a8fc7"/>
+          <path d="M190 187 C 250 187, 300 182, 352 182" fill="none" stroke="#cc785c" stroke-width="2"/>
+          <path d="M352 182 L342 177 L342 187 Z" fill="#cc785c"/>
+          <path d="M190 291 C 260 291, 300 206, 356 190" fill="none" stroke="#2f6d51" stroke-width="2"/>
+          <path d="M356 190 L346 186 L345 197 Z" fill="#2f6d51"/>
+
+          <text x="450" y="64" text-anchor="middle" font-size="11" fill="#7a8a99">跨注意力特征协同</text>
+
+          <!-- 汇合点 -->
+          <ellipse cx="440" cy="183" rx="82" ry="60" fill="#f7f9fb" stroke="#90a4ae" stroke-width="1.6"/>
+          <text x="440" y="176" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b4a5e">同一个表示</text>
+          <text x="440" y="196" text-anchor="middle" font-size="11" fill="#5a4a42">一张融合特征图</text>
+
+          <!-- 三种输出 -->
+          <path d="M522 183 L584 183" fill="none" stroke="#90a4ae" stroke-width="2"/>
+          <path d="M584 183 L574 178 L574 188 Z" fill="#90a4ae"/>
+          <rect x="586" y="82" width="150" height="38" rx="7" fill="#eaf6ef" stroke="#2f6d51" stroke-width="1.4"/>
+          <text x="661" y="107" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6d51">语义</text>
+          <rect x="586" y="164" width="150" height="38" rx="7" fill="#fdf1ec" stroke="#cc785c" stroke-width="1.4"/>
+          <text x="661" y="189" text-anchor="middle" font-size="12" font-weight="700" fill="#a8563a">RGB 与深度</text>
+          <rect x="586" y="246" width="150" height="38" rx="7" fill="#e8eef5" stroke="#5a8fc7" stroke-width="1.4"/>
+          <text x="661" y="271" text-anchor="middle" font-size="12" font-weight="700" fill="#2c5f8a">TSDF（几何）</text>
+          <path d="M522 183 C 556 183, 556 100, 584 100" fill="none" stroke="#90a4ae" stroke-width="1.6"/>
+          <path d="M522 183 C 556 183, 556 265, 584 265" fill="none" stroke="#90a4ae" stroke-width="1.6"/>
+
+          <!-- 第一季 0010 三分类 -->
+          <rect x="60" y="342" width="780" height="70" rx="8" fill="#faf7f4" stroke="#e0d5c8" stroke-width="1.4"/>
+          <text x="76" y="364" font-size="11.5" font-weight="700" fill="#5a4a42">第一季 0010 课的「建图三分类」：</text>
+          <text x="76" y="384" font-size="11" fill="#7a8a99">Geometric（几何图） · Semantic（语义图） · Implicit（隐式图）</text>
+          <text x="76" y="402" font-size="11.5" fill="#a8563a">SNI-SLAM 恰好把这三类塞进了同一个表示：几何 + 语义用同一张特征图承载，而这张特征图本身是隐式的</text>
+
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>「三合一」的流向图，以及它与第一季 <b>0010</b> 课那句「建图三分类」的关系。<br>
+          <b>怎么看这张图：</b>① 左边三条支路分别是几何、外观、语义，它们<b>不是三条独立的流水线</b>，而是在中间汇进同一个表示（跨注意力融合成一张特征图）；② 右边从这个表示里出来三种输出——语义、RGB 与深度、TSDF；③ 最下面那条横向对照最值得看：第一季 <b>0010</b> 课把建图方法分成<b>几何图、语义图、隐式图</b>三类，而 SNI-SLAM 的做法是<b>把几何与语义都放进隐式这一个表示里</b>——三分类里的三样，它一次占了两样，而且是同一种表示。<br>
+          <b>要记住的一句话：</b>这正是隐式表示这一派最引以为傲的一点——<b>「一张网络既能表示形状，也能表示颜色，还能表示类别」</b>。代价也正在这里：它们全部挤在同一份权重里，谁出问题都会牵连别人。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文特别强调「单向关联」：让一个模态的信息去增强别的模态，但不让增强的结果反过来改坏原表示。这个设计是针对什么风险的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。论文把这件事讲成了一个具体的难点：语义的多视角一致性可以用来改善外观，但外观的优化也会反过来牵动语义，两边的优化目标会互相拉扯——比如为了把语义边界推准而把颜色磨平。单向关联就是为了切断这种反向拉扯。" onclick="lessonKit.answer(this,'q0120b')">三个模态互相拉扯改坏</button>
+          <button data-correct="no" data-explanation="融合模块并不因为单向关联而变大或变小；这说的是信息流动的方向，不是参数量。" onclick="lessonKit.answer(this,'q0120b')">融合模块的参数太多了</button>
+          <button data-correct="no" data-explanation="梯度消失是深层网络的训练问题，与「模态之间要不要反向影响」无关。" onclick="lessonKit.answer(this,'q0120b')">深层网络的梯度消失了</button>
+        </div>
+        <div class="quiz-feedback" id="q0120b"></div>
+      </div>
+
+      <h2 id="what">4. 语义地图能干什么</h2>
+
+      <p>论文对「有什么用」这个问题给了一段相当克制的表述，没有画大饼，而是先说旧方法的不足：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「与传统 SLAM 相比，语义 SLAM 能够<b>识别、分类并关联场景中的实体</b>，并生成语义地图。」</p>
+
+      <p>然后它把「不能干什么」说得很清楚——「大多数现有 NeRF-SLAM 系统只建立 RGB 地图，而颜色信息并不直接适合<b>导航</b>这类下游任务」。这句话的潜台词是：一张只会渲染颜色和深度的地图，对机器人来说只是「好看」，而一张带类别的地图，机器人才知道「那块是地板、可以走」「那块是墙、别撞」。</p>
+
+      <p>具体到这一篇，语义地图的能力可以拆成三层：</p>
+
+      <div class="grid-3">
+        <div class="mini-card">
+          <b>① 每个像素都能给出类别</b>
+          <p>它做的是<b>稠密的三维语义分割</b>：任意视角渲染出来，除了颜色和深度，还能得到一张语义图。Replica 上的平均 mIoU 是 <b>87.41</b>（下面的对比表里会看到它比谁高）。</p>
+        </div>
+        <div class="mini-card">
+          <b>② 语义是分层的</b>
+          <p>粗层抓布局、细层抓细节，因此可以做「<b>自上而下的结构化语义建图</b>」——先知道这一片区域是厨房，再知道里面哪些是台面、哪些是柜子。这种层级结构对规划类任务更友好。</p>
+        </div>
+        <div class="mini-card">
+          <b>③ 能补出没看过的地方</b>
+          <p>传统的显式语义重建（点云 / 网格）有一个原始痛点是「无法预测未知区域」。隐式表示有一个附带好处：对没有被认真观测过的地方，网络也能给出一个「合理的猜测」（第一季 <b>0010</b>、本季 <b>0105</b> 的 iMAP 那节课讲过「孔洞填补」这件事）。</p>
+        </div>
+      </div>
+
+      <p>还有一个设计细节值得单独提：<b>特征损失（feature loss）</b>。上一节的互动判断里提到过它，这里补上完整意思——论文说，与 RGB 损失、深度损失这类低层损失相比，特征损失「能够在更高的层次上引导网络优化」。它的落地方式是：从场景表示里插值出「生成特征」，监督信号则是融合模块输出的那张特征图，两者在特征层面对齐。这是一个挺通用的技巧：<b>当你想要网络学的不只是输出，而是「输出的形成方式」时，就把损失放在中间层。</b></p>
+
+      <h2 id="line">5. 标签挂在哪：从 0062 到 0082，再到今天</h2>
+
+      <p>这一节是本课最想让你带走的东西——它不是某一个系统的细节，而是<b>一条横跨三季的线索</b>：<b>语义标签到底挂在什么表示上？</b></p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">课程 / 系统</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">地图表示</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">标签挂在哪</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">用途</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">第三季 <b>0062</b><br>Kimera</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">显式：稠密的<b>语义网格 / 面片</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">挂在<b>面片上</b>——每个面片带一个类别</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">度量-语义地图、位姿图优化</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">第四季 <b>0082</b><br>SuMa++</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">显式：激光<b>面片地图</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">挂在<b>面片上</b>，但主要用来<b>剔动态</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">语义过滤掉会动的物体，让配准更稳</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">本季 <b>0120</b><br>SNI-SLAM</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">隐式：<b>层级特征平面</b> + 解码器（NeRF / SDF）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">挂在<b>可优化的场景特征</b>上，语义是表示里的一条支路</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">稠密三维语义分割 + 实时语义建图</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">本季 <b>0123</b>（后面会讲）<br>LangSplat 一类</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">显式：3D 高斯</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">挂在<b>每个高斯上</b>，而且挂的不只是类别，还有<b>语言特征</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">用一句话查询场景里的某个东西</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>把这张表竖着读一遍，你会看到一条很清晰的演化：<b>从「挂在面片上」到「挂在特征上」再到「挂在椭球上」</b>。</p>
+
+      <div class="callout">
+        <h4>为什么「挂在哪」这么重要</h4>
+        <p>因为标签的<b>存储位置</b>决定了三件事：</p>
+        <p><b>① 位姿改了以后标签会不会错位。</b>挂在显式面片上的标签，位姿一修正就必须跟着搬（第四季 <b>0082</b>、第三季 <b>0062</b> 都要专门处理这件事）；挂在<b>可优化表示</b>上的标签，则可以在优化中自己重新收敛。</p>
+        <p><b>② 能不能被「优化」而不只是「被赋值」。</b>SNI-SLAM 之所以能把语义做成表示的一部分，是因为它多了一个融合模块和一个特征损失——语义是<b>学出来的</b>，不是投影上去的。</p>
+        <p><b>③ 查询的粒度。</b>面片上的标签只能回答「这块表面的类别」；而挂在每个高斯（或每个特征点）上的语言特征，可以让机器回答「把桌上那个红色的杯子给我」这种更细的请求。</p>
+        <p><b>课程判断：</b>这条线索从第一季 <b>0010</b> 的「建图三分类」一路延伸到这里，是本项目里最连贯的一条之一。<b>而 SNI-SLAM 的位置很特殊——它站在歧路口：左边是隐式表示把语义变成「可优化的特征」，右边是显式表示把语义变成「可编辑的标签」。</b>两条路都还没有收敛。</p>
+      </div>
+
+      <h2 id="result">6. 数字与边界</h2>
+
+      <p>先看它在三个数据集上的主结果：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">数据集 / 指标</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">SNI-SLAM</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">对照</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Replica 跟踪 ATE（均值 / RMSE，cm）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>0.397 / 0.456</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ESLAM 0.545 / 0.678（当时最好的隐式方法）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Replica 重建 Depth L1（cm）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>0.766</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ESLAM 0.945；iMAP 4.645</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Replica 语义 mIoU（%）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>87.41</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">NIDS-SLAM 82.37</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ScanNet 重建（RMSE，平均）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>6.54</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ESLAM 7.27；NICE-SLAM 8.64</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">TUM 重建（RMSE，平均）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>4.35</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">Point-SLAM 8.92；NICE-SLAM 15.87</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">带语义的 SLAM 帧率 / 参数量</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>2.15 FPS / 6.2 M</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">ESLAM 3.02 FPS / 6.85 M（不带语义）；NIDS-SLAM 0.86 FPS / 12.6 M</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>这几行数字里有两处值得多看两眼：</p>
+
+      <p><b>① 语义几乎没有拖慢它。</b>带语义的 SNI-SLAM 跑到 2.15 FPS，而不带语义的对照方法 ESLAM 是 3.02 FPS——差距不到一半；但另一个带语义的 NIDS-SLAM 只有 0.86 FPS、参数量还大一倍。<b>这说明「把语义做进表示里」并不必然昂贵，关键看它和表示的结合方式。</b></p>
+
+      <p><b>② 它赢的不只是语义，还有几何与跟踪。</b>Replica 的 ATE 从 ESLAM 的 0.545 降到 0.397，TUM 的重建 RMSE 从 Point-SLAM 的 8.92 降到 4.35。<b>这是一个很反直觉的现象：多学了一件事（语义），几何反而更准了。</b>论文给出的解释就是那套「特征协同」——三个模态互相补足，单属性有缺陷时系统也不崩。</p>
+
+      <p>最后一张图是语义质量的消融，它能让你看清「协同」到底贡献了多少：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SNI-SLAM/4a5e11220e3517a0196aa131ba6cb3da71c133f5fe3a9c6b5cf935fe83c257e6.jpg" alt="SNI-SLAM Fig.5 ablation study of semantic rendering">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Ablation study of semantic rendering results and ground truth labels on office0 of Replica. We visualize rendering results in different circumstances: (w/o HSM) without Hierarchical Semantic Mapping; (w/o FL) without Feature Loss; (w/o FF) without Feature Fusion. It can be seen from residuals that the whole SNI-SLAM achieves best semantic accuracy.<br>
+          （中译：在 Replica 的 office0 上对语义渲染结果与真值标签做的消融研究。我们可视化了不同设置下的渲染结果：<b>去掉 HSM</b>（无层级语义建图）、<b>去掉 FL</b>（无特征损失）、<b>去掉 FF</b>（无特征融合）。从残差可以看出，完整的 SNI-SLAM 取得最好的语义精度。）<br>
+          <b>怎么看这张图：</b>① 把每一栏和<b>真值标签</b>并排看，重点比对<b>类别边界</b>——比如桌子与地板交界、椅腿这种细结构；② 看残差那一栏（图注说差异会在残差里体现）：残差越少、越集中在小区域，说明这一项配置越好；③ 三行消融分别对应本节讲过的三件事——层级语义（有粗有细）、特征损失（在特征层监督）、特征融合（跨注意力），<b>去掉任何一项都会变差</b>，这就是「三合一」的必要性证据。<br>
+          <b>要记住的一句话：</b>语义精度不只看最终那一层分割输出，还要看<b>语义信息在表示里组织得怎么样</b>——这正是这一篇与「先分割再投影」的老做法的分水岭。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <h4>★ 关于「局限」的诚实说明（与 0119 课同样的情况）</h4>
+        <p><b>这篇论文也没有单独的局限性小节。</b>它的第 5 节标题是 Conclusion，内容只是把贡献复述了一遍，随后就是致谢与参考文献。所以任何标着「原文承认的局限」的说法都要小心。</p>
+        <p>下面是<b>由它的输入设定与实验范围推断</b>出来的边界（是判断，不是原文自评）：</p>
+        <p>① <b>依赖 RGB-D。</b>全篇的输入都是 RGB-D 流，所有实验都在 Replica / ScanNet 这类室内数据集上——没有单目配置，也没有户外大尺度场景。</p>
+        <p>② <b>语义质量受预训练分割网络限制。</b>它的语义特征来自一个预训练的分割网络（用 DINOv2 做通用特征提取器加一个分割头）。预训练网络没见过的类别，它没有理由认得出来——这一点是一个结构性的依赖。</p>
+        <p>③ <b>没有回环。</b>原文全篇未提回环检测；它所有评测都基于「无回环」的对比基线（原文在实验里明确说对照方法也是「不做回环」的那一批）。</p>
+        <p>④ <b>需要把三样东西一起优化。</b>它的优化目标是场景表示、MLP 网络与相机位姿的联合优化，损失项有自由空间、截断、语义、特征、颜色、深度六项（加权求和）——调参空间不小。</p>
+      </div>
+
+      <h2 id="ex">7. 课后练习</h2>
+
+      <section class="exercise-box">
+        <h3>练习</h3>
+        <ol>
+          <li>请用自己的话说清「给点云贴上语义标签」与「把语义做进场景表示」的区别，并说明后者多得到了什么。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>贴标签的做法：</b>先用分割网络把图像逐像素分类，再把类别当成颜色投影到三维点上。语义完全来自分割结果，与地图本身的优化没有任何关系。它的问题有两个：一是<b>依赖分割质量</b>（分割错了就永久错下去）；二是<b>位姿一漂、标签就错位</b>，因为标签是「一次性贴上去的」。</p>
+              <p><b>做进表示的做法：</b>把语义特征当成场景表示的一个分量——在 SNI-SLAM 里，语义特征来自分割网络，但要经过外观 MLP、再和几何、外观特征一起被跨注意力融合成一张特征图，最后经解码器渲染出语义图。它<b>参与体渲染、参与损失函数、参与优化</b>。</p>
+              <p><b>于是多得到了三样东西：</b>① <b>多视角一致性</b>——同一块表面从不同角度看，语义应该稳定，这个约束会自动进入优化；② <b>可修正性</b>——位姿被修正后，语义可以在后续优化里重新收敛，而不是错位到底；③ <b>互相增强</b>——几何帮语义把边界推准，语义帮几何把同类区域理平（论文图 1 的三个彩框就是这件事的证据）。</p>
+              <p><b>一句话总结：</b>贴标签是「给结果加注释」，做进表示是「让语义成为地图的一部分」。后者贵，但它能享受前者的所有下游好处。</p>
+            </div></details>
+          </li>
+          <li>「Semantic-Neural-Implicit」这三个词，分别对应这件工作的哪个层面？「三合一」在机制上又具体指什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>三个词对应的层面：</b><b>Semantic</b> 说的是<b>任务</b>——不只是建几何图，还要建语义图；<b>Neural</b> 说的是<b>实现方式</b>——表示由神经网络承载（特征平面 + MLP 解码器），并且是可以被梯度下降优化的；<b>Implicit</b> 说的是<b>表示类型</b>——不存点、不存面，信息藏在特征与权重里，想知道「这里是什么」就得去查询/渲染。</p>
+              <p><b>机制上的「三合一」：</b>三条并行的特征支路——外观（由外观 MLP 从语义特征变换而来）、几何（光线采样 + 频率编码 + 几何 MLP）、语义（预训练分割网络）——先用跨注意力做<b>特征协同</b>融合成一张特征图，再由<b>融合式解码器</b>从多层级特征里解码出<b>语义、RGB、TSDF</b> 三种值。所以是「三种特征进、一张特征图、三种输出出」。</p>
+              <p><b>必须补一句：</b>论文自己承认几何与外观的场景表示是<b>沿用 ESLAM 的</b>（原文写「we follow [16] for geometry and appearance scene representation」）。所以这一篇新做的是<b>语义这一层，以及三者的融合方式与解码器设计</b>——评价贡献时要把这句算进去。</p>
+            </div></details>
+          </li>
+          <li>请把「语义标签挂在什么表示上」这条线索，从第三季 <b>0062</b> Kimera 一直排到本季的 <b>0120</b> 与后面的 <b>0123</b>，并说明「挂在哪」会带来什么实际差别。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>顺序是：</b>第三季 <b>0062</b> Kimera——显式稠密语义网格 / 面片，标签挂在<b>面片</b>上；第四季 <b>0082</b> SuMa++——激光面片地图，标签也挂在<b>面片</b>上（主要用来剔动态）；本季 <b>0120</b> SNI-SLAM——神经隐式（层级特征平面 + 解码器），标签挂在<b>可优化的场景特征</b>上；本季 <b>0123</b> LangSplat 一类——3D 高斯，标签（而且是语言特征）挂在<b>每个高斯</b>上。</p>
+              <p><b>实际差别有三条：</b>① <b>位姿修正后的表现</b>——面片上的标签必须显式搬运（所以 SuMa++ 那一类要专门处理地图更新）；表示里的标签可以在优化中重新收敛；高斯上的标签则跟着椭球一起被搬（这正好用上高斯「可被扭曲修改」的性质）。② <b>是学出来的还是赋上去的</b>——SNI-SLAM 的语义有跨注意力融合与特征损失，是被优化的；传统做法的标签是分割结果投影上去的。③ <b>查询粒度</b>——面片只能回答「这块表面是什么」，挂在每个高斯上的语言特征则能支撑「用一句话找物体」这种细粒度查询。</p>
+              <p><b>课程判断：</b>这条线到现在还没有收敛。隐式派把语义变成「可优化的特征」，显式派把语义变成「可编辑的标签」，两者各有一个优势：前者能靠多视角一致性自我修正，后者能被直接删除、编辑、搬动。<b>读后面的论文时，看到「语义」两个字，第一件事就应该问：标签挂在哪儿？</b></p>
+            </div></details>
+          </li>
+          <li>SNI-SLAM 多学了一样东西（语义），跟踪与几何精度却比不学语义的对照方法更好。请解释这个现象可能的原因，并说明这属于原文的结论还是我们的推断。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>现象：</b>Replica 上跟踪 ATE 从 ESLAM 的 0.545 降到 0.397，TUM 重建 RMSE 从 Point-SLAM 的 8.92 降到 4.35，而 ESLAM 是<b>不带语义</b>的。多学一样反而更准，这在直觉上是反的。</p>
+              <p><b>论文给出的解释（属于原文结论）：</b>是那套<b>特征协同</b>。原文说两个挑战——「外观、几何与语义信息是互相关联的，独立处理会丢失交互关系」；它用跨注意力让三者互相增强，于是「即使单个属性有缺陷，系统也能保持稳健」。论文图 1 用三个彩框给出了具体证据：融合后的外观消掉了椅子上的阴影、融合后的几何改善了柜子下边缘的不一致、融合后的语义强化了桌腿与地板的区分。</p>
+              <p><b>课程补充的推断（属于我们的解释）：</b>语义特征是从一个预训练大模型（DINOv2）来的，它天然带有很强的语义先验。把它融进表示，等于给几何优化引入了一个<b>额外的、稳定的监督信号</b>——同一类物体的表面在语义上是「一样」的，这会抑制几何在纹理弱的地方乱飘。所以「多学一样」在这里不是负担，而是<b>多了一路正则化</b>。</p>
+              <p><b>要区分清楚：</b>「协同带来改善」是原文的实验结论与自述理由；「语义先验起了正则化作用」是我们从结构上给出的补充解释，论文并没有这样论证。读论文要养成习惯——分清哪句话是作者说的，哪句话是我们加的。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0119-Photo-SLAM2024-明确面向嵌入式实时.html">← Photo-SLAM（2024）：明确面向嵌入式实时</a>
+        <a class="next" href="0121-WildGS-SLAM与Splat-SLAM-动态剔除与纯RGB全局优化.html">WildGS-SLAM 与 Splat-SLAM：动态剔除与纯 RGB 全局优化 →</a>
+      </div>
+      <p class="foot-note">「标签挂在哪」这个问题看着很小，却是跨了三季的一条主线。记住它，后面每读一篇语义工作都用得上 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

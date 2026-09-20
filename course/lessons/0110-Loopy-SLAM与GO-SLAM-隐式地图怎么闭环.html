@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Loopy-SLAM 与 GO-SLAM：隐式地图怎么闭环 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0110</div>
+      <h1>Loopy-SLAM 与 GO-SLAM：隐式地图怎么闭环</h1>
+      <p class="subtitle">当地图是一堆网络权重时，回环来了、位姿要改，这些权重到底怎么改？🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：隐式表示的回环与全局一致</span>
+        <span>👥 作者：Loopy（RGB-D）、GO-SLAM（TUM 等）</span>
+        <span>📅 2024 / 2023 · <i>Loopy-SLAM / GO-SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#why">先立问题意识</a>
+        <a href="#loopy">Loopy-SLAM：点能搬</a>
+        <a href="#go">GO-SLAM：即时重建</a>
+        <a href="#conclusion">核心结论：改哪一层</a>
+        <a href="#table">横向对比</a>
+        <a href="#layer">改动落在哪一层</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="why">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说清「稀疏 SLAM 改位姿就够、隐式表示必须改地图本身」这个矛盾；讲出 Loopy-SLAM 用「点基 submap 整体刚性搬动」、GO-SLAM 用「哈希场即时重渲染」各是怎么做回环的；并记住本组六篇回环一个共同真相——它们都不直接改 MLP 权重。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>接第一季 <b>0014</b> 课「回环检测综述」（一个错回环代价很大，需要安全阀）；接第三季 <b>0043–0045</b> 课 ORB-SLAM 三兄弟的 BoW 重识别与位姿图；接第二季 <b>0019/0020/0021</b> 课的 BA 与 g2o；接上一课 <b>0109</b>（Point-SLAM，把特征挂在点云上）——本节的 Loopy-SLAM 正是它的「加回环」版本。</p>
+        </div>
+      </div>
+
+      <h2>1. 先立问题意识：地图是权重，回环来了怎么办</h2>
+
+      <p>我们从一张非常朴素的对比开始。</p>
+
+      <p>在传统的<b>稀疏 SLAM</b> 里（比如 ORB-SLAM、LOAM），地图是一堆<b>孤立的点或特征</b>。当机器人走回原点、检测到回环，发现「咦，我之前记的位置偏了」，它只需要<b>把那些点的位置搬一搬</b>，或者更常见的是——<b>只改位姿</b>，地图点跟着位姿一起被重新摆放就行。地图本身不需要「重新学习」。</p>
+
+      <p>但到了<b>隐式表示</b>（NeRF、神经点云、哈希网格），情况彻底变了。这里地图不是「一堆点」，而是<b>一个函数的权重</b>。你想知道「这里有没有墙」，不是去翻一个点，而是<b>去问一个网络</b>：把三维坐标喂进去，它吐出颜色和密度。</p>
+
+      <div class="callout">
+        <h4>本组的灵魂问题</h4>
+        <p>如果地图是网络权重（或特征网格），回环来了、位姿要改，这些权重怎么改？</p>
+        <p>稀疏 SLAM 改位姿就够；隐式表示必须<b>改地图本身</b>——但「改一个神经网络」听起来很吓人：难道每次回环都要把整个网络<b>重训</b>一遍吗？如果那样，在线实时就别想了。</p>
+        <p>下面两篇就是针对这个问题的两种回答，而真正读进去你会发现：<b>它们其实都没去动那个大 MLP。</b></p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">同一个房间，机器人走了两遍</text>
+
+          <!-- 第一遍：偏移虚影 -->
+          <rect x="40" y="50" width="380" height="320" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="230" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">① 第一遍走：地图是歪的</text>
+
+          <!-- 真实房间轮廓 -->
+          <rect x="90" y="110" width="160" height="120" fill="none" stroke="#3b4a5e" stroke-width="2.4"/>
+          <rect x="110" y="200" width="120" height="40" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+          <text x="170" y="225" text-anchor="middle" font-size="11" fill="#607d8b">真实家具</text>
+          <!-- 偏移虚影 -->
+          <g opacity="0.55">
+            <rect x="118" y="92" width="160" height="120" fill="none" stroke="#c0392b" stroke-width="2.2" stroke-dasharray="6 4"/>
+            <rect x="138" y="182" width="120" height="40" fill="#e6a09a" stroke="#c0392b" stroke-width="1.2"/>
+          </g>
+          <text x="230" y="270" text-anchor="middle" font-size="11" fill="#c0392b">偏掉的家具虚影</text>
+          <text x="230" y="352" text-anchor="middle" font-size="11.5" fill="#a8563a">里程计漂移：同一面墙被记成两处</text>
+
+          <!-- 第二遍：回环拉住 -->
+          <rect x="480" y="50" width="380" height="320" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="670" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">② 第二遍回到起点：检测到回环</text>
+
+          <rect x="530" y="110" width="160" height="120" fill="none" stroke="#3b4a5e" stroke-width="2.4"/>
+          <rect x="550" y="200" width="120" height="40" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1.2"/>
+          <!-- 一串特征点与搬运箭头 -->
+          <g fill="#2e9e6b">
+            <circle cx="548" cy="96" r="4.5"/><circle cx="600" cy="100" r="4.5"/><circle cx="652" cy="104" r="4.5"/>
+            <circle cx="560" cy="150" r="4.5"/><circle cx="612" cy="154" r="4.5"/><circle cx="664" cy="158" r="4.5"/>
+            <circle cx="572" cy="210" r="4.5"/><circle cx="624" cy="214" r="4.5"/><circle cx="676" cy="218" r="4.5"/>
+          </g>
+          <g stroke="#2e9e6b" stroke-width="1.6" fill="none">
+            <path d="M548 96 Q520 80 504 96"/><path d="M600 100 Q572 84 556 100"/><path d="M652 104 Q624 88 608 104"/>
+            <path d="M560 150 Q532 134 516 150"/><path d="M612 154 Q584 138 568 154"/><path d="M664 158 Q636 142 620 158"/>
+            <path d="M572 210 Q544 194 528 210"/><path d="M624 214 Q596 198 580 214"/><path d="M676 218 Q648 202 632 218"/>
+          </g>
+          <g fill="#2e9e6b">
+            <path d="M504 96 L512 92 L512 100 Z"/><path d="M516 150 L524 146 L524 154 Z"/><path d="M528 210 L536 206 L536 214 Z"/>
+          </g>
+          <text x="700" y="160" text-anchor="middle" font-size="11" fill="#2f6d51">一串特征点</text>
+          <text x="700" y="178" text-anchor="middle" font-size="11" fill="#2f6d51">被整体拉住</text>
+          <text x="670" y="300" text-anchor="middle" font-size="11.5" fill="#2f6d51">虚影与真实轮廓重合</text>
+          <text x="670" y="356" text-anchor="middle" font-size="11" fill="#5f8a72">网络权重没法直接「挪」，能挪的是带特征的点</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是机器人第一次走过一个房间，里程计慢慢漂了，同一面墙被记成两处（红色虚影是偏掉的副本）；右格是它第二次回到起点、检测到回环后，把那一串<b>带特征的点</b>整体搬到正确位置，虚影与真实轮廓重合。<br>
+          <b>怎么看这张图：</b>① 左格的重点是「漂移会让同一个物体长出重复、偏移的副本」；② 右格里那一串绿点是「锚点」，每个都用一个箭头表示它被从旧位置搬到了新位置；③ 注意：被搬的是<b>点</b>，不是网络的权重矩阵——这正是本组的核心。<br>
+          <b>要记住的一句话：</b>隐式地图「会动」，但动的是<b>显式锚点</b>，不是那个共享的小 MLP。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="loopy">
+      <h2>2. Loopy-SLAM：点基 submap，能整体搬就别重训</h2>
+
+      <p>Loopy-SLAM（2024）是 Point-SLAM（上一课 <b>0109</b>）的直系后裔。Point-SLAM 把神经特征<b>挂在一朵朵点云</b>上，渲染时去问这些点；但它<b>没有回环</b>。Loopy-SLAM 干的事，就是给这套点基表示<b>加上在线回环</b>，并且证明：因为点能搬，所以回环修正<b>不需要重训整个网络</b>。</p>
+
+      <h3>submap 怎么划分和合并</h3>
+      <p>它把连续的轨迹切成一段一段的<b>点云 submap</b>（子地图）。触发规则很朴素：当「当前活跃 submap」相对「全局关键帧」的位移或转角超过阈值（比如 Replica 上平移 0.3 米、转角 20°），就<b>新建一个 submap</b>。每个 submap 的第一帧是一个全局关键帧，定义了一个该 submap 在世界系下的位姿。</p>
+
+      <p>这些 submap 里的点，带着<b>几何特征</b>（32 维）和<b>颜色特征</b>（32 维）。关键在于：点和这两份特征是<b>局部锚定</b>的——点被刚体搬动时，特征跟着点走，渲染结果不变。</p>
+
+      <h3>位姿图：节点是什么</h3>
+      <p>回环用的也是经典套路——<b>位姿图</b>。它的节点是每个全局关键帧的世界系位姿；边有两种：</p>
+      <ul>
+        <li><b>里程计边</b>：相邻 submap 之间的连续帧约束；</li>
+        <li><b>回环边</b>：用 <b>BoW（词袋）</b>做全局重识别，发现「现在这个 submap 和很久以前那个 submap 是同一个地方」时连上。</li>
+      </ul>
+      <p>检测到候选回环后，跑一遍<b>鲁棒位姿图优化（PGO）</b>。优化里有一个 line process 权重，专门用来<b>否决假的回环边</b>——这正是第一季 <b>0014</b> 课「假阳性铁律」所说「一个错回环代价极大」的应对安全阀。</p>
+
+      <p>优化出刚性修正后，作用到三处：关键帧的世界位姿、该 submap 所属帧的位姿、以及<b>这个 submap 本身的点</b>。改的<b>只是点的位置（刚性搬动）</b>，不是特征重训。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Loopy-SLAM/607c372726751488982ee247e9e48f552ea2e52a1f31dedf09154665a2788375.jpg" alt="Loopy-SLAM Fig.1 benefits overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Benefits of Loopy-SLAM. While Point-SLAM yields high-fidelity reconstructions it does not implement loop closure and may duplicate geometries due to drift. ESLAM is faced by the same problem. GO-SLAM implements loop closure, but computes rather low quality map geometry. In contrast to GO-SLAM which requires to save the entire history of input frames…<br>
+          （中译：Loopy-SLAM 的好处。Point-SLAM 重建保真度高但没有回环、会因漂移复制几何；ESLAM 同理；GO-SLAM 有回环但几何质量偏低；而 GO-SLAM 需要存下全部历史输入帧……）<br>
+          <b>怎么看这张图：</b>① 重点看左半部分——<b>没有回环</b>的方法（Point-SLAM、ESLAM）会「复制出重复的几何」（同一个物体长成两处）；② 右半部分 GO-SLAM 有回环但几何偏糙；③ 本文主张的是「点能搬、不存全帧也能修」。本图是它要解决的问题全景图。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Loopy-SLAM/ed01ba90e77cf12d98ded7bf15b4b5b6f22d1165e98845ffa83e07977f8dbf5d.jpg" alt="Loopy-SLAM Fig.2 overview pipeline">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Loopy-SLAM Overview. Given an input RGBD stream, we first track the frame against the current active submap. If a new global keyframe is triggered … we initialize a new submap … If a loop is detected … pose graph optimization (PGO) is triggered.<br>
+          （中译：总览。给定 RGB-D 流，先对当前活跃 submap 跟踪；若触发新的全局关键帧则新建 submap；若检测到回环则触发位姿图优化。）<br>
+          <b>怎么看这张图：</b>这张图就是上面文字的图示版。请顺着箭头看三件事：① 跟踪线程只对<b>当前活跃 submap</b> 工作；② 何时「啪」地新建一个 submap；③ 回环被检出后，PGO 如何把 submap <b>整体刚性对齐</b>。记住「点可搬、不重训」这个卖点。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Loopy-SLAM 做回环修正时，被「搬动」的到底是下面哪一样？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。它搬的是 submap 里那一串带着几何/颜色特征的点（刚性变换），网络解码器基本不动。因为点与特征是局部锚定的，搬点即变形，无需重训整个网络——这正是它比网格法省力的原因。" onclick="lessonKit.answer(this,'q0110a')">带着特征的点云</button>
+          <button data-correct="no" data-explanation="错。它恰恰没有去重训那个共享 MLP 解码器。直接重训整网既慢又容易破坏已建好的区域，所以本文选择「搬点」而不是「改权重」。" onclick="lessonKit.answer(this,'q0110a')">整个MLP权重</button>
+        </div>
+        <div class="quiz-feedback" id="q0110a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="go">
+      <h2>3. GO-SLAM：即时重建与全局优化</h2>
+
+      <p>GO-SLAM（2023）走的是另一条路。它站在 <b>DROID-SLAM</b> 的肩膀上：前端扩展 DROID-SLAM 来做跟踪和回环，后端用一个独立线程做<b>在线 full BA（全量光束法平差）</b>，再把结果喂给一个 <b>Instant-NGP 式的哈希编码 + 浅 MLP</b> 做即时重建。</p>
+
+      <h3>「Instant Reconstruction」指什么</h3>
+      <p>这个词说的是<b>位姿一改、地图立刻跟着改</b>。它有一个「即时建图」线程，以较高频率用最新的优化位姿/深度去更新隐式表面。它聪明地挑关键帧（最新的两帧、未优化的帧、按位姿差取 Top-10、再加分层采样 10 个），避免每次都全量重算。所以「改完位姿立刻就能看到新地图」。</p>
+
+      <h3>全局优化怎么做</h3>
+      <p>它有三条并行线程：① 前端跟踪 + 回环检测；② 后端 full BA（同时优化所有历史关键帧的位姿与逐像素逆深度）；③ 即时建图。回环检测比 DROID 更严：要<b>连续 3 个回环候选</b>且均值流小于阈值才接受——又是一个防错回环的安全阀。</p>
+
+      <h3>与 NeRF-SLAM 的关系</h3>
+      <p>记住一条线：<b>NeRF-SLAM = DROID-SLAM 出位姿 + Instant-NGP 建图</b>（组合式，但<b>没有回环</b>）；GO-SLAM = 在它基础上<b>加了在线回环 + 全 BA</b>。GO-SLAM 自己的正文也点名批评了 NeRF-SLAM 的「absence of online loop closing and full BA」。所以 GO-SLAM 是「组合式无回环 → 加回环」的演化样板。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_GO-SLAM/06b6f0623eb39038088444a536d28d261483f772527ee4f23453133ac6353ce8.jpg" alt="GO-SLAM Fig.3 ablation loop closing and full BA">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Qualitative examples of LC and full BA … (a) significant error accumulates when no global optimization; (b) with loop closing the system eliminates trajectory error using global geometry; (c) online full BA optimizes poses of all keyframes; (d) the final model.<br>
+          （中译：回环与全 BA 的定性示例。(a) 无全局优化时误差累积；(b) 加回环后利用全局几何消除轨迹误差；(c) 在线全 BA 优化所有关键帧位姿；(d) 最终模型。）<br>
+          <b>怎么看这张图：</b>① 看 (a) 到 (d) 的递进——先有误差，加回环消掉一部分，加全 BA 再精修，最后得到全局一致的网格；② 这正是「即时重建」想展示的：位姿被优化后，同一份哈希特征被按新位姿重新渲染，地图立刻变正。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_GO-SLAM/26086517931553d890342bc9ffbbc841c708b0c6ea085590cbd5b8855d52b0ae.jpg" alt="GO-SLAM Fig.2 three-thread architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Architecture Overview. Our GO-SLAM framework consists of three parallel threads: front-end tracking (including keyframe initialization and loop closing), back-end tracking, and instant mapping.<br>
+          （中译：架构总览。GO-SLAM 由三条并行线程组成：前端跟踪（含关键帧初始化与回环）、后端跟踪、即时建图。）<br>
+          <b>怎么看这张图：</b>把这张图当成「三条流水线同时跑」。重点是中间那条 <b>full BA 线程</b>和右边那条<b>即时建图线程</b>如何被前端喂数据、又把优化结果回灌——这就是「即时重建」的工程实现。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="conclusion">
+      <h2>4. 核心结论：这六篇回环都不直接改 MLP 权重</h2>
+
+      <p>下面是本组最锋利、也最容易被误解的一句话——它来自精读材料对六篇正文的逐条核对：</p>
+
+      <div class="callout">
+        <h4>★ 必须写清的核心结论</h4>
+        <p>本组六篇（Loopy-SLAM、PIN-SLAM、NeRF-SLAM、NeRF-LOAM、GO-SLAM、PLGSLAM）的地图<b>没有一篇在回环时去改那个 MLP 解码器的权重</b>。</p>
+        <p>它们的地图都是<b>混合表示</b>：一个<b>显式锚点</b>（神经点 / 特征网格 / tri-plane / 体素 embedding）+ 一个<b>很小的共享 MLP 解码器</b>。回环发生时，改的是<b>显式锚点的位置或特征</b>——Loopy-SLAM、PIN-SLAM 平移/旋转神经点；GO-SLAM、PLGSLAM 改哈希 / tri-plane 特征对应的几何——而那个小 MLP 几乎被冻结。</p>
+        <p>换句话说：<b>改地图 ≠ 改权重</b>。改的是「权重之上的那层锚点」。</p>
+      </div>
+
+      <p>这个结论为什么重要？因为「隐式地图回环要重训网络」是一个流传很广的误解。实际上，这些方法的聪明之处，正是把「难改的权重」和「好搬的锚点」<b>分开</b>：权重一次训好就冻住，后面所有修正都落在轻量的锚点上。代价因此远小于「重训整张图」。</p>
+
+      <p>这里还要诚实标注两个例外（同样来自精读材料的纠正）：<b>NeRF-SLAM 与 NeRF-LOAM 其实根本没有回环</b>（已 grep 验证，正文从头到尾没有 loop closure）。所以对本组「回环怎么改地图」这个问题，真正成立的只有 Loopy-SLAM、PIN-SLAM（直接搬点）、GO-SLAM、PLGSLAM（改特征再重渲染）；而 NeRF-SLAM / NeRF-LOAM 是「没有回环、靠别的方式兜底」的代表，下一课再细讲。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">改动落在哪一层</text>
+
+          <!-- 三层结构 -->
+          <rect x="250" y="60" width="400" height="70" rx="10" fill="#fef3e0" stroke="#e0a458" stroke-width="1.6"/>
+          <text x="450" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#9a5a16">可移动的锚点 / 点云</text>
+          <text x="450" y="114" text-anchor="middle" font-size="11.5" fill="#b06a1f">带几何/颜色特征，回环时能整体平移旋转</text>
+
+          <rect x="250" y="150" width="400" height="70" rx="10" fill="#e7f1fb" stroke="#5a8fc7" stroke-width="1.6"/>
+          <text x="450" y="182" text-anchor="middle" font-size="14" font-weight="700" fill="#2c5f8a">特征（跟着锚点走）</text>
+          <text x="450" y="204" text-anchor="middle" font-size="11.5" fill="#3f78a0">锚点一动，它携带的特征一起被搬</text>
+
+          <rect x="250" y="240" width="400" height="70" rx="10" fill="#f2f2f2" stroke="#9aa0a6" stroke-width="1.6"/>
+          <text x="450" y="272" text-anchor="middle" font-size="14" font-weight="700" fill="#555">小 MLP 解码器</text>
+          <text x="450" y="294" text-anchor="middle" font-size="11.5" fill="#777">基本冻结，回环时几乎不动</text>
+
+          <!-- 左侧大括号：回环只动上面两层 -->
+          <path d="M225 95 C200 95 200 195 225 195" fill="none" stroke="#2e9e6b" stroke-width="2"/>
+          <path d="M225 95 L232 95 M225 195 L232 195" stroke="#2e9e6b" stroke-width="2"/>
+          <text x="170" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="#2e9e6b">回环</text>
+          <text x="170" y="166" text-anchor="middle" font-size="12" font-weight="700" fill="#2e9e6b">只动</text>
+          <text x="170" y="184" text-anchor="middle" font-size="12" font-weight="700" fill="#2e9e6b">这两层</text>
+
+          <!-- 右侧箭头：输入坐标 -> MLP 输出 -->
+          <text x="700" y="100" text-anchor="middle" font-size="11" fill="#9a5a16">坐标+视角</text>
+          <path d="M690 130 L770 250" stroke="#9aa0a6" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <path d="M770 250 L762 242 L762 258 Z" fill="#9aa0a6"/>
+          <text x="700" y="300" text-anchor="middle" font-size="11" fill="#555">颜色+密度</text>
+          <text x="700" y="320" text-anchor="middle" font-size="10.5" fill="#777">MLP 只是「问」的入口</text>
+
+          <text x="450" y="400" text-anchor="middle" font-size="12" fill="#5a4a42">稀疏 SLAM 改位姿就够；隐式表示必须连显式锚点一起改，才全局一致</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>隐式地图的「三层堆叠」——最上面是能搬的锚点/点云，中间是跟着走的特征，最下面是几乎不动的小 MLP。<br>
+          <b>怎么看这张图：</b>① 左边绿色大括号标出「回环只动上面两层」；② 右边虚线箭头说明 MLP 的角色只是「你把坐标喂进去、它吐出颜色密度」的入口，它自己不被回环改写；③ 把这张图和上一节那张「点被整体拉住」的图对照看，你会发现它们讲的是同一件事的不同侧面。<br>
+          <b>要记住的一句话：</b>回环修正的落点，是<b>权重之上的显式锚点</b>，不是权重本身。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="table">
+      <h2>5. 横向对比：Loopy-SLAM 与 GO-SLAM</h2>
+
+      <p>把两篇摆在一起，差异一目了然：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">Loopy-SLAM（2024）</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">GO-SLAM（2023）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>传感器</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">RGB-D（室内）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">单目 / 立体 / RGB-D</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>地图表示</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">点云 submap（点带几何/颜色特征）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">多分辨率哈希 + 浅 MLP（SDF/颜色）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>回环做法</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">BoW 检回环 + 鲁棒 PGO（line process 拒外点）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">扩展 DROID 共视矩阵 + 连续 3 候选 + 在线 full BA</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>回环时改什么</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">submap 点整体刚性搬动</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">关键帧位姿/深度改后，哈希场即时重渲染</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>速度 / 显存</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">跟踪同 Point-SLAM；仅需 12 GB GPU</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">8 FPS（RTX 3090），峰值约 18 GB 显存</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>原文承认短板</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">回环配准贵（约 12 s/次）、仅 RGB-D 室内</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">显存偏高、依赖 DROID 预训练权重</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="margin-top:1rem">共同点是：两者都<b>不改 MLP 权重</b>，都把修正落在「显式锚点 / 哈希特征」这一层。差异在于锚点的形状——Loopy 是<b>点</b>（物理上能搬），GO-SLAM 是<b>哈希网格</b>（改位姿后重渲染）。</p>
+    </section>
+
+    <section class="section-card" id="layer">
+      <h2>6. 把问题收束：回环改的是「地图的哪一层」</h2>
+
+      <p>回到开头的问题意识。我们问的是：当地图是网络权重，回环来了权重怎么改？两篇读下来，答案出乎意料地统一：</p>
+
+      <div class="callout">
+        <h4>本组给初读者的判断（非原文自评）</h4>
+        <p>隐式表示的回环，<b>不是「改权重」，而是「改权重之上的显式锚点」</b>。稀疏 SLAM 改个位姿就够；隐式表示必须连锚点一起改，才能让整张地图重新摆正——但因为它搬的是轻量的点/特征，而不是重训那个网络，所以代价可控、能在线做。</p>
+        <p>这是本季反复出现的一条暗线：隐式地图要「会动」，靠的是<b>把可变的部分和不可变的部分解耦</b>。下一课 PIN-SLAM 会把这件事推到极致——它用「弹性的神经点云」做到激光侧首个完整的隐式 SLAM。</p>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么说「稀疏 SLAM 改位姿就够、隐式表示必须改地图本身」？请用本组的两层结构解释。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>稀疏 SLAM 的地图是一堆孤立点，点的位置由位姿决定；改了位姿，点跟着被重新摆放，地图自然就正了，<b>地图本身不需要变</b>。</p>
+              <p>隐式表示的地图是「一个函数 + 显式锚点」。函数值由锚点位置/特征和那个小 MLP 共同决定。如果只改位姿而不动锚点，网络对同一坐标的预测还是旧的——所以必须<b>连锚点一起改</b>（平移/旋转神经点，或改哈希特征），地图才会跟着正过来。区别在于：它改的是锚点，不是 MLP 权重。</p>
+            </div></details>
+          </li>
+          <li>Loopy-SLAM 的 submap 是怎么触发「新建」的？回环检出后，它改的是哪一样东西？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>触发：当「当前活跃 submap」相对「全局关键帧」的位移或转角超过阈值（Replica 上约平移 0.3 m、转角 20°）时，就新建一个 submap。</p>
+              <p>回环检出后跑鲁棒 PGO，优化出的刚性修正作用到三处：关键帧世界位姿、该 submap 所属帧位姿、以及<b>这个 submap 本身的点</b>。改的是<b>点的位置（刚性搬动）</b>，不是特征重训，也不是整个 MLP。</p>
+            </div></details>
+          </li>
+          <li>GO-SLAM 的「Instant Reconstruction（即时重建）」是什么意思？它和 NeRF-SLAM 是什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>「即时重建」指：位姿一被优化，即时建图线程就用最新位姿/深度去更新隐式表面，<b>改完位姿立刻能看新地图</b>。它靠「只挑关键帧、不全量重算」来维持实时。</p>
+              <p>关系：NeRF-SLAM = DROID-SLAM 出位姿 + Instant-NGP 建图（组合式，<b>无回环</b>）；GO-SLAM = 在它之上<b>加在线回环 + 全 BA</b>。GO-SLAM 正文也点名批评 NeRF-SLAM 缺在线回环与全 BA。所以 GO-SLAM 是「组合式无回环 → 加回环」的演化样板。</p>
+            </div></details>
+          </li>
+          <li>本组六篇里，有哪两篇其实根本没有回环？它们靠什么方式「兜底」全局一致？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>没有回环的是 <b>NeRF-SLAM</b> 与 <b>NeRF-LOAM</b>（已 grep 验证，正文无 loop closure）。</p>
+              <p>兜底方式：NeRF-SLAM 靠 DROID-SLAM 的<b>稠密 BA</b> 在线维持一致性（不是回环修正）；NeRF-LOAM 靠 <b>key-scan buffer 联合精修</b>缓解「前 K 帧遗忘」，也不是回环。它们被用来对照「没有回环时如何靠别的方式尽量保持不崩」。下一课会专门讲这两篇。</p>
+            </div></details>
+          </li>
+          <li>为什么本组强调「回环不直接改 MLP 权重」很重要？如果真的去重训整个网络会怎样？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>重要是因为它推翻了「隐式地图回环 = 重训网络」的误解。实际上这些方法把「难改的共享权重」和「好搬的显式锚点」解耦：权重一次训好就冻住。</p>
+              <p>如果每次回环都重训整张网络：① 计算量极大，无法在线/实时；② 重训容易破坏已经建好的区域（灾难性遗忘）；③ 网格法（规则特征网格）正是因为这个才难做增量回环——PIN-SLAM 在引言里就点名这是它要解决的问题。所以点基/哈希的方法是「搬点/改特征」，代价远小于重训。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0109-Point-SLAM2023-把特征挂在点云上.html">← Point-SLAM（2023）：把特征挂在点云上</a>
+        <a class="next" href="0111-PIN-SLAM2024-首个完整隐式SLAM.html">PIN-SLAM（2024）：首个完整隐式 SLAM →</a>
+      </div>
+      <p class="foot-note">回环不是「重训网络」，而是「搬动显式锚点」。记住这一层，后面五篇都不慌 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

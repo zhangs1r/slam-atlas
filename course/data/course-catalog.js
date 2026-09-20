@@ -7,7 +7,7 @@
 
 window.PAPERLESSON_DATA = {
   /* 首页「当前主线」指向的 collection id */
-  featuredCollectionId: "stage-e",
+  featuredCollectionId: "stage-f",
 
   /* ---------- 分馆 ---------- */
   groups: [
@@ -17,7 +17,7 @@ window.PAPERLESSON_DATA = {
       title: "SLAM 论文精读馆",
       emoji: "📄",
       description: "按语料库阅读路线的阶段（A–K）分块。每个「来源块」对应一个阶段，块内课程按认知依赖顺序排列；一篇论文可以拆成多节课，也可以几篇同类论文合成一节。",
-      meta: ["按阶段分块", "255 篇语料库", "已开到阶段 E · 多传感器融合"]
+      meta: ["按阶段分块", "255 篇语料库", "已开到阶段 F · 前沿：神经隐式与 3D 高斯"]
     },
     {
       id: "qa",
@@ -88,6 +88,16 @@ window.PAPERLESSON_DATA = {
       description: "第 0095 课起。第三季做的是「视觉 ＋ 惯性」、第四季做的是「激光 ＋ 惯性」；这一季把第三条腿接上，问一个很实在的问题：三种传感器到底怎么合成一台机器。答案分成两种哲学——「两条流水线并行、末端合流」（R³LIVE 一系）与「统一状态、统一地图、视觉直接复用激光几何」（FAST-LIVO 一系）。顺带把「地图里存什么」这条从第二季铺过来的暗线推到「存平面」与「存高斯」，并回答一个容易被忽略的问题：融合系统在真实场景跑不起来，往往不是算法不够聪明，而是时间同步与外参标定没做扎实。",
       quickOpen: "start lessons\\0095-导览-第五季开场-三传感器怎么合成一台机器.html",
       meta: ["9 节课", "覆盖 9 篇论文", "23 张具象自绘图"]
+    },
+    {
+      id: "stage-f",
+      groupId: "papers",
+      kind: "阶段精读",
+      title: "阶段 F · 前沿：神经隐式与 3D 高斯",
+      subtitle: "同一面墙的两种记法 · 第六季 36 篇 / 24 节",
+      description: "第 0104 课起。前五季问的都是「位姿怎么算」，这一季换一个更根本的问题：场景本身到底存在哪？一条答案是「存成一堆数」（显式：点云、体素、面片、平面、椭球），另一条是「塞进一个函数里」（隐式：把场景压进网络权重）。这一季把两条路都走一遍：从 iMAP 第一次把整张地图塞进网络，到多层级特征网格、八叉树、特征平面、挂在点云上的特征，再到回环时「地图怎么改」、第一季欠下的两句判断被正面回答；然后进入 3D 高斯这一支，把挂了五季的「自适应密度控制」还清，并沿高斯往下走到 SLAM、语义、语言、表面抽取、逆渲染、跨场景泛化与显存压缩。最后一节不做新论文，只结账。",
+      quickOpen: "start lessons\\0104-导览-第六季开场-隐式与显式之争.html",
+      meta: ["24 节课", "覆盖 36 篇论文", "49 张具象自绘图"]
     },
     {
       id: "qa-0002",
@@ -1247,6 +1257,270 @@ window.PAPERLESSON_DATA = {
       description: "车顶两台激光雷达之间的相对位姿出厂后会漂，于是干脆把它当成待估变量、一边跑一边估。含「两个雷达扫同一根电线杆、错位被修平」与「为什么必须动起来才标得准（不可观 → 可观）」两张具象图。本季收官，含四条主线的总收束与九节对照表。"
     },
     {
+      id: "0104",
+      path: "lessons/0104-导览-第六季开场-隐式与显式之争.html",
+      paper: "stage-f",
+      title: "第六季开场：隐式与显式之争",
+      subtitle: "两笔旧债 · 六模块地图 · 两种记法",
+      emoji: "🧠",
+      duration: "45 分钟",
+      tags: ["导览", "隐式与显式", "还债清单"],
+      description: "第六季开场。前五季一直在解决「位姿怎么算」，这一季换问题：场景本身到底存在哪。含「两笔旧债」时间轴（第一季 0015 的『自适应密度控制』、第一季 0010 的『隐式方法在大尺度户外的有效性尚未被证明』）与「显式 vs 隐式」逐项对照。"
+    },
+    {
+      id: "0105",
+      path: "lessons/0105-iMAP2021-第一次把地图塞进一个网络.html",
+      paper: "stage-f",
+      title: "iMAP（2021）：第一次把整张地图塞进一个网络",
+      subtitle: "一个网络既是地图又是定位器",
+      emoji: "🗄️",
+      duration: "50 分钟",
+      tags: ["隐式表示", "联合优化", "开山之作"],
+      description: "第一次把整张地图塞进一个网络：网络既是地图、又是定位器。含「黑箱问答」具象图，以及「显式地图（明码标价、想删就删）vs 隐式地图（改一处全世界都跟着动）」的对照。也讲清它当时的场景规模上限。"
+    },
+    {
+      id: "0106",
+      path: "lessons/0106-NICE-SLAM2022-多层级特征网格.html",
+      paper: "stage-f",
+      title: "NICE-SLAM（2022）：多层级特征网格",
+      subtitle: "把单 MLP 拆成粗中细三层",
+      emoji: "🧱",
+      duration: "50 分钟",
+      tags: ["多分辨率", "特征网格", "规模化"],
+      description: "给 iMAP 的单 MLP 拆成粗中细三层特征网格，细节不再糊成一团。含「同一面砖墙被粗网格与细网格分别记住」的具象图，并说清参数量到底去了哪。"
+    },
+    {
+      id: "0107",
+      path: "lessons/0107-Vox-Fusion与ESLAM-八叉树与特征平面.html",
+      paper: "stage-f",
+      title: "Vox-Fusion 与 ESLAM：八叉树与特征平面",
+      subtitle: "两条省内存的路",
+      emoji: "📦",
+      duration: "55 分钟",
+      tags: ["组课", "八叉树", "特征平面"],
+      description: "组课。特征网格的代价是内存，于是两条省内存的路：只在有东西的地方开格子（八叉树）vs 用平面代替体素（轴对齐特征平面）。含「空格子白占内存」与「三张平面图组合出三维特征」两张具象图。"
+    },
+    {
+      id: "0108",
+      path: "lessons/0108-Co-SLAM2023-联合坐标与稀疏参数编码.html",
+      paper: "stage-f",
+      title: "Co-SLAM（2023）：联合坐标与稀疏参数编码",
+      subtitle: "低频与高频，两个一起用",
+      emoji: "🔀",
+      duration: "50 分钟",
+      tags: ["联合编码", "全局BA", "实时"],
+      description: "一个编码不可能既平滑又锐利，那就低频和高频一起用。含「两种编码并联」具象图。开头附语料库勘误：路线图把 Co-SLAM 与其『期刊版』列成两行，实际是同一篇的重复录入；另有一处按文件名模糊匹配会误命中的 DiSCo-SLAM（多机器人激光 SLAM）。"
+    },
+    {
+      id: "0109",
+      path: "lessons/0109-Point-SLAM2023-把特征挂在点云上.html",
+      paper: "stage-f",
+      title: "Point-SLAM（2023）：把特征挂在点云上",
+      subtitle: "特征绑在场景自己的点上",
+      emoji: "📌",
+      duration: "50 分钟",
+      tags: ["神经点云", "特征表示", "空间感知"],
+      description: "特征不绑在固定格点上，而绑在场景自己的点上——图钉跟着墙走。含「格点特征 vs 点上特征」与「从深度图长出点」两张具象图。"
+    },
+    {
+      id: "0110",
+      path: "lessons/0110-Loopy-SLAM与GO-SLAM-隐式地图怎么闭环.html",
+      paper: "stage-f",
+      title: "Loopy-SLAM 与 GO-SLAM：隐式地图怎么闭环",
+      subtitle: "回环来了，网络权重怎么改",
+      emoji: "🧩",
+      duration: "60 分钟",
+      tags: ["组课", "回环", "全局一致"],
+      description: "组课。当地图是一堆网络权重时，回环来了、位姿要改，这些权重到底怎么改？核心结论：本季多数工作都不直接改 MLP 权重，改的是显式锚点加小 MLP。含「家具虚影被拉正」与「改动落在哪一层」两张具象图。"
+    },
+    {
+      id: "0111",
+      path: "lessons/0111-PIN-SLAM2024-首个完整隐式SLAM.html",
+      paper: "stage-f",
+      title: "PIN-SLAM（2024）：首个完整隐式 SLAM",
+      subtitle: "可形变神经点云 · 回环 · 两万帧",
+      emoji: "🕸️",
+      duration: "65 分钟",
+      tags: ["可形变地图", "回环", "第一个完整"],
+      description: "首个完整隐式 SLAM（激光侧）：用一张会拉伸又会收回的网当地图，还能回环、还能跑两万帧。含「神经点被整体拉动」与「里程计加回环两级」两张具象图。本节正面回应第一季 0010 课那句「隐式地图方法在大尺度户外的有效性尚未被证明」。"
+    },
+    {
+      id: "0112",
+      path: "lessons/0112-三条规模化路线-NeRF-SLAM与NeRF-LOAM与PLGSLAM.html",
+      paper: "stage-f",
+      title: "三条规模化路线：组合、激光、渐进",
+      subtitle: "借位姿 / 换激光 / 分局部",
+      emoji: "☁️",
+      duration: "55 分钟",
+      tags: ["组课", "规模化", "组合式方案"],
+      description: "组课。隐式 SLAM 怎么做大？三条路都不靠回环：借别人的位姿（NeRF-SLAM 用 DROID-SLAM）、换到激光上做增量（NeRF-LOAM）、渐进式加局部到全局 BA（PLGSLAM）。含「借位姿」架构图与「渐进式」三格对照。另附语料库重复录入勘误。"
+    },
+    {
+      id: "0113",
+      path: "lessons/0113-Orbeez-SLAM与NeurAR-轻量实时与不确定性.html",
+      paper: "stage-f",
+      title: "Orbeez-SLAM 与 NeurAR：轻量实时与不确定性",
+      subtitle: "让 NeRF 跑成实时 · 把不知道量化出来",
+      emoji: "🎯",
+      duration: "50 分钟",
+      tags: ["组课", "实时", "不确定性"],
+      description: "组课。一条让 NeRF 跑成实时的混合路线（ORB 特征法管位姿、NeRF 只管地图），一个把「不知道」量化出来的主动重建方法。含「分工」与「不确定性热区」两张具象图。"
+    },
+    {
+      id: "0114",
+      path: "lessons/0114-动态场景三种打法-DytanVO与RoDyn-SLAM与OVD-SLAM.html",
+      paper: "stage-f",
+      title: "动态场景三种打法",
+      subtitle: "稠密地图会长出整块幽灵",
+      emoji: "👻",
+      duration: "60 分钟",
+      tags: ["组课", "动态环境", "三层框架"],
+      description: "组课。当静态假设被打破，稠密地图长出的不是几个坏点，而是整块幽灵。三篇分别是纯学习式 VO、RGB-D 的 NeRF 方法、语义加权的特征 SLAM。含「办公室里的走动的人与推开的椅子」与「判定/处理/代价三层框架」两张具象图。"
+    },
+    {
+      id: "0115",
+      path: "lessons/0115-DeepV2D2020-视频到深度的端到端.html",
+      paper: "stage-f",
+      title: "DeepV2D（2020）：视频到深度的端到端",
+      subtitle: "把经典几何做成可微积木",
+      emoji: "🧱",
+      duration: "50 分钟",
+      tags: ["端到端", "可微", "SfM"],
+      description: "把经典几何做成可微积木——SfM 里那些离散步骤被换掉之后，误差才能从输出一路反传回输入。含「传统流水 vs 端到端」与「梯度在哪里被掐断」两张具象图。"
+    },
+    {
+      id: "0116",
+      path: "lessons/0116-3DGS原著2023-可微光栅化与自适应密度控制.html",
+      paper: "stage-f",
+      title: "3DGS 原著（2023）：可微光栅化与自适应密度控制",
+      subtitle: "★ 还债课 · 挂了五季的那笔",
+      emoji: "🫧",
+      duration: "70 分钟",
+      tags: ["3DGS 原著", "还债课", "自适应密度控制"],
+      description: "本季最大的还债点：第一季 0015 课明确写过「3DGS 综述只引用、未展开『自适应密度控制』」，这一节连本带利还清。含参数化、可微光栅化全流程（16×16 瓦片、一次排序、α 合成），以及「欠重建→克隆、过度重建→切分」的正确方向与不透明度周期重置的原因。"
+    },
+    {
+      id: "0117",
+      path: "lessons/0117-MonoGS2024-首个以高斯为唯一表示的SLAM.html",
+      paper: "stage-f",
+      title: "MonoGS（2024）：首个以高斯为唯一表示的 SLAM",
+      subtitle: "同一个渲染误差，推动两样东西",
+      emoji: "📷",
+      duration: "55 分钟",
+      tags: ["高斯 SLAM", "直接优化", "单目"],
+      description: "首个以高斯为唯一表示的 SLAM：同一个渲染误差既推动相机、又推动地图。含「误差同时推动两样东西」与「高斯没有『面』的概念带来的浮空团」两张具象图。也讲作者团队与第一季 0041 MonoSLAM 跨越十七年的呼应。"
+    },
+    {
+      id: "0118",
+      path: "lessons/0118-SplaTAM与GS-SLAM-轮廓掩码与自适应增删.html",
+      paper: "stage-f",
+      title: "SplaTAM 与 GS-SLAM：轮廓掩码与自适应增删",
+      subtitle: "什么时候该加一个新高斯",
+      emoji: "🧩",
+      duration: "55 分钟",
+      tags: ["组课", "高斯增删", "轮廓掩码"],
+      description: "组课。两篇一起回答「什么时候该加一个新高斯」：一个靠渲染剪影与真实轮廓的差（轮廓掩码），一个靠由粗到细的可靠高斯筛选。含「露出来的那一圈就是还没覆盖到的地方」与「哪些高斯最可靠」两张具象图。"
+    },
+    {
+      id: "0119",
+      path: "lessons/0119-Photo-SLAM2024-明确面向嵌入式实时.html",
+      paper: "stage-f",
+      title: "Photo-SLAM（2024）：明确面向嵌入式实时",
+      subtitle: "定位要快、渲染要好，那就分两层存",
+      emoji: "🛠️",
+      duration: "50 分钟",
+      tags: ["嵌入式", "实时", "地图分层"],
+      description: "明确面向嵌入式实时。含「hyper primitives map 两层分工（稀疏几何负责定位、稠密光度负责渲染）」与「算力预算条」两张具象图。"
+    },
+    {
+      id: "0120",
+      path: "lessons/0120-SNI-SLAM2024-高斯带语义标签.html",
+      paper: "stage-f",
+      title: "SNI-SLAM（2024）：高斯带语义标签",
+      subtitle: "地图还知道这是什么",
+      emoji: "🏠",
+      duration: "50 分钟",
+      tags: ["语义", "高斯", "建图三分类"],
+      description: "高斯带语义标签——地图不只知道这里有什么形状，还知道这是什么东西。含「按类别上色的椭球」与「几何/外观/语义三条线汇进同一个表示」两张具象图，并回接第一季 0010 课的建图三分类。"
+    },
+    {
+      id: "0121",
+      path: "lessons/0121-WildGS-SLAM与Splat-SLAM-动态剔除与纯RGB全局优化.html",
+      paper: "stage-f",
+      title: "WildGS-SLAM 与 Splat-SLAM：动态剔除与纯 RGB 全局优化",
+      subtitle: "两篇 2025 年的最新答案",
+      emoji: "🔍",
+      duration: "55 分钟",
+      tags: ["组课", "动态剔除", "全局优化"],
+      description: "组课，两篇 2025 年最新工作：一个用 DINOv2 特征的不确定度剔动态（不需要深度、不需要语义标签），一个纯 RGB 做全局优化。含「真实场景→特征不稳→不确定度热图」三格连环画，与「要不要深度 × 要不要回环」二维对照。"
+    },
+    {
+      id: "0122",
+      path: "lessons/0122-SuGaR与GS-IR-表面对齐与逆渲染.html",
+      paper: "stage-f",
+      title: "SuGaR 与 GS-IR：表面对齐与逆渲染",
+      subtitle: "补上几何与光照两块短板",
+      emoji: "🧱",
+      duration: "55 分钟",
+      tags: ["组课", "表面抽取", "逆渲染"],
+      description: "组课，回应第一季 0015 课列过的两条短板：几何（表面不精确、难抽网格）与光照（镜面与复杂反射差）。含「散开的椭球被拍扁贴到椅子表面、再抽出网格」与「逆渲染在解什么」两张具象图。"
+    },
+    {
+      id: "0123",
+      path: "lessons/0123-LangSplat与GaussianGrasper-语言高斯与机器人抓取.html",
+      paper: "stage-f",
+      title: "LangSplat 与 GaussianGrasper：语言高斯与机器人抓取",
+      subtitle: "可以直接用一句话问地图",
+      emoji: "🗣️",
+      duration: "55 分钟",
+      tags: ["组课", "语言高斯", "机器人抓取"],
+      description: "组课。地图上还能挂一串描述含义的数，于是可以直接用一句话问它。含「语言向量条加一句查询指向被高亮的椭球」与「scene / object / part 三层语义」两张具象图。注意：两篇不是同一团队。"
+    },
+    {
+      id: "0124",
+      path: "lessons/0124-GPS-Gaussian与Animatable-Gaussians-前馈泛化与可驱动人体.html",
+      paper: "stage-f",
+      title: "GPS-Gaussian 与 Animatable Gaussians：前馈泛化与可驱动人体",
+      subtitle: "能不能不用逐场景优化",
+      emoji: "⏱️",
+      duration: "50 分钟",
+      tags: ["组课", "前馈泛化", "可驱动"],
+      description: "组课。3DGS 一直是「一个场景优化一遍」，这两篇问的是能不能不优化。含「免优化 vs 逐场景优化」与「高斯跟着姿态动」两张具象图。诚实说明两篇都只在人体上验证、且不是 SLAM。"
+    },
+    {
+      id: "0125",
+      path: "lessons/0125-高斯内存压缩与StopThePop-显存与排序.html",
+      paper: "stage-f",
+      title: "高斯内存压缩与 StopThePop：显存与排序",
+      subtitle: "把显存账算清 · 把画面乱跳的根找出",
+      emoji: "🧾",
+      duration: "55 分钟",
+      tags: ["组课", "显存压缩", "排序"],
+      description: "组课，全季最实在的两篇：一个把几百万个高斯占满显存的账算清并砍掉 96%，一个把「转视角时画面乱跳」的根（排序是近似的）找出来。含「一个高斯要存什么」的具体账本与 popping 现象对照图。"
+    },
+    {
+      id: "0126",
+      path: "lessons/0126-HUGS与Motion-Aware-城市级场景与动态高斯.html",
+      paper: "stage-f",
+      title: "HUGS 与 Motion-Aware：城市级场景与动态高斯",
+      subtitle: "把会动的东西写进模型",
+      emoji: "🚶",
+      duration: "55 分钟",
+      tags: ["组课", "城市级", "动态高斯"],
+      description: "组课。前面都在处理静止的世界，这一节把会动的东西正式写进高斯模型。含「城市街道的静态层与动态层」与「每个高斯带一条自己的运动轨迹」两张具象图，并把本季三条动态路线排成一条线。"
+    },
+    {
+      id: "0127",
+      path: "lessons/0127-收官-两条路线的十年之争.html",
+      paper: "stage-f",
+      title: "收官：两条路线的十年之争",
+      subtitle: "不做新论文，只结账",
+      emoji: "🧾",
+      duration: "60 分钟",
+      tags: ["收官", "总收束", "十年对照"],
+      description: "不做新论文，只结账：把隐式/高斯这条线与稀疏特征这条线十年的胜负逐项对完，把两笔旧债的偿还情况交代清楚，并指出仍未解决的四件事。含全季对照表，以及「哪些结论是证据、哪些还只是判断」的诚实标注。"
+    },
+    {
       id: "QA0002",
       path: "qa/qa-0002-MAP到非线性最小二乘.html",
       paper: "qa-0002",
@@ -1340,6 +1614,12 @@ window.PAPERLESSON_DATA = {
       title: "第五季：多传感器融合",
       emoji: "🎛️",
       description: "第五季的收获：融合的两种哲学对照表、四个「啊哈时刻」（融合的价值在退化时才体现 / 深度白送改变了直接法 / 序贯更新 / 地图存储单元一路变厚）、三条主线的收束，以及精读时被纠正的四处错误假设。"
+    },
+    {
+      path: "learning-records/0008-第六季学习记录.md",
+      title: "第六季：神经隐式与 3D 高斯",
+      emoji: "🫧",
+      description: "第六季全季的收获：两笔挂了五季的债（自适应密度控制 / 大尺度户外未证明）的偿还情况与证据、三个最反直觉的认识（回环只动显式锚点 / 稠密表示的动态代价更大 / 逐场景优化被正面挑战）、被纠正的六处错误假设、三条主线的进展，以及留给后面阶段的五条疑问。"
     }
   ],
 

@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SplaTAM 与 GS-SLAM：轮廓掩码与自适应增删 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 F · 前沿：神经隐式与 3D 高斯 / Lesson 0118</div>
+      <h1>SplaTAM 与 GS-SLAM：轮廓掩码与自适应增删</h1>
+      <p class="subtitle">两篇论文，一起回答同一个问题：什么时候该加一个新高斯？🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：轮廓掩码 · 自适应扩张 · 由粗到细选可靠高斯</span>
+        <span>👥 作者：Nikhil Keetha 等（CMU / MIT）· Yan Chi 等（上海 AI Lab / HKUST 等）</span>
+        <span>📅 2024 · <i>SplaTAM</i> · <i>GS-SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#q">两篇论文，同一个问题</a>
+        <a href="#frame">先立一个统一框架</a>
+        <a href="#splatam">SplaTAM：轮廓掩码</a>
+        <a href="#pose">SplaTAM：位姿从哪来</a>
+        <a href="#gsslam">GS-SLAM：扩张与筛选</a>
+        <a href="#cmp">横向对比表</a>
+        <a href="#verdict">我们的判断</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="q">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：说出除了「看梯度大小」之外，判断「哪里该加高斯」的另外两种判据；解释「轮廓掩码（silhouette mask）」为什么比逐像素比深度更稳；知道 GS-SLAM 的「由粗到细」在筛选什么；并能把两篇的取舍放进一张表里比。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>直接接着上一课 <b>0116</b>（3DGS 原著的自适应密度控制：看视角空间位置梯度、clone / split、每 3000 次迭代压不透明度）与 <b>0117</b>（MonoGS：用渲染误差反传位姿）。这一课要回答的是「这两篇把密度控制的判据换成了什么」。再往前，第一季 <b>0015</b> 只引用未展开的那一步，到这里算是彻底讲完了。</p>
+        </div>
+      </div>
+
+      <h2 id="q-sec">1. 两篇论文，同一个问题</h2>
+
+      <p>先交代组织方式。这一课是 <b>组课</b>：两篇 2024 年的工作合在一节里读，因为它们在回答<b>同一个问题</b>：</p>
+
+      <div class="callout">
+        <h4>这一课的问题意识</h4>
+        <p>3DGS 的高斯不是一次放好的，而是<b>边优化边增删</b>的。那么——<b>「哪里该补一个新高斯」这件事，凭什么判断？</b></p>
+        <p>这个问题在离线重建里可以很奢侈地回答（慢慢试、反复看）；但在<b>在线 SLAM</b> 里不行：一来没有足够的视角，二来每一帧的算力预算都是固定的。所以两篇论文各自提了一种<b>新的判据</b>。</p>
+      </div>
+
+      <p>先看一张总览图，说明这一节课要讲的两件事：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">哪里该加高斯：看剪影，还是看深度差？</text>
+
+          <!-- 左格：轮廓掩码 -->
+          <rect x="20" y="46" width="420" height="326" rx="10" fill="#f2faf5" stroke="#b6d9c4" stroke-width="1.4"/>
+          <text x="230" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#2f6d51">① SplaTAM：把剪影叠上去看</text>
+
+          <!-- 桌面 -->
+          <rect x="120" y="272" width="230" height="10" fill="#d7c3a8" stroke="#a1795a" stroke-width="1.1"/>
+          <rect x="132" y="282" width="8" height="52" fill="#a1795a"/>
+          <rect x="330" y="282" width="8" height="52" fill="#a1795a"/>
+          <!-- 真实杯子轮廓 -->
+          <path d="M190 272 L190 186 L246 186 L246 272 Z" fill="none" stroke="#37474f" stroke-width="2"/>
+          <path d="M246 200 C 268 200 268 232 246 232" fill="none" stroke="#37474f" stroke-width="2"/>
+          <text x="150" y="176" font-size="11" fill="#37474f">真实轮廓</text>
+          <!-- 渲染出的剪影（略小，露一圈） -->
+          <path d="M204 272 L204 200 L236 200 L236 272 Z" fill="#9aa7b2" opacity="0.75" stroke="#7a8a99" stroke-width="1.4"/>
+          <text x="268" y="300" font-size="11" fill="#5a6b78">渲染出的剪影</text>
+          <!-- 露出来的一圈 -->
+          <path d="M190 272 L190 186 L246 186 L246 272" fill="none" stroke="#c0392b" stroke-width="2.6" stroke-dasharray="6 4"/>
+          <text x="230" y="128" text-anchor="middle" font-size="11.5" font-weight="700" fill="#c0392b">露出来的这一圈，就是还没被盖住的地方</text>
+          <text x="230" y="358" text-anchor="middle" font-size="11.5" fill="#2f6d51">结论：露出来的地方 → 加高斯</text>
+
+          <!-- 右格：逐像素深度差 -->
+          <rect x="460" y="46" width="420" height="326" rx="10" fill="#fdf6f3" stroke="#e0c4b8" stroke-width="1.4"/>
+          <text x="670" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#a8563a">② 另一种做法：逐像素比深度</text>
+          <rect x="560" y="110" width="60" height="6" fill="#90a4ae"/>
+          <text x="590" y="102" text-anchor="middle" font-size="10.5" fill="#7a8a99">相机</text>
+          <rect x="700" y="150" width="10" height="130" fill="#d7c3a8" stroke="#a1795a" stroke-width="1"/>
+          <text x="716" y="300" font-size="10.5" fill="#a8846f">墙</text>
+          <g stroke="#c0392b" stroke-width="1.2" stroke-dasharray="5 4">
+            <line x1="622" y1="150" x2="696" y2="150"/>
+            <line x1="620" y1="176" x2="700" y2="176"/>
+            <line x1="618" y1="202" x2="698" y2="202"/>
+            <line x1="621" y1="228" x2="699" y2="228"/>
+            <line x1="619" y1="254" x2="697" y2="254"/>
+            <line x1="622" y1="280" x2="700" y2="280"/>
+          </g>
+          <g fill="#c0392b">
+            <circle cx="660" cy="150" r="3"/><circle cx="655" cy="176" r="3"/><circle cx="666" cy="202" r="3"/>
+            <circle cx="652" cy="228" r="3"/><circle cx="663" cy="254" r="3"/><circle cx="657" cy="280" r="3"/>
+          </g>
+          <text x="670" y="330" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8563a">每个像素都要比一次，噪声大、容易误判</text>
+          <text x="670" y="358" text-anchor="middle" font-size="11.5" fill="#a8846f">一两个坏像素就会凭空生出一团高斯</text>
+
+          <text x="450" y="400" text-anchor="middle" font-size="12" fill="#5a4a42">「这块地方建过图没有」这个问题，看剪影比看深度差答得更干脆</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两篇论文都在解决「哪里该补高斯」，但用的判据不同。左边是 SplaTAM 的轮廓掩码，右边是逐像素比深度这种做法。<br>
+          <b>怎么看这张图：</b>① 左格里，深色实线是<b>真实杯子的轮廓</b>，灰色块是<b>系统渲染出来的剪影</b>——注意灰块比真实轮廓小了一圈；② 那一圈<b>红色虚线</b>就是「真实物体在这里、但地图里什么都没有」的区域，也就是该补高斯的地方；③ 右格是另一种思路：拿每个像素的渲染深度和实测深度逐一对减法。它的麻烦在于，深度传感器本身有噪声，一个像素的深度跳变就可能误判出一整团高斯；④ 而剪影是<b>把很多像素的信息合起来回答一个是非题</b>——「这块到底建过没有」，所以抗噪得多。<br>
+          <b>要记住的一句话：</b>SplaTAM 的关键洞察是——<b>「地图的空间前沿在哪」这件事，显式表示能一语回答，隐式表示很难回答。</b>
+        </figcaption>
+      </figure>
+
+      <h2 id="frame">2. 先立一个统一框架</h2>
+
+      <p>在逐篇讲之前，先把「该不该加高斯」这件事拆成三个可比较的层次。这样两篇论文的差异就一目了然了。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.94rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">判据</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">谁在用</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">核心问题</th>
+            <th style="border:1px solid #e0d5c8;padding:.5rem .7rem;text-align:left">代价</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>看梯度大小</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">3DGS 原著（<b>0116</b>）</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「这里优化得很难受吗」——视角空间位置梯度的平均幅度是否超过阈值</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">需要 SfM 给的<u>准确</u>初始点云；在线场景不成立</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>看剪影</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">SplaTAM</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「这一块<b>地图里到底有没有东西</b>」——渲染出的剪影与真实前景对不上</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">需要前景/背景能分开（对无边界场景要多想一步）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem"><b>看不透明度 + 深度差</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">GS-SLAM</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">「这一像素有没有被现有的高斯盖住」+「实测深度是否更靠前」</td>
+            <td style="border:1px solid #e0d5c8;padding:.5rem .7rem">依赖高质量深度；阈值要调</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>三行摆在一起，你会发现它们是<b>从「难」到「容易」</b>排的：梯度判据最通用但最依赖初始条件；剪影判据最干脆但需要「前景」这个概念；不透明度加深度差最好实现但吃深度质量。两篇论文都选了 RGB-D 输入，正是因为有了深度，第三行这条路才走得通。</p>
+
+      <p>还有一件事需要先说明白：<b>这两篇都在争「第一个」。</b>SplaTAM 的摘要写的是「第一个利用<b>显式体积表示</b>（即 3D 高斯），从<b>单台未给位姿的 RGB-D 相机</b>做高保真重建」；GS-SLAM 的摘要写的是「第一个<b>使用 3D 高斯场景表示</b>的 RGB-D 稠密 SLAM 系统」。两句话的限定词不一样，所以严格说<b>它们各自在自己的表述下都成立</b>。本课程不做排名，把它们如实并列——你以后在文献里看到「first」时，一定要连读它后面的限定语。</p>
+
+      <h2 id="splatam">3. SplaTAM：用轮廓掩码判断「哪里还没盖住」</h2>
+
+      <p>先看它的高斯长什么样，因为这是它比原著「简化」最明显的地方。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <b>原著（0116）</b>
+          <p>每个高斯要存位置、协方差（四元数 + 尺度）、不透明度，外加<b>球谐系数</b>来表示「从不同角度看颜色会变」。参数多、表达力强。</p>
+        </div>
+        <div class="mini-card">
+          <b>SplaTAM</b>
+          <p>把高斯砍到只剩 <b>8 个参数</b>：3 个位置 + 3 个 RGB 颜色 + 1 个半径 + 1 个不透明度。<b>没有球谐、而且是各向同性</b>——也就是说每个高斯是个圆球，不是椭球。</p>
+        </div>
+      </div>
+
+      <p>它的高斯函数因此写得很简单：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f(\mathbf{x})=o\exp\!\left(-\frac{\|\mathbf{x}-\boldsymbol{\mu}\|^2}{2r^2}\right)$$</div>
+      </div>
+
+      <p>$o$ 是不透明度，$\boldsymbol{\mu}$ 是球心，$r$ 是半径。三个式子就把原著的「椭球 + 球谐」换成了「圆球 + 固定颜色」。</p>
+
+      <p>为什么敢这么砍？因为<b>它手里有深度。</b>单目最大的困难是「这个像素有多远」只能猜，猜错就会长出浮空团；而 RGB-D 直接给了深度，尺度和位置都是明确的。既然几何信息已经很硬，就不必再靠各向异性椭球和视角相关颜色去「拟合」——这是用输入换表示的典型操作。</p>
+
+      <p>真正的主角是它新加的那个量——<b>轮廓（silhouette）</b>。除了颜色和深度，它让渲染器多输出一张图：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$S(\mathbf{p})=\sum_{i} f_i(\mathbf{p})\prod_{j\lt i}\left(1-f_j(\mathbf{p})\right)$$</div>
+      </div>
+
+      <p>这个式子和颜色渲染的样子几乎一样，只是把「颜色」换成了「这个高斯在这点的密度 $f_i$」。所以 $S(\mathbf{p})$ 的含义是：<b>这个像素被高斯覆盖的程度</b>——接近 1 说明地图在这里有东西，接近 0 说明这里还是空的。</p>
+
+      <p>有了它，增密判据就变成一句话：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$M(\mathbf{p})=\left(S(\mathbf{p})\lt 0.5\right)\ \ \text{或}\ \ \left(\bar{D}(\mathbf{p})\lt D(\mathbf{p})\ \text{且}\ \mathrm{L1}\!\left(D(\mathbf{p})\right)\gt \lambda\cdot \mathrm{MDE}\right),\quad \lambda=50$$</div>
+      </div>
+
+      <p>拆开看：<b>要么</b>这个像素根本没被覆盖（$S\lt 0.5$），<b>要么</b>实测深度比渲染深度更靠前、并且深度误差大得离谱（超过中位深度误差的 50 倍）——后者说明「前面应该还有个东西，但地图里没有」。满足任一条，就在这个像素反投影出的位置放一个新高斯。</p>
+
+      <p>论文的系统总览图把这套流程画得很清楚：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SplaTAM/d74cb0a77f11dbf209897f6a039c472e6496ac007877e3dc58516b10c1c6b159.jpg" alt="SplaTAM Fig.2 overview of the online tracking and mapping steps">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of SplaTAM. Top-Left: The input to our approach at each timestep is the current RGB-D frame and the 3D Gaussian Map Representation that we have built representing all of the scene seen so far. Top-Right: Step (1) estimates the camera pose for the new image, using silhouette-guided differentiable rendering. Bottom-Right: Step (2) increases the map capacity by adding new Gaussians based on the rendered silhouette and input depth. Bottom-Left: Step (3) updates the underlying Gaussian map with differentiable rendering.<br>
+          （中译：SplaTAM 总览。左上：每一步的输入是当前 RGB-D 帧，以及我们此前建好的、代表已见场景的 3D 高斯地图。右上：步骤 1 用<b>剪影引导的可微渲染</b>估计新图像的相机位姿。右下：步骤 2 依据<b>渲染出的剪影</b>与输入深度<b>扩充地图容量</b>（加入新高斯）。左下：步骤 3 用可微渲染更新底层高斯地图。）<br>
+          <b>怎么看这张图：</b>① 请按「右上 → 右下 → 左下」这个顺序读，对应 <b>跟踪 → 增密 → 建图</b>三步；② 注意右下那一步的输入里明确写着 rendered silhouette——<b>剪影是增密的直接依据</b>，不是副产品；③ 左下那一步原图注特意强调「不用剪影掩码，因为我们想在所有像素上优化」——这说明剪影在这套系统里是<b>分场景使用的</b>：跟踪时用它筛掉没建过图的地方，建图时要全图一起优化。<br>
+          <b>一个诚实的提醒：</b>本地资料库里 SplaTAM 只有 <b>3 张</b>图可用（Fig. 1 / Fig. 2 / Fig. 3），本课引用了其中两张，没有为了凑数硬塞别的图。
+        </figcaption>
+      </figure>
+
+      <p>为什么说「剪影」这个思路在<b>原理上</b>比逐像素比深度更适合 SLAM？论文在动机那一节给了一段非常关键的话，值得整段记住：</p>
+
+      <p style="padding-left:1.2rem;border-left:3px solid var(--accent,#cc785c);color:#5a4a42">「<b>具有显式空间范围的地图</b>：现有地图的空间前沿可以很容易地被控制——只在过去观测到的场景部分加入高斯。给定一张新图像，这让我们可以通过<b>渲染一张剪影</b>，高效地识别出场景的哪些部分是新的内容（在地图的空间前沿之外）。这对相机跟踪至关重要，因为我们只想把场景中<b>已经建过图</b>的部分与新的图像做比较。<b>而这对隐式地图表示是很困难的，因为在针对未建图空间做基于梯度的优化时，网络会经历全局性的改变。</b>」</p>
+
+      <p>这段话值得反复读。它指出了隐式表示的一个结构性弱点：<b>神经网络是「牵一发动全身」的</b>——你去优化那块还没建图的空间，整个网络的输出都会跟着变，包括你以为已经建好的地方。而高斯的显式性让「哪里建过、哪里没建过」成为一个<b>可以直接问出来的问题</b>。这就把上一课「高斯显式到底显在哪」落到了实处。</p>
+
+      <p>论文的消融实验也把这件事量化了：<b>如果去掉剪影掩码，跟踪会彻底失败</b>（Replica Room 0 上 ATE 从 0.27 cm 恶化到 115.80 cm）；另外，跟踪时用的剪影阈值取 <b>0.99</b>（只用「几乎确定已建好」的像素），而增密时用的是 <b>0.5</b>——论文说，把跟踪阈值从 0.5 提到 0.99 带来了误差上约 <b>5 倍</b>的降低。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SplaTAM 跟踪时只在剪影值 $S(\mathbf{p})\gt 0.99$ 的像素上算误差（也就是「几乎确定已经建过图」的地方）。为什么不干脆用全部像素？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="用的是同一张渲染图，只是挑选了参与误差计算的像素子集，渲染成本并没有变化。" onclick="lessonKit.answer(this,'q0118a')">因为全图渲染会慢一些</button>
+          <button data-correct="yes" data-explanation="对。新一帧里常常包含地图还没拍到、还没优化好的新区域。如果把这些像素也放进误差里，位姿就会被一堆「本来就不该对上」的像素带偏。论文原话是：剪影「捕捉了地图的认知不确定性」，只在地图可靠的区域比较，才能得到干净的位姿梯度。" onclick="lessonKit.answer(this,'q0118a')">因为新区域会带偏位姿</button>
+          <button data-correct="no" data-explanation="恰恰相反，剪影阈值 0.99 是很严的筛选，参与计算的像素会变少而不是变多。" onclick="lessonKit.answer(this,'q0118a')">因为想让更多像素参与</button>
+        </div>
+        <div class="quiz-feedback" id="q0118a"></div>
+      </div>
+
+      <h2 id="pose">4. SplaTAM：位姿从哪来，它支持单目吗</h2>
+
+      <p>位姿这一侧，SplaTAM 走的是和上一课 MonoGS 同一条路——<b>可微渲染的光度/几何误差反传</b>，但用法上有一处很关键的不同：<b>它只在地图覆盖到的地方算误差。</b></p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal{L}_{t}=\sum_{\mathbf{p}\ :\ S(\mathbf{p})\gt 0.99}\Big(\ \mathrm{L1}\big(D(\mathbf{p})\big)\ +\ 0.5\ \mathrm{L1}\big(C(\mathbf{p})\big)\ \Big)$$</div>
+      </div>
+
+      <p>$C(\mathbf{p})$ 是渲染颜色、$D(\mathbf{p})$ 是渲染深度，两者都和实测值做 L1 距离；<b>求和范围被剪影限制住了</b>。颜色项前面的 0.5 是经验权重——论文解释得很实在：因为颜色残差的范围（约 0.01–0.03）比深度残差（约 0.002–0.006）大，所以要压一压，不然颜色项会独占主导权。</p>
+
+      <p>位姿初值则用<b>匀速模型</b>往前推（把上一帧的位姿按上一个速度外推），然后才开始梯度下降。消融显示这一步也很重要：去掉速度外推，跟踪误差会大 10 倍以上。</p>
+
+      <div class="callout">
+        <h4>它支持单目吗？——不支持</h4>
+        <p>SplaTAM 的摘要、标题、实验设置都把输入写死为 <b>RGB-D</b>（论文原话是「from a single <b>unposed RGB-D camera</b>」），所有基准测试也都在 RGB-D 数据集上。它<b>没有给出单目配置</b>。</p>
+        <p>这不是偶然：它的整套增密机制都吃深度——判据里有「实测深度是否比渲染深度更靠前」这一条，新高斯的位置也直接由深度反投影得到。把深度抽掉，这套机制就不成立了。</p>
+      </div>
+
+      <p>这可能就是这两篇工作最容易被忽略的差别：同样是 2024 年、同样是高斯 SLAM，<b>上一课的 MonoGS 是纯单目（3 fps），这一课的 SplaTAM 是纯 RGB-D</b>。它们不是同一个问题的两种解法，而是<b>两条平行的取舍线</b>：省掉深度传感器，就得用更复杂的表示和更多的迭代去补；有了深度传感器，就可以把表示砍到 8 个参数、把速度拉上去。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_SplaTAM/c9a58a09f386ede64abaf59fb7aa2b998eeb7b97978c50aefaeb23770ffdd36e.jpg" alt="SplaTAM Fig.1 tracking and reconstruction results">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>SplaTAM enables precise camera tracking and high-fidelity reconstruction for dense SLAM in challenging real-world scenarios. … Left: We showcase the high-fidelity 3D Gaussian Map along with the train (SLAM-input) &amp; novel view camera frustums. It can be noticed that SplaTAM achieves sub-cm localization despite the large motion between subsequent cameras in the texture-less environment. … Right: SplaTAM enables photo-realistic rendering of both train &amp; novel views at 400 FPS for a resolution of 876 × 584.<br>
+          （中译：SplaTAM 能在具有挑战的真实场景里做精确跟踪与高保真重建。它通过对显式体积表示——即 3D 高斯——做在线优化、并用可微渲染来实现。左：展示高保真 3D 高斯地图，以及训练视角（SLAM 输入）与新视角的相机视锥。可以看到，即便在<b>无纹理环境</b>里相邻相机之间位移很大，SplaTAM 仍达到<b>亚厘米级定位</b>。右：SplaTAM 能以 <b>400 FPS</b>、876 × 584 的分辨率对训练视角和新视角做照片级渲染。）<br>
+          <b>怎么看这张图：</b>① 左边那些小锥体就是相机拍过的位置，它们之间的间隔并不小——原文特意说这是「无纹理环境 + 大位移」，也就是最考验跟踪的设定（传统特征法在这种地方会直接跟丢）；② 右边是渲染结果，注意这是 <b>400 FPS</b> 下的画质；③ 请把「亚厘米级」和「无纹理」这两个词连起来读——这正是显式高斯表示+深度带来的红利。<br>
+          <b>要记住的一句话：</b>这套系统的卖点不是「又快又好」，而是<b>在传统方法会失败的场景里仍然跟得住</b>。
+        </figcaption>
+      </figure>
+
+      <p>运行开销的账也报得很清楚（Replica 数据集，跟踪/建图的每帧耗时）：SplaTAM 跟踪 <b>1.00 s/帧</b>、建图 <b>1.44 s/帧</b>，ATE <b>0.27 cm</b>；它还有一个精简版 SplaTAM-S，把每帧耗时压到 <b>0.19 s</b> 与 <b>0.33 s</b>，ATE 略升到 0.39 cm。对照 NICE-SLAM（1.18 s / 2.04 s，ATE 0.97 cm）与 Point-SLAM（0.76 s / 4.50 s，ATE 0.61 cm），可以看出它的建图那一步快得多。</p>
+
+      <p>原文承认的边界是：对<b>运动模糊、大深度噪声、剧烈旋转</b>敏感；并且需要<b>已知内参</b>与<b>稠密深度</b>。</p>
+
+      <h2 id="gsslam">5. GS-SLAM：自适应扩张与由粗到细</h2>
+
+      <p>现在看第二篇。GS-SLAM 的表示比 SplaTAM 更接近原著：它有协方差分解 $\Sigma=RSS^\top R^\top$，投影式是 $\Sigma'=JP^{-1}\Sigma P^{-\top}J^\top$（$P$ 为投影矩阵），而且它<b>保留了 1 阶球谐</b>（12 个系数）——代价我们待会儿在内存那一栏会看到。</p>
+
+      <p>它和原著最大的分歧在于「怎么加、怎么删」。论文把它叫<b>自适应 3D 高斯扩张策略（adaptive 3D Gaussian expansion strategy）</b>，并明确说这一步是「把 3D 高斯表示从『合成单个静态物体』扩展到『重建整个场景』的关键」。注意这句潜台词：<b>原著那套密度控制是为离线、有准确点云输入的场景设计的，直接搬到在线 SLAM 上会崩。</b>论文的消融也说得很直白——如果不做「加」（只用第一帧初始化然后纯优化），「这个策略会彻底崩溃，因为原著的密度控制在没有准确点云输入时无法胜任实时建图任务」。</p>
+
+      <p>它的做法分两步：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <b>加：看两个信号</b>
+          <p>在每个关键帧，先渲染一遍 RGB-D，算出每个像素的<b>累计不透明度</b> $T=\sum_i\alpha_i\prod_{j\lt i}(1-\alpha_j)$。一个像素被判为「不可靠」（un-reliable），条件是：<br>
+          $T\lt \tau_T$（这里根本没被盖住）<b>或</b> $|D-\hat{D}|\gt \tau_D$（实测深度和渲染深度差太多）。<br>
+          这些像素「大多正好捕捉到新观测到的区域」，把它们反投影成三维点，就在那里生成新高斯。</p>
+        </div>
+        <div class="mini-card">
+          <b>删：按深度压浮动体</b>
+          <p>对于落在当前视锥里、但位置和真实表面对不上的低质量高斯（也就是我们在 <b>0117</b> 里说的浮空团），论文不是直接删掉，而是<b>按深度去抑制它的不透明度</b>：$D-\mathrm{dist}(X_i,P_{uv})\gt \gamma$ 时让 $\Lambda_i\leftarrow\eta\Lambda_i$。这比硬删温和，给优化留下了回旋余地。</p>
+        </div>
+      </div>
+
+      <p>初始化的设计也很讲究：<b>第一帧只用一半的像素</b>（均匀采样 $HW/2$ 个）来初始化高斯。论文解释了原因——「留出空间来对高斯做自适应的密度控制，把大的点分裂成更小的、并往不同方向克隆，从而捕捉缺失的几何细节」。换句话说，它<b>故意一开始欠建一点</b>，好让后面的扩张策略有活干。</p>
+
+      <p>下面这张原图就是这套扩张策略的示意图：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GS-SLAM/34aa650c96a5d4affba4a8908fc22560deb9e3d4d2d305a1688f995706d482e1.jpg" alt="GS-SLAM Fig.3 adaptive 3D Gaussian expansion strategy">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Illustration of the proposed adaptive 3D Gaussian expansion strategy. GS-SLAM inhibits the low-quality 3D Gaussian floaters in the current frustum according to depth.<br>
+          （中译：所提出的自适应 3D 高斯扩张策略示意。GS-SLAM 依据深度，抑制当前视锥内的低质量 3D 高斯浮动体。）<br>
+          <b>怎么看这张图：</b>① 先找<b>视锥</b>（相机能看到的那片空间）——这是它做判断的范围；② 再看<b>浮动体</b>：那些飘在相机与真实表面之间、其实不对应任何东西的高斯；③ 注意图注用的是「抑制」（inhibits）而不是「删除」——它是把这类高斯的不透明度调低，让它们自己在优化中退出，而不是一刀切掉。<br>
+          <b>和 0116 对照着看：</b>原著处理浮空团的办法是「每 3000 次迭代把所有不透明度压回接近 0，让大家重新竞争」；GS-SLAM 则是「针对当前视锥里位置不对的那一批，按深度差压低它们的不透明度」——<b>一个是对全体周期性重置，一个是按几何关系定点抑制。</b>
+        </figcaption>
+      </figure>
+
+      <p>第二件事是它最出名的那招：<b>由粗到细的跟踪（coarse-to-fine）。</b>论文对动机说得很直接：「用所有图像像素来优化相机位姿会有问题，因为图像里的伪影会导致相机跟踪漂移」。它的解法分两阶段：</p>
+
+      <div class="flow-formula" style="text-align:center;font-size:1.02rem;padding:.9rem 0">
+        <b>粗阶段</b>：只渲染 <b>H/2 × W/2 的稀疏像素</b> → 迭代 $T_c$ 次 → 得到一个「先能看」的粗位姿 $P_c$<br>
+        ↓<br>
+        <b>细阶段</b>：用粗位姿把所有可见高斯投影到像平面 → 用 $|D_i-d_i|\le\varepsilon$ <b>挑出可靠的那批</b>（位置贴近真实表面的）→ 只渲染这些高斯做全分辨率细调 → 得到最终位姿
+      </div>
+
+      <p>为什么要这么绕？因为<b>「用所有像素算误差」和「用所有像素里干净的像素算误差」是两回事。</b>粗阶段靠降低分辨率来稀释单个伪影的影响；细阶段则靠<b>几何筛选</b>把那些「位置明显不在表面上」的高斯直接排除在外，不让它们参与渲染。这就是这一节的第二个自绘图要画的东西。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="28" text-anchor="middle" font-size="17" font-weight="700" fill="#2b2b2b">由粗到细：什么样的小球才算「可靠」</text>
+
+          <!-- 相机 -->
+          <rect x="40" y="190" width="70" height="44" rx="7" fill="#5a8fc7" stroke="#2c5f8a" stroke-width="1.5"/>
+          <text x="75" y="256" text-anchor="middle" font-size="11" fill="#2c5f8a">相机</text>
+          <!-- 视锥 -->
+          <path d="M112 198 L820 110 L820 314 L112 226 Z" fill="#7fc4a0" opacity="0.10" stroke="#4a9c76" stroke-width="1" stroke-dasharray="4 3"/>
+          <!-- 场景表面（一段墙） -->
+          <rect x="700" y="120" width="14" height="190" fill="#cfd8dc" stroke="#90a4ae" stroke-width="1"/>
+          <text x="707" y="332" text-anchor="middle" font-size="10.5" fill="#7a8a99">真实表面</text>
+
+          <!-- 近处高不透明度大高斯（高亮） -->
+          <g fill="#2f6d51" opacity="0.62">
+            <ellipse cx="300" cy="215" rx="30" ry="20"/>
+            <ellipse cx="420" cy="190" rx="26" ry="17"/>
+            <ellipse cx="560" cy="238" rx="28" ry="18"/>
+            <ellipse cx="380" cy="262" rx="24" ry="16"/>
+          </g>
+          <!-- 远处小高斯（变灰） -->
+          <g fill="#b0bec5" opacity="0.75">
+            <ellipse cx="660" cy="160" rx="9" ry="6"/>
+            <ellipse cx="680" cy="196" rx="8" ry="6"/>
+            <ellipse cx="672" cy="238" rx="9" ry="6"/>
+            <ellipse cx="690" cy="272" rx="8" ry="5"/>
+            <ellipse cx="640" cy="286" rx="8" ry="5"/>
+          </g>
+          <!-- 不可靠（位置偏离表面） -->
+          <g fill="#c0392b" opacity="0.55">
+            <ellipse cx="500" cy="132" rx="14" ry="9"/>
+            <ellipse cx="250" cy="300" rx="13" ry="8"/>
+          </g>
+          <text x="500" y="112" text-anchor="middle" font-size="10.5" fill="#c0392b">位置对不上的，剔除</text>
+
+          <text x="430" y="342" text-anchor="middle" font-size="12" font-weight="700" fill="#2f6d51">这几个：离相机近、不透明度高、投影面积大 → 最可靠</text>
+          <text x="700" y="360" text-anchor="middle" font-size="11" fill="#7a8a99">远处的小的：先不管</text>
+
+          <text x="450" y="400" text-anchor="middle" font-size="12" fill="#5a4a42">不是所有高斯都值得参与位姿优化；先把不靠谱的挑出去，剩下的才拿来做细调</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>GS-SLAM「由粗到细」里那个「细」阶段的核心动作——从一大堆可见高斯里挑出<b>可以信任</b>的那一批。<br>
+          <b>怎么看这张图：</b>① 相机在左边，视锥向右展开，最右边灰色那条是真实表面；② <b>深绿色的大椭球</b>是「可靠高斯」：它们离相机近、不透明度高、投影到图像上占的面积大，因此对位姿的约束最有分量；③ <b>灰色的小椭球</b>在远处，投影面积很小，它们对位姿几乎没影响，论文的处理是「先不管」；④ <b>两团红色</b>是位置明显偏离表面的（浮动体），它们在细阶段被直接排除，不许参与渲染——这一步正是为了避免它们去带偏位姿。<br>
+          <b>要记住的一句话：</b>「由粗到细」不只是「低分辨率 → 高分辨率」，它的关键是中间那一次<b>几何筛选</b>——先用粗位姿判断谁大概靠谱，再只用靠谱的那批去精修。
+        </figcaption>
+      </figure>
+
+      <p>这套组合拳的收益是实打实的。GS-SLAM 报告的系统帧率是 <b>8.34 FPS</b>（跟踪 11.9 ms × 10 次迭代、建图 12.8 ms × 100 次迭代），渲染帧率 <b>386.91 FPS</b>；在 Replica 上跟踪 ATE 平均比当时第二名的 Point-SLAM 好 <b>0.4 cm</b>，而 Point-SLAM 只有 0.42 FPS——也就是快了约 20 倍。消融里，去掉「加」会崩溃；去掉「删」则会留下大量冗余噪声高斯，「带来不理想的监督信号」。由粗到细的消融也显示：粗+细比纯细好（ATE 0.48 对 0.49、PSNR 31.56 对 30.84），论文解释说纯细的方案「受伪影和噪声影响，优化会震荡」。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>GS-SLAM 在<b>第一帧只初始化一半像素</b>的高斯。这样做最直接的理由是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="论文的理由与显存无关，它说的是「给自适应密度控制留出空间」。半像素确实省一点初始开销，但那不是它写出来的动机。" onclick="lessonKit.answer(this,'q0118b')">为了省下一半的显存</button>
+          <button data-correct="no" data-explanation="一半像素的点当然比全像素更稀，但论文并没有把「初始稀疏」当成缺点，反而说这是为后面的扩张留余地。" onclick="lessonKit.answer(this,'q0118b')">因为深度图只有一半</button>
+          <button data-correct="yes" data-explanation="对。论文原话是「只使用一半像素来初始化场景，从而留出空间来对高斯做自适应的密度控制：把大的点分裂成更小的、并往不同方向克隆，以捕捉缺失的几何细节」。也就是说，它刻意让初始表示欠建一点，好让扩张策略有事情可做——这正好呼应上一课 0116 里「欠重建 → 克隆」那条分支。" onclick="lessonKit.answer(this,'q0118b')">给后面的扩张留余地</button>
+        </div>
+        <div class="quiz-feedback" id="q0118b"></div>
+      </div>
+
+      <p>它的系统总览图可以和图 3 对着看：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_GS-SLAM/1df3b6744bf37ab20a89ede1eb50352c517263943db060a6ff460bea677287f1.jpg" alt="GS-SLAM Fig.2 overview of the proposed method">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of the proposed method. We aim to use 3D Gaussians to represent the scene and use the rendered RGB-D image for inverse camera tracking. GS-SLAM proposes a novel Gaussian expansion strategy to make the 3D Gaussian feasible to reconstruct the whole scene and can achieve real-time tracking, mapping, and rendering performance on GPU.<br>
+          （中译：方法总览。我们用 3D 高斯表示场景，并用渲染出的 RGB-D 图像做<b>逆向相机跟踪</b>。GS-SLAM 提出一种新颖的高斯扩张策略，使 3D 高斯能够重建整个场景，并能在 GPU 上实现实时的跟踪、建图与渲染。）<br>
+          <b>怎么看这张图：</b>① 找到那个把流程分成上下两半的分界——上半是<b>跟踪</b>（用渲染图反推位姿），下半是<b>建图</b>（扩张 + 优化）；② 注意图里画了两条往返的箭头：一条是「渲染出来的 RGB-D 图像 → 位姿」，另一条是「位姿 → 高斯场景表示」，这正是「渲染误差反传」在流程图上的样子；③ 最后把这张图和上一节的自绘图拼起来看：自绘图讲的是「挑哪些高斯来算」，这张总览讲的是「算完以后拿结果去干什么」。<br>
+          <b>要记住的一句话：</b>把上一篇 <b>0117</b> 的 MonoGS 总览图拿出来并排放——结构几乎一样，差别全在「判据」和「筛选」这两个词上。
+        </figcaption>
+      </figure>
+
+      <h2 id="cmp">6. 横向对比表</h2>
+
+      <p>组课的主干就是这张表。请特别注意「未提及」三栏——<b>那是真的回原文找过、确认没有才填的</b>，不是偷懒。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.9rem">
+        <thead>
+          <tr style="background:#f5efe9">
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">　</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">SplaTAM（2024）</th>
+            <th style="border:1px solid #e0d5c8;padding:.45rem .6rem;text-align:left">GS-SLAM（2024）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>输入</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">RGB-D（单台未给位姿的相机）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">RGB-D（已知内参）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>支持单目</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">未提及（全文按 RGB-D 设计）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">未提及（全文按 RGB-D 设计）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>高斯参数</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>8 个</b>：位置 3 + RGB 3 + 半径 1 + 不透明度 1；<b>各向同性</b>、无球谐</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">位置 + 协方差（R、S 分解）+ 不透明度 + <b>1 阶球谐（12 系数）</b></td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>追踪依据的额外信号</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">渲染<b>剪影</b> $S(\mathbf{p})$（跟踪用 0.99 阈值）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">渲染<b>累计不透明度</b> $T$ + 深度一致性</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>加高斯判据</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">$S(\mathbf{p})&lt;0.5$，或「实测深度更靠前且深度误差 &gt; 50 × 中位深度误差」</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">$T&lt;\tau_T$ 或 $|D-\hat{D}|&gt;\tau_D$，把「不可靠像素」反投影成新高斯</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>删 / 抑制</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">建图阶段剔除「不透明度接近 0」或「过大」的高斯（沿用原著做法）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">按深度抑制视锥内浮动体：$\Lambda_i\leftarrow\eta\Lambda_i$</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>抗伪影的手段</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">只用剪影覆盖到的像素算跟踪误差</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>由粗到细</b>：粗阶段半分辨率；细阶段按深度一致性挑可靠高斯</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>速度</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">渲染 400 FPS（876×584）；跟踪 1.00 s/帧、建图 1.44 s/帧（精简版 0.19 / 0.33 s）</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">系统 <b>8.34 FPS</b>；渲染 386.91 FPS</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>内存</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">未单独报告</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">Replica Room 0 场景表示 <b>198.04 MB</b>（原文说主要是球谐系数吃掉的）</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>跟踪精度</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">Replica ATE <b>0.27 cm</b>；原文说在四个数据集上「最高 2 倍」优于既有方法</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">Replica 平均比第二名 Point-SLAM 好 <b>0.4 cm</b>（对应 0.50 对 0.54 cm）</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>回环</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">未提及</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">未提及</td>
+          </tr>
+          <tr style="background:#faf7f4">
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem"><b>原文承认的短板</b></td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">对运动模糊、大深度噪声、剧烈旋转敏感；需已知内参与稠密深度</td>
+            <td style="border:1px solid #e0d5c8;padding:.45rem .6rem">依赖高质量深度；大场景显存高（原文建议用量化、聚类改善）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 id="verdict">7. 我们的判断</h2>
+
+      <div class="callout">
+        <h4>★ 以下是课程判断，不是原文自评</h4>
+        <p>两篇论文都不敢自称「通用解法」，所以我们也不必替它们吹。就这一课关心的那个问题——「什么时候该加一个新高斯」——我们的看法是：</p>
+        <p><b>① SplaTAM 的「剪影」在概念上更有意思。</b>它把「地图的空间前沿」变成了一个可以渲染出来的量，并且把这个量的适用范围讲清楚了（跟踪时用、建图时不用）。这段论证不只是工程技巧，它是「显式表示凭什么优于隐式表示」的一个具体论据——而且原文自己把它写在了动机里。</p>
+        <p><b>② GS-SLAM 的「由粗到细」更实在。</b>它没有发明新的表示，而是承认「地图里一定有还没收敛好的高斯」，然后用一次几何筛选把噪声源挡在优化之外。这种「先粗后精、中途筛选」的思路，你在第四季 <b>0074</b> LOAM（里程计高频粗、建图低频精）与第三季 <b>0049</b> DSO 里都见过影子——它是工程上非常可靠的模式。</p>
+        <p><b>③ 两篇都选择了「不做回环」。</b>这不是疏忽，而是这个阶段的研究者把火力集中在「表示与增删」上了。回环这件事要等到 <b>0119</b>（Photo-SLAM）与 <b>0121</b>（Splat-SLAM）才被正面处理，而那也正是它们的核心卖点。</p>
+      </div>
+
+      <p>还有一处细节很值得记下来：<b>两篇都在处理同一类东西——浮空团（floaters）。</b>它们给出的办法不同（一个是剪影筛选 + 阈值剔除，一个是按深度压低不透明度），但方向一致：<b>高斯表示天生会产出垃圾，你必须有一套机制去清。</b>这条线索从 <b>0116</b>（原著的不透明度重置）一直贯到 <b>0122</b>（SuGaR 把高斯拍扁贴到表面上），是全季最连贯的一条暗线之一。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>请解释 SplaTAM 的轮廓掩码 $S(\mathbf{p})$ 是什么，以及它为什么能被用来判断「哪里该加高斯」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>它是什么：</b>$S(\mathbf{p})=\sum_i f_i(\mathbf{p})\prod_{j\lt i}(1-f_j(\mathbf{p}))$，把颜色渲染式里的颜色换成高斯密度 $f_i$。所以它表示「这个像素被高斯覆盖的程度」：接近 1 = 地图在这里有东西，接近 0 = 这里是空的。</p>
+              <p><b>为什么能判断增密：</b>真实图像里的物体在某个像素上显然是「有东西」的（属于前景），但如果渲染出的剪影在这个像素上几乎为 0，就说明<b>地图里这一块还是空的</b>——这正是需要补高斯的地方。增密掩码不只用了这一条，还加了第二条：如果实测深度比渲染深度更靠前、且深度误差超过中位深度误差的 50 倍，也说明「前面还有个东西没建出来」。</p>
+              <p><b>和看深度差相比好在哪：</b>深度逐像素相减会受到深度传感器噪声的直接干扰，一个坏像素就可能凭空生出一团高斯；而剪影是把大量像素的信息汇总成一个「这块建过没有」的是非判断，抗噪性好得多。论文也正是靠它，把「地图的空间前沿在哪」这个显式表示独有的性质用了起来。</p>
+              <p><b>还有一个细节别忘：</b>跟踪和增密用的阈值不一样——跟踪用 0.99（只信「几乎确定建好」的像素），增密用 0.5（宁可多补一点）。</p>
+            </div></details>
+          </li>
+          <li>GS-SLAM 说「原著那套密度控制直接搬到在线 SLAM 上会崩」。请根据这一课与 <b>0116</b> 的内容，说明为什么会崩。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为原著的密度控制<b>建立在两个前提上</b>，而这两个前提在在线 SLAM 里都不成立。</p>
+              <p><b>前提一：有一个准确的初始点云。</b>原著从 SfM 的稀疏点出发，这些点的位置虽然稀疏但相当准。而 SLAM 是边跑边建，第一帧能拿到的只是一张深度图反投影出来的点——覆盖不全、还有噪声，更没有任何多视角校验。GS-SLAM 的消融说得很直白：如果只做「第一帧初始化，然后纯优化不加新点」，「这个策略会彻底崩溃，因为原著的密度控制在没有准确点云输入时无法胜任实时建图任务」。</p>
+              <p><b>前提二：有足够多、且挑得好的视角。</b>原著是离线重建，视角多、姿态准，所以「哪里梯度大 = 哪里没重建好」这个推断是可靠的。在线 SLAM 只有一小段窗口内的视角，而且位姿本身在漂——用它去判断「这里该不该加高斯」，容易把位姿的误差误判成地图的缺失。</p>
+              <p><b>所以 GS-SLAM 换成了两条更直接的判据：</b>累计不透明度 $T$ 太低（这里根本没被盖住），或者实测深度与渲染深度差太多（前面应该还有东西）。前者回答「有没有」，后者回答「够不够前」，都<b>不需要依赖位姿的精度</b>。同时它从第一帧就只用一半像素初始化，刻意留出余地给这套扩张策略。</p>
+            </div></details>
+          </li>
+          <li>请把「由粗到细」这件事用自己的话讲清楚：粗阶段到底粗在哪，细阶段到底细在哪？中间那一步筛选筛的是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>粗阶段粗在分辨率：</b>它只渲染 $H/2\times W/2$ 的稀疏像素来做跟踪损失。这样做的收益不是「更快」，而是<b>更稳</b>——论文原话是「这个粗优化步骤显著减轻了细节伪影的影响」。单个像素上的噪点被稀释掉了，得到的是一个方向大致正确的粗位姿 $P_c$。它的任务是「先别跑偏」，不是「一步到位」。</p>
+              <p><b>中间那一步筛的是高斯，不是像素：</b>拿粗位姿 $P_c$ 把所有可见高斯投影到像平面，逐个检查它到相机像平面的距离 $d_i$ 与那个像素的深度观测 $D_i$ 是否接近（$|D_i-d_i|\le\varepsilon$）。接近的算「可靠高斯」（说明它落在了真实表面附近），差得远的（浮动体）直接剔除。</p>
+              <p><b>细阶段细在两个地方：</b>一是回到全分辨率；二是「只渲染可靠的那些高斯」。所以它不是简单地重复一遍精算，而是<b>在更干净的数据上精算</b>——既少了伪影，也少了一大堆本来就没用的高斯。</p>
+              <p><b>为什么这套组合优于纯细：</b>论文的消融显示，纯细的方案在精度上比纯粗好，但「受重建场景中的伪影和噪声影响，优化会波动」，最终粗+细在跟踪、建图、渲染三项指标上全面最好。</p>
+            </div></details>
+          </li>
+          <li>两篇论文都用 RGB-D，而上一课的 MonoGS 是纯单目。请说明这个输入选择会怎样影响「表示的选择」与「系统的能力边界」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>对表示的影响：</b>有深度时，像素对应到哪里是明确的，所以高斯的位置可以「一次放准」；于是可以大胆简化表示——SplaTAM 直接砍到 8 个参数（各向同性球 + 固定颜色），GS-SLAM 虽然保留了协方差和 1 阶球谐，但也主要是为了建图与渲染质量。反过来，纯单目的 MonoGS 必须处理「位置可能是错的」这件事，所以它要保留各向异性椭球（用来贴合未知的表面方向），并且要额外加各向同性正则和可见性剪枝来清理浮空团。</p>
+              <p><b>对能力边界的影响：</b>RGB-D 版本的优点是精度和速度（SplaTAM 亚厘米级、GS-SLAM 8.34 FPS 系统帧率），代价是<b>依赖深度传感器</b>——两篇都明确把「深度质量」列为短板，SplaTAM 还要求稠密深度。纯单目版本省掉了这个硬件约束（MonoGS 单目地图只有 2.6 MB），代价是速度只有约 3 fps、尺度要慢慢收敛，并且必须用更复杂的机制兜底。</p>
+              <p><b>一句话总结：</b>这是一个非常干净的取舍对照——<b>你愿意在输入端付钱（多一个深度传感器），就可以在算法端省钱（表示更简单、速度更快）；不愿意付，就得在算法上补回来。</b>这条规律在后面几课还会反复出现。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0117-MonoGS2024-首个以高斯为唯一表示的SLAM.html">← MonoGS（2024）：首个以高斯为唯一表示的 SLAM</a>
+        <a class="next" href="0119-Photo-SLAM2024-明确面向嵌入式实时.html">Photo-SLAM（2024）：明确面向嵌入式实时 →</a>
+      </div>
+      <p class="foot-note">「什么时候该加一个高斯」——这个问题看起来很小，却是所有高斯 SLAM 都要回答的地方 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>
