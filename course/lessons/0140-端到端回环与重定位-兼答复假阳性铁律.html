@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>端到端回环与重定位 2024 · DeepLoopClosing (LCR-Net) — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0140</div>
+      <h1>端到端回环与重定位 2024 · DeepLoopClosing（内部名 LCR-Net）</h1>
+      <p class="subtitle">一个共享 backbone 同时出「全局描述子（检索）」和「稠密匹配（6-DoF 位姿）」，把检索这条线一路推到回环 + 重定位一体，并正面回答第一季 0014 的假阳性铁律 🔁</p>
+      <div class="hero-meta">
+        <span>🎯 主题：LiDAR 回环检测 + 重定位的统一多头网络</span>
+        <span>👥 作者：Y. Zhong、R. Guo、S. Wang 等</span>
+        <span>📅 2024 · <i>Fast and Accurate Deep Loop Closing and Relocalization for Reliable LiDAR SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">它接在谁后面</a>
+        <a href="#c">一个 backbone，两路 head</a>
+        <a href="#d">检索这条路</a>
+        <a href="#e">位姿这条路</a>
+        <a href="#f">塞进 SLAM</a>
+        <a href="#g">正面回答假阳性铁律</a>
+        <a href="#h">这条线的总账</a>
+        <a href="#i">练习</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>读懂 LCR-Net 怎么把「检索候选」和「算 6-DoF 位姿」塞进同一个网络；搞清楚它为什么是<b>完整系统</b>（回环 + 重定位，A-LOAM 后端，重定位 2.5 Hz / 回环 1 Hz）；并正面回答第一季 <b>0014</b> 的回环假阳性铁律：学习式方法把假阳性率压下去了吗、代价是什么、又带来了哪些新失效模式。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0011</b>「深度学习先吃掉匹配与检索」——检索那一半的答案：从 DBoW2（0134）的 tf-idf 词袋，到 Scan Context（0135）的手工几何描述子，到 SALAD（0138）的最优传输聚合，今天 LCR-Net 用 NetVLAD + 学习到的稀疏特征把 LiDAR 检索也端到端化。<b>0014</b> 的假阳性铁律（一次假阳性毁整张地图）是本课必须正面回答的旧债。<b>0136</b> 的 LCDNet 是 LCR-Net 的直接前身与对比基线。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>SLAM 跑久了会「记错路」：同一个地方转两圈，系统却没认出「这就是刚才那地儿」，于是地图越画越歪（<b>漂移</b>）。认出「咦，回到老地方了」这根操作叫<b>回环检测</b>（Loop Closing）。除了认路，SLAM 还常需要被「重新摆正」——比如被绑架后重新定位自己（<b>重定位</b>，Relocalization）。</p>
+      <p>过去这两件事是两套流程：先靠描述子找「可能是同一处」的候选帧（<b>检索</b>），再用 ICP 这类几何方法一点点对齐算位姿（<b>注册</b>）。LCR-Net 的野心是：<b>一个网络一次前向，既吐出「最像的候选」，又直接算出 6 个自由度的相对位姿</b>，把回环和重定位一次性解决，而且能实时跑。</p>
+      <p>术语先露脸先解释：<b>6-DoF</b> = 6 自由度（3 个平移 x/y/z + 3 个旋转 roll/pitch/yaw）；<b>head</b> = 网络末端分叉出的一个任务分支；<b>backbone</b> = 大家共用的主干特征提取器；<b>NetVLAD</b> = 把一堆局部特征聚成一个固定长度全局向量的老办法（见 0136）；<b>Sinkhorn</b> = 一种把「谁配谁」的打分矩阵迭代归一化成合法一一对应的算法（见 0138）。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面</h2>
+      <p>把这一块的检索线拉直看：0134 DBoW2（手工词袋）→ 0135 Scan Context（手工几何极坐标描述子）→ 0136 LCDNet / OverlapTransformer（第一次用深度学习做 LiDAR 描述子 + 位姿回归）→ 0137 BEVPlace / SeqOT（鸟瞰图 + 序列）→ 0138 SALAD / R²Former（图像 VPR 的聚合巅峰）→ 0139 Hybrid（CNN+Transformer 混合）。到 0140，LCR-Net 干的是 0136 那一脉的「升级终局」：不仅检索，还把注册（算位姿）也学进去，并且回环 + 重定位共用一个模型。</p>
+      <p>所以本课是<b>整条检索支线的收口</b>：前面所有「怎么把一帧压成一个好描述子」的功夫，在这里被收编成「候选检索 head」；而「描述子找到候选后怎么对齐」，则被另一路 head 用学习的稠密匹配替代掉 ICP。下一节 0141 会拐去另一条支线（PoseNet / DeepVO）——用深度学习直接从图像回归位姿，与本课的 LiDAR 路线互补。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. LCR-Net 长什么样：一个 backbone，两路 head</h2>
+      <p>先读图 1（总览）和图 3（流水线），建立整机印象。输入是<b>原始点云</b>（不是图像，KITTI / MulRan / Ford / Apollo / KITTI-360 都用）。主干 KPEncoder（VGG 式 KPConv）先把点云下采样成均匀关键点，带每点特征 $\hat{\mathbf F}$。然后 3D-RoFormer++ 做旋转位置编码的跨图上下文聚合，VoteEncoder 用投票偏移把均匀点推到显著区并聚类出投票特征 $\mathbf H$。到分叉口：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>检索 head（全局描述子）</h4>
+          <p>用均匀特征 $\hat{\mathbf F}$ 经 NetVLAD 聚成向量，MLP 压维，再过 <b>context gating</b> 得到全局描述子，用于「从地图里找最像的那一帧」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>位姿 head（稠密匹配）</h4>
+          <p>用投票特征 $\mathbf H$ 算打分矩阵，加 dustbin + Sinkhorn 得软分配取 Top-N 对应，再 point-to-node 扩展到 patch 内稠密匹配，最后 LGR（加权 SVD + 假设验证）求 6-DoF。</p>
+        </div>
+        <div class="mini-card">
+          <h4>3D-RoFormer++</h4>
+          <p>把相对位置写成旋转矩阵 $R_{\Theta_j-\Theta_i}$ 做 pose-aware 注意力；改进原版：非线性 sigmoid 旋转映射改为线性 Linear，并加边界惩罚获得<b>平移不变性</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>VoteEncoder</h4>
+          <p>投票偏移把均匀下采样点移向几何显著区并质心聚类。反直觉发现：匹配点的<b>覆盖度 / 内点比</b>比单点精度更关键，VoteEncoder 正是靠提升内点比拿到大增益。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepLoopClosing/563c41cb85d4c1df8e2ee09a0580d9963508056fb843d467c229acd185bda138.jpg" alt="LCR-Net 总体框架">
+        <figcaption>
+          <p><b>原图想说啥：</b>Fig. 1. Our proposed LCR-Net for loop closing and relocalization. LCR-Net 的总框架：共享 backbone 出三类稀疏特征，再分两路 head（全局描述子 / 稠密匹配）同时服务回环与重定位。</p>
+          <p><b>怎么看：</b>左半是特征提取（KPEncoder → 3D-RoFormer++ / VoteEncoder），右上是检索 head 出全局描述子去地图里查候选，右下是匹配 head 出 6-DoF 位姿。两条线共用同一份特征，所以「找候选」和「算位姿」不会各说各话。</p>
+          <p><b>要记住的一句话：</b>检索与位姿共用一个 backbone，避免了「描述子说像、几何对齐却对不上」的两段式割裂。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepLoopClosing/e02130567f588c6f9b0f57bac51bd9a710aa78ef1ffb2ae080ddeffdd61a9ada.jpg" alt="LCR-Net 流水线总览">
+        <figcaption>
+          <p><b>原图想说啥：</b>Fig. 3. Pipeline overview. LCR-Net consists of three main components: 特征提取、全局描述子（检索）、稠密匹配（位姿）三大件串成 coarse-to-fine 流水线。</p>
+          <p><b>怎么看：</b>coarse（粗）是先靠全局描述子从大地图里捞候选；fine（细）是只在候选帧之间做稠密匹配算精确位姿。粗到细分摊了计算，也分摊了出错风险。</p>
+          <p><b>要记住的一句话：</b>coarse-to-fine 是它能实时化的关键——不在全图每帧都做昂贵对齐，只对齐「已经被描述子初步认可」的候选。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 检索这条路：全局描述子怎么来</h2>
+      <p>检索 head 和 0136 学的 NetVLAD 一脉相承：把均匀关键点特征聚成固定长度向量，再 MLP 压维。LCR-Net 多加了一道 <b>context gating</b> $V = CG(X) = \sigma(WX+b) \otimes X$——一个按通道重要性开的「门」：重要的维度放大、不重要的压住。训练时用 <b>triplet loss</b>（正样本 overlap &gt; 0.3，每样本 6 正 6 负），逼「真回环」的描述子比「假相似」更靠近。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ G = CG\big(\text{NetVLAD}(\hat{\mathbf F})\big) = \sigma(WX+b) \otimes X $$</div>
+        <p style="margin:.6rem 0 0;font-size:.92rem;color:#6b5a4e">人话翻译：把 NetVLAD 聚出来的全局描述子再过一道「按重要性开关」的门——哪些维度最能区分地点就放大，哪些维度是噪声就压住，让检索时最该被注意的特征更突出，榜首更稳。</p>
+      </div>
+      <p>图 2 把常见框架和本文框架摆一起比：传统是「描述子检索 → 几何 ICP 注册」两段独立；LCR-Net 是「描述子检索 + 学习匹配注册」一体。检索数字（Table I）：KITTI AUC <b>0.958</b> / R@1 <b>0.937</b> / R@1% <b>0.993</b>；Ford Campus AUC <b>0.972</b>。LCDNet 的 KITTI AUC 0.961 略高，但 Ford 上 0.961 &lt; LCR 0.972——说明跨数据集更稳。</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepLoopClosing/6c447ba7c099a7d19dd5e3dd55f290698b28dcd713d7142becb3f5f98cfea3d4.jpg" alt="常见框架与 LCR-Net 框架对比">
+        <figcaption>
+          <p><b>原图想说啥：</b>Fig. 2. Comparison of common frameworks and our framework for similarity estimation：常见两段式（描述子 + ICP）vs LCR-Net 一体式（描述子 + 学习匹配）。</p>
+          <p><b>怎么看：</b>重点看「注册」那一步——别人用迭代最近点 ICP 这类纯几何优化，LCR-Net 用学习的稠密匹配直接出位姿，所以候选一旦检索对，位姿也不用另起炉灶。</p>
+          <p><b>要记住的一句话：</b>它把「检索」和「位姿」从串联改成了并联，共享特征、一次前向完成。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 位姿这条路：稠密匹配 + LGR</h2>
+      <p>匹配 head 是 LCR-Net 比 LCDNet 多出来的「第二只手」。稀疏对应用打分矩阵 $C = H^A H^B / \sqrt{d_c}$，加 dustbin 行/列（见 0138 说过的 SuperGlue 式套路）再用 <b>Sinkhorn</b> 迭代行列归一化得软分配，取 Top-$N_c$ 对应；再把关键点扩展到 patch（point-to-node），patch 内用 KPDecoder 恢复的逐点描述子再做一次 Sinkhorn 得<b>稠密匹配</b>；最后 <b>LGR</b>（local-to-global registration，加权 SVD + 假设验证）求 6-DoF。</p>
+      <p>关键数字（闭环注册，KITTI-00/08，RR 多已饱和 100%）：LCR-Net RTE <b>0.04 m</b> / RYE <b>0.09°</b>，而 LCDNet 是 0.11 / 0.12；在 overlap &gt; 0.3、相距达 15 m 的更难集上<b>唯一保持 100% RR</b>；翻译误差比 LCDNet+ICP 在 seq00 降 <b>64%</b>、seq08 降 <b>16%</b>。图 6 把「用 LCDNet 初始化再做注册」的定性结果拉出来比，LCR-Net 的对应点更干净。</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepLoopClosing/643782d55556fc43f2efac3f702b1d795ec439d17dc7bc9ef791bca2be9ae54d.jpg" alt="以 LCDNet 为初始化的注册定性对比">
+        <figcaption>
+          <p><b>原图想说啥：</b>Fig. 6. Qualitative comparison of registration using LCDNet as an initialization：以 LCDNet 初始化做注册时，LCR-Net 的对应点与对齐质量更好。</p>
+          <p><b>怎么看：</b>看彩色对应点连线——LCR-Net 的线更整齐、跨源噪声点更少，说明 VoteEncoder 提升的内点比（IR）确实转化为更稳的位姿。</p>
+          <p><b>要记住的一句话：</b>位姿精度来自「内点比」而非「单点更准」，这是 LCR-Net 反直觉的取胜点。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 端到端塞进 SLAM：回环 1 Hz，重定位 2.5 Hz</h2>
+      <p>LCR-Net 不是裸模型，而是个<b>完整系统</b>：前端用 A-LOAM，回环与重定位都由 LCR-Net 提供。速度（Table V）：候选描述子提取 <b>50 ms</b>，map 查询 5 ms，注册用 LGR 仅 <b>13 ms</b>（总 306 ms），比 RANSAC 版（683 ms）快约 <b>30×</b>——这就是它能在线化的根本原因。系统实测频率：<b>重定位 2.5 Hz、回环 1 Hz</b>。</p>
+      <p>在 KITTI-02 上，SC+ICP 的 APE 是 4.9 m，集成 LCR-Net 后降到 <b>4.2 m</b>；连续重定位（MulRan）RR <b>97.89 / 98.22%</b>，远高于 RDMNet+RANSAC 的 87.09%，RRE 降 43%、RTE 降 20%。图 8 把 A-LOAM 集成 LCR-Net 的全局轨迹和对比法摆一起：LCR-Net 的轨迹收得更紧、回环处不再翘起。</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_DeepLoopClosing/ee966d06155a1bf222a08677f617fa4caef2bb9ceca1091d192090a3c98effc7.jpg" alt="A-LOAM 集成 LCR-Net 的性能对比">
+        <figcaption>
+          <p><b>原图想说啥：</b>Fig. 8. Performance of A-LOAM with integrating LCR-Net compared with ...：集成 LCR-Net 后 A-LOAM 的全局一致性明显更好。</p>
+          <p><b>怎么看：</b>对比各方法的估计轨迹与真值——LCR-Net 那条的回环闭合处没有「错层」，说明回环一旦正确触发，地图就被牢牢焊住，不再累积漂移。</p>
+          <p><b>要记住的一句话：</b>正确的回环把地图「焊死」，错误的回环把地图「拽歪」——下一节用一张自绘图把后者的代价画给你看。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 正面回答 0014 假阳性铁律</h2>
+      <p>第一季 <b>0014</b> 立过铁律：<b>回环假阳性是 SLAM 最贵的错误——一次错连，整张地图被错误约束拉歪，且不可逆</b>。学习式方法（LCR-Net 是代表）把假阳性率压下去了吗？答案是<b>部分压下去，但换了代价，也带来新失效模式</b>。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>压下去了吗？部分</h4>
+          <p>双保险降低了假阳性：检索 head 用 triplet（正样本需 overlap&gt;0.3）先过滤「像但不重叠」的难负；位姿 head 的 LGR 带假设验证，对齐不过关就不采纳。难集（overlap&gt;0.3、15 m）上 LCR-Net 是<b>唯一保持 100% RR</b> 的方法，说明「像但其实是异地」的假阳性被显著压住。</p>
+        </div>
+        <div class="mini-card">
+          <h4>代价是什么？</h4>
+          <p>① 算力代价：50 ms 描述子 + 13 ms LGR，比纯几何 Scan Context（7.4 ms，见 0135）重得多，只能做到回环 1 Hz / 重定位 2.5 Hz；② 数据代价：依赖大量带位姿标签的点云训练，换传感器/换场景要重训；③ 不可解释：错在哪一步（检索错还是匹配错）不如几何法直观。</p>
+        </div>
+        <div class="mini-card">
+          <h4>新失效模式</h4>
+          <p>① <b>分布外失效</b>：训练没见过的结构（长走廊、退化场景）靠「退化关键帧」机制兜底，仍可能整段失锁；② <b>检索-匹配不一致</b>：描述子说像、但 LGR 假设验证被噪声骗过仍可能采纳；③ <b>投票偏差</b>：VoteEncoder 推点若偏向某类几何，会在同类场景过匹配。</p>
+        </div>
+        <div class="mini-card">
+          <h4>结论</h4>
+          <p>学习式没有「消灭」假阳性，而是把假阳性从「几何对齐易错」转成「需靠训练覆盖 + 假设验证兜住」。铁律依然成立：假阳性依旧毁地图，只是现在更稀有、且更难事后定位根因。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="正确回环与假阳性回环对比">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <line x1="450" y1="40" x2="450" y2="380" stroke="#d7dce5" stroke-width="1.5"/>
+          <text x="235" y="34" text-anchor="middle" font-size="19" fill="#1f6f43"><tspan font-weight="700">✓ 正确回环：地图闭合，无漂移</tspan></text>
+          <text x="665" y="34" text-anchor="middle" font-size="19" fill="#b4232a"><tspan font-weight="700">✗ 假阳性回环：整张地图被拉歪</tspan></text>
+          <text x="40" y="58" font-size="13" fill="#5b6472">左：回到老地方，绿色闭环把地图焊死</text>
+          <text x="470" y="58" font-size="13" fill="#5b6472">右：本不该连的两处被红链接上</text>
+          <path d="M 110 150 C 180 110, 300 110, 360 160 C 410 200, 360 300, 250 310 C 160 318, 90 280, 95 220 C 98 190, 100 170, 110 150 Z" fill="none" stroke="#2b7de9" stroke-width="2.5"/>
+          <circle cx="110" cy="150" r="5" fill="#2b7de9"/>
+          <circle cx="95" cy="220" r="5" fill="#2b7de9"/>
+          <text x="205" y="135" text-anchor="middle" font-size="12" fill="#2b7de9">轨迹绕一圈</text>
+          <path d="M 110 150 Q 220 235, 95 220" fill="none" stroke="#1f9d55" stroke-width="2.5" stroke-dasharray="7 5"/>
+          <text x="120" y="205" font-size="12" fill="#1f9d55"><tspan font-weight="700">绿：回环约束</tspan></text>
+          <text x="235" y="345" text-anchor="middle" font-size="13" fill="#1f6f43">结果：地图自洽，漂移被消除</text>
+          <path d="M 520 140 C 600 110, 720 120, 800 165" fill="none" stroke="#2b7de9" stroke-width="2.5"/>
+          <path d="M 800 165 C 840 250, 720 320, 560 330 C 500 333, 500 270, 540 230 C 565 205, 540 170, 520 140 Z" fill="none" stroke="#2b7de9" stroke-width="2.5"/>
+          <circle cx="520" cy="140" r="5" fill="#2b7de9"/>
+          <circle cx="800" cy="165" r="5" fill="#2b7de9"/>
+          <text x="660" y="125" text-anchor="middle" font-size="12" fill="#2b7de9">真实是两地</text>
+          <line x1="520" y1="140" x2="800" y2="165" stroke="#e0392b" stroke-width="3"/>
+          <text x="650" y="150" text-anchor="middle" font-size="12" fill="#e0392b"><tspan font-weight="700">红：错误回环</tspan></text>
+          <path d="M 540 250 Q 660 300, 800 165" fill="none" stroke="#e0392b" stroke-width="1.6" stroke-dasharray="4 4"/>
+          <text x="700" y="280" font-size="11" fill="#e0392b">地图被迫拉伸对齐</text>
+          <text x="665" y="365" text-anchor="middle" font-size="13" fill="#b4232a">结果：约束错误 → 整图变形、不可逆</text>
+          <text x="450" y="408" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">回环假阳性的代价：一次错连，整张地图被拉歪</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>原图想说啥：</b>自绘图。左半是正确回环——机器人绕回老地方，绿色闭环约束把地图焊死、消除漂移；右半是假阳性——两处本不相同的地点被红色回环错误连上，整张地图被强行拉伸对齐而变形。</p>
+          <p><b>怎么看：</b>看两条红线。一条是「错误回环边」本身（实线），一条是「地图被迫变形」的后果（虚线牵引）。变形一旦写进因子图/地图，后续所有帧都跟着错，这正是 0014 铁律说的「一次假阳性毁整张地图」。</p>
+          <p><b>要记住的一句话：</b>回环约束是双向的——对的回环消除漂移，错的回环传播错误；学习式让错回环更稀有，但代价与失效模式都换了形。</p>
+        </figcaption>
+      </figure>
+
+        <figure class="figure">
+<svg viewBox="0 0 900 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="双保险两道闸：检索闸与位姿闸">
+  <text x="450" y="24" text-anchor="middle" font-size="16" font-weight="700" fill="#3d2a22">一辆车要过两道闸，才允许被当成真回环</text>
+
+  <!-- 路面（三条车道） -->
+  <rect x="26" y="72" width="848" height="58" rx="12" fill="#e8e2d4" stroke="#c9b9a6" stroke-width="1.2"/>
+  <rect x="26" y="182" width="848" height="58" rx="12" fill="#e8e2d4" stroke="#c9b9a6" stroke-width="1.2"/>
+  <rect x="26" y="292" width="848" height="58" rx="12" fill="#e8e2d4" stroke="#c9b9a6" stroke-width="1.2"/>
+  <line x1="38" y1="101" x2="862" y2="101" stroke="#b9a894" stroke-width="1.6" stroke-dasharray="12,10"/>
+  <line x1="38" y1="211" x2="862" y2="211" stroke="#b9a894" stroke-width="1.6" stroke-dasharray="12,10"/>
+  <line x1="38" y1="321" x2="862" y2="321" stroke="#b9a894" stroke-width="1.6" stroke-dasharray="12,10"/>
+
+  <!-- 车道名（放路上方，避免压住车辆） -->
+  <text x="32" y="64" font-size="12" fill="#6b5a4e">车道① 真回环：同一地点，而且确实重叠</text>
+  <text x="32" y="174" font-size="12" fill="#6b5a4e">车道② 像，但其实是异地（难负样本）</text>
+  <text x="32" y="284" font-size="12" fill="#6b5a4e">车道③ 确实重叠，但对齐残差不过关（噪声骗过匹配）</text>
+
+  <!-- 闸① 检索闸 -->
+  <line x1="330" y1="66" x2="330" y2="356" stroke="#cc785c" stroke-width="2.4" stroke-dasharray="9,6"/>
+  <rect x="306" y="42" width="150" height="20" rx="6" fill="#f3e3da" stroke="#cc785c" stroke-width="1"/>
+  <text x="381" y="57" text-anchor="middle" font-size="12" font-weight="700" fill="#8d4f37">闸① 检索：重叠度 &gt; 0.3</text>
+
+  <!-- 闸② 位姿闸 -->
+  <line x1="646" y1="66" x2="646" y2="356" stroke="#cc785c" stroke-width="2.4" stroke-dasharray="9,6"/>
+  <rect x="622" y="42" width="164" height="20" rx="6" fill="#f3e3da" stroke="#cc785c" stroke-width="1"/>
+  <text x="704" y="57" text-anchor="middle" font-size="12" font-weight="700" fill="#8d4f37">闸② 位姿：LGR 假设验证</text>
+
+  <!-- 车道①：两道都过 → 采纳 -->
+  <g>
+    <rect x="70" y="86" width="58" height="30" rx="7" fill="#4a6b8a" stroke="#33485c" stroke-width="1.2"/>
+    <rect x="86" y="80" width="26" height="12" rx="3" fill="#d9e4ef" stroke="#33485c" stroke-width="1"/>
+    <circle cx="86" cy="120" r="7" fill="#2f3a44"/><circle cx="114" cy="120" r="7" fill="#2f3a44"/>
+    <text x="99" y="107" text-anchor="middle" font-size="11" fill="#f2f6fa">车</text>
+  </g>
+  <g>
+    <rect x="392" y="86" width="58" height="30" rx="7" fill="#4a6b8a" stroke="#33485c" stroke-width="1.2"/>
+    <rect x="408" y="80" width="26" height="12" rx="3" fill="#d9e4ef" stroke="#33485c" stroke-width="1"/>
+    <circle cx="408" cy="120" r="7" fill="#2f3a44"/><circle cx="436" cy="120" r="7" fill="#2f3a44"/>
+  </g>
+  <circle cx="806" cy="103" r="17" fill="#e4f3e8" stroke="#4f9a68" stroke-width="2"/>
+  <path d="M798 103 l6 7 l11 -13" fill="none" stroke="#3d7f55" stroke-width="3" stroke-linecap="round"/>
+  <text x="806" y="140" text-anchor="middle" font-size="12" font-weight="700" fill="#3d7f55">采纳</text>
+  <text x="520" y="82" font-size="11" fill="#3d7f55">过闸①</text>
+  <text x="742" y="82" font-size="11" fill="#3d7f55">过闸②</text>
+
+  <!-- 车道②：闸①拦下 → 丢弃 -->
+  <g>
+    <rect x="70" y="196" width="58" height="30" rx="7" fill="#8a6a4a" stroke="#5c452e" stroke-width="1.2"/>
+    <rect x="86" y="190" width="26" height="12" rx="3" fill="#efe4d6" stroke="#5c452e" stroke-width="1"/>
+    <circle cx="86" cy="230" r="7" fill="#2f3a44"/><circle cx="114" cy="230" r="7" fill="#2f3a44"/>
+  </g>
+  <line x1="150" y1="186" x2="316" y2="240" stroke="#b9a894" stroke-width="1.6" stroke-dasharray="7,6"/>
+  <circle cx="806" cy="213" r="17" fill="#f7e6e2" stroke="#c06a5a" stroke-width="2"/>
+  <path d="M799 206 l14 14 M813 206 l-14 14" fill="none" stroke="#a44f3f" stroke-width="3" stroke-linecap="round"/>
+  <text x="806" y="250" text-anchor="middle" font-size="12" font-weight="700" fill="#a44f3f">丢弃</text>
+  <text x="318" y="264" text-anchor="end" font-size="11" fill="#a44f3f">描述子说像，但重叠度不够 → 挡在这里</text>
+
+  <!-- 车道③：过闸①，闸②拦下 → 丢弃 -->
+  <g>
+    <rect x="70" y="306" width="58" height="30" rx="7" fill="#6a6a8a" stroke="#45455c" stroke-width="1.2"/>
+    <rect x="86" y="300" width="26" height="12" rx="3" fill="#e4e4f0" stroke="#45455c" stroke-width="1"/>
+    <circle cx="86" cy="340" r="7" fill="#2f3a44"/><circle cx="114" cy="340" r="7" fill="#2f3a44"/>
+  </g>
+  <g>
+    <rect x="392" y="306" width="58" height="30" rx="7" fill="#6a6a8a" stroke="#45455c" stroke-width="1.2"/>
+    <rect x="408" y="300" width="26" height="12" rx="3" fill="#e4e4f0" stroke="#45455c" stroke-width="1"/>
+    <circle cx="408" cy="340" r="7" fill="#2f3a44"/><circle cx="436" cy="340" r="7" fill="#2f3a44"/>
+  </g>
+  <circle cx="806" cy="323" r="17" fill="#f7e6e2" stroke="#c06a5a" stroke-width="2"/>
+  <path d="M799 316 l14 14 M813 316 l-14 14" fill="none" stroke="#a44f3f" stroke-width="3" stroke-linecap="round"/>
+  <text x="806" y="360" text-anchor="middle" font-size="12" font-weight="700" fill="#a44f3f">丢弃</text>
+  <text x="520" y="302" font-size="11" fill="#3d7f55">过闸①</text>
+  <text x="600" y="380" text-anchor="middle" font-size="11" fill="#a44f3f">对齐不过关 → 挡在这里</text>
+
+  <text x="450" y="410" text-anchor="middle" font-size="12" fill="#6b5a4e">两道闸都过，才允许写进因子图；任一道拦下，这一对就被丢掉</text>
+</svg>
+          <figcaption>
+            <p><b>这张图在说什么：</b>LCR-Net 的「双保险」不是一句形容词，而是<b>前后两道具体的闸</b>——第一道在检索环节（描述子的重叠度要够），第二道在配准环节（假设验证的残差要够）。三条车道是三种典型情形。</p>
+            <p><b>怎么看：</b>先看两条竖虚线，那是两道闸的位置；再横着看每条车道——车停在哪条竖虚线<b>左边</b>，就说明它被哪道闸拦下了。重点看第三条车道。</p>
+            <p><b>要记住的一句话：</b>假阳性不是靠「描述子更准」消灭的，而是靠<b>两个独立环节各挡一次</b>把它变得稀有——代价也正来自这里：两道闸都要算，回环就只能做到 1 Hz。</p>
+          </figcaption>
+        </figure>
+
+      <div class="interactive-card">
+        <h4>互动：假阳性铁律，今天谁更危险？</h4>
+        <p>第一季 0014 说「一次假阳性毁整张地图」。下面两种系统，哪种的假阳性更致命？<button class="quiz-options" onclick="lessonKit.answer(this,'q0140a')">纯几何 Scan Context + ICP（0135）</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0140b')">LCR-Net 学习式（检索 + LGR 假设验证）</button></p>
+        <p class="quiz-feedback" id="q0140a" hidden>两者假阳性都致命（铁律不变）。但机制不同：几何法靠 ICP 残差门槛挡假阳性，易在「像但不重叠」处翻车；学习式多加检索 triplet 过滤 + LGR 假设验证两道闸，假阳性更稀有，可一旦训练分布外失效仍会毁图。所以不是「谁更安全」，是「假阳性从频繁变稀有、但根因更难查」。</p>
+        <p class="quiz-feedback" id="q0140b" hidden>两者假阳性都致命（铁律不变）。LCR-Net 靠检索 triplet + LGR 假设验证把假阳性变得更稀有，但代价是算力/数据依赖与分布外失效。结论：学习式没有消灭假阳性，只是换了形态——这正是本课对 0014 的正面回答。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 这条线的总账：检索支线走到哪了</h2>
+      <p>把第七季「场景识别 / 回环」整块收个口。检索范式三分（见 0138/0139）：① 单阶段全局检索（CricaVPR / SALAD / Hybrid，纯图像）；② 检索 + 重排序（R²Former，图像）；③ <b>检索 + 位姿</b>（LCR-Net、SeqOT 仅检索，点云）。LCR-Net 是③里最完整的一个——它把「检索」和「位姿」焊进一个共享 backbone，且是<b>首个带深度学习回环 + 重定位的 LiDAR SLAM 系统</b>。</p>
+      <p>回看 0011 的断言「深度学习先吃掉匹配与检索」：到本课，匹配（LCR-Net 的稠密匹配 head，替代 ICP）与检索（NetVLAD + context gating，替代 Scan Context）在 LiDAR 侧都被吃掉了，且回环 + 重定位一体。但铁律 0014 提醒：吃掉的只是「频率与精度」，没吃掉「假阳性的毁灭性」——只是把它推到了更深处。</p>
+      <div class="interactive-card">
+        <h4>互动：给这条线排个进化序</h4>
+        <p>下面哪个顺序最贴本块叙事？<button class="quiz-options" onclick="lessonKit.answer(this,'q0140c')">DBoW2 → Scan Context → LCDNet → LCR-Net</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0140d')">LCR-Net → Scan Context → DBoW2 → LCDNet</button></p>
+        <p class="quiz-feedback" id="q0140c" hidden>正确。手工词袋（0134）→ 手工几何描述子（0135）→ 学习描述子 + 位姿回归（0136）→ 学习检索 + 位姿一体的完整系统（0140）。每一步都在把「人写的规则」换成「学出来的特征」，并把功能从单检索扩到回环 + 重定位。</p>
+        <p class="quiz-feedback" id="q0140d" hidden>反了。进化方向是手工 → 学习、单检索 → 检索 + 位姿。正确序：DBoW2 → Scan Context → LCDNet → LCR-Net。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>LCR-Net 的「一个 backbone、两路 head」分别产出什么？检索 head 和位姿 head 共用哪份特征？</li>
+        <li>为什么 coarse-to-fine（先描述子粗检索、再稠密匹配精配准）是它能实时化的关键？</li>
+        <li>context gating $V=\sigma(WX+b)\otimes X$ 在检索描述子上干了什么？用一句话说。</li>
+        <li>LCR-Net 的 KITTI AUC / Ford AUC 是多少？和 LCDNet 比谁跨数据集更稳？</li>
+        <li>正面回答 0014：学习式把假阳性率压下去了吗？代价是什么？新失效模式有哪些？</li>
+      </ul>
+      <h2>10. 练习（收起，点开看解析）</h2>
+      <div class="exercise-box">
+        <details class="exercise-answer">
+          <summary>练习 1 · 检索 + 位姿一体，省了什么？</summary>
+          <p>省了「两段式」里的独立几何注册（ICP）。传统流程：描述子找到候选 → 另跑 ICP 算位姿，两步可能不一致（描述子说像、ICP 却对不上或对齐错）。LCR-Net 让位姿 head 和检索 head 共享同一份 backbone 特征，候选一旦检索对，位姿也由学习匹配直接给出，不会出现「检索对、注册错」的割裂。代价是模型更重、需训练数据。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 2 · LGR 比 RANSAC 快约 30×，凭什么？</summary>
+          <p>LGR（local-to-global registration）用加权 SVD + 假设验证，输入是 Sinkhorn 已经给出的高质量软分配对应（内点比高），只需少量假设验证即可收敛；RANSAC 要从含大量外点的原始对应里随机采样猜模型，迭代次数随外点率爆炸。论文：LGR 注册仅 13 ms vs RANSAC 683 ms，且精度相当。这也是能在线跑（回环 1 Hz）的前提。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 3 · 为什么「内点比」比「单点精度」更关键？</summary>
+          <p>Sec.VI-H 的反直觉发现：匹配点的覆盖度 / 内点比（IR）比单点位置精度更影响最终位姿。VoteEncoder 把均匀点投票到显著区、提升内点比，带来比「把每个点算得更准」更大的位姿增益。直觉：位姿由一堆对应加权平均得出，外点会系统性拽偏；先保证「多数是内点」，比「每个点更准但仍有不少外点」更重要。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 4 · 用 0014 铁律给 LCR-Net 挑刺</summary>
+          <p>铁律：一次假阳性毁整张地图。LCR-Net 虽用 triplet（正样本需 overlap&gt;0.3）+ LGR 假设验证把假阳性压稀，但：① 分布外场景（长走廊、退化）靠退化关键帧兜底，仍可能整段失锁；② 检索-匹配可能不一致——描述子说像、LGR 被噪声骗过仍采纳；③ VoteEncoder 投票偏差导致同类场景过匹配。所以假阳性未消灭，只是更稀有、根因更难查。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 5 · 它和 0136 的 LCDNet 到底差在哪？</summary>
+          <p>共同点：都用 NetVLAD 类描述子 + 学习位姿，且都只吃点云。差异：① LCDNet 是「描述子 + UOT 位姿回归」，LCR-Net 是「描述子 + 稠密匹配（Sinkhorn）+ LGR」；② LCR-Net 额外做<b>重定位</b>，且是回环 + 重定位统一模型，LCDNet 只做回环节点；③ LCR-Net 有 VoteEncoder / 3D-RoFormer++ 提升内点比；④ 数字上 LCR-Net 在检索（Ford AUC 0.972 &gt; 0.961）与注册（RTE 0.04 m &lt; 0.11 m）双维度超越 LCDNet。</p>
+        </details>
+      </div>
+    </section>
+
+    <nav class="nav-links">
+      <a href="0139-混合架构与统一检索.html">← 上一节：0139 混合架构与统一检索</a>
+      <a href="0141-这条支线的起点-PoseNet与DeepVO.html">下一节：0141 这条支线的起点 · PoseNet 与 DeepVO →</a>
+      <a href="../index.html">返回课程馆</a>
+    </nav>
+  </div>
+</body>
+</html>

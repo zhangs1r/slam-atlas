@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DROID-SLAM 2021 · 把 BA 做成一层的转折点 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0145</div>
+      <h1>DROID-SLAM（2021）：把 BA 做成一层的转折点</h1>
+      <p class="subtitle">全季最重要的一节：可微稠密 BA 层 + CorrBlock + ConvGRU 循环迭代，灾难性失败显著更少 🧠</p>
+      <div class="hero-meta">
+        <span>🎯 主题：Dense BA Layer（DBA）+ 相关体 + 循环迭代</span>
+        <span>👥 作者：Z. Teed、J. Deng（Princeton）</span>
+        <span>📅 2021 · <i>DROID-SLAM: Deep Visual SLAM for Monocular, Stereo, and RGB-D Cameras</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">接在谁后面</a>
+        <a href="#c">DROID 长什么样</a>
+        <a href="#d">DBA 层：BA 变成网络的一层</a>
+        <a href="#e">训练信号与损失</a>
+        <a href="#f">灾难性失败更少</a>
+        <a href="#g">三张自绘图</a>
+        <a href="#h">这条线的账</a>
+        <a href="#i">练习</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>搞懂 DROID-SLAM 为什么是<b>全季转折点</b>：它把经典 BA（光束法平差）做成网络里<b>可反向传播的一层（Dense BA layer）</b>，配合 CorrBlock（来自 RAFT 一系）和 ConvGRU 循环迭代更新位姿与每像素深度。并显式对照第二季 <b>0018/0019</b>：经典 BA 是<b>稀疏</b>的、用 Schur 消元解；DROID 是<b>稠密</b>的、用迭代更新解。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0018/0019</b>（第二季 BA 上下）：Schur 消元、稀疏性、鲁棒核——本课灵魂 DBA 层必须和它对照（稀疏 vs 稠密、Schur vs 迭代）。<b>0132</b> RAFT：DROID 的 CorrBlock 与「循环迭代更新光流」直接来自这一系，本课要回链。<b>0144</b> D3VO 把网络当 DSO 插件；DROID 更进一步——自己造可微 BA 层，是「网络+几何融合」的极点。<b>0011</b> 的断言在这里得到最强证据：学习式 VO 在挑战/跨域全面超经典。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>前面 D3VO 把网络当 DSO 的「插件」，但 BA 还是 DSO 那个现成的稀疏 BA。DROID-SLAM 走得更绝：<b>它自己造了一个 BA，而且这个 BA 是神经网络里的一层，能反向传播</b>。这叫「可微 BA 层（Dense Bundle Adjustment layer，DBA）」。</p>
+      <p>打个比方：经典 SLAM 里 BA 是「最后一道独立工序」（算完几何再优化）；DROID 把这道工序<b>焊进网络</b>，于是网络训练时 BA 的误差能一路反传回去、把前面提特征的方式也教好。配合两样东西：<b>CorrBlock</b>（在多尺度特征上查「这两帧哪里对应」）和 <b>ConvGRU</b>（循环迭代，一遍遍修正位姿和深度，像反复擦改草稿）。术语先露脸：<b>BA / 光束法平差</b> = 同时调相机位姿和三维点让重投影误差最小（见 0018）；<b>可微</b> = 整层能求导、能反传；<b>相关体（correlation volume）</b> = 把所有像素两两的相似度存成一个大张量，供查询（见 0132 RAFT）；<b>ConvGRU</b> = 卷积门控循环单元，记忆历史、逐步更新。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面</h2>
+      <p>本块叙事到顶：DeepVO（黑箱）→ UnDeepVO/DeepSLAM（自监督）→ D3VO（嵌几何后端）→ <b>DROID-SLAM（可微 BA 层，新范式）</b>。DROID 不是「替换」也不是「嵌入」，而是<b>「几何优化本身被神经网络化」</b>。它和 0132 RAFT 同源（作者 Teed/Deng 同一团队，RAFT 就是他们做的循环光流），CorrBlock 的思路直接来自 RAFT 的相关体。下一节 <b>0146</b> DPVO 是它的稀疏化 VO 分叉。</p>
+      <p>为什么这是转折点？因为经典 BA 的「稀疏 + Schur 消元」是第二季 0018/0019 花两节课讲透的看家本领；DROID 用「稠密 + 迭代更新 + 可反传」另起一套，且效果更好、灾难性失败更少。本节必须把这两套 BA 摆清楚。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. DROID-SLAM 长什么样</h2>
+      <p>状态 = 每帧位姿 $G_t∈SE(3)$ + 逆深度 $d_t∈ℝ_+^{H×W}$。流程：特征提取（feature net + context net，各 6 残差块 + 3 下采样到 1/8 分辨率）→ 对每对帧建<b>4D 相关体</b>（仿 RAFT）→ Update Operator（3×3 ConvGRU）循环迭代，每次预测「修正光流 r + 置信度 w + 位姿更新 Δξ + 深度更新 Δd」→ 送进 DBA 层解出新位姿与深度。图 1 是总览。</p>
+      <figure class="figure">
+        <img src="../../md/images/2021_DROID-SLAM/f79089bf11bdf30478bd6ed95718facc71c7fbfbcf9848db19c8d4873040e08f.jpg" alt="DROID-SLAM 总览">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>DROID-SLAM can operate on monocular, stereo, and RGB-D video. It builds a dense 3D map of the environment while simultaneously localizing the camera within the map.</p>
+          <p><b>怎么看这张图：</b>输入可以是单目/双目/RGB-D 视频，输出是「边定位边建稠密三维图」。关键在内部循环：Update Operator 反复修正、DBA 层反复解 BA——这不是一次性回归，而是迭代优化。仅用合成 TartanAir 单目训练，就能在测试时切到双目/RGB-D 提精度（不重训）。</p>
+          <p><b>要记住的一句话：</b>DROID = 循环迭代 + 可微 BA；单模型训一次覆盖 4 数据集 3 模态。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2021_DROID-SLAM/47ec3415097190a3cda2050426d97feb263e1b7302973eadc32cd12f9661295d.jpg" alt="DROID-SLAM 更新算子">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b>Illustration of the update operator. The operator acts on edges in the frame graph, predicting flow revisions which are mapped to depth and pose update through the (DBA) layer.</p>
+          <p><b>怎么看这张图：</b>Update Operator 作用在「帧图」的边（帧对帧）上，预测光流修正，再经 DBA 层映射成深度与位姿更新。每轮只动一小撮边——这正是稠密 BA 层「每轮只更新网上少量连线」的具象。</p>
+          <p><b>要记住的一句话：</b>更新算子 + DBA 层 = 一遍遍把位姿/深度擦准，而非一口吐出。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. DBA 层：BA 变成网络里的一层（本节灵魂）</h2>
+      <p>经典 BA（第二季 <b>0018/0019</b>）长这样：有一堆<b>稀疏</b>三维点和相机，目标是最小化「重投影误差」，用 <b>Schur 消元</b>把点先边缘化掉、只对相机位姿解一个小的稀疏线性系统。它<b>不可微进网络</b>，是独立优化器。</p>
+      <p>DROID 的 DBA 层反过来：它把「所有像素」都当成要优化的量（<b>稠密</b>），目标是</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ E(G',d')=\sum_{(i,j)\in\mathcal E}\Big\|p_{ij}^*-\Pi_c\big(G_{ij}'\circ\Pi_c^{-1}(p_i,d_i')\big)\Big\|_{\Sigma_{ij}}^2 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对每对帧 (i,j)，拿当前深度 $d_i'$ 和位姿 $G_{ij}'$ 把像素 $p_i$ 投影到帧 j，看它落点 $p_{ij}^*$ 和「CorrBlock 查到的应该落点」差多少；所有帧对的差加起来要最小。注意这里优化的是<b>每像素深度</b>（稠密），不是少数稀疏点。解法用 Gauss-Newton，对位姿/深度分块、Schur 补（其中块 C 对角可廉价求逆）高效求解，且整层能反向传播——所以叫「可微 BA 层」。</p>
+      <table>
+        <thead>
+          <tr><th>对照项</th><th>经典 BA（0018/0019）</th><th>DROID 的 DBA 层</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>优化对象</td><td>稀疏三维点 + 相机</td><td>每像素深度 + 每帧位姿（稠密）</td></tr>
+          <tr><td>求解法</td><td>Schur 消元解稀疏线性系统</td><td>迭代（Gauss-Newton）+ 分块 Schur 补</td></tr>
+          <tr><td>是否进网络</td><td>否，独立优化器</td><td>是，可微、可反传</td></tr>
+          <tr><td>更新方式</td><td>一次性收敛</td><td>每轮只更新少量边，循环迭代</td></tr>
+        </tbody>
+      </table>
+      <p>关键点：DROID <b>不是丢了 Schur</b>——它在 DBA 层内部仍用分块 Schur 补（C 对角可廉价求逆）高效求解，只是把「BA」整体包成一层、让梯度能流回去。消融还证明：<b>训练中必须用 DBA 层，否则系统不稳定、易失败</b>。这印证「可微 BA」不是噱头，是它稳的根。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 训练信号与损失：监督，合成真值</h2>
+      <p>DROID 是<b>监督</b>，真值来自纯合成 <b>TartanAir</b>（和 TartanVO 同款数据源，但 DROID 用得更狠）。训练 25 万 step、bs4、7 帧片段、展开 15 次更新。损失 = 位姿损失 + 光流损失，每步输出加权（γ=0.9，越往后越重要）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathcal L_{pose}=\sum_i\big\|\mathrm{Log}_{SE3}(T_i^{-1}\cdot G_i)\big\|_2 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对每帧，把「真值位姿 $T_i$」和「网络位姿 $G_i$」的比值取 SE(3) 李代数 Log，得到「差多少」的向量，求范数当误差。固定前两帧位姿是为了消掉「整体平移/旋转（gauge）」和尺度这种自由度——否则 BA 会乱飘。光流损失则逼 CorrBlock 出的修正光流贴近真值。</p>
+      <p>把「这篇的损失由哪几项组成、每项在约束什么」摆清楚（本块每节的重点栏）：</p>
+      <table>
+        <thead>
+          <tr><th>损失项</th><th>来源</th><th>在约束什么</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>位姿损失 $\mathcal L_{pose}$</td><td>合成 TartanAir 的位姿真值</td><td>网络位姿 $G_i$ 与真值 $T_i$ 的 SE(3) Log 误差要小；固定前两帧消掉 gauge 与尺度自由度</td></tr>
+          <tr><td>光流损失 $\mathcal L_{flow}$</td><td>合成真值光流</td><td>更新算子预测的修正光流 $r$ 要贴近真值流 → 逼 CorrBlock「查对应」这一步学对</td></tr>
+          <tr><td>逐步加权（$\gamma=0.9$）</td><td>循环迭代的每一步输出</td><td>越靠后的迭代权重越大 → 逼网络「越迭代越准」，而不是靠第一轮蒙对</td></tr>
+        </tbody>
+      </table>
+      <p>注意训练只用<b>单目</b> TartanAir，但测时可以直接吃双目/RGB-D（只加对应优化项、不重训）——这种「合成单目训、真实多模态用」的泛化，是它强于前面所有方法的底气。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 灾难性失败更少（硬结论，有实测）</h2>
+      <p>「学习式 VO 比经典法稳」不是口号，DROID 有数据：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>TartanAir 单目 ATE</h4>
+          <p>Avg <b>0.24</b>，是 TartanVO(1.92) 的 1/8、DeepV2D(5.03) 的 1/20。</p>
+        </div>
+        <div class="mini-card">
+          <h4>EuRoC 单目 ATE</h4>
+          <p>≈ <b>0.022m</b>（2.2cm），比零失败方法低 82%、比 ORB-SLAM3 低 43%；双目 0.024，比 ORB-SLAM3 低 71%。</p>
+        </div>
+        <div class="mini-card">
+          <h4>ETH-3D 成功数</h4>
+          <p>RGB-D <b>30/32</b>，排名第 1；次优方法仅 19/32。</p>
+        </div>
+        <div class="mini-card">
+          <h4>零失败</h4>
+          <p>TartanAir / EuRoC / TUM <b>零失败</b>；经典法在这些集频繁崩。</p>
+        </div>
+      </div>
+      <p>原文明确称「suffering from <b>substantially fewer catastrophic failures</b>」，并用上面的成功数支撑（30/32 vs 19/32）。代价是<b>显存</b>：后端需 24GB——这是它最大的限制（下节 DPVO 就冲这个来）。速度：EuRoC 20fps、TUM 30fps、TartanAir 8fps（仍比竞赛方案快 16×）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2021_DROID-SLAM/48f90bcedb100a1b0b9be5560b3de5492ba508fe456e28c913bf8cdef5b026b6.jpg" alt="DROID-SLAM ETH3D 泛化">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>Generalization results on the RGB-D ETH3D-SLAM benchmark. (Left) Our method, trained only on synthetic TartanAir, ranks 1st on both train and test splits. (Right) number successful trajectories as a function of ATE. Our method successfully tracks 30/32 of the datasets where image data is available.</p>
+          <p><b>怎么看这张图：</b>左是 AUC 排名（DROID 第一）；右是「成功率随 ATE 阈值」曲线——DROID 在很严的 ATE 下仍维持 30/32 成功，明显高过次优。这就是「灾难性失败更少」的实测证据。</p>
+          <p><b>要记住的一句话：</b>只合成训、真实泛化还第一，且几乎不崩——这是 0011「位姿被吃掉一段」的最强注脚。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2021_DROID-SLAM/0ea00b8c2993f18efbca5ff70244289df03aef137a8bed9c6dec5fb3169027e1.jpg" alt="DROID-SLAM 全局上下文与 BA 层消融">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b>(Left) Impact of global context in the update operator. (Right) Impact of using the bundle adjustment layer during training vs training directly on optical flow, then applying BA at test time.</p>
+          <p><b>怎么看这张图：</b>右图对照「训练中带 DBA 层」vs「只训光流、测试时再套 BA」——前者稳得多，证明可微 BA 层必须进训练，不是事后装饰。这直接支撑第 4 节的结论。</p>
+          <p><b>要记住的一句话：</b>DBA 层是 DROID 稳定的命门，不是可选项。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 三张自绘图：稠密 BA、相关体、迭代</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="稠密 BA 层与经典稀疏 BA 对照">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="225" y="32" text-anchor="middle" font-size="18" fill="#5b6472"><tspan font-weight="700">经典 BA（0018/0019）：稀疏 + Schur</tspan></text>
+          <text x="675" y="32" text-anchor="middle" font-size="18" fill="#9d553f"><tspan font-weight="700">DROID DBA 层：稠密 + 迭代</tspan></text>
+          <line x1="450" y1="44" x2="450" y2="388" stroke="#d7dce5" stroke-width="1.5"/>
+          <rect x="40" y="55" width="370" height="300" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="225" y="84" text-anchor="middle" font-size="13" fill="#3a4a5a">少数稀疏三维点 + 相机</text>
+          <circle cx="110" cy="160" r="6" fill="#2b6cb0"/>
+          <circle cx="200" cy="130" r="6" fill="#2b6cb0"/>
+          <circle cx="300" cy="180" r="6" fill="#2b6cb0"/>
+          <circle cx="150" cy="230" r="6" fill="#2b6cb0"/>
+          <circle cx="280" cy="250" r="6" fill="#2b6cb0"/>
+          <line x1="110" y1="160" x2="200" y2="130" stroke="#7a8699" stroke-width="1.5"/>
+          <line x1="200" y1="130" x2="300" y2="180" stroke="#7a8699" stroke-width="1.5"/>
+          <line x1="150" y1="230" x2="280" y2="250" stroke="#7a8699" stroke-width="1.5"/>
+          <line x1="110" y1="160" x2="150" y2="230" stroke="#7a8699" stroke-width="1.5"/>
+          <text x="225" y="300" text-anchor="middle" font-size="12" fill="#5b6472">点少、边稀疏 → Schur 消元</text>
+          <text x="225" y="322" text-anchor="middle" font-size="12" fill="#5b6472">只对相机解小线性系统</text>
+          <text x="225" y="344" text-anchor="middle" font-size="12" fill="#5b6472">独立优化器，不可进网络</text>
+          <rect x="490" y="55" width="370" height="300" rx="12" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="675" y="84" text-anchor="middle" font-size="13" fill="#3a4a5a">每个像素都是优化量</text>
+          <g stroke="#c9a13a" stroke-width="1.2" opacity="0.8">
+            <line x1="520" y1="120" x2="600" y2="130"/>
+            <line x1="600" y1="130" x2="700" y2="120"/>
+            <line x1="700" y1="120" x2="800" y2="140"/>
+            <line x1="520" y1="120" x2="540" y2="200"/>
+            <line x1="800" y1="140" x2="790" y2="210"/>
+            <line x1="600" y1="130" x2="620" y2="210"/>
+            <line x1="540" y1="200" x2="620" y2="210"/>
+            <line x1="620" y1="210" x2="790" y2="210"/>
+            <line x1="540" y1="200" x2="700" y2="120"/>
+          </g>
+          <circle cx="520" cy="120" r="4" fill="#e0392b"/>
+          <circle cx="600" cy="130" r="4" fill="#e0392b"/>
+          <circle cx="700" cy="120" r="4" fill="#e0392b"/>
+          <circle cx="800" cy="140" r="4" fill="#e0392b"/>
+          <circle cx="540" cy="200" r="4" fill="#e0392b"/>
+          <circle cx="620" cy="210" r="4" fill="#e0392b"/>
+          <circle cx="790" cy="210" r="4" fill="#e0392b"/>
+          <text x="675" y="250" text-anchor="middle" font-size="12" fill="#9d553f">密密麻麻的像素网</text>
+          <text x="675" y="272" text-anchor="middle" font-size="12" fill="#9d553f">每轮只更新少量连线（粗）</text>
+          <line x1="600" y1="130" x2="620" y2="210" stroke="#c65c47" stroke-width="3.5"/>
+          <line x1="700" y1="120" x2="800" y2="140" stroke="#c65c47" stroke-width="3.5"/>
+          <text x="675" y="300" text-anchor="middle" font-size="12" fill="#9d553f">Gauss-Newton + 分块 Schur 补</text>
+          <text x="675" y="322" text-anchor="middle" font-size="12" fill="#9d553f">整层可微、可反传</text>
+          <text x="675" y="344" text-anchor="middle" font-size="12" fill="#9d553f">循环迭代，不是一次收敛</text>
+          <text x="450" y="392" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">左：稀疏点网用 Schur 解一次；右：稠密像素网靠迭代更新，且梯度能流回特征</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左是经典 BA——少量稀疏三维点（蓝点）和相机连成稀疏图，用 Schur 消元只对相机解一次；右是 DROID 的稠密 BA 层——每个像素都是网上的节点（红点），每轮只更新少数边（粗红线），循环迭代，且整层可反向传播。</p>
+          <p><b>怎么看这张图：</b>① 经典 BA 的「稀疏」来自只优化被观测到的特征点；DROID 把「所有像素」都当优化量，所以稠密；② 右图粗红线表示「每轮只改一小撮连线」——对应 Update Operator 每步只修正部分边；③ 两者都用 Schur 补，但 DROID 把 BA 包成可微层。</p>
+          <p><b>要记住的一句话：</b>经典 BA 是稀疏的、用 Schur 解；DROID 是稠密的、用迭代解且可反传——这是 0018/0019 到本课的最大跨度。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CorrBlock 相关体金字塔">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="450" y="32" text-anchor="middle" font-size="19" fill="#2b6cb0"><tspan font-weight="700">CorrBlock / 相关体：在特征金字塔上「查这两帧哪对应」</tspan></text>
+          <rect x="60" y="60" width="320" height="120" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="220" y="100" text-anchor="middle" font-size="13" fill="#3a4a5a">帧 i 的特征图</text>
+          <text x="220" y="124" text-anchor="middle" font-size="12" fill="#5b6472">高维向量场</text>
+          <rect x="520" y="60" width="320" height="120" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="680" y="100" text-anchor="middle" font-size="13" fill="#3a4a5a">帧 j 的特征图</text>
+          <text x="680" y="124" text-anchor="middle" font-size="12" fill="#5b6472">高维向量场</text>
+          <text x="450" y="138" text-anchor="middle" font-size="20" fill="#2b6cb0">↔</text>
+          <text x="450" y="180" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">对每对像素算相似度 → 存成一个 4D 相关体</tspan></text>
+          <rect x="430" y="200" width="40" height="40" rx="6" fill="#9d553f"/>
+          <text x="450" y="225" text-anchor="middle" font-size="12" fill="#fff">细</text>
+          <rect x="395" y="248" width="110" height="40" rx="6" fill="#b5703f"/>
+          <text x="450" y="273" text-anchor="middle" font-size="12" fill="#fff">中（2×）</text>
+          <rect x="345" y="296" width="210" height="40" rx="6" fill="#c98f5a"/>
+          <text x="450" y="321" text-anchor="middle" font-size="12" fill="#fff">粗（4×）</text>
+          <rect x="270" y="344" width="360" height="34" rx="6" fill="#dcab7e"/>
+          <text x="450" y="366" text-anchor="middle" font-size="12" fill="#3a4a5a">最粗（8×）—— 4 级金字塔</text>
+          <text x="700" y="260" text-anchor="middle" font-size="12" fill="#5b6472">越往上越粗</text>
+          <text x="700" y="282" text-anchor="middle" font-size="12" fill="#5b6472">越大位移也能查到</text>
+          <text x="700" y="304" text-anchor="middle" font-size="12" fill="#5b6472">仿 RAFT（见 0132）</text>
+          <text x="450" y="398" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">CorrBlock 在金字塔各层取相似度，大位移靠粗层、精对齐靠细层——来自 0132 RAFT 一系</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>帧 i 和帧 j 的特征图做两两相似度，存成一个 4D「相关体」；再把它下采样成 4 级金字塔（细→粗）。查询时从各层取相似度，粗层管大位移、细层管精对齐。</p>
+          <p><b>怎么看这张图：</b>① 相关体就是「每个像素和另一帧每个像素有多像」的大表；② 金字塔让「物体动了很多像素」也能在粗层查到，不会漏；③ 这套思路直接来自 0132 RAFT 的循环光流相关体，DROID 把它改成「查位姿/深度」。</p>
+          <p><b>要记住的一句话：</b>CorrBlock = 多尺度查表找对应；它的血统是 RAFT（0132），不是凭空冒出。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ConvGRU 迭代更新位姿深度">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="450" y="32" text-anchor="middle" font-size="19" fill="#9d553f"><tspan font-weight="700">ConvGRU 循环迭代：像反复擦改草稿，越改越准</tspan></text>
+          <rect x="50" y="60" width="240" height="120" rx="10" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="170" y="88" text-anchor="middle" font-size="12" fill="#5b6472">草稿①（初值）</text>
+          <path d="M 80 120 L 260 120" stroke="#c65c47" stroke-width="2.5" fill="none" stroke-dasharray="6 5"/>
+          <text x="170" y="146" text-anchor="middle" font-size="11" fill="#c65c47">位姿/深度 偏</text>
+          <text x="315" y="124" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="345" y="60" width="240" height="120" rx="10" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="465" y="88" text-anchor="middle" font-size="12" fill="#5b6472">草稿②（修正）</text>
+          <path d="M 375 120 L 555 120" stroke="#c9a13a" stroke-width="2.5" fill="none" stroke-dasharray="6 5"/>
+          <text x="465" y="146" text-anchor="middle" font-size="11" fill="#c9a13a">CorrBlock 给差</text>
+          <text x="610" y="124" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="640" y="60" width="220" height="120" rx="10" fill="#ffffff" stroke="#9bd0a8"/>
+          <text x="750" y="88" text-anchor="middle" font-size="12" fill="#3a4a5a">草稿③（再修正）</text>
+          <line x1="667" y1="120" x2="833" y2="120" stroke="#4f9a63" stroke-width="2.5"/>
+          <text x="750" y="146" text-anchor="middle" font-size="11" fill="#4f9a63">贴真值</text>
+          <text x="450" y="210" text-anchor="middle" font-size="14" fill="#34415a"><tspan font-weight="700">每轮：ConvGRU 看 CorrBlock + 置信度 w → 出 Δξ, Δd, 修正光流 r</tspan></text>
+          <rect x="120" y="240" width="660" height="110" rx="12" fill="#f1e9fb" stroke="#c4a9e6"/>
+          <text x="450" y="272" text-anchor="middle" font-size="13" fill="#3a4a5a">Update Operator 内部（3×3 ConvGRU）</text>
+          <text x="450" y="300" text-anchor="middle" font-size="12" fill="#5b6472">上下文特征 + 相关体特征 → 注入 GRU 隐状态</text>
+          <text x="450" y="324" text-anchor="middle" font-size="12" fill="#5b6472">输出：修正光流 r、置信度 w、位姿更新 Δξ、深度更新 Δd</text>
+          <text x="450" y="348" text-anchor="middle" font-size="12" fill="#5b6472">r,w 送进 DBA 层 → 解出新 G, d → 再喂回下一轮</text>
+          <text x="450" y="392" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">迭代（展开 15 次更新）让位姿/深度从「偏」滚到「准」——RNN 那套擦改草稿的具象</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>上半三张草稿：初始位姿/深度偏了（红虚线），经 CorrBlock 指出误差后修正（黄），再修正贴真值（绿）。下半是 Update Operator：ConvGRU 把上下文+相关体特征融进隐状态，吐出修正光流 r、置信度 w、位姿更新 Δξ、深度更新 Δd，送 DBA 层解出新值再循环。</p>
+          <p><b>怎么看这张图：</b>① 它不是「一口出答案」，而是「迭代收敛」——这是和 DeepVO 那种 RNN 回归的本质区别（DROID 迭代的是几何 BA，不是仅仅是隐状态）；② 置信度 w 让网络「对哪改得准多信哪」；③ 展开 15 次更新是训练时的递归深度。</p>
+          <p><b>要记住的一句话：</b>ConvGRU 迭代 = 反复擦改草稿；每轮都跑一次可微 BA，位姿/深度越滚越准。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动：DROID 的 DBA 层和经典 BA 最大区别？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0145a')">稠密且可反传</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0145b')">丢了 Schur</button></p>
+        <p class="quiz-feedback" id="q0145a" hidden>正确。DROID 把 BA 做成「每像素深度都参与优化」的稠密层、且整层可微可反传，梯度能流回前面的特征提取——这是和经典 BA（稀疏点、独立优化器、一次 Schur 解）的根本不同。注意它没丢 Schur：DBA 层内部仍用分块 Schur 补（C 对角可廉价求逆）高效求解，只是把 BA 包成可微层。消融证明训练中必须带 DBA 层否则易失败。</p>
+        <p class="quiz-feedback" id="q0145b" hidden>不对。DROID 没有丢掉 Schur——它在 DBA 层内部仍用分块 Schur 补（块 C 对角可廉价求逆）来高效求解 Gauss-Newton。它改的是：优化对象从稀疏点变稠密像素、BA 整体变成可反向传播的网络层、且循环迭代更新而不是一次收敛。把「稠密+可微」说成「丢了 Schur」是误解。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 这条线的账：从替换到「几何被神经网络化」</h2>
+      <table>
+        <thead>
+          <tr><th>论文</th><th>几何的角色</th><th>BA 在哪</th><th>灾难性失败</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DeepVO</td><td>被丢弃</td><td>无</td><td>高速/动态段崩</td></tr>
+          <tr><td>D3VO</td><td>DSO 是主角</td><td>DSO 现成 BA</td><td>较好</td></tr>
+          <tr><td>DROID-SLAM</td><td>BA 被神经网络化</td><td>自造可微 DBA 层</td><td>显著更少（有实测）</td></tr>
+        </tbody>
+      </table>
+      <p>DROID-SLAM 是<b>全季转折点</b>：它把「BA」这个第二季 0018/0019 讲了两节课的看家本领，做成了网络里能训练的一层，配合 RAFT 一系的 CorrBlock（0132）和 ConvGRU 迭代，第一次让学习式 VO/SLAM 在挑战/跨域场景<b>全面超过</b> ORB-SLAM/DSO 且灾难性失败更少。但它贵（24GB 显存）——下一节 <b>0146</b> DPVO 就冲着「算力/显存」把稠密光流换成稀疏 patch，精度反升、速度快 3×、显存 &lt;1/3。</p>
+      <div class="interactive-card">
+        <h4>互动：DROID 为什么「灾难性失败更少」可信？</h4>
+        <p>下面哪条是课文给的实证？<button class="quiz-options" onclick="lessonKit.answer(this,'q0145c')">30/32 成功数</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0145d')">作者口头说</button></p>
+        <p class="quiz-feedback" id="q0145c" hidden>正确。课文给的是硬数据：ETH-3D RGB-D 上 DROID 成功 30/32、次优仅 19/32；TartanAir/EuRoC/TUM 零失败。原文明确称「substantially fewer catastrophic failures」并用这些成功数支撑——不是空口。代价是显存 24GB，这正是下节 DPVO 要解决的。</p>
+        <p class="quiz-feedback" id="q0145d" hidden>不对。它是「有实测支撑」的结论，不是作者随口说：ETH-3D 成功 30/32（次优 19/32）、TartanAir/EuRoC/TUM 零失败，原文用这些数据支撑「灾难性失败显著更少」。若只当口号记会漏掉它的证据链——这也是 0011 断言「位姿被吃掉一段」的最强注脚。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>DROID 的 DBA 层和 0018/0019 经典 BA 在「稀疏/稠密、Schur/迭代、可微否」上差哪三点？</li>
+        <li>CorrBlock 的相关体是什么？它和 0132 RAFT 什么关系？金字塔为什么要多级？</li>
+        <li>ConvGRU 每轮输出哪四样东西（r, w, Δξ, Δd）？它们怎么流回 DBA 层？</li>
+        <li>DROID 的「灾难性失败更少」有哪些实测数字支撑？它的代价是什么？</li>
+        <li>为什么 DROID 是「全季转折点」？它和 0144 D3VO 的 BA 用法有何本质不同？</li>
+      </ul>
+      <h2>10. 练习（收起，点开看解析）</h2>
+      <div class="exercise-box">
+        <details class="exercise-answer">
+          <summary>练习 1 · 可微 BA 层到底「可微」在哪？</summary>
+          <p>经典 BA 是独立优化器，输出位姿对前面网络没有梯度。DROID 的 DBA 层把「重投影误差对位姿/深度的导数」解析写出（Gauss-Newton + 分块 Schur 补），整层包成可微算子——于是训练时 BA 的残差能反传到特征提取和 Update Operator，逼网络学到「让 BA 容易收敛的好特征」。消融证明训练不带 DBA 层系统就不稳、易失败。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 2 · 为什么 DROID 只要单目合成训就能多模态用？</summary>
+          <p>它的 BA 目标函数对「输入模态」是解耦的：单目只用到帧间约束；测时给双目/RGB-D，只需在 DBA 层里加对应的约束项（如 RGB-D 的深度观测项），不重训网络。因为位姿/深度表示（SE(3) + 逆深度）本身是模态无关的，网络学到的「对应与迭代更新」能力通用。这正是它泛化强的工程原因。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 3 · CorrBlock 和 RAFT（0132）的继承关系</summary>
+          <p>RAFT（0132）为光流建 4D 相关体 + 4 级金字塔，循环迭代更新光流。DROID 同一团队，把这套「多尺度查对应 + 循环更新」直接拿来：CorrBlock 建同样的 4D 相关体金字塔，Update Operator 用 ConvGRU 循环迭代——只是 RAFT 更新的是光流、DROID 更新的是位姿+深度，且多一层可微 BA 把更新转成几何解。所以本课必须回链 0132。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 4 · 固定前两帧位姿在干嘛？</summary>
+          <p>SE(3) 位姿整体有 7 个自由度是「规范自由度（gauge）」——整个轨迹平移/旋转/缩放一下，重投影误差不变。若不管，BA 会乱飘、损失无定义。DROID 固定前两帧位姿（锚定全局位姿与尺度），消掉这 7 个自由度，让 Log 误差有唯一解。这和 BA 教程里「固定参考帧消 gauge」是同一思想。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 5 · DROID 和 D3VO 的 BA 本质不同</summary>
+          <p>D3VO 用现成的 DSO 稀疏 BA，三个网络只是给 DSO 喂初值/先验/权重——BA 本身不可微进网络。DROID 自己造 DBA 层：稠密、可微、可反传，且和网络一起训练。一句话：D3VO 是「网络当几何后端的插件」，DROID 是「几何优化被神经网络化」。这是本块从「融合」到「神经网络化」的质变，也是全季转折点。</p>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0144-D3VO2020-深度位姿与不确定性一起学.html">← 上一节：0144 D3VO 深度·位姿·不确定性</a>
+        <a class="next" href="0146-DPVO2023-图像块跟踪替代稠密光流.html">下一节：0146 DPVO 图像块跟踪 →</a>
+      </div>
+      <p class="foot-note">BA 从第二季的稀疏 Schur 走到了可微的稠密一层——这是全季最重要的一跳。下一节看 DPVO 怎么把稠密再减成稀疏 🪶</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

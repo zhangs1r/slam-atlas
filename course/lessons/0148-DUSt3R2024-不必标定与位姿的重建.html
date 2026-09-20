@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DUSt3R 2024 · 不必标定与位姿的重建 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0148</div>
+      <h1>DUSt3R（2024）：不必标定、不必位姿的重建</h1>
+      <p class="subtitle">第二季 0027 的 COLMAP 要先从无序图像里「解」出位姿和结构；DUSt3R 说：不如一次前向，直接把答案「猜」出来 🗺️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：pointmap 表示 · 免内外参的成对重建</span>
+        <span>👥 作者：Aalto University + Naver Labs Europe（Weinzaepfel 等）</span>
+        <span>📅 2024 · CVPR · <i>DUSt3R: Geometric 3D Vision Made Easy</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">接在 COLMAP 后面</a>
+        <a href="#c">pointmap 是什么</a>
+        <a href="#d">网络与全局对齐</a>
+        <a href="#e">尺度：up-to-scale</a>
+        <a href="#f">硬数字</a>
+        <a href="#g">三张自绘图</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>搞懂 <b>pointmap</b> 这个表示：<b>一张图上的每个像素对应一个三维点</b>，(H×W×3) 的一整块，位姿、相机、几何全打包在里面，所以<b>不用标定、不用已知位姿</b>，两张无约束图喂进去，一次前向就出点图。要讲清三件事：① pointmap 里<b>深度就是 z 分量</b>；② 多图时靠一个<b>在 3D 空间里直接对齐的全局优化</b>把它们拼到同一坐标系；③ ★ <b>DUSt3R 的输出是「同一坐标系、但尺度未定（up-to-scale）」</b>——它<b>不给度量尺度</b>，度量化是 MASt3R 与 0150 Metric3D v2 那条线在做的事。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>第二季 0027 COLMAP</b>：SfM 的经典做法，要从无序图像里<b>解</b>出相机位姿与三维结构（还要标定、要匹配、要 BA）。DUSt3R 正是它的学习式反面——不解释、直接回归。<b>第六季 0124 GPS-Gaussian</b>：「前馈式泛化」这条线在渲染侧的版本，本课是它在几何侧的延伸。<b>0147</b> 刚讲的 DINOv2/SAM 是<b>感知</b>零件，本课开始进入<b>几何</b>零件。<b>0149 MASt3R-SLAM</b> 与 <b>0150 SLAM3R</b> 都直接继承本课的架构与权重，这条继承链要一次讲清。<b>第三季 0040/0041</b> 的「尺度暗线」在这里出现第一个关键分岔：DUSt3R 是<b>不做度量</b>的那一支。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话：从「解方程」到「直接猜」</h2>
+      <p>传统三维重建（第二季 <b>0027 COLMAP</b> 那一套）像一个侦探破案：先找线索（提特征）、再连线（匹配）、再假设一个说法（初始位姿）、再反复验算（BA）。要验算就得知道<b>相机本身是什么型号</b>——焦距多少、有没有畸变，这就是「标定」。所以传统流程有两道硬门槛：<b>你得知道相机内参</b>，而且<b>你得有足够多的好匹配</b>才能把位姿解出来。</p>
+      <p>DUSt3R 换了一个思路：<b>与其解，不如猜</b>。它训一个网络，输入两张照片，直接输出「第一张图的每个像素对应空间里的哪个点」。这就像是让人瞄一眼照片就能画出三维草模——不解释推导过程，但答案直接摆在桌上。</p>
+      <p>术语先露脸：<b>pointmap（点图）</b>＝一张与图像同尺寸的三维点阵，<b>每个像素 (u,v) 处存一个三维坐标 (x,y,z)</b>，所以它的形状是 H×W×3；<b>无约束图像（unconstrained images）</b>＝不知道相机型号、不知道拍摄位置、甚至不知道谁先谁后的一堆照片；<b>canonical 坐标系</b>＝本文里指「以第一张图的相机为原点」的那个坐标系；<b>SfM</b>＝Structure from Motion，从运动的相机里同时恢复相机位姿与三维结构；<b>置信度图</b>＝和 pointmap 同尺寸的一张单通道图，每个像素一个标量，表示「这个点的预测有多可信」。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 接在谁后面：0027 COLMAP 的反面</h2>
+      <p>把两条流程并排摆出来，差别一目了然：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">环节</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">传统 SfM（第二季 0027 COLMAP）</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">DUSt3R（本课）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">要知道相机内参吗</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">要，或至少要一个合理初值</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee"><b>不用</b>——内参不需要输入，反而可以从结果里反推</td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">要知道位姿吗</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">不知道，所以才要估（这本来就是它的任务）</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">不用估——位姿是 pointmap 的<b>副产品</b></td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">怎么求解</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">特征 → 匹配 → 初始化 → <b>束调整（BA）反复迭代</b></td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee"><b>一次前向回归</b>出两张 pointmap</td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">多图怎么办</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">增量式 SfM，一轮一轮加图、一轮一轮 BA</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">成对预测，再做一个<b>pointmap 全局对齐</b>把各对拼到同一坐标系</td></tr>
+          <tr><td style="padding:.55rem .7rem">难点在哪</td><td style="padding:.55rem .7rem">匹配不好就崩；标定不准就崩</td><td style="padding:.55rem .7rem">回归精度天然不如专门训练的三角测量；<b>尺度不定</b>（见第 5 节）</td></tr>
+        </tbody>
+      </table>
+      <p>还有一条更容易被忽略的接续线：<b>第六季 0124 GPS-Gaussian</b> 讲的是「前馈式泛化」——不针对每个场景优化，一次前向就出结果。那是<b>渲染侧</b>的前馈；DUSt3R 是<b>几何侧</b>的前馈。两者合起来才是这一块的完整版图，而 <b>0149</b> 与 <b>0150</b> 是把这份前馈能力做成完整系统。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. pointmap：把位姿、相机、几何打包成一张图</h2>
+      <p>这是全课的核心。输入是一组无约束图像（至少 2 张，成对处理；只有一张时就把同一张图送两次）；输出是<b>两张图的 pointmap</b> $X^{1,1}, X^{2,1} \in \mathbb{R}^{H\times W\times 3}$，<b>都在图像 1 的坐标系下</b>，外加两张对应的<b>置信度图</b> $C \in \mathbb{R}^{W\times H}$（每个像素一个标量——原文这里把 H、W 写反了，按 pointmap 的尺寸理解即可，本课照此改并说明）。</p>
+      <p>关键在：<b>像素与三维点是一一对应的</b>——第 (u,v) 个像素的三维点就存在第 (u,v) 个位置。这意味着 pointmap 同时打包了三类信息：<b>①几何</b>（这些三维点连成什么形状）、<b>②像素—三维的对应关系</b>（哪个像素是哪个点，所以像素匹配可以直接用最近邻去查）、<b>③两视关系</b>（两张图在同一条坐标系里，相对位姿就藏在这两组点的对应里）。</p>
+      <p>还有一个特别好记的推论：<b>深度就是 pointmap 的 z 分量</b>。因为坐标系以图像 1 的相机为原点，z 轴往前，z 值天然就是「这个像素对应的东西有多远」。同理，<b>焦距可以从 pointmap 用 Weiszfeld 迭代估出来</b>——这就是论文说的「内参也可以从结果里恢复」。</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_DUSt3R/f6ede59e3fe85a76d070cbca595de48ada2b4c95909b4775e8cf9c7ee22b2d85.jpg" alt="DUSt3R input and outputs">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>Top: DUSt3R takes as input an unconstrained collection of images and outputs pointmaps, from which various geometric quantities can be straightforwardly derived. Bottom: Fully-consistent 3D reconstructions without input camera poses nor intrinsics. From left to right: input image, colored point-cloud, rendered with shading. DUSt3R can also reconstruct scenes without any visual overlap (top-right).（上：DUSt3R 输入一堆无约束图像、输出 pointmap，各种几何量都能从它直接导出。下：在既没有输入位姿、也没有输入内参的情况下得到完全一致的三维重建；从左到右是输入图、着色点云、带明暗渲染的结果。右上还显示它能在两图<b>完全没有视觉重叠</b>时也重建。）</p>
+          <p><b>怎么看这张图：</b>上半是「输入多样、输出统一」——不管输入是单图、双图还是更多，出口都是 pointmap。下半要盯住两件事：一是那些点云<b>没有用任何输入的位姿或内参</b>；二是右上那格特别值得看——两张照片拍的是<b>完全不同的地方、没有共同可见区域</b>，它仍然把它们放进了同一个坐标系里（相对位姿靠别的东西推出来）。</p>
+          <p><b>要记住的一句话：</b>pointmap 这个表示把「重建」变成了一次回归——<b>不再是先有位姿再有结构，而是结构里带着位姿</b>。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2024_DUSt3R/6736afba5543242d197a04b0c111593132ce601d1a0013f0f5e7f35b2bc47667.jpg" alt="DUSt3R network architecture">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b>Architecture of the network. Two views of a scene $(I^1,I^2)$ are first encoded in a Siamese manner with a shared ViT encoder. The resulting token representations $F^1$ and $F^2$ are then passed to two transformer decoders that constantly exchange information via cross-attention. Finally, two regression heads output the two corresponding pointmaps and associated confidence maps. Importantly, the two pointmaps are expressed in the same coordinate frame of the first image $I^1$.（网络结构：两视 $(I^1,I^2)$ 先用<b>共享权重</b>的 ViT 编码器做孪生编码；得到的 token 表示 $F^1,F^2$ 送进两个 Transformer 解码器，两者不断通过 <b>cross-attention 交换信息</b>；最后由两个回归头吐出两张 pointmap 与对应置信度图。重点是<b>两张 pointmap 都表达在图像 1 的坐标系里</b>。）</p>
+          <p><b>怎么看这张图：</b>① 左边那个编码器是<b>一个</b>（Siamese，权重共享），两张图走同一套参数；② 中间两个解码器之间的双箭头是 <b>cross-attention</b>——这是「两张图互相看」的地方，也是它能同时输出「同一坐标系下的两张点图」的关键（对照 0129 SuperGlue 的 cross-attention，同一个机制、不同用途）；③ 最右边两个头各吐一张 pointmap + 一张置信度图，图注特意强调它们<b>在同一坐标系</b>。</p>
+          <p><b>要记住的一句话：</b>「同一坐标系」不是事后对齐出来的，而是<b>网络在解码阶段就通过互相看而达成的</b>——这是它不用已知位姿的根本原因。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 网络怎么训，多图怎么拼</h2>
+      <p>网络规模其实很朴素：编码器 ViT-Large、解码器 ViT-Base、patch 16×16，接一个 DPT 回归头；用 CroCo 预训练权重初始化。训练先 224×224，后换成最长边 512 并随机长宽比；推理时最长边 512。训练数据是 <b>8 个数据集</b>混合（Habitat、MegaDepth、ARKitScenes、Static Scenes 3D、BlendedMVS、ScanNet++、CO3D-v2、Waymo），一共抽出 <b>850 万对图像</b>。</p>
+      <p>训练目标是「置信度加权的三维回归损失」：直接把预测的点往真值点上拉，但<b>两边的尺度歧义要先消掉</b>——做法是把预测与真值的点集各自按「所有有效点到原点的平均距离」归一化。这样网络就不用去猜「这个场景该有多大」。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathcal{L} \;=\; \sum_{v\in\{1,2\}}\sum_{i} C^{v}_{i}\;\Big\|\,\tfrac{1}{z}\,X^{v}_{i}-\tfrac{1}{\bar z}\,\bar X^{v}_{i}\,\Big\|\;-\;\alpha\sum_{v,i}\log C^{v}_{i} $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对两张图（$v=1,2$）的每个像素 $i$，先看预测点 $\frac{1}{z}X^{v}_{i}$ 与真值点 $\frac{1}{\bar z}\bar X^{v}_{i}$ 差多远——这里的 $z$ 与 $\bar z$ 就是前面说的「平均到原点距离」，除一下就把尺度差异抹平了；然后按该像素的置信度 $C^{v}_{i}$ 加权（网络觉得准的点，误差算得重）。后面那个 $-\alpha\log C$ 项是防止网络偷懒——如果它把所有权重都调到 0 就能让误差归零，这一项就是用来惩罚这种做法的。这是示意写法，具体的加权细节以原文公式为准。</p>
+      <p>那么多张图怎么拼到同一个坐标系？答案是<b>全局对齐（global alignment）</b>：把每对图各自预测出的 pointmap，用「旋转 + 平移 + 一个缩放」拼到同一参考系，目标函数则直接在三维空间里最小化点到点的偏差，并加一个 $\prod_e \sigma_e = 1$ 的约束防止退化成「所有东西都缩到零」这种平凡解。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \min_{\chi,\;P_e,\;\sigma_e}\ \sum_{e}\sum_{i} C^{e}_{i}\,\big\|\,\chi_{i}-\sigma_{e}P_{e}X^{e}_{i}\,\big\|^{2} \qquad \text{约束}:\ \prod_{e}\sigma_{e}=1 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>$\chi_i$ 是「第 i 个三维点在整个场景里的最终位置」（所有边的预测都在争这个位置），$P_e$ 与 $\sigma_e$ 是第 $e$ 条边（一对图）自己的旋转平移与缩放。式子说：请找一套最终位置和每条边的变换，让每条边预测的点、经过自己的变换之后，都尽量贴到那个最终位置上，按置信度加权。约束 $\prod_e\sigma_e=1$ 是为了堵住「把所有 $\sigma$ 一起缩小」这个无意义的解。关键在于它<b>比的是三维坐标本身，不是重投影误差</b>——所以几十几百步梯度下降就能收敛，快得多。</p>
+      <figure class="figure">
+        <img src="../../md/images/2024_DUSt3R/f91001590590af6adf7e1da56e292d1dc68497529d4b0f8e4ca5c45430ba6223.jpg" alt="DUSt3R reconstruction examples with depth and confidence">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b>Reconstruction examples on two scenes never seen during training. From left to right: RGB, depth map, confidence map, reconstruction. The left scene shows the raw result output from $f(I^1,I^2)$. The right scene shows the outcome of global alignment (Sec. 3.4).（两个训练中没见过的场景的重建示例。从左到右：RGB、深度图、置信度图、重建结果。左边场景展示 $f(I^1,I^2)$ 的原始输出；右边场景展示全局对齐（3.4 节）之后的结果。）</p>
+          <p><b>怎么看这张图：</b>四列要竖着对看。第二列是深度图——它就是从 pointmap 的 z 分量直接取出来的；第三列是置信度图，<b>发亮的地方是网络自己觉得靠得住的地方</b>，暗的地方（比如天空、玻璃、远处稀薄纹理）是它不自信的地方。第四列的重建结果里，左边那是「一对图的原始输出」，右边那才是「多对图拼完之后」的结果——差别在于后者已经是全局一致的。</p>
+          <p><b>要记住的一句话：</b>它一次给出四样东西：颜色、深度、<b>自己有多自信</b>、以及由此得到的三维形状；那个「自信」不是装饰，后面 0149 的跟踪与优化都要靠它加权。</p>
+        </figcaption>
+      </figure>
+      <p>论文还提了两条好用的下游用法：<b>做像素匹配</b>时直接在这两张 pointmap 之间做最近邻搜索就行；<b>要相对或绝对位姿</b>时，用 Procrustes 配准（绝对位姿再加 RANSAC + PnP）。也就是说，<b>现在位姿和匹配都从同一张 pointmap 里「导出」，而不必再各训一个模块</b>。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ★ 尺度：它是 up-to-scale，不是度量尺度</h2>
+      <p>这是本课最容易被写错、也最要紧的一处，必须讲透。</p>
+      <p><b>DUSt3R 的输出没有绝对尺度。</b>它给的是「同一坐标系下、形状正确，但整体可以被任意放大缩小」的一堆点——术语叫 <b>up-to-scale（尺度未定）</b>。这一点在论文里是明说的：训练时要用「平均到原点距离」把预测与真值各自归一化，正是为了把尺度这一自由度从损失里剔除掉。换句话说，网络被训练成<b>不去关心尺度</b>。</p>
+      <div class="callout">
+        <p><b>为什么不能写成「给出度量尺度」：</b>度量尺度意味着「这个杯子高 12 厘米」这种<b>能和现实单位对上</b>的数值。DUSt3R 的重建只能说「这个杯子比那个盘子高 1.4 倍」，说不出 1.4 倍是 12 厘米还是 12 米——整体乘任何常数，都是同样合法的答案。<b>度量化是另一条线在做的事</b>：<b>MASt3R</b>（DUSt3R 的加匹配头后继，它的部分训练数据带度量尺度）和 <b>0150 的 Metric3D v2</b>（用 canonical camera transformation 直接给单目补绝对尺度）。本课只负责把「尺度未定」这件事说清楚。</p>
+      </div>
+      <p>顺带把这条线的账提前记好：DUSt3R 之后的 <b>0149 MASt3R-SLAM</b> 用 <b>Sim(3)</b>（带尺度 s 的相似变换）来定义位姿，其实就是<b>主动把那个未知的尺度当成一个要估的状态吸收掉</b>；而 <b>0150 Metric3D v2</b> 走的是另一条路——不吸收，直接给。两条路线的分工在 <b>0150</b> 会正面比较，这里先立个桩。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 硬数字（原文实测）</h2>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>训练规模</h4>
+          <p><b>8 个数据集</b>混合，共抽出 <b>8.5M（850 万）对</b>图像。先 224×224 训，后改最长边 512、随机长宽比。</p>
+        </div>
+        <div class="mini-card">
+          <h4>网络与推理</h4>
+          <p>ViT-L 编码器 + ViT-B 解码器，patch 16×16，DPT 回归头；推理分辨率最长边 512。逐对推理 <b>≈ 25 ms</b>（H100）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Map-free 重定位</h4>
+          <p>中位平移误差 <b>0.98 m</b>，VCRE AUC <b>0.697</b>——优于 RoMa 等对手。</p>
+        </div>
+        <div class="mini-card">
+          <h4>多视位姿</h4>
+          <p>CO3Dv2：RRA@15 <b>96.2</b>、RTA@15 <b>86.8</b>、mAA(30) <b>76.7</b>；RealEstate10K mAA(30) <b>67.7</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>DTU 三维重建</h4>
+          <p>accuracy <b>2.677 mm</b> / completeness <b>0.805 mm</b> / overall <b>1.741 mm</b>（原文正文按四舍五入写成 2.7 / 0.8 / 1.7 mm）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>作者自己承认的短板</h4>
+          <p>回归法精度<b>不及</b>用了 GT 相机、并在 DTU 上专门训练的方法（亚像素三角测量更准）；<b>输出的 pointmap 不保证符合某个物理相机模型</b>。</p>
+        </div>
+      </div>
+      <p>最后一条值得多看一眼：它其实解释了 DUSt3R 的定位——<b>它不是在「同一把尺子上更准」，而是把「连尺子都不需要」这件事做成了</b>。这和第二季 <b>0027</b> COLMAP 的追求不是一回事：一个追精度，一个追「免前提」。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 三张自绘图：点图、尺度、对齐</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">pointmap：每个像素长出一根柱子，柱子的高度就是深度</tspan></text>
+          <text x="220" y="52" text-anchor="middle" font-size="12" fill="#5b6472">一张照片（一间屋子）</text>
+          <text x="680" y="52" text-anchor="middle" font-size="12" fill="#5b6472">沿这条扫描线，每一列取一根柱子</text>
+
+          <rect x="30" y="70" width="380" height="240" fill="#f2ece3" stroke="#c9b8a3"/>
+          <rect x="30" y="220" width="380" height="90" fill="#d3c7b6"/>
+          <rect x="120" y="150" width="90" height="70" fill="#c9dcec" stroke="#8ba8c4"/>
+          <rect x="140" y="180" width="45" height="60" fill="#b07a4a"/>
+          <rect x="265" y="190" width="50" height="55" fill="#9c8470"/>
+          <line x1="52" y1="85" x2="52" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="88" y1="85" x2="88" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="124" y1="85" x2="124" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="160" y1="85" x2="160" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="196" y1="85" x2="196" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="232" y1="85" x2="232" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="268" y1="85" x2="268" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="304" y1="85" x2="304" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="340" y1="85" x2="340" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <line x1="376" y1="85" x2="376" y2="308" stroke="#c9a13a" stroke-width="1" stroke-dasharray="5 4"/>
+          <text x="52" y="326" text-anchor="middle" font-size="10" fill="#8a7365">1</text>
+          <text x="88" y="326" text-anchor="middle" font-size="10" fill="#8a7365">2</text>
+          <text x="124" y="326" text-anchor="middle" font-size="10" fill="#8a7365">3</text>
+          <text x="160" y="326" text-anchor="middle" font-size="10" fill="#8a7365">4</text>
+          <text x="196" y="326" text-anchor="middle" font-size="10" fill="#8a7365">5</text>
+          <text x="232" y="326" text-anchor="middle" font-size="10" fill="#8a7365">6</text>
+          <text x="268" y="326" text-anchor="middle" font-size="10" fill="#8a7365">7</text>
+          <text x="304" y="326" text-anchor="middle" font-size="10" fill="#8a7365">8</text>
+          <text x="340" y="326" text-anchor="middle" font-size="10" fill="#8a7365">9</text>
+          <text x="376" y="326" text-anchor="middle" font-size="10" fill="#8a7365">10</text>
+
+          <line x1="508" y1="300" x2="508" y2="100" stroke="#b9c6d4" stroke-width="1.5"/>
+          <polygon points="508,100 503,112 513,112" fill="#b9c6d4"/>
+          <text x="498" y="88" font-size="11" fill="#5b6472">深度</text>
+
+          <line x1="505" y1="300" x2="860" y2="300" stroke="#b9c6d4" stroke-width="1.5"/>
+          <rect x="520" y="100" width="20" height="200" rx="3" fill="#d97757"/>
+          <rect x="555" y="105" width="20" height="195" rx="3" fill="#c98a63"/>
+          <rect x="590" y="151" width="20" height="149" rx="3" fill="#b79a6a"/>
+          <rect x="625" y="175" width="20" height="125" rx="3" fill="#8fa07a"/>
+          <rect x="660" y="116" width="20" height="184" rx="3" fill="#6f9a86"/>
+          <rect x="695" y="111" width="20" height="189" rx="3" fill="#5b93a0"/>
+          <rect x="730" y="144" width="20" height="156" rx="3" fill="#4a8aa8"/>
+          <rect x="765" y="144" width="20" height="156" rx="3" fill="#3d6b96"/>
+          <rect x="800" y="111" width="20" height="189" rx="3" fill="#3d6b96"/>
+          <rect x="835" y="101" width="20" height="199" rx="3" fill="#3d6b96"/>
+          <polyline points="530,100 565,105 600,151 635,175 670,116 705,111 740,144 775,144 810,111 845,101" fill="none" stroke="#2b2b2b" stroke-width="2"/>
+          <text x="530" y="326" text-anchor="middle" font-size="10" fill="#8a7365">1</text>
+          <text x="565" y="326" text-anchor="middle" font-size="10" fill="#8a7365">2</text>
+          <text x="600" y="326" text-anchor="middle" font-size="10" fill="#8a7365">3</text>
+          <text x="635" y="326" text-anchor="middle" font-size="10" fill="#8a7365">4</text>
+          <text x="670" y="326" text-anchor="middle" font-size="10" fill="#8a7365">5</text>
+          <text x="705" y="326" text-anchor="middle" font-size="10" fill="#8a7365">6</text>
+          <text x="740" y="326" text-anchor="middle" font-size="10" fill="#8a7365">7</text>
+          <text x="775" y="326" text-anchor="middle" font-size="10" fill="#8a7365">8</text>
+          <text x="810" y="326" text-anchor="middle" font-size="10" fill="#8a7365">9</text>
+          <text x="845" y="326" text-anchor="middle" font-size="10" fill="#8a7365">10</text>
+
+          <text x="450" y="360" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">柱子里偏矮的 4 号、5 号正好对应照片里那两件靠近相机的东西——柱子越长，说明那里越远</tspan></text>
+          <text x="450" y="390" text-anchor="middle" font-size="11.5" fill="#5b6472">真实情况下每个像素都有一根柱子；这里只画了沿一条扫描线的 10 列，方便看清</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边是一间屋子的照片，上面画了 10 条虚线（就是 10 个采样像素列，编号 1–10）；右边是这 10 列各自对应的<b>柱子</b>——柱子的高度就是那个像素的深度，把这些柱子顶端连起来，就得到一条起伏的曲线，像一张被撑起来的橡皮膜。</p>
+          <p><b>怎么看这张图：</b>① 左右两边的编号是<b>一一对应</b>的，请竖着比对；② 照片里第 4、5 列附近有两件靠相机更近的东西（木箱与椅子），右边这两根柱子恰好<b>矮下去</b>——因为近的东西深度小；③ 最右边那根黑线是把柱顶连起来的结果，这张「膜」就是 pointmap 里那一行像素的几何形状；④ 注意整张图里<b>没有任何「位姿」信息出现</b>，位姿是从这些三维点的相对关系里导出的。</p>
+          <p><b>要记住的一句话：</b>pointmap 就是「每个像素一根柱子」；<b>柱子高度＝深度，柱子顶端连成的膜＝场景形状</b>。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">尺度未定：同一张橡皮膜，整体放大一倍，看起来还是「一张橡皮膜」</tspan></text>
+
+          <rect x="40" y="60" width="240" height="240" rx="8" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="160" y="84" text-anchor="middle" font-size="12" fill="#3a4a5a">重建结果 A</text>
+          <line x1="55" y1="290" x2="215" y2="290" stroke="#d7dce5" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <polyline points="60,200 66,200 72,200 79,201 85,205 91,214 98,230 104,246 110,249 116,237 122,220 129,208 135,204 141,206 148,212 154,221 160,229 166,231 172,226 179,218 185,209 191,204 198,201 204,200 210,200" fill="none" stroke="#d97757" stroke-width="2.5"/>
+          <line x1="250" y1="230" x2="250" y2="290" stroke="#3a4a5a" stroke-width="2"/>
+          <line x1="245" y1="230" x2="255" y2="230" stroke="#3a4a5a" stroke-width="2"/>
+          <line x1="245" y1="290" x2="255" y2="290" stroke="#3a4a5a" stroke-width="2"/>
+          <text x="262" y="264" font-size="13" fill="#3a4a5a">?</text>
+
+          <text x="370" y="180" text-anchor="middle" font-size="26" fill="#9d553f">≈</text>
+          <text x="370" y="212" text-anchor="middle" font-size="11" fill="#5b6472">结构一样</text>
+          <text x="370" y="232" text-anchor="middle" font-size="11" fill="#5b6472">只差一个缩放</text>
+
+          <rect x="460" y="60" width="400" height="240" rx="8" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="660" y="84" text-anchor="middle" font-size="12" fill="#3a4a5a">重建结果 B（其实是同一个场景）</text>
+          <line x1="545" y1="290" x2="855" y2="290" stroke="#d7dce5" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <polyline points="550,110 562,110 575,110 588,112 600,119 612,138 625,171 638,201 650,207 662,183 675,149 688,126 700,118 712,122 725,135 738,153 750,168 762,173 775,163 788,145 800,128 812,118 825,112 838,111 850,110" fill="none" stroke="#3d6b96" stroke-width="3"/>
+          <line x1="520" y1="200" x2="520" y2="290" stroke="#3a4a5a" stroke-width="2"/>
+          <line x1="515" y1="200" x2="525" y2="200" stroke="#3a4a5a" stroke-width="2"/>
+          <line x1="515" y1="290" x2="525" y2="290" stroke="#3a4a5a" stroke-width="2"/>
+          <text x="500" y="250" text-anchor="end" font-size="13" fill="#3a4a5a">?</text>
+
+          <text x="450" y="340" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">两个「?」尺子长度不同，可谁也说不清它们到底代表几厘米——这就是尺度未定</tspan></text>
+          <text x="450" y="372" text-anchor="middle" font-size="11.5" fill="#5b6472">DUSt3R 只保证形状对，整体乘任何常数都是同样合法的答案；要绝对尺度得另找来源</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左右两幅是<b>同一个场景</b>的两份重建结果，右边那份被整体放大了一倍。每幅下面各有一把「尺子」，但两把尺子都只标了一个问号——因为重建结果里<b>没有任何东西告诉你一个单位等于现实里的多少米</b>。</p>
+          <p><b>怎么看这张图：</b>① 先把两幅的形状对比一下：起伏的位置、凹凸的比例<b>完全一样</b>，这正是论文训练时「按平均到原点距离归一化」要达到的效果；② 再看两把「?」尺子：长度明明差一倍，可你没法判断哪一把才是「真实的 1 米」——因为两份结果各自都可以整体缩放而依然合法；③ 所以 A 与 B 之间打的是「约等于」，而不是「等于」。</p>
+          <p><b>要记住的一句话：</b>DUSt3R 给的是 <b>up-to-scale（尺度未定）</b>的重建；<b>要绝对尺度，得靠另外的来源</b>——0149 的 Sim(3) 是「把未知尺度当成状态吸收掉」，0150 的 Metric3D v2 是「直接给你补上」。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">全局对齐：每对图各吐一张点图，最后拼进同一个坐标系</tspan></text>
+
+          <text x="116" y="52" text-anchor="middle" font-size="11" fill="#5b6472">图 1 + 图 2</text>
+          <text x="406" y="52" text-anchor="middle" font-size="11" fill="#5b6472">图 2 + 图 3</text>
+          <text x="696" y="52" text-anchor="middle" font-size="11" fill="#5b6472">图 3 + 图 4</text>
+
+          <rect x="50" y="60" width="62" height="48" rx="3" fill="#c9dcec" stroke="#8ba8c4"/>
+          <rect x="120" y="60" width="62" height="48" rx="3" fill="#d9b98f" stroke="#b08a5d"/>
+          <rect x="340" y="60" width="62" height="48" rx="3" fill="#d9b98f" stroke="#b08a5d"/>
+          <rect x="410" y="60" width="62" height="48" rx="3" fill="#c9e0c9" stroke="#8fbf8f"/>
+          <rect x="630" y="60" width="62" height="48" rx="3" fill="#c9e0c9" stroke="#8fbf8f"/>
+          <rect x="700" y="60" width="62" height="48" rx="3" fill="#e0cfd9" stroke="#bf8fa8"/>
+
+          <line x1="116" y1="112" x2="116" y2="136" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="116,136 111,126 121,126" fill="#c9a13a"/>
+          <line x1="406" y1="112" x2="406" y2="136" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="406,136 401,126 411,126" fill="#c9a13a"/>
+          <line x1="696" y1="112" x2="696" y2="136" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="696,136 691,126 701,126" fill="#c9a13a"/>
+
+          <polygon points="60,198 182,198 196,148 74,148" fill="#eaf1fb" stroke="#9bbce6"/>
+          <polygon points="350,198 472,198 486,148 364,148" fill="#eaf1fb" stroke="#9bbce6"/>
+          <polygon points="640,198 762,198 776,148 654,148" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="128" y="216" text-anchor="middle" font-size="11" fill="#5b6472">局部点图 · 各自坐标系</text>
+          <text x="418" y="216" text-anchor="middle" font-size="11" fill="#5b6472">局部点图 · 各自坐标系</text>
+          <text x="708" y="216" text-anchor="middle" font-size="11" fill="#5b6472">局部点图 · 各自坐标系</text>
+
+          <line x1="128" y1="226" x2="360" y2="266" stroke="#c9a13a" stroke-width="2"/>
+          <polygon points="360,266 350,263 355,257" fill="#c9a13a"/>
+          <line x1="418" y1="226" x2="450" y2="266" stroke="#c9a13a" stroke-width="2"/>
+          <polygon points="450,266 440,263 445,257" fill="#c9a13a"/>
+          <line x1="708" y1="226" x2="540" y2="266" stroke="#c9a13a" stroke-width="2"/>
+          <polygon points="540,266 530,269 535,257" fill="#c9a13a"/>
+
+          <rect x="200" y="270" width="500" height="120" rx="8" fill="#ffffff" stroke="#9bbce6"/>
+          <text x="450" y="292" text-anchor="middle" font-size="12" fill="#2f5b82">同一坐标系下的整张点图</text>
+          <circle cx="250" cy="350" r="2.6" fill="#3d6b96"/><circle cx="268" cy="342" r="2.6" fill="#3d6b96"/><circle cx="286" cy="336" r="2.6" fill="#6f9a86"/><circle cx="304" cy="332" r="2.6" fill="#6f9a86"/>
+          <circle cx="322" cy="330" r="2.6" fill="#6f9a86"/><circle cx="340" cy="330" r="2.6" fill="#8fa07a"/><circle cx="358" cy="331" r="2.6" fill="#8fa07a"/><circle cx="376" cy="334" r="2.6" fill="#b79a6a"/>
+          <circle cx="394" cy="338" r="2.6" fill="#b79a6a"/><circle cx="412" cy="343" r="2.6" fill="#c98a63"/><circle cx="430" cy="349" r="2.6" fill="#c98a63"/><circle cx="448" cy="355" r="2.6" fill="#d97757"/>
+          <circle cx="466" cy="352" r="2.6" fill="#d97757"/><circle cx="484" cy="347" r="2.6" fill="#c98a63"/><circle cx="502" cy="341" r="2.6" fill="#b79a6a"/><circle cx="520" cy="336" r="2.6" fill="#8fa07a"/>
+          <circle cx="538" cy="332" r="2.6" fill="#6f9a86"/><circle cx="556" cy="330" r="2.6" fill="#5b93a0"/><circle cx="574" cy="330" r="2.6" fill="#4a8aa8"/><circle cx="592" cy="332" r="2.6" fill="#4a8aa8"/>
+          <circle cx="610" cy="336" r="2.6" fill="#3d6b96"/><circle cx="628" cy="342" r="2.6" fill="#3d6b96"/><circle cx="646" cy="349" r="2.6" fill="#3d6b96"/>
+          <circle cx="270" cy="368" r="2.6" fill="#6f9a86"/><circle cx="330" cy="372" r="2.6" fill="#8fa07a"/><circle cx="400" cy="376" r="2.6" fill="#b79a6a"/>
+          <circle cx="470" cy="376" r="2.6" fill="#c98a63"/><circle cx="540" cy="372" r="2.6" fill="#6f9a86"/><circle cx="610" cy="368" r="2.6" fill="#3d6b96"/>
+
+          <text x="450" y="418" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">像 BA，但它对齐的是三维坐标本身（不是重投影误差），所以几百步梯度下降就能收敛</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>上面三格是「相邻两张图组成一对」（图 1+2、图 2+3、图 3+4），每对各自吐出一张<b>局部点图</b>——注意每张局部点图都画成平行四边形，表示「它落在自己的一套坐标系里，方向朝向都不一样」。下面那个大框是全局对齐之后的结果：所有点被搬进<b>同一个坐标系</b>，拼成一张完整的场景点图。</p>
+          <p><b>怎么看这张图：</b>① 关键差别在「谁被优化」：传统 BA 调的是位姿和结构，通过<b>重投影误差</b>（把点投回图像上比对）来约束；这里的全局对齐直接<b>比三维坐标本身</b>，少了一层投影，所以收敛快得多；② 那些平行四边形的朝向各不相同，正说明「每对图都有自己的坐标系」，对齐这一步是必需的、不是装饰；③ 图 2 与图 3 是<b>共用的</b>——同一张照片同时出现在两对里，它就成了把两套坐标系缝起来的「针脚」。</p>
+          <p><b>要记住的一句话：</b>DUSt3R 的「多图」不是重新训一个多图网络，而是<b>成对预测 + 一次三维空间里的全局对齐</b>；这也正是 0149 与 0150 要在它之上做实时化的起点。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h4>互动：DUSt3R 的输出尺度是怎样的？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0148a')">同一坐标系但尺度未定</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0148b')">直接给出度量尺度结果</button></p>
+        <p class="quiz-feedback" id="q0148a" hidden>正确。原文明确说 pointmap 是 up-to-scale：训练时要把预测与真值各自按「所有有效点到原点的平均距离」归一化，正是为了把尺度这一自由度从损失里剔除。所以它的结果是「形状对、整体可任意缩放」。要绝对尺度得靠别的来源——MASt3R（部分训练数据带度量尺度）与 0150 的 Metric3D v2（canonical camera transformation）。0149 则用 Sim(3) 把未知尺度当成要估的状态吸收掉。</p>
+        <p class="quiz-feedback" id="q0148b" hidden>不对。DUSt3R 恰恰不给你度量尺度。它的训练目标里专门做了「按平均到原点距离归一化」来消除尺度歧义——也就是说网络被训练成不去关心尺度。两张 pointmap 确实在<b>同一个坐标系</b>里（都是图像 1 的系），但整体系可以被任意放大缩小，都同样合法。若记成「直接给出度量尺度」，就会把它和 0150 Metric3D v2 那条线混为一谈。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 读完你应该能回答</h2>
+      <ul>
+        <li>DUSt3R 的输入输出分别是什么？pointmap 的尺寸与含义是什么？它为什么「不用标定、不用已知位姿」？</li>
+        <li>pointmap 里哪一类信息承载了「深度」？内参（焦距）怎么从它恢复？</li>
+        <li>「两张 pointmap 在同一坐标系」这件事是怎么达成的？cross-attention 在其中起什么作用？</li>
+        <li>全局对齐和传统 BA 差在哪？为什么它更快？$\prod_e\sigma_e=1$ 这个约束是用来防什么的？</li>
+        <li>为什么说 DUSt3R 是「up-to-scale」而不是「度量」？0150 里谁会来补上绝对尺度？</li>
+        <li>DUSt3R 和 0027 COLMAP、0124 GPS-Gaussian 分别是什么关系？</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>用不超过 150 字，向一个只学过第二季 0027 COLMAP 的人解释：DUSt3R 到底把哪一步「省掉」了？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>COLMAP 的流程是「提特征 → 匹配 → 初始化位姿 → BA 迭代」，其中「初始化位姿」和「迭代 BA」都要先知道<b>相机内参</b>（要标定），而且要靠足够好的匹配才能起步。</p>
+              <p>DUSt3R 把「解」换成了「猜」：一个网络吃两张无约束图，直接吐两张 pointmap——<b>像素对应的三维点</b>。位姿不再是输入、也不再是求解目标，它是从这两组三维点的对应关系里<b>导出</b>的副产品；内参同样不需要输入，还能反过来从 pointmap 估。省掉的是「位姿/内参求解」这一整环，代价是回归精度不如专门做三角测量的方法，而且<b>尺度不定</b>。</p>
+            </div></details>
+          </li>
+          <li>为什么 pointmap 这个表示能让「匹配、深度、位姿」三件事都用同一份输出解决？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为 pointmap 是「像素 → 三维点」的一一映射，三类信息天然都在里面：</p>
+              <p><b>深度</b>：直接取 z 分量——坐标系以第一个相机为原点、z 轴朝前，z 值就是距离。<br><b>匹配</b>：两张 pointmap 描述的是同一批三维点，在同一坐标系里，所以「第一张图的像素 p 对应第二张图的哪个像素」只要在第二张的 pointmap 里做最近邻搜索就能得到。<br><b>位姿</b>：两组像素各自对应的三维点都已知，于是相对位姿就成了一个「已知两个点集、求刚体变换」的问题（Procrustes），要绝对位姿再加 RANSAC + PnP。</p>
+              <p>换句话说，<b>它不是三个模块的拼接，而是一个表示了之后三个问题各自都变成了简单的后处理</b>。这也是论文标题「Geometric 3D Vision Made Easy」的底气所在。</p>
+            </div></details>
+          </li>
+          <li>假设你把同一个场景拍了两组照片，用 DUSt3R 分别重建，得到两份结果。你怎么判断它们是不是同一套尺度的？为什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>无法仅凭两份重建结果判断。</b>因为 DUSt3R 的输出是 up-to-scale 的：每一份结果都可以整体乘任意常数而依然合法。你看到「第二份比第一份大两倍」时，完全说不出是「场景真的更远/更大」，还是「只是尺度因子不同」。</p>
+              <p>要把它定下来，必须引入一个<b>不受尺度自由度影响的外部约束</b>。可能的做法有：① 场景里有<b>已知真实尺寸</b>的物体（比如一张 A4 纸、一块已知边长标定板）；② 借助外部传感器（IMU 的加速度积分能给尺度，双目的基线也能给尺度）；③ 直接用 <b>0150 的 Metric3D v2</b> 这类<b>度量深度</b>模型给单目补绝对尺度；④ 或者像 <b>0149 MASt3R-SLAM</b> 那样，干脆用 <b>Sim(3)</b> 把尺度当成一个待估状态吸收掉——这不能给出「米」，但能让多段重建在同一个（仍然未知的）尺度下保持一致。</p>
+              <p>这道题的意义在于：<b>「尺度未定」不是一个小毛病，而是决定了你这套系统能不能输出「米」这个单位的根本分歧</b>。第三季 0040 那条「尺度暗线」到这一站又出现了。</p>
+            </div></details>
+          </li>
+          <li>DUSt3R 在一次前向后还额外给出「置信度图」。它有什么用？联系一下 0149。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>置信度图是「网络自己觉得这个像素的预测有多靠得住」。它有三个用处：</p>
+              <p><b>① 训练时当权重</b>：损失里那个 $C^v_i$ 就是它——网络不确定的点，误差算得轻，避免被坏标注/坏区域带偏；目标里那个 $-\alpha\log C$ 项则是防止它把所有权重都调成 0 来偷懒。<br><b>② 全局对齐时当权重</b>：对齐的目标函数同样按 $C^e_i$ 加权，让可靠的点主导拼接。<br><b>③ 下游跟踪与优化里当权重</b>：这就是 0149 的做法——MASt3R 的输出（pointmap + 置信度 + 匹配特征 + 特征置信度）被当作整个 SLAM 的底座，跟踪时用置信度加权，融合时也用它决定「哪些点可信」。</p>
+              <p>更值得注意的是 <b>0147 与 0121 的那条对照</b>：WildGS-SLAM 用 DINOv2 的<b>特征不确定度</b>判断「这个像素可能不是真的」，DUSt3R 用<b>回归置信度</b>判断「这个点的三维坐标可能不可靠」。两者不是一回事，但都属于同一个套路：<b>让网络顺带输出「自己有多确定」，下游就能用它做取舍</b>。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0147-DINOv2与SAM-两个通用零件.html">← 上一节：0147 DINOv2 与 SAM 两个通用零件</a>
+        <a class="next" href="0149-MASt3R-SLAM2025-双视图先验做实时SLAM.html">下一节：0149 MASt3R-SLAM 双视图先验做实时 SLAM →</a>
+      </div>
+      <p class="foot-note">几何零件的源头找到了：pointmap。下一节看它怎么被做成一套真正跑得起来的实时 SLAM 系统 🗺️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

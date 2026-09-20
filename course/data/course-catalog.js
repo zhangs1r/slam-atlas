@@ -7,7 +7,7 @@
 
 window.PAPERLESSON_DATA = {
   /* 首页「当前主线」指向的 collection id */
-  featuredCollectionId: "stage-f",
+  featuredCollectionId: "stage-g",
 
   /* ---------- 分馆 ---------- */
   groups: [
@@ -17,7 +17,7 @@ window.PAPERLESSON_DATA = {
       title: "SLAM 论文精读馆",
       emoji: "📄",
       description: "按语料库阅读路线的阶段（A–K）分块。每个「来源块」对应一个阶段，块内课程按认知依赖顺序排列；一篇论文可以拆成多节课，也可以几篇同类论文合成一节。",
-      meta: ["按阶段分块", "255 篇语料库", "已开到阶段 F · 前沿：神经隐式与 3D 高斯"]
+      meta: ["按阶段分块", "255 篇语料库", "已开到阶段 G · 学习式方法"]
     },
     {
       id: "qa",
@@ -98,6 +98,16 @@ window.PAPERLESSON_DATA = {
       description: "第 0104 课起。前五季问的都是「位姿怎么算」，这一季换一个更根本的问题：场景本身到底存在哪？一条答案是「存成一堆数」（显式：点云、体素、面片、平面、椭球），另一条是「塞进一个函数里」（隐式：把场景压进网络权重）。这一季把两条路都走一遍：从 iMAP 第一次把整张地图塞进网络，到多层级特征网格、八叉树、特征平面、挂在点云上的特征，再到回环时「地图怎么改」、第一季欠下的两句判断被正面回答；然后进入 3D 高斯这一支，把挂了五季的「自适应密度控制」还清，并沿高斯往下走到 SLAM、语义、语言、表面抽取、逆渲染、跨场景泛化与显存压缩。最后一节不做新论文，只结账。",
       quickOpen: "start lessons\\0104-导览-第六季开场-隐式与显式之争.html",
       meta: ["24 节课", "覆盖 36 篇论文", "49 张具象自绘图"]
+    },
+    {
+      id: "stage-g",
+      groupId: "papers",
+      kind: "阶段精读",
+      title: "阶段 G · 学习式方法",
+      subtitle: "匹配 / 检索 / 端到端 / 基础模型 · 第七季 31 篇 / 24 节",
+      description: "第 0128 课起。第一季 0011 课写下过一句判断：深度学习先吃掉匹配和检索。这一季就是那句话的正面展开——到底吃掉了没有、吃到什么程度、哪些地方吃不动。四个战场依次推进：特征匹配（SuperGlue / LoFTR / LightGlue / SiLK / RAFT）、场景识别与回环（DBoW2 / Scan Context / LCDNet / BEVPlace / SALDA 等 12 篇）、端到端里程计（DeepVO 一路走到 DROID-SLAM 与 DPVO）、以及视觉基础模型（DINOv2 / SAM / DUSt3R / MASt3R-SLAM / SLAM3R / Metric3D v2）。第一季 0014 课立下的回环假阳性铁律会在 0140 被正面复查，尺度暗线在 0150 走到最新一站。最后一节不做新论文，只结账：哪些结论有论文证据、哪些还只是判断。",
+      quickOpen: "start lessons\\0128-导览-第七季开场-一句话的面试.html",
+      meta: ["24 节课", "覆盖 31 篇论文", "四个战场"]
     },
     {
       id: "qa-0002",
@@ -1519,6 +1529,270 @@ window.PAPERLESSON_DATA = {
       duration: "60 分钟",
       tags: ["收官", "总收束", "十年对照"],
       description: "不做新论文，只结账：把隐式/高斯这条线与稀疏特征这条线十年的胜负逐项对完，把两笔旧债的偿还情况交代清楚，并指出仍未解决的四件事。含全季对照表，以及「哪些结论是证据、哪些还只是判断」的诚实标注。"
+    },
+    {
+      id: "0128",
+      path: "lessons/0128-导览-第七季开场-一句话的面试.html",
+      paper: "stage-g",
+      title: "导览：第七季开场 · 一句话的面试",
+      subtitle: "深度学习到底吃掉了什么",
+      emoji: "🧭",
+      duration: "40 分钟",
+      tags: ["导览", "第七季开场", "四战场"],
+      description: "本季开场。把第一季 0011 课那句判断拆成四个战场：匹配、检索、端到端位姿、基础模型。含一张「整条 SLAM 流水线 + 学习式方法插在哪一段」的具象图，以及全季课表与六条自测问题。"
+    },
+    {
+      id: "0129",
+      path: "lessons/0129-SuperGlue2020-图神经网络与最优传输做匹配.html",
+      paper: "stage-g",
+      title: "SuperGlue（2020）：图神经网络与最优传输做匹配",
+      subtitle: "可学习的中间端",
+      emoji: "🧠",
+      duration: "55 分钟",
+      tags: ["单篇", "特征匹配", "最优传输"],
+      description: "把第一季 0004 课的「特征匹配与数据关联」交给网络。含四张具象自绘图：注意力用射线连出同一个门把手、代价矩阵、最优传输与垃圾桶变量、Sinkhorn 天平。理清它是中间端而不是前端，并交代置信度可以剔除坏匹配。"
+    },
+    {
+      id: "0130",
+      path: "lessons/0130-LoFTR2021-不用检测器的稠密匹配.html",
+      paper: "stage-g",
+      title: "LoFTR（2021）：不用检测器的稠密匹配",
+      subtitle: "弱纹理也管用",
+      emoji: "🔍",
+      duration: "50 分钟",
+      tags: ["单篇", "特征匹配", "无检测器"],
+      description: "回答「没有特征点怎么办」：先在低分辨率上做全局匹配，再逐级细化到原图。含弱纹理墙面对比图、卷积感受野与 Transformer 的差别、粗到精流程图。与第四季 0084 FAST-LIO2 的「干脆不提特征」互为镜像。"
+    },
+    {
+      id: "0131",
+      path: "lessons/0131-LightGlue2023-该快的地方才快.html",
+      paper: "stage-g",
+      title: "LightGlue（2023）：该快的地方才快",
+      subtitle: "自适应深浅",
+      emoji: "⚡",
+      duration: "45 分钟",
+      tags: ["单篇", "特征匹配", "自适应计算"],
+      description: "把 SuperGlue 重构得更快更准：位置编码、解耦的可匹配性、深度监督、以及按难度自适应停止。含「简单图对早停 vs 困难图对多算几层」的具象图，说明为什么它是现在工程上的默认选择。"
+    },
+    {
+      id: "0132",
+      path: "lessons/0132-RAFT2020-循环迭代式光流.html",
+      paper: "stage-g",
+      title: "RAFT（2020）：循环迭代式光流",
+      subtitle: "反复擦改草稿算光流",
+      emoji: "🌊",
+      duration: "50 分钟",
+      tags: ["单篇", "稠密光流", "循环迭代"],
+      description: "明确一点：它是稠密光流，不是稀疏特征匹配。核心是全对相关体加循环迭代更新。含四维相关体的切面示意、GRU 反复擦改草稿的连环画、多尺度查表。它对后面 0145 DROID-SLAM 的 CorrBlock 有直接影响。"
+    },
+    {
+      id: "0133",
+      path: "lessons/0133-SiLK2023-极简前端与匹配块小结.html",
+      paper: "stage-g",
+      title: "SiLK（2023）＋ 匹配块小结",
+      subtitle: "极简前端也能赢",
+      emoji: "🪶",
+      duration: "50 分钟",
+      tags: ["单篇", "收束", "极简"],
+      description: "它其实是检测器加描述子的前端，匹配只用余弦相似度与互为最近邻，不做注意力也不做最优传输——却依然能打。含 double-softmax 往返监督图与复杂度轴图。收束 0129 到 0133：什么时候该加复杂度、什么时候该减。"
+    },
+    {
+      id: "0134",
+      path: "lessons/0134-DBoW2-2012-词袋法怎么变成工程标准.html",
+      paper: "stage-g",
+      title: "DBoW2（2012）：词袋法怎么变成工程标准",
+      subtitle: "一本书的索引页",
+      emoji: "📖",
+      duration: "50 分钟",
+      tags: ["单篇", "词袋", "回环"],
+      description: "第三季 0043 到 0045 ORB-SLAM 回环的技术基础。含图书馆卡片柜与倒排索引两张具象图、tf-idf 加权与 L1 打分的解释，以及它为什么能在嵌入式上跑到 22 毫秒一帧。注意：该论文的 Markdown 文件开头有一处串页混入的无效内容，课上已说明只取中段正文。"
+    },
+    {
+      id: "0135",
+      path: "lessons/0135-ScanContext与加加-免训练的几何描述子.html",
+      paper: "stage-g",
+      title: "Scan Context 与 Scan Context++：免训练的几何描述子",
+      subtitle: "用最大高度画一张极坐标图",
+      emoji: "🧭",
+      duration: "55 分钟",
+      tags: ["组课", "点云回环", "免训练"],
+      description: "组课。把一帧激光按方位角与环号压成一张极坐标高度矩阵，列移就等于转向。含真实街道俯视加同心圆环、列移对齐连环画、以及换车道时的横向偏移对比。分清 2018 原版只解决旋转，横向不变是 2022 的 ++ 才系统解决的。"
+    },
+    {
+      id: "0136",
+      path: "lessons/0136-点云回环两篇-描述子与位姿回归.html",
+      paper: "stage-g",
+      title: "LCDNet 与 OverlapTransformer：描述子与位姿回归",
+      subtitle: "一步给出回环与六自由度位姿",
+      emoji: "🎯",
+      duration: "55 分钟",
+      tags: ["组课", "点云回环", "位姿回归"],
+      description: "组课。LCDNet 用一个共享编码器加两个头部，同时给出回环与六自由度相对位姿；OverlapTransformer 把旋转不变直接长进网络，快到 730 赫兹。含 NetVLAD 漏斗、非平衡最优传输的螺丝对螺丝孔、以及距离图列移等于原地转九十度三张具象图。"
+    },
+    {
+      id: "0137",
+      path: "lessons/0137-BEVPlace与SeqOT-鸟瞰图与序列时空.html",
+      paper: "stage-g",
+      title: "BEVPlace 与 SeqOT：鸟瞰图与序列时空",
+      subtitle: "把点云拍扁，或者让时间帮忙",
+      emoji: "🛰️",
+      duration: "50 分钟",
+      tags: ["组课", "点云回环", "鸟瞰图"],
+      description: "组课。一篇把点云压成俯视密度图再用群卷积保证旋转不变，一篇用连续帧做时空注意力。含停车场俯拍转鸟瞰图、旋转三十度对比、序列时空注意力三张具象图。注意 BEVPlace 只回归平面位置，不输出朝向。"
+    },
+    {
+      id: "0138",
+      path: "lessons/0138-视觉地点识别的两种聚合.html",
+      paper: "stage-g",
+      title: "CricaVPR 与最优传输聚合：视觉地点识别的两种聚合",
+      subtitle: "同一个最优传输，两种用法",
+      emoji: "🪣",
+      duration: "50 分钟",
+      tags: ["组课", "视觉检索", "描述子聚合"],
+      description: "组课。同一个「最优传输」名词，在 0129 SuperGlue 那里是解匹配指派，在这里是解描述子聚合——含一张并排对照的具象图，这是学习者最容易混淆的地方。另有 CricaVPR 的跨图像相关性图。"
+    },
+    {
+      id: "0139",
+      path: "lessons/0139-混合架构与统一检索.html",
+      paper: "stage-g",
+      title: "Hybrid CNN-Transformer 与 R²Former：架构与统一检索",
+      subtitle: "召回、重排序，以及统一成一个模型",
+      emoji: "🔀",
+      duration: "50 分钟",
+      tags: ["组课", "视觉检索", "重排序"],
+      description: "组课。一篇比较卷积与 Transformer 混合架构，一篇把检索与重排序收进一个 Transformer。含召回列表图（说清 Recall@1 与 Recall@1% 到底在量什么）与重排序流程图。"
+    },
+    {
+      id: "0140",
+      path: "lessons/0140-端到端回环与重定位-兼答复假阳性铁律.html",
+      paper: "stage-g",
+      title: "端到端回环与重定位：兼答复假阳性铁律",
+      subtitle: "一个骨干，两路输出",
+      emoji: "🔁",
+      duration: "55 分钟",
+      tags: ["单篇", "回环", "收束"],
+      description: "这套系统本身就是完整的回环加重定位方案，不是纯描述子论文。含被错误回环拉歪的轨迹对比图。本节的另一个任务：正面回答第一季 0014 课立下的假阳性铁律——学习式方法把假阳性率压下去了吗，代价是什么，有没有新的失效模式。"
+    },
+    {
+      id: "0141",
+      path: "lessons/0141-这条支线的起点-PoseNet与DeepVO.html",
+      paper: "stage-g",
+      title: "这条支线的起点：PoseNet 与 DeepVO",
+      subtitle: "先纠正一个流行误解",
+      emoji: "🚗",
+      duration: "50 分钟",
+      tags: ["组课", "端到端里程计", "起点"],
+      description: "开篇纠正一个流行误解：PoseNet 根本不是视觉里程计，它是单张图像的全局重定位；真正开启端到端里程计的是 DeepVO。含「网络直接吐出转了多少度走了几米」的具象图与序列建模示意。同时回顾第三季 0054 到 0056 那一代学习式稠密方法为什么没成主流。"
+    },
+    {
+      id: "0142",
+      path: "lessons/0142-无监督与跨数据集泛化.html",
+      paper: "stage-g",
+      title: "UnDeepVO 与 TartanVO：无监督与跨数据集泛化",
+      subtitle: "训练信号从哪来",
+      emoji: "🔄",
+      duration: "50 分钟",
+      tags: ["组课", "端到端里程计", "自监督"],
+      description: "组课。第一篇用立体像对的基线解决单目尺度，第二篇强调换数据集也能用。含「没有真值也能算出误差」的闭环图、左右相机基线提供尺度的图、以及合成场景训练到真实场景测试的并排对比。训练信号从哪来是这条支线的核心矛盾。"
+    },
+    {
+      id: "0143",
+      path: "lessons/0143-鲁棒单目学习式SLAM.html",
+      paper: "stage-g",
+      title: "DeepSLAM（2021）：鲁棒单目学习式 SLAM",
+      subtitle: "把地图也交给网络",
+      emoji: "🧩",
+      duration: "45 分钟",
+      tags: ["单篇", "端到端里程计", "地图"],
+      description: "不满足于只估轨迹，把建图也一起学。含网络结构的分模块图与鲁棒性对照。与第三季 0054 CNN-SLAM 的路线对照阅读。"
+    },
+    {
+      id: "0144",
+      path: "lessons/0144-D3VO2020-深度位姿与不确定性一起学.html",
+      paper: "stage-g",
+      title: "D3VO（2020）：深度、位姿与不确定性一起学",
+      subtitle: "让网络自己说我不确定",
+      emoji: "📉",
+      duration: "50 分钟",
+      tags: ["单篇", "端到端里程计", "不确定性"],
+      description: "三件事一起学，并且和经典直接法结合。回链第三季 0048 DSO 的光度标定。含不确定性可视化图（同一块砖墙与一块玻璃，网络信心差异）、光度一致性损失的箭头图、以及与 DSO 结合的流程图。引用其表格数字前已核对过 OCR 串行问题。"
+    },
+    {
+      id: "0145",
+      path: "lessons/0145-DROID-SLAM2021-把BA做成一层的转折点.html",
+      paper: "stage-g",
+      title: "DROID-SLAM（2021）：把 BA 做成一层的转折点",
+      subtitle: "稠密 BA 层与 CorrBlock",
+      emoji: "🏗️",
+      duration: "60 分钟",
+      tags: ["单篇", "端到端里程计", "稠密BA"],
+      description: "全季的转折点。它把 BA 做成网络里的一层，配合相关体做循环迭代更新。含把像素两两配对画成一张网的具象图，并与第二季 0018 与 0019 的稀疏 BA 与 Schur 消元显式对照：经典 BA 是稀疏的、用消元解，这里是稠密的、用迭代更新解。另说明它为什么灾难性失败更少（有实测证据）。"
+    },
+    {
+      id: "0146",
+      path: "lessons/0146-DPVO2023-图像块跟踪替代稠密光流.html",
+      paper: "stage-g",
+      title: "DPVO（2023）：图像块跟踪替代稠密光流",
+      subtitle: "往下减",
+      emoji: "🧱",
+      duration: "50 分钟",
+      tags: ["单篇", "端到端里程计", "图像块"],
+      description: "把稠密光流换成图像块跟踪，精度保持而算量大降。含图像块图的具象画法（线越粗表示越确定是同一个平面）与「精度对算力」散点图。回链 0132 RAFT，并点明全季那条往下减的暗线。"
+    },
+    {
+      id: "0147",
+      path: "lessons/0147-DINOv2与SAM-两个通用零件.html",
+      paper: "stage-g",
+      title: "DINOv2 与 SAM：两个通用零件",
+      subtitle: "特征与掩码，拿来就用",
+      emoji: "🧰",
+      duration: "55 分钟",
+      tags: ["组课", "基础模型", "通用零件"],
+      description: "组课。一个是自监督视觉特征，一个是通用分割，都是可以直接调用的零件。含「同一件东西在四季与昼夜下的照片、特征却挤在一起」的具象图、SAM 三重歧义的三个掩码并排图。回链第六季 0121 WildGS-SLAM 用 DINOv2 特征做动态剔除，说明零件是怎么被真正用起来的。诚实标注：正文里那组公平性百分比与它自己的表格数字不符，课上并列两套并说明以表格为准。"
+    },
+    {
+      id: "0148",
+      path: "lessons/0148-DUSt3R2024-不必标定与位姿的重建.html",
+      paper: "stage-g",
+      title: "DUSt3R（2024）：不必标定与位姿的重建",
+      subtitle: "pointmap 表示",
+      emoji: "🗺️",
+      duration: "55 分钟",
+      tags: ["单篇", "基础模型", "点图"],
+      description: "回链第二季 0027 COLMAP：从无序图像做重建，传统上要先恢复位姿与结构，这里一次前向就吐出点图。含「每个像素长出一根深度柱、整体像一张橡皮膜」的具象图，以及尺度未定的两副并排图。注意它给出的点图是同一坐标系但尺度未定，度量化是后面那条线的事。"
+    },
+    {
+      id: "0149",
+      path: "lessons/0149-MASt3R-SLAM2025-双视图先验做实时SLAM.html",
+      paper: "stage-g",
+      title: "MASt3R-SLAM（2025）：双视图先验做实时 SLAM",
+      subtitle: "它本身是一套 SLAM 系统",
+      emoji: "⚙️",
+      duration: "50 分钟",
+      tags: ["单篇", "基础模型", "实时SLAM"],
+      description: "说清一个身份差别：它不是被别人当零件的基础模型，本身就是一套实时 SLAM 系统，建立在双视图重建先验之上。含两张照片生成局部地图再当先验继续建图的流程图，以及轨迹误差与帧率的实测数字。"
+    },
+    {
+      id: "0150",
+      path: "lessons/0150-前馈重建与度量深度.html",
+      paper: "stage-g",
+      title: "SLAM3R 与 Metric3D v2：前馈重建与度量深度",
+      subtitle: "给单目补尺度",
+      emoji: "📏",
+      duration: "55 分钟",
+      tags: ["组课", "基础模型", "尺度"],
+      description: "组课，两篇身份不同：一篇是前馈重建系统，一篇是给单目补度量尺度的零件。含前馈与逐场景优化的流程并排图、以及把不同相机统一换算到标准相机的示意图。回链第三季 0040 导览埋下的尺度暗线，这是那条线的最新一站。"
+    },
+    {
+      id: "0151",
+      path: "lessons/0151-收官-学习式方法的能与不能.html",
+      paper: "stage-g",
+      title: "收官：学习式方法的能与不能",
+      subtitle: "不做新论文，只结账",
+      emoji: "🧾",
+      duration: "60 分钟",
+      tags: ["收官", "总收束", "四战场"],
+      description: "不做新论文，只结账。用一张四行对照表正面回答第一季 0011 那句判断：匹配吃掉了、检索吃掉了、位姿只吃掉了很窄的一段、几何被外包给了基础模型。把「复杂与极简之争」这条暗线结账，并诚实分区：哪些结论有论文证据、哪些只是判断。最后列出仍未解决的问题。"
     },
     {
       id: "QA0002",

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoFTR 2021 · 不用检测器的稠密匹配 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0130</div>
+      <h1>LoFTR 2021 · 不用检测器的稠密匹配</h1>
+      <p class="subtitle">连「找点」这一步都不要了——直接在全图上铺满稠密对应，专治纹理缺失的墙和地板 🧱</p>
+      <div class="hero-meta">
+        <span>🎯 主题：Detector-Free 的 Transformer 匹配</span>
+        <span>👥 作者：浙江大学 / 商汤等（Sun 等）</span>
+        <span>📅 2021 · <i>LoFTR: Detector-Free Local Feature Matching with Transformers</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它比 SuperGlue 狠在哪</a>
+        <a href="#b">全局感受野</a>
+        <a href="#c">整体架构与 Linear Transformer</a>
+        <a href="#d">粗匹配 + 精修（coarse-to-fine）</a>
+        <a href="#e">dual-softmax 与实验</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清 LoFTR 为什么能「不用检测器」；② 用生活类比解释「全局感受野」和「粗到精」；③ 讲出 dual-softmax 与 SuperGlue 的 Sinkhorn/dustbin 各自取舍；④ 知道它在纹理缺失处为什么碾压基于检测器的方法。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它是 <b>0129 SuperGlue 的直接对手与升级</b>：SuperGlue 仍依赖前端（SuperPoint）先「找点」，LoFTR 把「找点」也省了。两者都属于<b>第一季 0011 那句「先吃掉匹配」</b>的同一战场（中间端）。它也是在回应<b>第一季 0004 的手工特征匹配</b>——只不过这次连「特征检测」这第一步都不要了。</p>
+        </div>
+      </div>
+
+      <h2>1. 它比 SuperGlue 狠在哪：先讲人话</h2>
+      <p>SuperGlue 虽好，但它有个隐藏前提：<b>得先有人把「点」找出来</b>。传统方法（SIFT/ORB）和 SuperPoint 这类学习式前端，第一步都是「检测」——在图像里挑出角点、斑点这些「值得匹配的点」。问题来了：一面<b>白墙</b>、一块<b>纯色地板</b>、一片<b>重复纹理</b>的窗帘，检测器根本挑不出可靠的点。这时候 SuperGlue 再聪明也没米下锅。</p>
+      <p>LoFTR 的思路很极端：<b>干脆不找点了</b>。它把图像切成 1/8 分辨率的「像素格子」，直接在每个格子上建立匹配，再精修到亚像素。于是哪怕墙上一颗角点都没有，它也能在整面墙上铺满对应关系。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 370" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <defs>
+            <pattern id="loftrdots" width="22" height="22" patternUnits="userSpaceOnUse">
+              <circle cx="11" cy="11" r="3" fill="#2f8a4f"/>
+            </pattern>
+          </defs>
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">纹理缺失的墙：检测器找不到点，LoFTR 却能铺满对应</text>
+          <!-- 左：检测器失败 -->
+          <rect x="60" y="70" width="200" height="180" rx="6" fill="#f0ece4" stroke="#cfc6b6" stroke-width="1.3"/>
+          <text x="160" y="62" text-anchor="middle" font-size="10.5" fill="#8a7365">图 A · 检测器方法</text>
+          <text x="160" y="170" text-anchor="middle" font-size="11" fill="#b3532f">几乎找不到可靠角点</text>
+          <text x="160" y="192" text-anchor="middle" font-size="14" font-weight="700" fill="#b3532f">0 个 → 配不上</text>
+          <circle cx="110" cy="120" r="3" fill="#bbb"/>
+          <circle cx="210" cy="210" r="3" fill="#bbb"/>
+          <!-- 右：LoFTR 稠密 -->
+          <rect x="640" y="70" width="200" height="180" rx="6" fill="url(#loftrdots)" stroke="#a9c9af" stroke-width="1.3"/>
+          <text x="740" y="62" text-anchor="middle" font-size="10.5" fill="#3b6e49">图 B · LoFTR</text>
+          <text x="740" y="262" text-anchor="middle" font-size="10.5" fill="#2f6136">每个 1/8 格子都有匹配</text>
+          <!-- 中箭头 -->
+          <line x1="270" y1="160" x2="628" y2="160" stroke="#6b5a4e" stroke-width="2"/>
+          <polygon points="628,160 618,154 618,166" fill="#6b5a4e"/>
+          <text x="449" y="148" text-anchor="middle" font-size="10.5" fill="#6b5a4e">去掉「检测」一步</text>
+          <text x="449" y="350" text-anchor="middle" font-size="10.5" fill="#8a7365">白墙、地板、重复纹理：正是检测器式方法最怕的场景，却是 LoFTR 的主场</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边一面纹理缺失的墙，基于检测器的方法（如 SuperPoint+SuperGlue）几乎挑不出可靠角点，于是「没米下锅」；右边 LoFTR 不挑点，直接在整张图（1/8 分辨率）上铺满绿点，每个格子都建立对应。<br>
+          <b>怎么看这张图：</b>① 注意左边只有零星两个灰点，说明检测器在白墙上「失业」了。② 右边的绿点是用 <code>pattern</code> 平铺表示的稠密匹配场——实际 LoFTR 输出的是一张「每个粗格子对应到另一图哪个粗格子」的图。<br>
+          <b>要记住的一句话：</b>LoFTR 的核心赌注是——<b>「找点」本身才是匹配在难纹理处的瓶颈，把它去掉反而更稳</b>。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 全局感受野：为什么 Transformer 适合干这件事</h2>
+      <p>不用检测器之后，每个格子要跟另一张图的所有格子比。这就要求一个格子能「看到」全图信息——这叫<b>全局感受野</b>。卷积神经网络靠「一层只看邻居」，要连上相距很远的两个点得叠很多层；Transformer 的注意力一层就能直接连上任意两点。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">卷积要叠很多层，Transformer 一层就连通</text>
+          <!-- 左：卷积堆叠 -->
+          <text x="150" y="58" text-anchor="middle" font-size="11.5" font-weight="700" fill="#8a7365">卷积（局部连接）</text>
+          <rect x="60" y="74" width="180" height="22" rx="4" fill="#f0ece4" stroke="#cfc6b6"/>
+          <rect x="60" y="104" width="180" height="22" rx="4" fill="#f0ece4" stroke="#cfc6b6"/>
+          <rect x="60" y="134" width="180" height="22" rx="4" fill="#f0ece4" stroke="#cfc6b6"/>
+          <rect x="60" y="164" width="180" height="22" rx="4" fill="#f0ece4" stroke="#cfc6b6"/>
+          <text x="150" y="210" text-anchor="middle" font-size="9.5" fill="#8a7365">↑ 要叠很多层，L 和 R 才连得上</text>
+          <circle cx="80" cy="85" r="5" fill="#2f5b82"/><text x="80" y="70" text-anchor="middle" font-size="9" fill="#2f5b82">L</text>
+          <circle cx="220" cy="175" r="5" fill="#c0392b"/><text x="220" y="200" text-anchor="middle" font-size="9" fill="#c0392b">R</text>
+          <path d="M85,85 C120,120 180,140 215,173" fill="none" stroke="#9aa9b5" stroke-width="1.6" stroke-dasharray="4 3"/>
+          <!-- 右：Transformer 一层 -->
+          <text x="560" y="58" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3b6e49">Transformer（全局）</text>
+          <rect x="470" y="74" width="180" height="150" rx="8" fill="#f7fbf6" stroke="#a9c9af" stroke-width="1.3"/>
+          <circle cx="500" cy="110" r="5" fill="#2f5b82"/><text x="500" y="96" text-anchor="middle" font-size="9" fill="#2f5b82">L</text>
+          <circle cx="620" cy="190" r="5" fill="#c0392b"/><text x="620" y="212" text-anchor="middle" font-size="9" fill="#c0392b">R</text>
+          <line x1="500" y1="110" x2="620" y2="190" stroke="#2f8a4f" stroke-width="2.2"/>
+          <text x="560" y="240" text-anchor="middle" font-size="9.5" fill="#3b6e49">↑ 一层注意力直接连上 L 与 R</text>
+          <text x="560" y="262" text-anchor="middle" font-size="9.5" fill="#3b6e49">不受距离限制</text>
+          <!-- 中箭头 -->
+          <line x1="245" y1="120" x2="465" y2="150" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="465,150 455,144 456,156" fill="#6b5a4e"/>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是卷积：因为每层只看局部邻居，要把相距很远的两个点（L、R）的信息连起来，必须一层层往上堆；右边是 Transformer 的注意力：一层就能让 L 直接「看」到 R，画一条绿线。<br>
+          <b>怎么看这张图：</b>① 左边的虚线折线代表信息要「绕很多层」才传过去，又慢又容易在中间丢失。② 右边的直线说明注意力是<b>全局</b>的——这正是 LoFTR 能在「低纹理区」（没有局部线索可借）建立匹配的关键：它靠全局上下文直接判断。<br>
+          <b>要记住的一句话：</b>LoFTR 敢「不用检测器」，底气来自 Transformer 的<b>全局感受野</b>——即使一个点周围什么都没有，它也能从全图找到对应关系。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_LoFTR/16f839bed017cfaa1afe10c051f95d4c91d732f9992b6142f93f44859cdc405b.jpg" alt="Illustration of the receptive field of convolutions and Transformers">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Illustration of the receptive field of (a) Convolutions and (b) Transformers. Assume that the objective is to establish a connection between the L and R elements to extract their joint feature representation. Due to the local connectivity of convolutions, many convolution layers need to be stacked together in order to achieve this connection. The global receptive field of Transformers enables direct modeling.<br>
+          <b>怎么看这张图：</b>原文用 L、R 两个元素之间的连接来对比——卷积要叠很多层，Transformer 一层直达。这和上面那张自绘图是同一个意思，原文给的是更形象的「局部 vs 全局」示意图。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 整体架构与 Linear Transformer</h2>
+      <p>LoFTR 把「检测→描述→匹配」三步并成两步：先抽特征，再用 Transformer 模块把两图的粗特征「搅」到一起，最后做粗匹配 + 精修。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_LoFTR/ba49adb94695273b3cb82efe6f1ac0fa1d62ddc920d19ffdb068588f93ba6db5.jpg" alt="Overview of the LoFTR method">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of the proposed method. LoFTR has four components: 1. A local feature CNN extracts the coarse-level feature maps $\tilde F^A$ and $\tilde F^B$, together with the fine-level feature maps $\hat F^A$ and $\hat F^B$ from the image pair. 2. The coarse feature maps are flattened to 1-D and processed by the LoFTR module (alternating self- and cross-attention) ...<br>
+          <b>怎么看这张图：</b>顺着四步走——CNN 抽出粗（1/8）和细（1/2）两套特征；LoFTR 模块在粗特征上做 self/cross attention；粗匹配层挑出匹配对；最后 coarse-to-fine 在细特征上把它们精修到亚像素。
+        </figcaption>
+      </figure>
+
+      <h3>3.1 关键工程：把注意力从 O(N²) 降到 O(N)</h3>
+      <p>注意力虽好，但标准点积注意力对 N 个点要做 N×N 次，是二次复杂度。LoFTR 用了 <b>Linear Transformer</b>：把指数核换成 $\phi(Q)\phi(K)^\top$（其中 $\phi=\text{elu}+1$），借助矩阵结合律，把复杂度从 $O(N^2)$ 降到 $O(N)$。这是它能在 640×480 上实时跑通的前提。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_LoFTR/6815327910ceff5e0ae52b049e334c1a4d1af7645ce27dfd13d4c603497581fd.jpg" alt="Encoder layer and attention layer in LoFTR">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Encoder layer and attention layer in LoFTR. (a) Transformer encoder layer. (b) Vanilla dot-product attention with $O(N^2)$ complexity. (c) Linear attention layer with O(N) complexity. The scale factor is omitted for simplicity.<br>
+          <b>怎么看这张图：</b>(b) 是朴素注意力，复杂度随点数平方增长；(c) 是 LoFTR 用的 Linear attention，利用 $\phi(Q)\phi(K)^\top$ 的核技巧把复杂度压到线性。这一步是 LoFTR 能处理稠密（点数极多）又不太慢的关键。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{标准注意力：}O(N^2)\quad\xrightarrow{\;\phi=\text{elu}+1\;}\quad \text{Linear 注意力：}O(N)$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>把注意力里那个「每个点和其他所有点都算一次」的矩阵，换成一个能先合并、再乘回来的形式（核技巧），于是计算量从「点数平方」变成「点数线性」。点越多（LoFTR 是稠密的，点极多），这个加速越关键。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 粗匹配 + 精修：coarse-to-fine</h2>
+      <p>LoFTR 不在全分辨率上硬算（那太贵），而是「先粗后精」：先在 1/8 的粗格子层建立匹配，再对每个粗匹配，到 1/2 的细特征图里裁一个 5×5 的小窗，精修出亚像素位置。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">coarse-to-fine：先在大格子粗配，再在小窗里精修</text>
+          <!-- 左：粗网格 -->
+          <text x="180" y="58" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">① 粗层（1/8 分辨率）</text>
+          <rect x="70" y="74" width="220" height="180" rx="4" fill="#f3f6f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <line x1="121" y1="74" x2="121" y2="254" stroke="#cdd9e6" stroke-width="1"/>
+          <line x1="172" y1="74" x2="172" y2="254" stroke="#cdd9e6" stroke-width="1"/>
+          <line x1="223" y1="74" x2="223" y2="254" stroke="#cdd9e6" stroke-width="1"/>
+          <line x1="70" y1="124" x2="290" y2="124" stroke="#cdd9e6" stroke-width="1"/>
+          <line x1="70" y1="174" x2="290" y2="174" stroke="#cdd9e6" stroke-width="1"/>
+          <line x1="70" y1="224" x2="290" y2="224" stroke="#cdd9e6" stroke-width="1"/>
+          <circle cx="172" cy="174" r="6" fill="#2f5b82"/>
+          <text x="172" y="200" text-anchor="middle" font-size="9" fill="#2f5b82">一个粗匹配</text>
+          <!-- 右：细网格放大 -->
+          <text x="650" y="58" text-anchor="middle" font-size="11" font-weight="700" fill="#3b6e49">② 细层（1/2）局部 5×5 窗</text>
+          <rect x="540" y="74" width="220" height="180" rx="4" fill="#f7fbf6" stroke="#a9c9af" stroke-width="1.3"/>
+          <line x1="572" y1="74" x2="572" y2="254" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="604" y1="74" x2="604" y2="254" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="636" y1="74" x2="636" y2="254" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="668" y1="74" x2="668" y2="254" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="700" y1="74" x2="700" y2="254" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="732" y1="74" x2="732" y2="254" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="540" y1="106" x2="760" y2="106" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="540" y1="138" x2="760" y2="138" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="540" y1="170" x2="760" y2="170" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="540" y1="202" x2="760" y2="202" stroke="#cfe0cf" stroke-width="1"/>
+          <line x1="540" y1="234" x2="760" y2="234" stroke="#cfe0cf" stroke-width="1"/>
+          <circle cx="668" cy="170" r="5" fill="#2f8a4f"/>
+          <circle cx="682" cy="184" r="6" fill="#e0a23c"/>
+          <text x="650" y="280" text-anchor="middle" font-size="9.5" fill="#3b6e49">亚像素精修点（黄）落在格子之间</text>
+          <!-- 中箭头 -->
+          <line x1="295" y1="164" x2="535" y2="164" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="535,164 525,158 526,170" fill="#6b5a4e"/>
+          <text x="415" y="150" text-anchor="middle" font-size="10.5" fill="#6b5a4e">放大到 5×5 窗</text>
+          <text x="415" y="350" text-anchor="middle" font-size="10.5" fill="#8a7365">粗匹配给出「哪两个大格子对应」，精修给出「格子内部精确到小数点的位置」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是 1/8 分辨率的粗网格，LoFTR 先在上面找「哪两个大格子对应」（蓝点）；右边是把那个粗匹配放大，到 1/2 分辨率的细网格里裁一个 5×5 的小窗，用一个小 Transformer 算出亚像素精修位置（黄点落在格子之间）。<br>
+          <b>怎么看这张图：</b>① 粗层只解决「大致对应」，因此点数少、便宜。② 精修只在每个粗匹配的局部小窗里做，所以整体仍然便宜。③ 黄点在细格子「之间」，代表亚像素精度——比粗格子本身更准。<br>
+          <b>要记住的一句话：</b>coarse-to-fine 是 LoFTR「既稠密又不太慢」的核心——<b>全局在粗层做，精度在细层补</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 粗匹配层：dual-softmax 与实验</h2>
+      <p>粗匹配层要给每个粗格子对打一个分数 $S(i,j)$，然后挑出匹配。LoFTR 提供了两种可微匹配层：一种和 SuperGlue 一样用最优传输，另一种是他们主推的 <b>dual-softmax（双向 softmax 相乘）</b>——它用「行 softmax × 列 softmax」近似一个可微的互近邻（MNN），<b>从而完全避开了 SuperGlue 的 Sinkhorn 迭代和 dustbin</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">dual-softmax：行 softmax × 列 softmax ≈ 可微的「互相最近」</text>
+          <!-- 三个小矩阵 -->
+          <text x="130" y="62" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">① 分数 S</text>
+          <rect x="70" y="74" width="120" height="70" fill="#f3f6f9" stroke="#9bb0c4" stroke-width="1.2"/>
+          <text x="90" y="102" font-size="11" fill="#24486b">0.9 0.1</text>
+          <text x="90" y="126" font-size="11" fill="#24486b">0.2 0.8</text>
+          <text x="130" y="164" text-anchor="middle" font-size="9.5" fill="#8a7365">原始相似度</text>
+
+          <text x="390" y="62" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">② 行 / 列 softmax</text>
+          <rect x="330" y="74" width="120" height="70" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.2"/>
+          <text x="350" y="102" font-size="11" fill="#a8432c">0.88 0.12</text>
+          <text x="350" y="126" font-size="11" fill="#a8432c">0.05 0.95</text>
+          <text x="390" y="164" text-anchor="middle" font-size="9.5" fill="#8a7365">行归一（每行和=1）</text>
+
+          <text x="660" y="62" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6136">③ 两者相乘 → P</text>
+          <rect x="600" y="74" width="120" height="70" fill="#f7fbf6" stroke="#a9c9af" stroke-width="1.2"/>
+          <text x="620" y="102" font-size="11" fill="#2f6136">0.95 0.02</text>
+          <text x="620" y="126" font-size="11" fill="#2f6136">0.01 0.97</text>
+          <text x="660" y="164" text-anchor="middle" font-size="9.5" fill="#8a7365">接近对角 = 一一对应</text>
+
+          <line x1="190" y1="109" x2="328" y2="109" stroke="#bbb" stroke-width="1.5"/>
+          <polygon points="328,109 320,104 320,114" fill="#bbb"/>
+          <line x1="450" y1="109" x2="598" y2="109" stroke="#bbb" stroke-width="1.5"/>
+          <polygon points="598,109 590,104 590,114" fill="#bbb"/>
+          <text x="460" y="230" text-anchor="middle" font-size="11" fill="#6b5a4e">对比 SuperGlue：不需要 dustbin、不需要 Sinkhorn 迭代</text>
+          <text x="460" y="256" text-anchor="middle" font-size="10.5" fill="#8a7365">双向 softmax 相乘，天然偏好像「互相都是最近邻」的配对</text>
+          <text x="460" y="320" text-anchor="middle" font-size="10.5" fill="#8a7365">再经阈值 0.2 + 互近邻（MNN）筛选，得到最终粗匹配 M_c</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>① 原始相似度矩阵 $S$；② 对它的每一行、每一列分别做 softmax（图中以行归一示意）；③ 把「行 softmax」和「列 softmax」对应位置相乘，得到最终匹配概率 $P$。$P$ 接近对角，就是一一对应。<br>
+          <b>怎么看这张图：</b>① 行 softmax 让「该行最像的」得高分，列 softmax 让「该列最像的」得高分，<b>两者都高的格子</b>才是「互相都是最近邻」的可靠配对。② 这套操作和 SuperGlue 形成对照：<b>没有 dustbin（不需要显式处理遮挡的兜底列），也没有 Sinkhorn 的百次迭代</b>，更快更直接。<br>
+          <b>要记住的一句话：</b>dual-softmax 用「双向 softmax 相乘」这种便宜又完全可微的办法，近似了 SuperGlue 用最优传输才做到的事——<b>这是 LoFTR「该快的地方才快」的前奏</b>（下一节 LightGlue 把这条线推到极致）。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$P_c(i,j)=\text{softmax}\big(S(i,\cdot)\big)_j\;\cdot\;\text{softmax}\big(S(\cdot,j)\big)_i$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>最终的匹配概率 = 「第 i 行里 j 排第几像」乘上「第 j 列里 i 排第几像」。两个方向都靠前，才算互近邻——这就是可微版本的「互相最近邻（MNN）」。</p>
+
+      <h3>5.1 几个关键数字（来自正文 Table 1–3）</h3>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.85rem">
+        <thead>
+          <tr style="background:rgba(61,107,150,.1)">
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">测试</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">LoFTR-DS AUC</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">SP + SuperGlue</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">HPatches homography @10°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">84.6</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">81.7</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">室内 ScanNet AUC@20°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">57.62</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">51.84</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">室外 MegaDepth AUC@20°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">81.18</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">75.96</td></tr>
+          <tr><td style="padding:.5rem .6rem;font-weight:700">速度（640×480, 2080Ti）</td><td style="padding:.5rem .6rem">dual-softmax 116ms</td><td style="padding:.5rem .6rem">SuperGlue ~70ms（但 LoFTR 稠密得多）</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>一个反直觉的观察：</b>在室内，LoFTR-OT（用最优传输）略好于 LoFTR-DS（用 dual-softmax）；但在室外 MegaDepth 上，<b>dual-softmax 反而更好</b>。作者没有给出完美解释，只说这是数据分布的差异。另外 LoFTR-OT 在 MegaDepth 上只跑 <b>3 次</b> Sinkhorn 迭代——和 SuperGlue 的 100 次形成鲜明对比，侧面说明 LoFTR 的粗匹配已经相当准，不需要反复迭代。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 LoFTR 的「不用检测器」，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。LoFTR 直接在 1/8 分辨率的稠密特征上建立匹配，再精修到亚像素，因此即使在纹理缺失的墙、地板、重复纹理处也能铺满对应——这正是检测器式方法最怕的场景。" onclick="lessonKit.answer(this,'q0130a')">它靠稠密特征+全局注意力，在检测器失效处仍能匹配</button>
+          <button data-correct="no" data-explanation="不对。LoFTR 不是「检测更准」，而是根本不做检测这一步；它用 Transformer 的全局感受野让每个粗格子都能和全图比对，而不是依赖局部角点。" onclick="lessonKit.answer(this,'q0130a')">它只是把检测器换成了更准的另一种检测器</button>
+        </div>
+        <div class="quiz-feedback" id="q0130a"></div>
+      </div>
+
+      <h3>5.2 收束到本季暗线</h3>
+      <p>LoFTR 在这一季的「复杂 vs 极简」暗线上站在<b>往上加复杂度</b>那一侧（Transformer + 全局注意力 + coarse-to-fine 是一套相当重的机制），但它也用 dual-softmax 和 Linear Transformer 把「贵」的那部分压下去了。下一节 LightGlue 会沿着「更聪明地省」继续走，而再后面的 SiLK 则直接否定「需要上下文聚合」这个前提。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么在「白墙」这类纹理缺失场景下，SuperPoint+SuperGlue 会失灵，而 LoFTR 不会？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>SuperPoint 是检测器，先挑「显著点」；白墙上挑不出可靠角点，于是 SuperGlue「没米下锅」。LoFTR 不做检测，直接在 1/8 分辨率的稠密特征格子上建立匹配，靠 Transformer 的全局感受野判断对应关系，因此墙上有没有角点都不影响它铺满对应。</p>
+            </div></details>
+          </li>
+          <li>dual-softmax 相比 SuperGlue 的 Sinkhorn + dustbin，省掉了什么？代价可能是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>dual-softmax 用「行 softmax × 列 softmax」一步得到匹配概率，<b>没有 dustbin 兜底列，也没有百次 Sinkhorn 迭代</b>，更快、实现更简单。代价是：它不像 dustbin 那样显式建模「这个点不可匹配 / 被遮挡」，对极端遮挡的处理不如 SuperGlue 优雅——这也是为什么在室内 LoFTR-OT 仍略优于 LoFTR-DS 的原因。</p>
+            </div></details>
+          </li>
+          <li>Linear Transformer 解决了 LoFTR 的什么瓶颈？如果退回标准注意力会怎样？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>LoFTR 是稠密匹配，粗格子点数极多；标准注意力的 $O(N^2)$ 会让计算爆炸。Linear Transformer 用核技巧 $\phi(Q)\phi(K)^\top$（$\phi=\text{elu}+1$）借助矩阵结合律把复杂度降到 $O(N)$，使它在 640×480 上仍能 116ms 跑通。退回标准注意力，点数一多就太慢，实时性无从谈起。</p>
+            </div></details>
+          </li>
+          <li>coarse-to-fine 是怎么兼顾「稠密」和「不太慢」的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>全局匹配只在便宜的 1/8 粗层做（点数少）；确定粗匹配后，只在每个匹配的局部 5×5 细窗里做昂贵的精修。这样「全局对应」和「亚像素精度」分在两步，整体复杂度远低于「全分辨率全局匹配」，从而既稠密又不太慢。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0129-SuperGlue2020-图神经网络与最优传输做匹配.html">← SuperGlue 2020：图神经网络与最优传输</a>
+        <a class="next" href="0131-LightGlue2023-该快的地方才快.html">下一课：LightGlue 2023 →</a>
+      </div>
+      <p class="foot-note">LoFTR 把「找点」这第一步也扔了，用全局注意力在难纹理处反超 SuperGlue。但它仍然是一套重机制——下一节 LightGlue 教它「该快的地方才快」 🧱</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

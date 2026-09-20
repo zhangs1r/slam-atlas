@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>点云回环两篇 2022 · 描述子与位姿回归 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0136</div>
+      <h1>点云回环两篇 2022 · 描述子与位姿回归</h1>
+      <p class="subtitle">LCDNet 一步给出回环 + 6 自由度位姿，OverlapTransformer 把旋转不变「长」进网络 —— 学习式点云描述子正式登场 🤖</p>
+      <div class="hero-meta">
+        <span>🎯 主题：LiDAR 学习式回环（描述子 / 位姿）</span>
+        <span>👥 作者：LCDNet（Y. Li 等）/ OverlapTransformer（J. Ma 等）</span>
+        <span>📅 2022 · <i>LCDNet / OverlapTransformer</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">NetVLAD：描述子聚合</a>
+        <a href="#c">LCDNet：检回环 + 估位姿</a>
+        <a href="#d">OverlapTransformer：旋转不变长进网络</a>
+        <a href="#e">和前面课程怎么接</a>
+        <a href="#f">练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能回答① 用「漏斗倒进桶取平均」解释 NetVLAD 聚合；② 说清 LCDNet 如何「一步」同时检回环与估 6-DOF 位姿（UOT 头）；③ 说清 OverlapTransformer 的「旋转不变是长出来的、不是搜出来的」；④ 分清两篇都只用 NetVLAD 但<b>范式不同</b>（检索+位姿 vs 纯检索）。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本篇是 <b>第一季 0011「检索被吃掉」</b> 在激光侧的正面兑现：上节 Scan Context 还是免训练几何描述子，本节两篇<b>用神经网络学描述子</b>。同时是 <b>0135 Scan Context 系列的直接升级对手</b>——LCDNet 在 KITTI 08 反向回环上 AP 0.94，而 Scan Context 仅 0.65。⚠️ 注意：<b>LCDNet 说 Scan Context「只估 yaw」指的是 2018 原版</b>，不要和 Scan Context++ 的横向不变混为一谈。</p>
+        </div>
+      </div>
+
+      <h2>1. 它到底在做什么：先讲人话</h2>
+      <p>上节 Scan Context 把一帧激光变成「天空线图」，靠几何规则编码、不训练。本节两篇换了个思路：<b>让网络自己从大量点云里学出「这帧长什么样」的一串数（全局描述子）</b>，再用这串数做最近邻检索。区别在于——LCDNet 学完描述子后还顺手学出「两帧之间差多少位姿」，OverlapTransformer 则把「旋转不变」直接做进网络结构里，快到 730 Hz。</p>
+      <p>两者都用到 <b>NetVLAD</b> 这个「描述子聚合器」——它是把一堆零散特征压成一个定长向量的经典模块（视觉 VPR 里很常见，本季 0138 还会再见到它的各种改版）。先把它讲透。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. NetVLAD：把一堆描述子「倒进桶里取平均」</h2>
+      <p>单帧点云 / 图像经骨干网络后，会得到 N 个局部特征（每个点 / 每个 patch 一个向量）。但检索要的是一个<b>定长全局向量</b>。NetVLAD 的做法：预先有 K 个「簇中心」（如 K=64），每个局部特征按相似度「软分配」到各簇，再对每簇求「特征减中心」的加权和，最后把 K 个簇的结果拼起来。直觉上就是——</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">NetVLAD 像「漏斗倒进 K 个桶」：每个桶取加权平均，拼成定长描述子</text>
+          <!-- 散点特征 -->
+          <text x="120" y="62" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">N 个局部特征</text>
+          <circle cx="70" cy="100" r="6" fill="#2f5b82"/><circle cx="100" cy="130" r="6" fill="#2f5b82"/><circle cx="60" cy="160" r="6" fill="#2f5b82"/>
+          <circle cx="140" cy="110" r="6" fill="#3a8a6b"/><circle cx="120" cy="150" r="6" fill="#3a8a6b"/><circle cx="155" cy="165" r="6" fill="#3a8a6b"/>
+          <circle cx="95" cy="195" r="6" fill="#a8653c"/><circle cx="135" cy="200" r="6" fill="#a8653c"/>
+          <!-- 漏斗 -->
+          <polygon points="50,225 170,225 130,285 90,285" fill="#efe7da" stroke="#a98f6f" stroke-width="1.4"/>
+          <text x="110" y="262" text-anchor="middle" font-size="9.5" fill="#7a5b34">软分配</text>
+          <!-- K 个桶 -->
+          <text x="450" y="345" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">K=64 个簇（桶）</text>
+          <rect x="270" y="300" width="50" height="60" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="340" y="300" width="50" height="60" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="410" y="300" width="50" height="60" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="480" y="300" width="50" height="60" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="550" y="300" width="50" height="60" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <text x="295" y="375" text-anchor="middle" font-size="9" fill="#5b4636">簇1</text>
+          <text x="365" y="375" text-anchor="middle" font-size="9" fill="#5b4636">簇2</text>
+          <text x="435" y="375" text-anchor="middle" font-size="9" fill="#5b4636">簇3</text>
+          <text x="505" y="375" text-anchor="middle" font-size="9" fill="#5b4636">…</text>
+          <text x="575" y="375" text-anchor="middle" font-size="9" fill="#5b4636">簇K</text>
+          <!-- 聚合向量 -->
+          <rect x="640" y="300" width="80" height="60" rx="6" fill="#eef4f9" stroke="#2f5b82" stroke-width="1.6"/>
+          <text x="680" y="335" text-anchor="middle" font-size="10" font-weight="700" fill="#2f5b82">定长向量</text>
+          <text x="680" y="354" text-anchor="middle" font-size="9" fill="#5b4636">256 维</text>
+          <!-- 连接漏斗到桶 -->
+          <line x1="110" y1="285" x2="295" y2="300" stroke="#6b5a4e" stroke-width="1.4"/>
+          <line x1="110" y1="285" x2="365" y2="300" stroke="#6b5a4e" stroke-width="1.4"/>
+          <line x1="110" y1="285" x2="435" y2="300" stroke="#6b5a4e" stroke-width="1.4"/>
+          <line x1="110" y1="285" x2="505" y2="300" stroke="#6b5a4e" stroke-width="1.4"/>
+          <line x1="110" y1="285" x2="575" y2="300" stroke="#6b5a4e" stroke-width="1.4"/>
+          <line x1="590" y1="330" x2="638" y2="330" stroke="#6b5a4e" stroke-width="1.6"/>
+          <polygon points="638,330 630,325 631,336" fill="#6b5a4e"/>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面 N 个彩色点是骨干网络吐出的局部特征；中间漏斗把它们按相似度「软分配」到 K=64 个簇（桶）；每个桶对分到的特征求加权平均（NetVLAD 里是「特征减簇中心」的加权和）；最后把 64 个桶的结果拼成一个定长向量（LCDNet / OT 都是 256 维）。<br>
+          <b>怎么看这张图：</b>① 软分配意味着一个特征可以同时「部分属于」多个簇，比硬分配更平滑、更鲁棒。② 无论输入多少点（N 可变），输出永远是 K 个桶拼成的定长向量——这正是检索能用「最近邻」比的原因。③ NetVLAD 是连接「零散特征」与「可检索向量」的桥梁，0138 的 SALAD 会把它重写成最优传输。<br>
+          <b>要记住的一句话：</b>NetVLAD = 把一堆局部特征聚成 K 个桶、拼成定长向量；输出维度固定，和输入点数无关。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. LCDNet：一步检回环 + 估 6 自由度位姿</h2>
+      <p>LCDNet 的核心主张是：<b>此前多数深度学习方法在「反向回环」上明显弱于手工法</b>（因为全局描述子常需 ad-hoc 比较函数、对 yaw 不鲁棒）。它要一口气解决两件事——检回环、并直接估两帧间的 6-DOF 相对位姿。结构是一个共享编码器（改进 PV-RCNN）后接两个头：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>共享编码器</h4>
+          <p>3D 体素 CNN（PV-RCNN）+ VSA，提 N=4096 个关键点特征（D=640）。同一份特征喂给两个头，省算力。</p>
+        </div>
+        <div class="mini-card">
+          <h4>place recognition head</h4>
+          <p>NetVLAD（K=64）→ MLP 压到 <b>256 维</b>全局描述子 → context gating 自注意力重加权。检索用 L2 距离，取最近邻（排除近 M 帧）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>relative pose head（UOT）</h4>
+          <p>用<b>非平衡最优传输（UOT，Sinkhorn 近似）</b>算关键点软对应，再加权 SVD 得刚体变换。可拒野值、抗遮挡。RE 仅 3.13°，而朴素 MLP 头高达 21°+。</p>
+        </div>
+        <div class="mini-card">
+          <h4>训练</h4>
+          <p>总损失 $L_{total}=L_{trp}+L_{pose}+\beta L_{OT}$（β=0.05），triplet 边界 0.5。数据增强含随机 yaw ±180°、x/y 平移 ±1.5 m。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">UOT 位姿头像「螺丝配螺丝孔」：一对一个软权重，配不上的直接拒掉</text>
+          <!-- 左：点云 A -->
+          <rect x="40" y="58" width="260" height="210" fill="#f6f2ea" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="50" y="100" width="100" height="158" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="62" y="118" width="30" height="28" fill="#f2efe8"/>
+          <rect x="104" y="118" width="30" height="28" fill="#f2efe8"/>
+          <rect x="62" y="168" width="30" height="28" fill="#f2efe8"/>
+          <rect x="104" y="168" width="30" height="28" fill="#f2efe8"/>
+          <line x1="210" y1="100" x2="210" y2="258" stroke="#8a7f70" stroke-width="3"/>
+          <circle cx="265" cy="130" r="22" fill="#6fae7f"/>
+          <rect x="60" y="232" width="64" height="22" rx="3" fill="#9fb0c0"/>
+          <text x="170" y="48" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3d2a22">点云 A（查询帧）</text>
+          <text x="120" y="126" text-anchor="middle" font-size="9" fill="#4a342c">建筑角点</text>
+          <text x="210" y="156" text-anchor="middle" font-size="9" fill="#4a342c">灯杆</text>
+          <text x="265" y="114" text-anchor="middle" font-size="9" fill="#4a342c">行道树</text>
+          <text x="92" y="226" text-anchor="middle" font-size="9" fill="#4a342c">小汽车</text>
+          <circle cx="120" cy="140" r="6" fill="#b5482f"/><line x1="116" y1="140" x2="124" y2="140" stroke="#fff7ee" stroke-width="1.6"/>
+          <circle cx="210" cy="170" r="6" fill="#b5482f"/><line x1="206" y1="170" x2="214" y2="170" stroke="#fff7ee" stroke-width="1.6"/>
+          <circle cx="265" cy="130" r="6" fill="#b5482f"/><line x1="261" y1="130" x2="269" y2="130" stroke="#fff7ee" stroke-width="1.6"/>
+          <circle cx="92" cy="240" r="6" fill="#b5482f"/><line x1="88" y1="240" x2="96" y2="240" stroke="#fff7ee" stroke-width="1.6"/>
+          <!-- 右：点云 B -->
+          <rect x="580" y="58" width="260" height="210" fill="#f6f2ea" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="590" y="100" width="100" height="158" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="602" y="118" width="30" height="28" fill="#f2efe8"/>
+          <rect x="644" y="118" width="30" height="28" fill="#f2efe8"/>
+          <rect x="602" y="168" width="30" height="28" fill="#f2efe8"/>
+          <rect x="644" y="168" width="30" height="28" fill="#f2efe8"/>
+          <line x1="750" y1="100" x2="750" y2="258" stroke="#8a7f70" stroke-width="3"/>
+          <circle cx="805" cy="130" r="22" fill="#6fae7f"/>
+          <rect x="600" y="232" width="110" height="24" rx="3" fill="#7f97ab"/>
+          <text x="710" y="48" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3d2a22">点云 B（库里帧）</text>
+          <circle cx="630" cy="140" r="6" fill="none" stroke="#2f5b82" stroke-width="2.2"/>
+          <circle cx="750" cy="170" r="6" fill="none" stroke="#2f5b82" stroke-width="2.2"/>
+          <circle cx="805" cy="130" r="6" fill="none" stroke="#2f5b82" stroke-width="2.2"/>
+          <!-- 软对应连线 -->
+          <line x1="120" y1="140" x2="630" y2="140" stroke="#2f6136" stroke-width="2.8"/>
+          <line x1="210" y1="170" x2="750" y2="170" stroke="#c85f34" stroke-width="2"/>
+          <line x1="265" y1="130" x2="805" y2="130" stroke="#a8432c" stroke-width="1.3" stroke-dasharray="6 5"/>
+          <text x="380" y="132" text-anchor="middle" font-size="9" fill="#2f6136">w = 0.9</text>
+          <text x="560" y="162" text-anchor="middle" font-size="9" fill="#c85f34">w = 0.6</text>
+          <text x="420" y="120" text-anchor="middle" font-size="9" fill="#a8432c">w = 0.2</text>
+          <!-- 垃圾桶 -->
+          <line x1="92" y1="240" x2="156" y2="288" stroke="#bbb" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <rect x="150" y="286" width="40" height="40" rx="4" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <text x="145" y="300" text-anchor="end" font-size="9" fill="#4a342c">垃圾桶</text>
+          <text x="470" y="320" text-anchor="middle" font-size="9.5" fill="#5b4636">红点 = A 的关键点（螺丝），蓝圈 = B 的关键点（螺丝孔）；线越粗 = 这对的软权重越高</text>
+          <text x="470" y="344" text-anchor="middle" font-size="9.5" fill="#5b4636">A 里那辆小汽车在 B 里已经开走 → 它找不到孔，被拒配（软权重归零）</text>
+          <text x="470" y="368" text-anchor="middle" font-size="9.5" fill="#5b4636">拿到软对应后加权 SVD → 相对位姿 R, t：RE 只有 3.13°，而朴素 MLP 头要 21° 以上</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是查询帧点云 A 里的一条街（楼、灯杆、行道树、一辆路边小汽车），红点标出它选出的关键点——把红点想成「螺丝」。右边是库里帧点云 B 里同一条街，蓝圈是它的关键点——「螺丝孔」；注意 B 里那辆小汽车已经开走、换成了一辆公交车。<br>
+          <b>怎么看这张图：</b>① 三条连线是「软对应」：每一对都带一个权重（线越粗权重越高），不是非黑即白地硬配。② 建筑、灯杆、行道树这三对都找到了孔，权重从 0.9 到 0.2 递减——权重低的那对会被后面对齐算法自动压低。③ A 里小汽车那个红点在 B 里没有孔，于是被拒配、丢进垃圾桶——这就是 UOT 的 dustbin 干的事；它让「遮挡」和「开走的车」不再污染位姿估计。<br>
+          <b>要记住的一句话：</b>UOT 头不是硬配对，而是「给每对打分 + 允许拒配」，所以 RE 只有 3.13°，而直接用 MLP 回归要 21° 以上。
+        </figcaption>
+      </figure>
+
+      <p>关键数字：KITTI 08（纯反向）AP <b>0.94</b>，而 Scan Context 仅 0.65、M2DP 0.05（彻底失败）——这是它最硬的广告。描述子提取 94.6 ms（GPU）、地图查询 5 ms（FAISS），比 Scan Context 无 ring key 的 2000 ms 查询快约 400×。它还被集成进 LIO-SAM 替换其欧氏距离回环，跨城市/传感器（Freiburg 自采 Velodyne 64）泛化良好。</p>
+      <div class="callout">
+        <p><b>⚠️ 归类提醒（本季硬要求）：</b>LCDNet 正文称 Scan Context「只估 yaw（1-DOF）」，<b>这指 2018 原版</b>。Scan Context++（2022）已加 CC 支持横向，不能把 LCDNet 的这句评价安到 ++ 头上。本课与 0135 同属「激光回环」，但 0135 是免训练几何描述子，0136 是学习式——两者是「升级对手」关系。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LCDNet/5b5375961bbdc87e4441a6a7def14674836ac0c15be41130f62353ee586a0840.jpg" alt="Overview of LCDNet">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of our proposed LCDNet which is composed of a shared feature extractor (green), a place recognition head (blue) that generates global descriptors, and a relative pose head (orange) that estimates the transformation between two point clouds. We use three loss functions to train LCDNet (triplet loss, aux loss, and pose loss) which are depicted in purple.<br>
+          <b>怎么看这张图：</b>绿色是共享编码器，蓝色头出全局描述子（检索），橙色头出相对位姿（UOT）。这就是「检索 + 位姿」双头共享 backbone 的结构全景——和 0135 那种「只出相似度」的纯几何描述子形成对比。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LCDNet/61cf004d21e0c16e958584597443cd610277bea048d8a5be17c2470fe6270e44.jpg" alt="Qualitative ICP alignment with LCDNet initial guess">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Qualitative comparison of ICP alignment with and without using the LCDNet prediction as the initial guess. ICP alone (c) is not able to register the (a) source and the (b) target when the initial rotation misalignment is high. Whereas, our LCDNet effectively aligns them (d). The final ICP alignment with the prediction of our LCDNet as the initial guess further improve the results (e).<br>
+          <b>怎么看这张图：</b>左 (a)(b) 是源和目标（初始旋转偏差很大），(c) 纯 ICP 注册失败，(d) 用 LCDNet 预测的位姿当初值就对齐了，(e) 再跑 ICP 更精。这直观展示了 UOT 位姿头「先给个好初值、再精修」的价值——尤其在反向回环这种大转角场景。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LCDNet/2932e9e09bfd0060fbeab66a63a02a5d659186e2bbcd1d1b67a497c461296129.jpg" alt="LIO-SAM with LCDNet vs original loop closure">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>Performance of LIO-SAM with the original loop closure detection method (left) compared to our approach (right) on sequence 02 of the KITTI dataset.<br>
+          <b>怎么看这张图：</b>左边是 LIO-SAM 原装回环（漂移没被有效纠正），右边是换上 LCDNet 回环后的结果——轨迹明显更闭合、更准。这是「学习式回环集成进真实 SLAM」的落地证据，也呼应 0014 铁律：好的回环能修正长期漂移。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. OverlapTransformer：旋转不变「长」进网络</h2>
+      <p>OverlapTransformer 走了另一条更轻的路：<b>只用 range image 的深度一通道</b>，靠结构保证旋转不变，而不是像 Scan Context 那样「暴力列移去搜」。它的洞察很巧：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>输入：range image</h4>
+          <p>单帧激光投成 1×64×900 的「距离图」（只深度一通道）。yaw 旋转 = 这张图的水平（列）循环移位。</p>
+        </div>
+        <div class="mini-card">
+          <h4>编码器只压竖维</h4>
+          <p>Range Image Encoder 压缩<b>垂直</b>维、不压水平维、无 padding——于是特征对「列移」等变（yaw 等变）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Transformer + NetVLAD</h4>
+          <p>1 个 Transformer block 增强判别力；NetVLAD 对「列集合」置换不变 → 聚合后描述子对列移<b>不变</b>。旋转不变由结构保证。</p>
+        </div>
+        <div class="mini-card">
+          <h4>速度</h4>
+          <p>描述子 1.37 ms + 检索 0.44 ms（i7+RTX3070），约 <b>730 Hz</b>。是学习法里点云描述子提取最快的。</p>
+        </div>
+      </div>
+      <p>这是和 Scan Context 最根本的区别：Scan Context 是「<b>brute-force column shift</b>（暴力列移搜索）」，OverlapTransformer 是「<b>rotation-invariant by design</b>（旋转不变长在设计里）」。它只估 yaw、<b>不对横向平移不变</b>（range image 投影对平移会产生尺度/遮挡畸变，作者明确点出）；且只给描述子、不输出相对位姿。KITTI seq00 AUC 0.907、Recall@1 0.906，零样本泛化到 Ford Campus（AUC 0.923）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">车原地转 90°：range image 只是「列循环移位」——这就是 yaw 不变免费送的来源</text>
+          <!-- ① 真实场景 -->
+          <rect x="30" y="60" width="360" height="240" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.2"/>
+          <rect x="150" y="60" width="120" height="240" fill="#d8d4cd"/>
+          <rect x="30" y="150" width="360" height="60" fill="#d8d4cd"/>
+          <text x="210" y="52" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3d2a22">① 真实场景：车在路口，车头朝北</text>
+          <rect x="194" y="150" width="32" height="60" rx="4" fill="#3d2a22"/>
+          <polygon points="210,142 202,156 218,156" fill="#3d2a22"/>
+          <rect x="96" y="178" width="16" height="22" fill="#c85f34"/>
+          <rect x="306" y="176" width="30" height="10" fill="#e2924a"/>
+          <circle cx="210" cy="276" r="14" fill="#6fae7f"/>
+          <rect x="204" y="92" width="12" height="30" fill="#2f5b82"/>
+          <text x="210" y="88" text-anchor="middle" font-size="9" fill="#4a342c">路牌</text>
+          <text x="104" y="172" text-anchor="middle" font-size="9" fill="#4a342c">消防栓</text>
+          <text x="321" y="170" text-anchor="middle" font-size="9" fill="#4a342c">公交站</text>
+          <text x="210" y="314" text-anchor="middle" font-size="9" fill="#4a342c">行道树</text>
+          <text x="210" y="234" text-anchor="middle" font-size="9" fill="#4a342c">自车</text>
+          <!-- ② range image 车头朝北 -->
+          <text x="650" y="80" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3d2a22">② 车头朝北时的 range image（列 = 方位角）</text>
+          <rect x="470" y="90" width="360" height="56" fill="#f2efe8" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="470" y="90" width="8" height="56" fill="#2f5b82"/>
+          <rect x="560" y="90" width="8" height="56" fill="#e2924a"/>
+          <rect x="650" y="90" width="8" height="56" fill="#6fae7f"/>
+          <rect x="740" y="90" width="8" height="56" fill="#c85f34"/>
+          <text x="474" y="164" text-anchor="middle" font-size="9" fill="#2f5b82">北</text>
+          <text x="564" y="164" text-anchor="middle" font-size="9" fill="#e2924a">东</text>
+          <text x="654" y="164" text-anchor="middle" font-size="9" fill="#6fae7f">南</text>
+          <text x="744" y="164" text-anchor="middle" font-size="9" fill="#c85f34">西</text>
+          <text x="650" y="184" text-anchor="middle" font-size="9" fill="#8a7365">绕一圈 360° = 900 列</text>
+          <!-- ③ 转 90° -->
+          <text x="650" y="218" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3d2a22">③ 车原地左转 90°（车头朝西）后的同一帧</text>
+          <rect x="470" y="228" width="360" height="56" fill="#f2efe8" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="524" y="228" width="8" height="56" fill="#c85f34"/>
+          <rect x="614" y="228" width="8" height="56" fill="#2f5b82"/>
+          <rect x="704" y="228" width="8" height="56" fill="#e2924a"/>
+          <rect x="794" y="228" width="8" height="56" fill="#6fae7f"/>
+          <text x="528" y="302" text-anchor="middle" font-size="9" fill="#c85f34">西</text>
+          <text x="618" y="302" text-anchor="middle" font-size="9" fill="#2f5b82">北</text>
+          <text x="708" y="302" text-anchor="middle" font-size="9" fill="#e2924a">东</text>
+          <text x="798" y="302" text-anchor="middle" font-size="9" fill="#6fae7f">南</text>
+          <text x="650" y="322" text-anchor="middle" font-size="9" fill="#8a7365">四条色条整体左移 90 列（移出去的首尾相接绕回来）</text>
+          <text x="470" y="356" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">要记住：yaw 转多少度 = range image 的列循环移多少列；NetVLAD 对列集合置换不变 → 描述子不动</text>
+          <text x="470" y="380" text-anchor="middle" font-size="9.5" fill="#5b4636">对比 0135 Scan Context：那边要显式遍历所有列移取最小；这里的不变性是编码器只压竖维「送」的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>① 是一辆车停在路口的俯视图，车头朝北，四周有路牌（北）、公交站（东）、行道树（南）、消防栓（西）。② 是这一帧的 range image：横轴是方位角（绕一圈 900 列），四个地标各占一条竖条。③ 是车原地左转 90° 后的同一帧——四个地标的位置没变，但每条竖条都整体左移了 90 列，移出左边的从右边绕回来。<br>
+          <b>怎么看这张图：</b>① 先盯四条竖条的颜色顺序：② 里是「北—东—南—西」，③ 里仍然是「西—北—东—南」，<b>顺序完全一样</b>，只是整体错开了 90 列。② 这就是「yaw 旋转 = 列的循环移位」：车的朝向只决定从哪一列开始读，不改变列与列之间的相对次序。③ 所以只要编码器不把「水平方向」压掉、NetVLAD 又对「列集合」的先后次序不敏感，聚合出来的描述子就自然对 yaw 不变——不需要像 Scan Context 那样把所有列移搜一遍。<br>
+          <b>要记住的一句话：</b>OverlapTransformer 的旋转不变是「结构长出来的」，代价是它只对 yaw 不变、对横向平移不变不了，也不输出位姿。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_OverlapTransformer/faf673b9dec35808f858a73ec4d6f16f872365672cd0cb91916dc9f9c360bef0.jpg" alt="Pipeline overview of OverlapTransformer">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Pipeline overview of our proposed approach. We take a 64-beam LiDAR as an example to introduce the dimensions of feature maps. The Range Image Encoder (RIE) compresses range images from the Lidar sensor to yaw-angle-equivariant feature maps. The Transformer Module (TM) concatenates feature maps from Range Image Encoder and discriminativeness-enhanced feature maps from Transformer Attention. Global Descriptor Generator (GDG) generates yaw-angle-invariant descriptors exploiting the combination of MLP and NetVLAD.<br>
+          <b>怎么看这张图：</b>从 range image → RIE（压竖维、保水平维 → yaw 等变）→ Transformer（增强判别力，仍等变）→ NetVLAD（对列集合置换不变 → yaw 不变）→ 256 维描述子。整条链「等变逐层传导、最后聚合变不变」，这就是「旋转不变长进网络」的工程真身。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_OverlapTransformer/85bfc96e206fd5defcb417d6017c430de85a489e6cbaacfb8b807bf469cc4e2e.jpg" alt="Yaw-angle-invariant descriptors toy example">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>An illustration of our yaw-angle-invariant descriptors exploiting a toy example. As can be seen that the range image presentation, our range image encoder, and attentional feature transformer are yaw-angle-equivariant, and our global descriptor generator generates yaw-angle-invariant global features.<br>
+          <b>怎么看这张图：</b>用玩具例子展示「range image 表示 → 编码器 → Transformer → NetVLAD」每一环对 yaw 列移都是等变的，最后 NetVLAD 聚合把它变成不变。对比 Scan Context 需要显式去搜最佳列移，这里「不变性是免费的、结构送的」。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 LCDNet 与 OverlapTransformer 的范式区别，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。LCDNet 是「检索+位姿」：共享编码器后接全局描述子头（检索）和 UOT 位姿头（直接估 6-DOF），并集成进 LIO-SAM。OverlapTransformer 是「纯检索」：只输出 yaw 不变的 256 维描述子，不估相对位姿，且只对 yaw 不变、不对横向不变。" onclick="lessonKit.answer(this,'q0136a')">LCDNet 检索+位姿，OverlapTransformer 只检索</button>
+          <button data-correct="no" data-explanation="不对。OverlapTransformer 明确「only yaw-angle-invariant」、不输出相对位姿，是纯检索；LCDNet 才有 UOT 位姿头做 6-DOF 回归。说两者都「只检回环不估位姿」把 LCDNet 的位姿头抹掉了。" onclick="lessonKit.answer(this,'q0136a')">两篇都只检回环、都不估相对位姿</button>
+        </div>
+        <div class="quiz-feedback" id="q0136a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 和前面课程怎么接</h2>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>0011「检索被吃掉」的激光兑现</h4>
+          <p>上节 Scan Context 还是免训练；本节两篇用神经网络学描述子，且在反向回环上反超 SC。这是 0011 那句话在激光侧「开始被吃掉」的节点——但仍保留「几何描述子」的骨架（NetVLAD 聚合）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>是 0135 Scan Context 系列的升级对手</h4>
+          <p>LCDNet KITTI08 反向 AP 0.94 vs SC 0.65；OT 比 SC 查询快数百倍。但 SC++ 用免训练换「不依赖 GPU、CPU 100 Hz」，各有主场。学习式并非全面碾压。</p>
+        </div>
+        <div class="mini-card">
+          <h4>为 0140 埋伏笔</h4>
+          <p>LCDNet 的「检索 + 位姿」双头，正是 0140 LCR-Net「回环 + 重定位一体」的直接前身。本篇先立住「学习式点云回环能顺带估位姿」，0140 再推到完整 SLAM 系统。</p>
+        </div>
+      </div>
+      <p>下一节（0137）我们把镜头转向另一种「投影图」路线：BEVPlace（鸟瞰图 + 群卷积）和 SeqOT（序列 LiDAR + Transformer）。注意 BEVPlace <b>只回归 2-DOF 位置（x, y）、不输出 yaw</b>——旋转不变指描述子对旋转不敏感，不等于它能给出朝向。</p>
+
+      <section class="exercise-box" id="f">
+        <ol>
+          <li>用「漏斗倒进桶」解释 NetVLAD，并说明为什么输出维度与输入点数无关。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>NetVLAD 先有 K 个簇中心；每个局部特征按相似度「软分配」到 K 个簇；对每个簇求「特征减中心」的加权和；最后把 K 个簇的结果拼成一个定长向量（LCDNet/OT 都是 256 维）。无论输入有 N=4096 还是别的点数，输出永远是 K 个桶拼成的固定长度——所以检索能用最近邻直接比。这就是「漏斗倒进 K 个桶、各桶取加权平均、拼成定长向量」。</p>
+            </div></details>
+          </li>
+          <li>LCDNet 说 Scan Context「只估 yaw」，为什么必须指明这是 2018 原版？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>Scan Context++（2022）已加 Cart Context（CC）支持横向平移，是双描述子。LCDNet 论文写作/发表时对比的是 2018 原版（只有列移对齐、对横向不鲁棒），所以「只估 yaw」这句话只适用于 2018。把这句评价安到 ++ 头上会犯本季明确要纠正的归类错误。0135 已强调：横向不变是 ++ 才系统解决的。</p>
+            </div></details>
+          </li>
+          <li>OverlapTransformer 的「旋转不变 by design」和 Scan Context 的「brute-force column shift」区别在哪？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>Scan Context 是把候选矩阵循环移位 n 格去暴力搜索最佳对齐（显式搜索）。OverlapTransformer 让编码器只压竖维、不压水平维，使特征对「列移」等变；再靠 NetVLAD 对列集合置换不变，聚合后描述子天然对列移不变——不变性由网络结构保证，无需搜索。代价是它只对 yaw 不变、不对横向不变，且不出位姿。</p>
+            </div></details>
+          </li>
+          <li>LCDNet 为什么用 UOT（最优传输）头而不是 MLP 直接回归位姿？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>消融显示 MLP 头相对旋转误差（RE）高达 21°+，且需要旋转相关特征、拖累描述子；UOT 头用 Sinkhorn 求关键点软对应再加权 SVD，RE 仅 3.13°，还迫使 backbone 学更判别、更不变的特征，并能拒野值/抗遮挡。所以「可微最优传输 + SVD」比「直接回归一个 6 维向量」稳得多。</p>
+            </div></details>
+          </li>
+          <li>两篇都只用 NetVLAD，为何一个 94.6 ms、一个 1.37 ms？速度差从哪来？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>LCDNet 用重 3D 体素 CNN（PV-RCNN）提 4096 个关键点（GPU 94.6 ms），还要跑 UOT 位姿头；OverlapTransformer 只用 1 通道 range image + 轻量「只压竖维」编码器 + 1 个 Transformer block，重在「结构换算力」。所以 OT 快到 730 Hz，代价是不出位姿、只对 yaw 不变。速度差异本质是「任务复杂度（要不要估位姿）+ 骨干轻重」共同决定。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0135-ScanContext与加加-免训练的几何描述子.html">← Scan Context 与 ++：免训练的几何描述子</a>
+        <a class="next" href="0137-BEVPlace与SeqOT-鸟瞰图与序列时空.html">下一课：BEVPlace 与 SeqOT →</a>
+      </div>
+      <p class="foot-note">学习式点云描述子正式登场：LCDNet 检索+位姿，OT 把旋转不变长进网络。记住 LCDNet 说的「只估 yaw」指 2018 原版 🤖</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

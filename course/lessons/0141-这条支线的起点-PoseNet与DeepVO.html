@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>这条支线的起点 · PoseNet 与 DeepVO（2015 / 2017）— SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0141</div>
+      <h1>这条支线的起点：PoseNet 与 DeepVO（2015 / 2017）</h1>
+      <p class="subtitle">先纠正一个流行误解：PoseNet 根本不是视觉里程计，它是单张图像的全局重定位；真正开启端到端 VO 的是 DeepVO 🚗</p>
+      <div class="hero-meta">
+        <span>🎯 主题：CNN 位姿回归的先驱 + 第一个端到端单目 VO</span>
+        <span>👥 作者：A. Kendall / R. Cipolla（PoseNet）；S. Wang 等（DeepVO）</span>
+        <span>📅 2015 / 2017 · <i>PoseNet: A CNN for Real-Time 6-DOF Camera Relocalization</i> · <i>DeepVO: Towards End-to-End Visual Odometry with Deep RNN</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">它接在谁后面</a>
+        <a href="#c">PoseNet 的真实身份</a>
+        <a href="#d">PoseNet 怎么训</a>
+        <a href="#e">DeepVO：端到端 VO 起点</a>
+        <a href="#f">DeepVO 的训练信号</a>
+        <a href="#g">两张自绘图</a>
+        <a href="#h">这条线的转折</a>
+        <a href="#i">练习</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>分清<b>相机重定位</b>（relocalization，给一张图猜自己在全图的绝对位姿）与<b>视觉里程计</b>（VO，看连续帧估相对运动）这两个本质不同的任务；讲清为什么 PoseNet 不是 VO、而 DeepVO 才是「端到端单目 VO」的开山之作；并记住这一支线后面向「训练信号从哪来」转向的伏笔。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0011</b> 那句「深度学习先吃掉匹配与检索」在本块变成「位姿战场」——但位姿只被吃掉很窄的一段（本块 0141–0146 的结论）。<b>0054–0056</b>（CNN-SLAM / CodeSLAM / DeepFactors）是「用深度学习当深度/地图」的上一代，都没成主流；本块看 DeepVO 这条线换了什么思路。<b>0004</b> 讲的手工特征匹配（SIFT 那套），正是 PoseNet 想绕开的东西。<b>0024/0025</b> 的 VO 教程告诉你经典 VO 流水线长什么样，等会儿拿来和 DeepVO 对照。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>想象你在一个大商场里走路，想知道「我现在在地图上的哪个点、面朝哪」。这件事有两种问法：</p>
+      <ul>
+        <li><b>重定位（Relocalization）</b>：你掏出一张<b>单独的照片</b>给系统看，系统直接告诉你「你在中庭西北角、面朝东」。系统得先对整个商场建好模、再认这张图——这是「认地方」。</li>
+        <li><b>视觉里程计（Visual Odometry, VO）</b>：你不看全局地图，只盯着<b>眼前连续两帧</b>画面，算出「从上一帧到这一帧，我往左挪了半米、转了 3 度」。它不在乎绝对位置，只管「走了多少」——这是「记步数」。</li>
+      </ul>
+      <p>一句话区别：<b>重定位是「我在哪」，答案绝对；VO 是「我走了多少」，答案相对</b>。本课的硬知识点就是——清单里被塞进「端到端 VO」块的 <b>PoseNet</b>，其实干的是前者（重定位），不是后者；真正第一个做端到端 VO 的是 <b>DeepVO</b>。术语先露脸先解释：<b>6-DOF</b> = 6 自由度（3 个平移 x/y/z + 3 个旋转）；<b>位姿</b> = 位置 + 朝向的合称；<b>端到端</b> = 从原始图像直接出结果，中间不设人工模块。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面</h2>
+      <p>把第七季这条「位姿支线」的来路拉直：第一季 <b>0004</b> 讲的是 SIFT 式手工特征 + 数据关联；第二季 <b>0024/0025</b> 把 VO 拆成「提特征→匹配→运动估计→BA（光束法平差）」四步；第三季 <b>0054–0056</b> 试着用 CNN 去替换「深度估计」那一段（CNN-SLAM / CodeSLAM / DeepFactors），但始终还挂着经典后端，没成主流。</p>
+      <p>PoseNet（2015）和 DeepVO（2017）更进一步：干脆把<b>整条流水线</b>压进一个网络。<b>但 PoseNet 压的是「单图→全局位姿」，DeepVO 压的是「连续帧→相对位姿」</b>。下表先把俩任务放一起比，下一节再展开 PoseNet 为什么被误归到 VO。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>PoseNet（2015）</h4>
+          <p>输入：<b>单张</b> RGB 图像。<br>输出：<b>绝对</b> 6-DOF 位姿（全图坐标）。<br>本质：相机重定位 / 位姿回归。<br>训练：需要该场景的 SfM 真值标签。</p>
+        </div>
+        <div class="mini-card">
+          <h4>DeepVO（2017）</h4>
+          <p>输入：<b>连续两帧</b> RGB 堆叠。<br>输出：<b>相对</b> 6-DOF 位姿（帧间运动）。<br>本质：端到端单目 VO。<br>训练：需要真值位姿序列。</p>
+        </div>
+        <div class="mini-card">
+          <h4>共同点</h4>
+          <p>都用 CNN 直接回归位姿；都号称「免人工特征/免图优化」；都属于「用深度学习替换几何流水线」的第一次大尝试。</p>
+        </div>
+        <div class="mini-card">
+          <h4>关键分叉</h4>
+          <p>单图 vs 序列 → 绝对 vs 相对；这决定了它们一个是「重定位」、一个是「里程计」。后面 0142 起的 VO 支线全部继承自 DeepVO 而非 PoseNet。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. PoseNet 的真实身份：它不是 VO，是重定位</h2>
+      <p>PoseNet 全称「A Convolutional Network for Real-Time 6-DOF Camera Relocalization」。它的输入是<b>单张 224×224 RGB 图</b>，输出是 7 维向量 <b>p = [x(3), q(4)]</b>（位置 3 维 + 四元数 4 维），也就是「这张图对应的相机在全场景里的绝对位姿」。<b>它要先把整个场景用 SfM 建好模、再认这张图——这和 VO「不看全局、只记步数」是两码事。</b></p>
+      <p>原论文也自称是「the first application of deep CNNs to end-to-end 6-DOF camera pose <b>localization</b>」——用的词是 localization（定位），不是 odometry（里程计）。清单把它列在「端到端 VO」块里，属于<b>归类粗糙</b>。本课显式纠正：<b>PoseNet 是 CNN 位姿回归 / 重定位的开山之作，启发了后续 VO；但真正「end-to-end 单目 VO」是 2017 的 DeepVO。</b></p>
+      <p>PoseNet 的局限（写进它的自述）：① 需要<b>该场景</b>的训练图像（per-scene 重定位，不是任意场景的 VO）；② 单帧、无时序，因此没有「运动连续性」可借力；③ 网络能定位的物理面积有上限、易过拟合到特定场景布局。图 1 是它的典型结果：输入一张图（上），网络给出重建里的预测位姿（中），再叠回原图红框（下）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2015_PoseNet/e7b1d2f3ca839655abf27246b07bf61a7d5f4b3555e1ee2e917ce10944b61e26.jpg" alt="PoseNet 重定位结果">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>PoseNet: Convolutional neural network monocular camera relocalization. Relocalization results for an input image (top), the predicted camera pose of a visual reconstruction (middle), shown again overlaid in red on the original image (bottom). Our system relocalizes to within approximately 2m and 3° for large outdoor scenes spanning 50,000m².</p>
+          <p><b>怎么看这张图：</b>注意它给的是「单张图 → 绝对位姿」：上面是原图，中间是网络在重建模型里给出的相机位置（一个点），下面把那个预测点用红框叠回原图。它回答的是「我在场景的哪个位置」，不是「我相对上一帧走了多少」。</p>
+          <p><b>要记住的一句话：</b>PoseNet 一次只吃一张图、吐一个全局位姿——这是重定位，不是里程计。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2015_PoseNet/3299a6d6ab7c4e118a201b72202b0e304d36ef6d69b3c504dbde028e6e821f62.jpg" alt="PoseNet 定位精度累积直方图">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b>Localization performance. These figures show our localization accuracy for both position and orientation as a cumulative histogram of errors for the entire testing set. The regression convnet outperforms the nearest neighbour feature matching which demonstrates we regress finer resolution results than given by training. Comparing to the RGB-D SCoRe Forest approach shows that our method is competitive, but outperformed by a more expensive depth approach. Our method does perform better on the hardest few frames, above the 95th percentile, with our worst error lower than the worst error from the SCoRe approach.</p>
+          <p><b>怎么看这张图：</b>横轴是误差、纵轴是「误差小于该值的帧占比」。PoseNet（卷积回归）的曲线比最近邻特征匹配（NN）更靠左上，说明大部分帧误差更小。室外大场景约 2m/3°、室内约 0.5m/5°。</p>
+          <p><b>要记住的一句话：</b>作为「重定位」它确实准且快（5ms/帧、50MB），但精准的前提是「这个场景训练过」。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. PoseNet 怎么训：监督信号来自 SfM 标签</h2>
+      <p>PoseNet 是<b>监督</b>学习：真值位姿由 SfM（运动恢复结构）对场景视频<b>自动生成</b>，再靠 ImageNet/Places 分类预训练做迁移学习（解决标注少）。损失直接拿预测位姿和真值位姿比：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathrm{loss}(I)=\|\hat{\mathbf x}-\mathbf x\|_2+\beta\|\hat{\mathbf q}-\mathbf q/\|\mathbf q\|\|_2 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>网络吐出的位置 $\hat{\mathbf x}$ 和真值 $\mathbf x$ 算欧氏距离，四元数 $\hat{\mathbf q}$ 也和归一化后的真值比距离；前面那个 $\beta$ 是个「平衡旋钮」——室外场景位置误差权重 250–2000、室内 120–750，靠网格搜索调，因为「位置和朝向」单位不同、不调会偏科。</p>
+      <p>所以 PoseNet 的「训练信号」本质是<b>别人用 SfM 标好的位姿</b>。这一点和后面 0142 的 UnDeepVO（不用真值、靠几何自监督）形成鲜明对照，是整条支线的核心矛盾。下面这张表把本课两篇的「损失由哪几项组成、每项在约束什么」摆清楚——这是本块每节都要点名的重点栏。</p>
+      <table>
+        <thead>
+          <tr><th>论文</th><th>监督信号来源</th><th>损失项</th><th>每一项在约束什么</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>PoseNet</td><td>SfM 自动生成的绝对位姿标签</td><td>位置 L2 + β×四元数 L2</td><td>预测绝对位置接近真值；预测朝向（四元数）接近真值，β 平衡两者量纲</td></tr>
+          <tr><td>DeepVO</td><td>KITTI 真值位姿序列</td><td>位置 MSE + κ×朝向 MSE（逐帧累加）</td><td>每帧相对平移与旋转都接近真值；κ=100 压制「朝向比位置更易过拟合」</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. DeepVO：真正的端到端 VO 起点</h2>
+      <p>DeepVO（2017）干的事才是「端到端 VO」：把经典 VO 流水线（<b>特征提取→匹配→运动估计→BA</b>，见 0024/0025）整体换成 CNN+RNN，直接从原始 RGB 视频序列回归 6-DOF <b>相对</b>位姿，作者声称「连相机标定都不需要」。图 1 把经典法和它的端到端法并排画：左边一串手工模块，右边一个 RCNN 一口吞掉序列出位姿。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_DeepVO__Towards_end-to-end_visual_odometry_with_deep_Rec/f4352be3a58f984b2cf430e5424ecf663a6574fa553a092f9caa2f3d16b50508.jpg" alt="DeepVO 端到端架构对照">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>Architectures of the conventional feature based monocular VO and the proposed end-to-end method. In the proposed method, RCNN takes a sequence of RGB images (video) as input and learns features by CNN for RNN based sequential modelling to estimate poses.</p>
+          <p><b>怎么看这张图：</b>左边经典 VO 是「提特征→匹配→几何估计→优化」四段串联；右边 DeepVO 把两帧图堆起来喂进 CNN 提特征，再交给 RNN（LSTM）建模时序，直接出位姿。注意输入是「序列」而非「单图」——这正是它和 PoseNet 的根本不同。</p>
+          <p><b>要记住的一句话：</b>DeepVO 吃连续帧、吐相对位姿，是端到端 VO 的开山之作；PoseNet 吃单图、吐绝对位姿，是重定位。</p>
+        </figcaption>
+      </figure>
+      <p>结构细节：输入是<b>两帧连续 RGB 堆叠</b>的张量；CNN 部分 9 个卷积层（从 FlowNet 预训练借特征）；RNN 是<b>两层 LSTM，每层 1000 隐状态</b>。输出每步 6-DOF（平移 3 + 欧拉角 3）。核心洞察是：CNN 学「几何而非外观」的特征，LSTM 把帧间时序动态包进隐状态——作者点明<b>朝向比位置更易过拟合，所以尺度被网络从 KITTI 数据里隐式学会，不需额外对齐</b>。图 4 用「过拟合模型 vs 拟合良好模型」说明这个坑。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_DeepVO__Towards_end-to-end_visual_odometry_with_deep_Rec/9e426a9e72af23a1681d48504315fe48815fcffe6f16614e51604a6664161202.jpg" alt="DeepVO 过拟合与良好拟合对照">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>Training losses and VO results of two models. Figures in the left and right columns are about the over-fitted and well-fitted models, respectively. (a)-(b) Training and validation losses. (c)-(d) Estimated VO on training data (Sequence 00). (e)-(f) Estimated VO on testing data (Sequence 05).</p>
+          <p><b>怎么看这张图：</b>左列训练/验证 loss 差距大（过拟合），测试轨迹（e）明显歪；右列两者贴近（拟合好），测试轨迹（f）贴真值。DeepVO 明确讨论：训练/验证 loss 差距大时测试反而差，朝向尤其容易过拟合。</p>
+          <p><b>要记住的一句话：</b>端到端 VO 的第一个大敌不是精度，是过拟合——数据多样性不够就泛化崩。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. DeepVO 的训练信号：真值位姿监督</h2>
+      <p>DeepVO 同样走<b>监督</b>路线，真值来自 KITTI 位姿序列（Sequence 00–10）。损失是位置与朝向的 MSE 之和，逐帧累加：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \theta^*=\arg\min\frac1N\sum_{i=1}^N\sum_{k=1}^t\|\hat{\mathbf p}_k-\mathbf p_k\|_2^2+\kappa\|\hat{\boldsymbol\varphi}_k-\boldsymbol\varphi_k\|_2^2 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对整段序列的每一帧 k，把预测平移 $\hat{\mathbf p}_k$ 和预测欧拉角 $\hat{\boldsymbol\varphi}_k$ 分别和真值算平方误差，全段加起来求最小；$\kappa=100$ 是朝向的权重——因为作者发现朝向比位置更容易过拟合，得给它加码。注意它用的是欧拉角而非四元数（说四元数的单位约束会碍事）。</p>
+      <p>实测（KITTI）：DeepVO 平均 <b>t_rel 5.96% / r_rel 6.12°/100m</b>，比单目 VISO2_M（17.48%/16.52°）好很多，但仍弱于双目 VISO2_S（1.89%/1.96°）。作者自己承认：<b>「不是要取代几何方法，而是可行的补充」</b>；在高速、大开阔无纹理、动态物体时退化明显（seq12 明显失败）。图 6 把几个测试序列的轨迹画出来，能直观看到它在简单路段贴真值、复杂路段飘。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_DeepVO__Towards_end-to-end_visual_odometry_with_deep_Rec/2e76706d8a05b465fb11219cc5ad80b925c297de5c34bba0d1f2f3c2165d3ed0.jpg" alt="DeepVO 测试轨迹">
+        <figcaption>
+          <p><b>原图注（Fig. 6）：</b>Trajectories of VO testing results on Sequence 04, 05, 07 and 10. The DeepVO model used is trained on Sequence 00, 02, 08 and 09.</p>
+          <p><b>怎么看这张图：</b>四张小图分别是四个测试序列的估计轨迹（彩色）与真值（黑色参考）。简单序列（如 05）贴得很紧，开阔/高速序列（如 10）出现可见漂移。对照双目 VISO2_S 和 ORB-SLAM 可知 DeepVO 单目仍有差距。</p>
+          <p><b>要记住的一句话：</b>DeepVO 证明了「端到端 VO 可行」，但 KITTI 驾驶场景下仍弱于几何/双目法——这恰是第一季 0011 那条线「位姿只被吃掉很窄一段」的伏笔。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 两张自绘图：把「区别」和「机制」画实</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="重定位与相对位姿回归对比">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <rect x="20" y="50" width="410" height="300" rx="14" fill="#ffffff" stroke="#c9d2e0"/>
+          <rect x="470" y="50" width="410" height="300" rx="14" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="225" y="38" text-anchor="middle" font-size="18" fill="#2b6cb0"><tspan font-weight="700">PoseNet：单张照片 → 绝对位姿（重定位）</tspan></text>
+          <text x="675" y="38" text-anchor="middle" font-size="18" fill="#9d553f"><tspan font-weight="700">DeepVO：连续两帧 → 相对位姿（VO）</tspan></text>
+          <rect x="140" y="70" width="180" height="66" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="230" y="96" text-anchor="middle" font-size="13" fill="#3a4a5a">一张照片（院子一角）</text>
+          <text x="230" y="118" text-anchor="middle" font-size="12" fill="#5b6472">没有前一帧、没有时序</text>
+          <line x1="230" y1="140" x2="230" y2="156" stroke="#7a8699" stroke-width="2"/>
+          <path d="M 230 162 L 224 152 M 230 162 L 236 152" stroke="#7a8699" stroke-width="2" fill="none"/>
+          <rect x="140" y="166" width="180" height="60" rx="12" fill="#2b6cb0"/>
+          <text x="230" y="192" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">CNN 回归</tspan></text>
+          <text x="230" y="212" text-anchor="middle" font-size="11" fill="#cfe0f5">GoogLeNet 改 23 层</text>
+          <line x1="230" y1="230" x2="230" y2="246" stroke="#7a8699" stroke-width="2"/>
+          <path d="M 230 252 L 224 242 M 230 252 L 236 242" stroke="#7a8699" stroke-width="2" fill="none"/>
+          <rect x="120" y="256" width="220" height="66" rx="10" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="230" y="282" text-anchor="middle" font-size="13" fill="#9d553f"><tspan font-weight="700">全图坐标里的绝对位姿</tspan></text>
+          <text x="230" y="304" text-anchor="middle" font-size="12" fill="#5b6472">位置 3 + 朝向 3（6-DOF）</text>
+          <text x="225" y="342" text-anchor="middle" font-size="12" fill="#5b6472">「我在中院西北角」——得先建好这个场景</text>
+          <rect x="540" y="70" width="140" height="66" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="610" y="96" text-anchor="middle" font-size="13" fill="#3a4a5a">照片①（车在 A）</text>
+          <text x="610" y="118" text-anchor="middle" font-size="12" fill="#5b6472">院墙 + 树</text>
+          <rect x="710" y="70" width="140" height="66" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="780" y="96" text-anchor="middle" font-size="13" fill="#3a4a5a">照片②（车在 B）</text>
+          <text x="780" y="118" text-anchor="middle" font-size="12" fill="#5b6472">院墙 + 树</text>
+          <line x1="610" y1="140" x2="655" y2="156" stroke="#7a8699" stroke-width="2"/>
+          <line x1="780" y1="140" x2="735" y2="156" stroke="#7a8699" stroke-width="2"/>
+          <rect x="580" y="162" width="200" height="64" rx="12" fill="#9d553f"/>
+          <text x="680" y="188" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">RCNN：CNN + LSTM</tspan></text>
+          <text x="680" y="208" text-anchor="middle" font-size="11" fill="#f3dccf">帧间时序动态进隐状态</text>
+          <line x1="680" y1="230" x2="680" y2="246" stroke="#7a8699" stroke-width="2"/>
+          <path d="M 680 252 L 674 242 M 680 252 L 686 242" stroke="#7a8699" stroke-width="2" fill="none"/>
+          <rect x="580" y="256" width="200" height="66" rx="10" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="680" y="282" text-anchor="middle" font-size="13" fill="#9d553f"><tspan font-weight="700">相对位姿（6-DOF）</tspan></text>
+          <text x="680" y="304" text-anchor="middle" font-size="12" fill="#5b6472">转 25° · 走 3.2 m</text>
+          <text x="675" y="342" text-anchor="middle" font-size="12" fill="#5b6472">「从 A 到 B 走了多少」——不需全局地图</text>
+          <text x="450" y="380" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">单图问「我在哪」（绝对）；两帧问「走了多少」（相对）——这是重定位与 VO 的分界线</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左半 PoseNet——单张院子照片进 CNN，直接吐出「全图坐标里的绝对位姿」；右半 DeepVO——连续两帧（车在 A、车在 B）进 RCNN，吐出「从 A 到 B 的相对运动」。</p>
+          <p><b>怎么看这张图：</b>① 左边没有「前一帧」，所以答案必然落在全局地图坐标里（绝对）；② 右边两帧之间有箭头表示运动，答案只描述这一步（相对）；③ 训练前提也不同：PoseNet 要该场景建过模，DeepVO 要从真值位姿序列学。</p>
+          <p><b>要记住的一句话：</b>单图=重定位（绝对），序列=里程计（相对）；把 PoseNet 叫 VO 是归类错误。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="相对位姿回归与 LSTM 迭代">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="34" text-anchor="middle" font-size="19" fill="#9d553f"><tspan font-weight="700">DeepVO：车在院子里，网络直接吐「转了多少度、走了几米」</tspan></text>
+          <rect x="40" y="60" width="180" height="120" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="130" y="92" text-anchor="middle" font-size="13" fill="#3a4a5a">帧 t（车在 A）</text>
+          <text x="130" y="116" text-anchor="middle" font-size="12" fill="#5b6472">院墙 + 树</text>
+          <text x="130" y="140" text-anchor="middle" font-size="12" fill="#5b6472">照片①</text>
+          <rect x="320" y="60" width="180" height="120" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="410" y="92" text-anchor="middle" font-size="13" fill="#3a4a5a">帧 t+1（车在 B）</text>
+          <text x="410" y="116" text-anchor="middle" font-size="12" fill="#5b6472">院墙 + 树</text>
+          <text x="410" y="140" text-anchor="middle" font-size="12" fill="#5b6472">照片②</text>
+          <text x="270" y="124" text-anchor="middle" font-size="20" fill="#2b6cb0">+</text>
+          <rect x="560" y="70" width="170" height="100" rx="12" fill="#9d553f"/>
+          <text x="645" y="104" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">CNN 提特征</tspan></text>
+          <text x="645" y="126" text-anchor="middle" font-size="11" fill="#f3dccf">几何而非外观</text>
+          <text x="645" y="146" text-anchor="middle" font-size="11" fill="#f3dccf">→ LSTM 时序</text>
+          <text x="745" y="122" text-anchor="middle" font-size="22" fill="#9d553f">→</text>
+          <rect x="700" y="60" width="170" height="120" rx="10" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="785" y="90" text-anchor="middle" font-size="13" fill="#3a4a5a">输出相对位姿</text>
+          <text x="785" y="116" text-anchor="middle" font-size="13" fill="#9d553f"><tspan font-weight="700">转 25°</tspan></text>
+          <text x="785" y="140" text-anchor="middle" font-size="13" fill="#9d553f"><tspan font-weight="700">走 3.2 m</tspan></text>
+          <text x="785" y="164" text-anchor="middle" font-size="11" fill="#5b6472">6-DOF</text>
+          <text x="450" y="222" text-anchor="middle" font-size="15" fill="#34415a"><tspan font-weight="700">LSTM 隐状态：把「帧间时序动态」反复擦改，逐步收敛</tspan></text>
+          <rect x="60" y="245" width="240" height="100" rx="10" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="180" y="272" text-anchor="middle" font-size="12" fill="#5b6472">草稿①（初稿）</text>
+          <path d="M 90 300 L 270 300" stroke="#c65c47" stroke-width="2.5" fill="none" stroke-dasharray="6 5"/>
+          <text x="180" y="322" text-anchor="middle" font-size="11" fill="#c65c47">轨迹歪了</text>
+          <text x="335" y="296" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="370" y="245" width="240" height="100" rx="10" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="490" y="272" text-anchor="middle" font-size="12" fill="#5b6472">草稿②（修正）</text>
+          <path d="M 400 300 L 580 300" stroke="#c9a13a" stroke-width="2.5" fill="none" stroke-dasharray="6 5"/>
+          <text x="490" y="322" text-anchor="middle" font-size="11" fill="#c9a13a">好一些</text>
+          <text x="645" y="296" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="680" y="245" width="200" height="100" rx="10" fill="#ffffff" stroke="#9bd0a8"/>
+          <text x="780" y="272" text-anchor="middle" font-size="12" fill="#3a4a5a">草稿③（再修正）</text>
+          <path d="M 705 300 L 855 300" stroke="#4f9a63" stroke-width="2.5" fill="none"/>
+          <text x="780" y="322" text-anchor="middle" font-size="11" fill="#4f9a63">贴真值</text>
+          <text x="450" y="384" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">RNN/GRU 迭代 = 反复擦改草稿：初稿 → 修正 → 再修正，隐状态记住历史</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>上半是 DeepVO 的「两帧进、相对位姿出」——车在院子 A、B 两处，网络直接报「转 25°、走 3.2 m」。下半用三张草稿比喻 LSTM：轨迹先画歪（初稿），再修正，最后贴上真值。</p>
+          <p><b>怎么看这张图：</b>① 上半网络吐的是「相对」量，不含全局坐标；② 下半说明 RNN/LSTM 的价值——它把前面所有帧的动态压进隐状态，像人一边走一边涂改路线图，越走越准；③ 朝向比位置更难估，所以网络要靠迭代慢慢纠。</p>
+          <p><b>要记住的一句话：</b>端到端 VO = 连续帧直接回归相对位姿 + 用循环网络记住时序；这正是 PoseNet 缺的那一半。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动：下面哪种说法对？</h4>
+        <p>「PoseNet 是端到端视觉里程计（VO）的开山之作。」这句话对吗？<button class="quiz-options" onclick="lessonKit.answer(this,'q0141a')">错，它是重定位</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0141b')">对，它就是 VO</button></p>
+        <p class="quiz-feedback" id="q0141a" hidden>正确。PoseNet 输入单图、输出绝对位姿，本质是相机重定位（relocalization），不是里程计；原文也自称 localization。真正开启端到端单目 VO 的是 2017 的 DeepVO（吃连续帧、吐相对位姿）。清单把它塞进「端到端 VO」块属归类粗糙，本课已纠正。</p>
+        <p class="quiz-feedback" id="q0141b" hidden>不对。PoseNet 一次只吃一张图、吐一个全局位姿，回答的是「我在场景哪」，属于重定位；它没有时序、不估相对运动，不具备 VO「记步数」的能力。端到端 VO 的起点是 DeepVO。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 这条线的转折：训练信号从哪来</h2>
+      <p>PoseNet 和 DeepVO 都依赖<b>真值位姿标签</b>（一个来自 SfM、一个来自 KITTI 真值）。这带来一个致命瓶颈：<b>好标签贵</b>。KITTI 那种带真值位姿的序列就那么多，换个城市、换个相机就得重标——这也是 DeepVO 在高速/开阔/动态段泛化崩的根。</p>
+      <p>下一节 <b>0142</b> 的 UnDeepVO 和 TartanVO 就冲着这个矛盾来：一个改用<b>无监督</b>（靠 stereo 几何自己造监督信号），一个改用<b>纯合成数据</b>（TartanAir）训练、零微调直接泛化到真实 KITTI/EuRoC。<b>「训练信号从哪来」是整条端到端 VO 支线的核心矛盾</b>，本块后面每节都会回到这张表。先记住结论：DeepVO 证明了「端到端 VO 可行」，但它那套「靠真值位姿」的路子很快被更省钱、更能泛化的思路取代。</p>
+      <div class="interactive-card">
+        <h4>互动：端到端 VO 的第一个大敌是谁？</h4>
+        <p>DeepVO 作者自己反复强调的弱点，下面哪个最贴切？<button class="quiz-options" onclick="lessonKit.answer(this,'q0141c')">过拟合、泛化差</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0141d')">推理速度太慢</button></p>
+        <p class="quiz-feedback" id="q0141c" hidden>正确。DeepVO 明确讨论 overfitting：训练/验证 loss 差距大时测试反而差，朝向比位置更易过拟合；在高速、大开阔无纹理、动态物体段退化明显。根因是「真值位姿标签」稀缺、数据多样性不足——这正好引出 0142 用无监督/合成数据破局。</p>
+        <p class="quiz-feedback" id="q0141d" hidden>不对。DeepVO 没给具体 FPS，只称实时可行；它自称的硬伤是过拟合与泛化，不是速度。速度问题要等到 0145/0146 的稠密 BA 那一代才凸显。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>重定位（relocalization）和视觉里程计（VO）在「输入 / 输出 / 本质」上差在哪三处？</li>
+        <li>为什么 PoseNet 不是 VO？它是靠什么信号训出来的？</li>
+        <li>DeepVO 凭什么被称为「端到端单目 VO 起点」？它的 RCNN（CNN+LSTM）各自负责什么？</li>
+        <li>DeepVO 的损失里 κ=100 在压什么？它自己承认的局限是什么？</li>
+        <li>「训练信号从哪来」为什么是这条支线的核心矛盾？PoseNet/DeepVO 的信号来源有什么共同瓶颈？</li>
+      </ul>
+      <h2>10. 练习（收起，点开看解析）</h2>
+      <div class="exercise-box">
+        <details class="exercise-answer">
+          <summary>练习 1 · 把 PoseNet 硬塞进 VO 块会出什么错？</summary>
+          <p>会误导读者以为它估的是「相对运动」。实际上 PoseNet 输入单图、输出绝对位姿，需要该场景先建模（per-scene 重定位），且单帧无时序。把它当成 VO 起点，会让人误以为 DeepVO 只是「PoseNet 加了个时序」——但二者任务定义就不同。正确表述：PoseNet 是 CNN 位姿回归/重定位先驱，启发了后续 VO；端到端 VO 真正起点是 DeepVO。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 2 · DeepVO 的尺度从哪来？</summary>
+          <p>DeepVO 不显式对齐尺度，作者称尺度被网络「从 KITTI 数据里隐式学会」。因为训练真值自带公制尺度、且 KITTI 相机内参固定，网络在回归相对位姿时把尺度也学进去了。代价是：换数据集/换相机时这隐式尺度可能失效——这正是后面 UnDeepVO（stereo 恢复尺度）、TartanVO（up-to-scale 损失）要系统解决的事。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 3 · 为什么用欧拉角而不用四元数？</summary>
+          <p>DeepVO 作者说四元数的单位范数约束会「妨碍优化」（给梯度下降添堵），所以选了无约束的欧拉角。代价是欧拉角有万向锁、且旋转量纲不统一；但端到端回归里直接 MSE 最省事。后面 DROID-SLAM 等改用 SE(3) 的李代数 Log 误差，反而更严谨——可见这条支线在「怎么表示位姿」上也演进了。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 4 · PoseNet 的 β 和 DeepVO 的 κ 是同一类东西吗？</summary>
+          <p>是同一类——都是「平衡不同量纲项的权重」。PoseNet 的 β 平衡位置 L2 与四元数 L2；DeepVO 的 κ=100 平衡平移 MSE 与旋转 MSE。两者都因为「位置和朝向单位/量级不同、不加权会偏科」而存在。不同在于：β 要靠网格搜索逐场景调，κ 直接定 100。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 5 · 用 0011 的断言给本块起个头</summary>
+          <p>第一季 0011 说「深度学习先吃掉匹配与检索」。本块（0141–0146）是「位姿战场」，结论将是：位姿只被吃掉很窄的一段——DeepVO 在 KITTI 驾驶场景仍明显弱于双目/几何法，直到 DROID/DPVO 在挑战/跨域场景才全面超过 ORB-SLAM/DSO。所以「吃位姿」比「吃匹配/检索」难得多、也晚得多，本块就是讲清为什么。</p>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0140-端到端回环与重定位-兼答复假阳性铁律.html">← 上一节：0140 端到端回环与重定位</a>
+        <a class="next" href="0142-无监督与跨数据集泛化.html">下一节：0142 无监督与跨数据集泛化 →</a>
+      </div>
+      <p class="foot-note">PoseNet 是重定位、DeepVO 才是端到端 VO 的起点——这一节把归类纠正过来，也为「训练信号从哪来」这条暗线埋下伏笔 🚗</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

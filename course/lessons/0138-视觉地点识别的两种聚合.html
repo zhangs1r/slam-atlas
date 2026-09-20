@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视觉地点识别的两种聚合 2024 · CricaVPR 与 SALAD — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0138</div>
+      <h1>视觉地点识别的两种聚合 2024 · CricaVPR 与 SALAD</h1>
+      <p class="subtitle">把「一堆局部特征」压成一个向量，有两种加法：跨图互看（CricaVPR）与最优传输聚合（SALAD）—— 后者单阶段反超两阶段 🔩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：图像 VPR 的描述子聚合</span>
+        <span>👥 作者：CricaVPR（F. Lu 等）/ SALAD（S. Izquierdo 等）</span>
+        <span>📅 2024 · <i>CricaVPR / SALAD (OT Aggregation)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">两把「最优传输」螺丝刀</a>
+        <a href="#c">CricaVPR：跨图互看</a>
+        <a href="#d">SALAD：OT 聚合</a>
+        <a href="#e">和前面课程怎么接</a>
+        <a href="#f">练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能回答① 说清图像 VPR 的「聚合」是在干什么；② 用「螺丝-螺丝孔」类比区分 <b>SALAD 的 OT 聚合</b>与 <b>SuperGlue 的 OT 匹配</b>；③ 讲清 CricaVPR 的「批内跨图像关联」；④ 解释为什么 SALAD 单阶段能反超 R²Former 这类两阶段重排序。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本篇是 <b>0011「检索被吃掉」</b> 在<b>图像 VPR</b> 侧的高潮：从 DBoW2（0134）的视觉词袋，到本节用 <b>DINOv2 基础模型</b> 当骨干。⚠️ 最关键区分：<b>SALAD 用最优传输做「描述子聚合」，而 0129 SuperGlue 用最优传输解「匹配指派」——同名词不同用</b>，本季反复强调学习者最易混，本节用一张图彻底分清。</p>
+        </div>
+      </div>
+
+      <h2>1. 它到底在做什么：先讲人话</h2>
+      <p>图像地点识别的本质是：把一张图压成一个向量，再拿向量去最近邻检索。压向量的「聚合」方式，本节看两种：</p>
+      <ul>
+        <li><b>CricaVPR</b>：让一批图「互相看一眼」——同一地点不同角度/天气的图在 batch 里互相当正则，逼出更鲁棒的特征。</li>
+        <li><b>SALAD</b>：把 NetVLAD 的「软分配」重写成<b>最优传输（Sinkhorn）</b>，并加 dustbin 丢掉天空/路面这类无信息特征。</li>
+      </ul>
+      <p>两者都是<b>单阶段全局检索</b>（一张图一个向量，直接最近邻），不需要 RANSAC 几何校验、也不需要重排序。但 SALAD 单阶段却在 MSLS Challenge 上反超了带重排序的两阶段方法——这是本块最反直觉的结论。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 两把「最优传输」螺丝刀：聚合 ≠ 匹配</h2>
+      <p>本节最容易被坑的地方：<b>都叫「最优传输 + Sinkhorn + dustbin」，但干的是两件完全不同的活</b>。用「螺丝-螺丝孔」类比：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">同一把「最优传输」螺丝刀，干两件不同的活：匹配 vs 聚合</text>
+          <!-- ===== 左：SuperGlue 跨图匹配（同一栋楼，两次经过的两张实拍） ===== -->
+          <text x="230" y="56" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8432c">SuperGlue（0129）：feature ↔ feature 匹配</text>
+          <!-- 图 A：白天经过 -->
+          <rect x="40" y="70" width="160" height="120" rx="6" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.4"/>
+          <rect x="42" y="72" width="156" height="28" fill="#dcebf7"/>
+          <rect x="50" y="98" width="140" height="82" fill="#d9cdbb" stroke="#bfae97" stroke-width="0.9"/>
+          <rect x="62" y="110" width="30" height="22" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="104" y="110" width="30" height="22" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="146" y="110" width="30" height="22" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="62" y="140" width="30" height="22" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="104" y="140" width="30" height="22" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="146" y="140" width="30" height="22" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.7"/>
+          <text x="47" y="86" font-size="9" fill="#3a6a90">图 A · 白天拍到</text>
+          <circle cx="62" cy="110" r="5" fill="#2f5b82"/><circle cx="104" cy="140" r="5" fill="#2f5b82"/><circle cx="176" cy="110" r="5" fill="#2f5b82"/>
+          <!-- 图 B：夜里再次经过 -->
+          <rect x="260" y="70" width="160" height="120" rx="6" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.4"/>
+          <rect x="262" y="72" width="156" height="28" fill="#c6d4e6"/>
+          <rect x="270" y="98" width="140" height="82" fill="#cfc3b0" stroke="#b3a08a" stroke-width="0.9"/>
+          <rect x="282" y="110" width="30" height="22" fill="#efe7d7" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="324" y="110" width="30" height="22" fill="#efe7d7" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="366" y="110" width="30" height="22" fill="#efe7d7" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="282" y="140" width="30" height="22" fill="#efe7d7" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="324" y="140" width="30" height="22" fill="#efe7d7" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="366" y="140" width="30" height="22" fill="#efe7d7" stroke="#c9b48f" stroke-width="0.7"/>
+          <text x="267" y="86" font-size="9" fill="#3a6a90">图 B · 夜里再经过</text>
+          <circle cx="282" cy="110" r="5" fill="#2f8a4f"/><circle cx="324" cy="140" r="5" fill="#2f8a4f"/><circle cx="396" cy="110" r="5" fill="#2f8a4f"/>
+          <!-- 配上的两点连线；配不上的扔垃圾桶 -->
+          <line x1="62" y1="110" x2="282" y2="110" stroke="#6b5a4e" stroke-width="1.4"/>
+          <line x1="176" y1="110" x2="324" y2="140" stroke="#6b5a4e" stroke-width="1.4"/>
+          <rect x="430" y="95" width="46" height="70" rx="5" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <text x="453" y="135" text-anchor="middle" font-size="9" fill="#fff">垃圾桶</text>
+          <line x1="396" y1="110" x2="428" y2="112" stroke="#bbb" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <text x="230" y="212" text-anchor="middle" font-size="9.5" fill="#5b4636">代价矩阵 = N×M（图A点 × 图B点）</text>
+          <text x="230" y="230" text-anchor="middle" font-size="9.5" fill="#5b4636">marginals：每个点各分配一次（partial）</text>
+          <!-- ===== 右：SALAD 聚合（一张街景 → K 个视觉词簇） ===== -->
+          <text x="690" y="56" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6136">SALAD（本节）：feature → cluster 聚合</text>
+          <rect x="500" y="70" width="160" height="120" rx="6" fill="#f7fbf6" stroke="#c3d9c6" stroke-width="1.4"/>
+          <rect x="502" y="72" width="156" height="26" fill="#dcebf7"/>
+          <rect x="502" y="98" width="156" height="46" fill="#e6dfd1" stroke="#c9b48f" stroke-width="0.7"/>
+          <rect x="516" y="106" width="26" height="18" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.6"/>
+          <rect x="556" y="106" width="26" height="18" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.6"/>
+          <rect x="596" y="106" width="26" height="18" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.6"/>
+          <rect x="516" y="128" width="26" height="12" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.6"/>
+          <rect x="556" y="128" width="26" height="12" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.6"/>
+          <rect x="596" y="128" width="26" height="12" fill="#f7f0e2" stroke="#c9b48f" stroke-width="0.6"/>
+          <rect x="502" y="144" width="156" height="44" fill="#d3cdc1"/>
+          <line x1="502" y1="166" x2="658" y2="166" stroke="#ffffff" stroke-width="1.2" stroke-dasharray="6 5"/>
+          <text x="507" y="86" font-size="9" fill="#3a6a90">一张街景的局部特征</text>
+          <circle cx="540" cy="120" r="5" fill="#2f5b82"/><circle cx="580" cy="150" r="5" fill="#2f5b82"/><circle cx="620" cy="115" r="5" fill="#2f5b82"/><circle cx="560" cy="165" r="5" fill="#2f5b82"/><circle cx="610" cy="160" r="5" fill="#2f5b82"/>
+          <!-- K 个「视觉词」桶（桶里放的是聚成一类的那批特征） -->
+          <rect x="710" y="78" width="40" height="40" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="722" y="90" width="16" height="16" fill="#dcebf7" stroke="#9db9d2" stroke-width="0.8"/>
+          <line x1="730" y1="90" x2="730" y2="106" stroke="#9db9d2" stroke-width="0.8"/>
+          <line x1="722" y1="98" x2="738" y2="98" stroke="#9db9d2" stroke-width="0.8"/>
+          <rect x="710" y="128" width="40" height="40" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <circle cx="730" cy="146" r="9" fill="#7fae8c"/>
+          <line x1="730" y1="155" x2="730" y2="163" stroke="#8a6b4a" stroke-width="1.4"/>
+          <rect x="710" y="178" width="40" height="40" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1.2"/>
+          <rect x="720" y="190" width="20" height="16" fill="#d3cdc1" stroke="#b3a08a" stroke-width="0.8"/>
+          <text x="730" y="72" text-anchor="middle" font-size="8.5" fill="#7a5b34">簇1</text>
+          <text x="730" y="122" text-anchor="middle" font-size="8.5" fill="#7a5b34">簇2</text>
+          <text x="730" y="172" text-anchor="middle" font-size="8.5" fill="#7a5b34">簇K</text>
+          <line x1="540" y1="120" x2="708" y2="98" stroke="#6b5a4e" stroke-width="1.2"/>
+          <line x1="620" y1="115" x2="708" y2="148" stroke="#6b5a4e" stroke-width="1.2"/>
+          <line x1="580" y1="150" x2="708" y2="198" stroke="#6b5a4e" stroke-width="1.2"/>
+          <!-- dustbin 右 -->
+          <rect x="780" y="120" width="46" height="70" rx="5" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <text x="803" y="160" text-anchor="middle" font-size="9" fill="#fff">垃圾桶</text>
+          <line x1="610" y1="160" x2="778" y2="155" stroke="#bbb" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <text x="690" y="238" text-anchor="middle" font-size="9.5" fill="#5b4636">代价矩阵 = n×(m+1)（特征 × 簇+垃圾桶）</text>
+          <text x="690" y="256" text-anchor="middle" font-size="9.5" fill="#5b4636">marginals：每特征质量=1 全部分完；簇有容量</text>
+          <text x="460" y="300" text-anchor="middle" font-size="10.5" fill="#8a7365">SuperGlue：配不上对的螺丝（点）→ 进垃圾桶（无匹配）；目标是「两张图的点两两配对」</text>
+          <text x="460" y="322" text-anchor="middle" font-size="10.5" fill="#8a7365">SALAD：无信息的螺丝（天空/路面）→ 进垃圾桶；目标是「把螺丝分进 K 个孔、压成一个向量」</text>
+          <text x="460" y="360" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">要记住：都叫 Sinkhorn+dustbin，但 SuperGlue 是「跨图匹配」、SALAD 是「聚合到簇」——别混</text>
+          <text x="460" y="390" text-anchor="middle" font-size="10" fill="#8a7365">（SALAD 还显式引入 cluster→feature 容量约束，SuperGlue 没有「簇」概念；且 SALAD 不做残差减法）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边 SuperGlue（0129）那一格画的是「同一栋楼，白天一次、夜里又一次」的两张实拍：图 A 的螺丝（关键点）去配图 B 的螺丝孔，配得上的连黑线，配不上的（右边那个绿点）虚线丢进垃圾桶；代价矩阵是 N×M，marginals 是「每个点各分配一次」。右边 SALAD（本节）那一格画的是一张真实街景（天空 / 楼、窗 / 路面）：把这张图的局部特征（螺丝）软分配到 K 个「视觉词」桶（孔）里，桶里放的就是聚成一类的那批特征，无信息的特征（天空、路面）丢进垃圾桶；代价矩阵是 n×(m+1)，marginals 一边「每个特征质量=1 全部分完」、另一边「每个桶有容量」。<br>
+          <b>怎么看这张图：</b>① 两者都用了 Sinkhorn 迭代 + dustbin，但<b>目标完全不同</b>：SuperGlue 解「两张图之间谁配谁」（匹配），SALAD 解「一堆特征该分到哪个视觉词簇」（聚合）。② SuperGlue 的代价矩阵是「点×点」，SALAD 的是「特征×簇」——后者多了「簇」这个实体，还加了 cluster-to-feature 容量约束。③ SALAD 聚合时<b>不做 NetVLAD 的残差减法</b>（直接求和），这也是和 NetVLAD 的又一区别。<br>
+          <b>要记住的一句话：</b>同叫最优传输，SuperGlue 是「跨图匹配」、SALAD 是「聚合到簇」——这是本季最容易混、也最该分清的一处。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. CricaVPR：让一批图互相看一眼</h2>
+      <p>CricaVPR 的巧思在<b>特征提取阶段</b>就引入「批内跨图像关联」：backbone 用冻结（仅 adapter）的 <b>DINOv2（ViT-B/14）</b>，224×224 输入。先用 spatial pyramid 把 patch token 分成 1×1 / 2×2 / 3×3 三级（1×1 级直接用 class token），共 14 个区域特征。关键是——</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$f_i=\{f_i^1,f_i^2,\dots,f_i^B\}\quad\text{（batch 内所有图的第 i 个区域特征组成序列）}$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>把「同一地点不同角度/天气、甚至异地」的图放进同一个 batch，取出每张图的第 i 个区域特征，串成一条序列送进 cross-image encoder（2 层 transformer）。于是每个区域特征在生成时，<b>顺带借了同批其他图的信息</b>——同地异况的图互相强化视角/条件不变性，异地的图互相强化判别力，从而抗感知混叠。</p>
+      <p>14 个输出区域特征拼接 + L2 归一化得全局描述子（原 14×768=10752 维，PCA 到 4096 / 512）。它仍是<b>单阶段全局检索</b>——跨图关联发生在「特征提取」里，不是检索后重排序。数字：Pitts30k R@1 <b>94.9</b>、Nordland 90.7；训练仅 3.5 小时（2×RTX3090）。MulConv adapter 在 ViT 每个 block 并行插 1×1/3×3/5×5 卷积，把基础模型适配到 VPR 的局部多尺度先验。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">CricaVPR：同一个 batch 里的图先「互相看一眼」，再各自出描述子</text>
+          <!-- 四张图 -->
+          <rect x="40" y="70" width="100" height="80" fill="#cfe3f2" stroke="#b3ad9f" stroke-width="1"/>
+          <rect x="60" y="96" width="30" height="44" fill="#cfc6b8"/>
+          <rect x="100" y="104" width="30" height="36" fill="#c4bbac"/>
+          <circle cx="88" cy="138" r="8" fill="#6fae7f"/>
+          <rect x="40" y="140" width="100" height="10" fill="#d8d4cd"/>
+          <line x1="73" y1="70" x2="73" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="107" y1="70" x2="107" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="40" y1="97" x2="140" y2="97" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="40" y1="123" x2="140" y2="123" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <rect x="73" y="70" width="34" height="27" fill="#cc785c" opacity="0.32"/>
+          <rect x="190" y="70" width="100" height="80" fill="#22304a" stroke="#b3ad9f" stroke-width="1"/>
+          <rect x="210" y="96" width="30" height="44" fill="#3a4a66"/>
+          <rect x="250" y="104" width="30" height="36" fill="#3a4a66"/>
+          <rect x="214" y="102" width="8" height="10" fill="#ffd166"/>
+          <rect x="254" y="110" width="8" height="10" fill="#ffd166"/>
+          <rect x="224" y="118" width="8" height="10" fill="#ffd166"/>
+          <rect x="190" y="140" width="100" height="10" fill="#1a2233"/>
+          <line x1="223" y1="70" x2="223" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="257" y1="70" x2="257" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="190" y1="97" x2="290" y2="97" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="190" y1="123" x2="290" y2="123" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <rect x="223" y="70" width="34" height="27" fill="#cc785c" opacity="0.32"/>
+          <rect x="340" y="70" width="100" height="80" fill="#9aa5ad" stroke="#b3ad9f" stroke-width="1"/>
+          <rect x="360" y="96" width="30" height="44" fill="#8b9199"/>
+          <rect x="400" y="104" width="30" height="36" fill="#8b9199"/>
+          <circle cx="388" cy="138" r="8" fill="#4f8a5f"/>
+          <rect x="340" y="140" width="100" height="10" fill="#7d858c"/>
+          <line x1="373" y1="70" x2="373" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="407" y1="70" x2="407" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="340" y1="97" x2="440" y2="97" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="340" y1="123" x2="440" y2="123" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <rect x="373" y="70" width="34" height="27" fill="#cc785c" opacity="0.32"/>
+          <rect x="490" y="70" width="100" height="80" fill="#e8dcc8" stroke="#b3ad9f" stroke-width="1"/>
+          <rect x="506" y="88" width="68" height="52" fill="#b5765a"/>
+          <rect x="514" y="96" width="12" height="14" fill="#f2efe8"/>
+          <rect x="534" y="96" width="12" height="14" fill="#f2efe8"/>
+          <rect x="554" y="96" width="12" height="14" fill="#f2efe8"/>
+          <rect x="514" y="118" width="12" height="14" fill="#f2efe8"/>
+          <rect x="534" y="118" width="12" height="14" fill="#f2efe8"/>
+          <rect x="554" y="118" width="12" height="14" fill="#f2efe8"/>
+          <rect x="490" y="140" width="100" height="10" fill="#d8d4cd"/>
+          <line x1="523" y1="70" x2="523" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="557" y1="70" x2="557" y2="150" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="490" y1="97" x2="590" y2="97" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <line x1="490" y1="123" x2="590" y2="123" stroke="#6b5a4e" stroke-width="0.8" opacity="0.55"/>
+          <rect x="523" y="70" width="34" height="27" fill="#cc785c" opacity="0.32"/>
+          <text x="90" y="166" text-anchor="middle" font-size="9" fill="#4a342c">同一栋楼 · 白天</text>
+          <text x="240" y="166" text-anchor="middle" font-size="9" fill="#4a342c">同一栋楼 · 夜晚</text>
+          <text x="390" y="166" text-anchor="middle" font-size="9" fill="#4a342c">同一栋楼 · 雨天</text>
+          <text x="540" y="166" text-anchor="middle" font-size="9" fill="#4a342c">另一栋楼（异地）</text>
+          <text x="760" y="96" text-anchor="middle" font-size="9" fill="#a8432c">红框 = 同一个序号的区域</text>
+          <text x="760" y="118" text-anchor="middle" font-size="9" fill="#8a7365">虚线 = 把它们串成一条序列</text>
+          <line x1="142" y1="110" x2="186" y2="110" stroke="#cc785c" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="292" y1="110" x2="336" y2="110" stroke="#cc785c" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="442" y1="110" x2="486" y2="110" stroke="#cc785c" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="470" y1="182" x2="470" y2="210" stroke="#6b5a4e" stroke-width="1.6"/>
+          <polygon points="470,214 465,204 475,205" fill="#6b5a4e"/>
+          <rect x="200" y="218" width="540" height="62" fill="#eef4f9" stroke="#2f5b82" stroke-width="1.5"/>
+          <text x="470" y="244" text-anchor="middle" font-size="10" fill="#2f5b82">cross-image encoder（2 层 Transformer）</text>
+          <text x="470" y="266" text-anchor="middle" font-size="9.5" fill="#2f5b82">第 i 个区域特征生成时，借了同批其他图的信息</text>
+          <line x1="470" y1="284" x2="470" y2="308" stroke="#6b5a4e" stroke-width="1.6"/>
+          <polygon points="470,312 465,302 475,303" fill="#6b5a4e"/>
+          <rect x="330" y="316" width="280" height="56" fill="#eef4f9" stroke="#2f5b82" stroke-width="1.5"/>
+          <text x="470" y="338" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2f5b82">拼 14 个区域 + L2 → 全局描述子</text>
+          <text x="470" y="358" text-anchor="middle" font-size="9" fill="#5b4636">（一张图一个向量，仍是单阶段检索）</text>
+          <text x="470" y="392" text-anchor="middle" font-size="9.5" fill="#5b4636">同地异况的图互相补视角 / 光照不变性；异地但相似的图互相强化判别力</text>
+          <text x="470" y="416" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">要记住：跨图关联发生在「特征提取阶段」，检索仍是单图最近邻——它不是重排序</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面四张是同一个 batch 里的照片：三张是同一栋楼的白天 / 夜晚 / 雨天，第四张是另一栋楼。每张图上都画了 patch 分块网格，红框标出「同一个序号的区域」。虚线把四张图里这个同序号区域连起来——它们会被串成一条序列，送进 cross-image encoder。下面两步分别是编码和聚合。<br>
+          <b>怎么看这张图：</b>① 先看前三张：楼是同一栋，但光照从白天到夜晚到雨天完全不同，如果没有互相参照，网络很容易把它们当成三个地方。② 再看红色虚线：CricaVPR 把「各图的第 i 个区域」编成一条序列送进 Transformer，于是每个区域特征在生成时就「看过」其他图里同位置的区域——同地异况互相补不变性，异地（第四张）互相强化判别力。③ 最后看输出：14 个区域特征拼起来、L2 归一化，仍然是一张图一个向量，检索阶段依然是单图最近邻——所以它不属于「检索后再重排序」。<br>
+          <b>要记住的一句话：</b>跨图关联发生在<b>特征提取阶段</b>（batch 内互看），而不是检索后的重排序；这就是为什么它仍被归入「单阶段全局检索」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_CricaVPR__Cross-Image_Correlation-Aware_Representation_L/b0920868135ecaf42cd5187f60b7e0072608dcc32885375dc923ab8107bdbd26.jpg" alt="Batch with same/different places">
+        <figcaption>
+          <b>原图注（Fig. 2，正文描述）：</b>…as shown in Fig. 2. On the one hand, image representations from the same place with different perspectives and conditions can improve the viewpoint invariance and condition invariance of each other after the correlated encoding. On the other hand, image representations from different places also promote each other to produce discriminative features.<br>
+          <b>怎么看这张图：</b>展示一个 batch 里既有「同地不同视角/条件」、也有「异地但相似」的图。CricaVPR 让它们互相关注：同地的互相补视角/条件不变性，异地的互相强化判别力。这正是「跨图像关联」的动机可视化。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_CricaVPR__Cross-Image_Correlation-Aware_Representation_L/2a843dc3681c6d0d53ce59cef726e8e5fa987be23feaf1dd9bd0bc69a03307dc.jpg" alt="CricaVPR pipeline">
+        <figcaption>
+          <b>原图注（Fig. 3，正文描述）：</b>We design the pipeline to produce desired global features as shown in Fig. 3. The output patch tokens of a batch of images from the ViT backbone are reshaped as the B×W×H×D-dim feature maps. We first use the spatial pyramid to produce initial feature representations… Next is the most critical step. We treat the i-th regional features of all images in a batch as a sequence of embedding vectors…<br>
+          <b>怎么看这张图：</b>ViT 出 patch token → spatial pyramid 分三级得 14 区域特征 → 把 batch 内同位置区域特征串成序列送 cross-image encoder → 拼接+L2 成全局描述子。这条「批内互注意」链就是上面公式的工程实现。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_CricaVPR__Cross-Image_Correlation-Aware_Representation_L/9a99e7d08318902723e97e69cb239b12567b6282be23d0de772a1cdd2195bd8f.jpg" alt="Adapted DINOv2 attention focus">
+        <figcaption>
+          <b>原图注（Fig. 6，正文描述）：</b>Fig. 6 vividly illustrates the underlying reasons. The adapted DINOv2, in contrast to the pre-trained DINOv2, exhibits a stronger ability to focus on objects related to place recognition, with more attention given to more important objects.<br>
+          <b>怎么看这张图：</b>对比「冻结 DINOv2」与「适配后 DINOv2」的注意力——适配后的网络明显更聚焦建筑、植被等不变地标，忽略天空、地面、动态车。这也侧面说明为什么 SALAD 的 dustbin 能直接丢天空/路面：基础模型已经学会「什么该忽略」。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. SALAD：把 NetVLAD 重写成最优传输</h2>
+      <p>SALAD（<b>S</b>inkhorn <b>A</b>lgorithm for <b>L</b>ocally <b>A</b>ggregated <b>D</b>criptors）把 NetVLAD 的「逐行 softmax 软分配」重述为一个<b>最优传输问题</b>。骨干用 DINOv2-B（<b>仅微调最后 4 层</b>，4 epoch 即收敛）。流程：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>score 矩阵</h4>
+          <p>两层 FC 从零学（不初始化 k-means 质心，减归纳偏置/局部极小），加 dustbin 列吸收无信息特征。沿用 SuperGlue 的 dustbin 设计。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Sinkhorn 分配</h4>
+          <p>特征质量 $\mu=\mathbf 1_n$ 在 m 个簇 + dustbin 间分配，簇容量 $\kappa=[\mathbf 1_m^\top,\,n-m]^\top$；Sinkhorn 求 $\bar P$，丢 dustbin 列得 $P\in\mathbb R^{n\times m}$。</p>
+        </div>
+        <div class="mini-card">
+          <h4>聚合（不做残差减法）</h4>
+          <p>$V_{j,k}=\sum_i P_{i,k}f_{i,k}$（f 经 FC 从 768 降到 128）。拼上 global token（256 维）→ flatten + L2 得最终描述子（m=64 → 8192+256）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>反直觉结果</h4>
+          <p>单阶段 MSLS-ch R@1 <b>75.0</b>，超两阶段 R²Former 73.0、TransVPR 63.9；latency 2.41 ms、显存 0.63 GB。训练 <1 小时。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">SALAD 的「分桶」：一张街景切成 patch，每个 patch 软分到 K 个视觉词簇</text>
+          <!-- 街景 -->
+          <rect x="40" y="70" width="240" height="170" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.2"/>
+          <rect x="40" y="70" width="240" height="46" fill="#cfe3f2"/>
+          <rect x="58" y="96" width="74" height="84" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="68" y="108" width="18" height="16" fill="#f2efe8"/>
+          <rect x="98" y="108" width="18" height="16" fill="#f2efe8"/>
+          <rect x="68" y="140" width="18" height="16" fill="#f2efe8"/>
+          <rect x="98" y="140" width="18" height="16" fill="#f2efe8"/>
+          <rect x="148" y="88" width="104" height="92" fill="#c4bbac" stroke="#a89a86" stroke-width="1"/>
+          <rect x="158" y="102" width="20" height="18" fill="#f2efe8"/>
+          <rect x="192" y="102" width="20" height="18" fill="#f2efe8"/>
+          <rect x="226" y="102" width="16" height="18" fill="#f2efe8"/>
+          <rect x="158" y="136" width="20" height="18" fill="#f2efe8"/>
+          <rect x="192" y="136" width="20" height="18" fill="#f2efe8"/>
+          <circle cx="96" cy="180" r="20" fill="#6fae7f"/>
+          <rect x="40" y="200" width="240" height="40" fill="#d8d4cd"/>
+          <rect x="208" y="192" width="58" height="20" rx="3" fill="#8fa3b5"/>
+          <line x1="120" y1="70" x2="120" y2="240" stroke="#6b5a4e" stroke-width="0.9" opacity="0.5" stroke-dasharray="5 4"/>
+          <line x1="200" y1="70" x2="200" y2="240" stroke="#6b5a4e" stroke-width="0.9" opacity="0.5" stroke-dasharray="5 4"/>
+          <line x1="40" y1="127" x2="280" y2="127" stroke="#6b5a4e" stroke-width="0.9" opacity="0.5" stroke-dasharray="5 4"/>
+          <line x1="40" y1="184" x2="280" y2="184" stroke="#6b5a4e" stroke-width="0.9" opacity="0.5" stroke-dasharray="5 4"/>
+          <text x="160" y="258" text-anchor="middle" font-size="9.5" fill="#4a342c">一张街景（被切成 patch）</text>
+          <text x="160" y="280" text-anchor="middle" font-size="9" fill="#8a7365">DINOv2 每块 14×14 像素</text>
+          <!-- patch 芯片 -->
+          <rect x="330" y="80" width="40" height="30" rx="3" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="330" y="116" width="40" height="30" rx="3" fill="#f2efe8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="330" y="152" width="40" height="30" rx="3" fill="#6fae7f" stroke="#a89a86" stroke-width="1"/>
+          <rect x="330" y="188" width="40" height="30" rx="3" fill="#cfe3f2" stroke="#a89a86" stroke-width="1"/>
+          <rect x="330" y="224" width="40" height="30" rx="3" fill="#d8d4cd" stroke="#a89a86" stroke-width="1"/>
+          <text x="350" y="100" text-anchor="middle" font-size="9" fill="#3d2a22">块1</text>
+          <text x="350" y="136" text-anchor="middle" font-size="9" fill="#3d2a22">块2</text>
+          <text x="350" y="172" text-anchor="middle" font-size="9" fill="#3d2a22">块3</text>
+          <text x="350" y="208" text-anchor="middle" font-size="9" fill="#3d2a22">块4</text>
+          <text x="350" y="244" text-anchor="middle" font-size="9" fill="#3d2a22">块5</text>
+          <!-- 软分配连线 -->
+          <line x1="370" y1="95" x2="618" y2="99" stroke="#2f6136" stroke-width="2.2"/>
+          <line x1="370" y1="131" x2="618" y2="165" stroke="#2f6136" stroke-width="2"/>
+          <line x1="370" y1="167" x2="618" y2="231" stroke="#2f6136" stroke-width="1.8"/>
+          <line x1="370" y1="203" x2="618" y2="288" stroke="#bbb" stroke-width="1.4" stroke-dasharray="5 4"/>
+          <line x1="370" y1="239" x2="640" y2="300" stroke="#bbb" stroke-width="1.4" stroke-dasharray="5 4"/>
+          <text x="500" y="92" text-anchor="middle" font-size="9" fill="#2f6136">0.8</text>
+          <text x="500" y="140" text-anchor="middle" font-size="9" fill="#2f6136">0.7</text>
+          <text x="500" y="190" text-anchor="middle" font-size="9" fill="#2f6136">0.5</text>
+          <!-- 视觉词簇 -->
+          <rect x="620" y="82" width="150" height="34" fill="#fffdf9" stroke="#2f5b82" stroke-width="1.3"/>
+          <text x="695" y="104" text-anchor="middle" font-size="9" fill="#2f5b82">簇 A：建筑墙面</text>
+          <rect x="620" y="148" width="150" height="34" fill="#fffdf9" stroke="#2f5b82" stroke-width="1.3"/>
+          <text x="695" y="170" text-anchor="middle" font-size="9" fill="#2f5b82">簇 B：窗户</text>
+          <rect x="620" y="214" width="150" height="34" fill="#fffdf9" stroke="#2f5b82" stroke-width="1.3"/>
+          <text x="695" y="236" text-anchor="middle" font-size="9" fill="#2f5b82">簇 C：植被</text>
+          <rect x="620" y="268" width="150" height="40" rx="4" fill="#555" stroke="#333" stroke-width="1.2"/>
+          <text x="695" y="292" text-anchor="middle" font-size="9" fill="#ffffff">dustbin（拒掉）</text>
+          <text x="470" y="320" text-anchor="middle" font-size="9.5" fill="#5b4636">块 4、块 5 是天空和路面，结构信息太少 → 直接进 dustbin，不参与聚合</text>
+          <text x="470" y="344" text-anchor="middle" font-size="9.5" fill="#5b4636">剩下的特征按软分配聚成 8192 + 256 维描述子：这一步是 feature → cluster（聚合）</text>
+          <text x="470" y="368" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">要记住：聚合是「把螺丝分进 K 个孔」，和 0129 SuperGlue 的「螺丝对螺丝孔」不是一回事</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一张真实街景（天空、两栋楼、一棵树、路面、一辆车），上面画了 patch 分块虚线。中间是这张图里挑出来的 5 个 patch（块 1 到块 5），右边是 SALAD 的视觉词簇：簇 A 建筑墙面、簇 B 窗户、簇 C 植被，以及一个 dustbin。<br>
+          <b>怎么看这张图：</b>① 每条实线是一次「软分配」：块 1 以 0.8 的权重分到簇 A、块 2 以 0.7 分到簇 B、块 3 以 0.5 分到簇 C——注意权重不必是 1，同一个 patch 也可以同时部分属于几个簇。② 块 4（天空）和块 5（路面）指向的虚线终点是 dustbin：它们的结构信息太少，直接拒掉、不污染最终向量。③ 最后一步是把落到同一个簇的特征加起来，得到 8192+256 维描述子——这里全程只有<b>一张图</b>，没有任何「另一张图」参与。<br>
+          <b>要记住的一句话：</b>SALAD 的 OT 是「一张图的特征分到哪些视觉词簇」（feature → cluster），SuperGlue 的 OT 是「两张图的点谁配谁」（feature ↔ feature）；两者都叫 Sinkhorn、都有 dustbin，但目标完全不同。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Optimal_Transport_Aggregation_for_Visual_Place_Recogniti/255a8061bb4d6f2dd4f4fbe787a40c9c5f1d2d99c67f5b5e3f8a6e914cbe6174.jpg" alt="VPR baseline vs SALAD">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Illustration of a VPR baseline (left) and our contribution (right). The left column outlines a typical VPR baseline, a ResNet backbone followed by NetVLAD aggregation. On the right column, we replace ResNet with a partially fine-tuned DINOv2 backbone, and incorporate SALAD, our novel optimal transport aggregation using the Sinkhorn Algorithm.<br>
+          <b>怎么看这张图：</b>左是经典「ResNet + NetVLAD」基线，右把骨干换成「微调末 4 层的 DINOv2」、把聚合换成 SALAD（OT + dustbin）。一句话点明 SALAD 的两大改动：更好的基础模型 + 更好的聚合方式。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Optimal_Transport_Aggregation_for_Visual_Place_Recogniti/8b792f99082b35266262759d9b15f853b28748deb4e52d8ecf5cc6b9ad6ae6aa.jpg" alt="SALAD overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of our method. First, the DINOv2 backbone extracts local features and a global token from an input image. Then, a small MLP, score projection, computes a score matrix for feature-to-cluster and dustbin relationships. The optimal transport module uses the Sinkhorn algorithm to transform this matrix into an assignment, and subsequently, dimensionality-reduced features are aggregated into the final descriptor based on this assignment and concatenated with the global token.<br>
+          <b>怎么看这张图：</b>DINOv2 出局部特征 + global token → score 矩阵（含 dustbin）→ Sinkhorn 求分配 → 按分配聚合（降维后求和）并拼 global token → 最终描述子。这就是上面「螺丝分进 K 个孔」那张自绘图的工程真身。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Optimal_Transport_Aggregation_for_Visual_Place_Recogniti/142abb649db961e7abc985922bcb87029748023639339dc632833dd0432675bc.jpg" alt="Feature-to-cluster assignments">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Illustration of feature-to-cluster assignments. See at the leftmost and rightmost part of the figure two different views of the same place. Framed by red and blue squares we highlight two corresponding patches in each of the images. The central part of the figure shows the feature-to-cluster assignments for these patches. Note how DINOv2 SALAD correctly assigns the features to the same bins for both views, even with different local texture.<br>
+          <b>怎么看这张图：</b>同一地点两个视角，红/蓝框标出对应 patch；中间显示它们被分到同一个簇。正因为「同一地点的特征稳定分到同簇」，描述子才对视角/光照鲁棒——这正是 feature→cluster 聚合（而非 feature↔feature 匹配）的价值：它关心「属于哪类地标」，不关心「和哪张图的点配对」。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 SALAD 与 SuperGlue 的「最优传输」，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。SuperGlue（0129）用 Sinkhorn 解「两张图关键点之间的匹配指派」（代价矩阵 N×M，feature↔feature）；SALAD 用 Sinkhorn 把「局部特征软分配到视觉词簇」（代价矩阵 n×(m+1)，feature→cluster），并加 cluster-to-feature 容量约束、不做残差减法。同叫 OT，一个是匹配、一个是聚合，目标不同。" onclick="lessonKit.answer(this,'q0138a')">SALAD 是聚合到簇，SuperGlue 是跨图匹配</button>
+          <button data-correct="no" data-explanation="不对。两者代价矩阵的维度与 marginals 都不同：SuperGlue 是「点×点」的跨图匹配，SALAD 是「特征×簇」的聚合。把 SALAD 说成「和 SuperGlue 一样的跨图匹配」会抹掉本节最重要的区分——SALAD 没有「另一张图」参与，只有一张图的特征被分到簇。" onclick="lessonKit.answer(this,'q0138a')">两者都是跨两张图的关键点匹配</button>
+        </div>
+        <div class="quiz-feedback" id="q0138a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 和前面课程怎么接</h2>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>0011「检索被吃掉」的图像兑现</h4>
+          <p>从 DBoW2（0134）的视觉词袋，到本节用 DINOv2 基础模型 + 更聪明的聚合（跨图关联 / OT），图像 VPR 已被深度学习吃得相当透。基础模型当「零件」也呼应第六季 0121 WildGS-SLAM 用 DINOv2 做动态剔除。</p>
+        </div>
+        <div class="mini-card">
+          <h4>与 0129 SuperGlue 的 OT 区分</h4>
+          <p>本季硬要求：SuperGlue 的 OT 是「匹配指派」（middle-end），SALAD 的 OT 是「描述子聚合」。本课用一张「螺丝-螺丝孔」图彻底分清——这是学习者最容易混、也最该分清的一处。</p>
+        </div>
+        <div class="mini-card">
+          <h4>为 0139 埋伏笔</h4>
+          <p>SALAD 单阶段反超两阶段 R²Former，是「聚合比重排序更关键」的最强证据；下一节 0139 会系统比较「单阶段检索 vs 检索+重排序」。</p>
+        </div>
+      </div>
+
+      <section class="exercise-box" id="f">
+        <ol>
+          <li>用「螺丝-螺丝孔」类比，说清 SALAD 的 OT 聚合与 SuperGlue 的 OT 匹配有何本质不同。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>SuperGlue：两张图的关键点（螺丝）去配另一张图的螺丝孔（点），代价矩阵是 N×M，目标是「谁配谁」，配不上的进垃圾桶（无匹配）——是跨图匹配。SALAD：一张图的局部特征（螺丝）软分配到 K 个视觉词簇（孔），代价矩阵是 n×(m+1)，目标是「分进哪类地标、压成一个向量」，无信息的进垃圾桶——是聚合。同叫 Sinkhorn+dustbin，但一个是 feature↔feature、一个是 feature→cluster，目标根本不同。</p>
+            </div></details>
+          </li>
+          <li>CricaVPR 的「跨图像关联」发生在流程的哪一步？它和「检索后重排序」是一回事吗？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>发生在<b>特征提取阶段</b>：把 batch 内所有图的「第 i 个区域特征」串成序列送 cross-image encoder，让每个区域特征生成时借同批其他图的信息。它不是检索后的重排序——检索阶段仍是单图全局特征最近邻。所以它仍是<b>单阶段全局检索</b>，只是特征本身被「批内互看」增强了。</p>
+            </div></details>
+          </li>
+          <li>为什么 SALAD 单阶段能反超两阶段 R²Former？给出关键数字。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>MSLS Challenge R@1：SALAD（单阶段）75.0，R²Former（检索+重排序）73.0，TransVPR 63.9。SALAD 用「DINOv2 微调末 4 层 + OT 聚合 + dustbin 丢无信息特征」把描述子本身做得极好，使得「好的聚合」比「检索后再重排序」更关键；且它 latency 仅 2.41 ms、显存 0.63 GB，远轻于 R²Former 的 8.88 ms / 202 ms。说明 2024 年聚合质量压过了重排序。</p>
+            </div></details>
+          </li>
+          <li>SALAD 相比 NetVLAD，除了「换成 OT」还有哪两处改动？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>① 引入 dustbin 列吸收无信息特征（天空/路面/动态物），NetVLAD 没有；② <b>不做残差减法</b>——NetVLAD 聚合的是「特征减簇中心」的加权和，SALAD 直接求和 $\sum_i P_{i,k}f_{i,k}$。此外 score 矩阵从零学、不初始化 k-means 质心，也减少了归纳偏置。</p>
+            </div></details>
+          </li>
+          <li>为什么 SALAD 用 DINOv2 但「只微调最后 4 层」？全微调会怎样？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>作者实测（Table 6）：训 2/4 层最佳（92.2/92.0），训 6 层 91.6，<b>全训反而 89.2（过拟合/灾难性遗忘）</b>。用参数高效微调（PETL adapter 思路）保留 DINOv2 预训练学到的通用视觉先验，只适配 VPR 任务，既好又快（4 epoch 收敛）。这也和 CricaVPR「冻结 DINOv2 + adapter」殊途同归。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0137-BEVPlace与SeqOT-鸟瞰图与序列时空.html">← BEVPlace 与 SeqOT：鸟瞰图与序列时空</a>
+        <a class="next" href="0139-混合架构与统一检索.html">下一课：混合架构与统一检索 →</a>
+      </div>
+      <p class="foot-note">CricaVPR 让图互看、SALAD 用 OT 聚合；记住 SALAD 的 OT 是「聚合到簇」不是「跨图匹配」🔩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

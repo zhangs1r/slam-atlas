@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DBoW2 2012 · 词袋法怎么变成工程标准 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0134</div>
+      <h1>DBoW2 2012 · 词袋法怎么变成工程标准</h1>
+      <p class="subtitle">把「这一帧里有没有出现过哪些地标」压成一个向量，回环检测就能在毫秒级跑完 —— 它至今还是 ORB-SLAM 的心脏 📚</p>
+      <div class="hero-meta">
+        <span>🎯 主题：二进制词袋（BoW）回环检测</span>
+        <span>👥 作者：Dorian Gálvez-López / Juan D. Tardós</span>
+        <span>📅 2012 · <i>Bags of Binary Words for Fast Place Recognition in Image Sequences</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">词袋怎么建起来</a>
+        <a href="#c">怎么判断回到老地方</a>
+        <a href="#d">实验：快、准、0 假阳性</a>
+        <a href="#e">诚实的局限</a>
+        <a href="#f">和前面课程怎么接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能回答① 用「书索引页」类比讲清词袋（BoW）是怎么把一张图压成一串「视觉词」的；② 区分 direct index 与 inverse index 各自的用途；③ 写出 L1-score 相似度并解释它为什么是「越像越大」；④ 说清 DBoW2 给后续 ORB-SLAM 回环留下的技术地基。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本篇是 <b>第三季 0043–0045 ORB-SLAM 三兄弟的 BoW 回环</b> 的共同祖先——ORB-SLAM 用的就是 DBoW2 这套「二进制词袋 + 倒排索引」。它也是 <b>第一季 0011 那句「深度学习先吃掉匹配与检索」</b> 中「检索」那一半的<b>手工时代标杆</b>：在 2012 年，回环检索还完全不需要神经网络。本课会先立住这个手工基准，<b>0140 才用学习式方法回头跟它比</b>。另外它 0 假阳性的结果，正好呼应 <b>第一季 0014 的回环假阳性铁律</b>。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><b>⚠️ 先说明一处材料问题（本季硬要求）：</b>这篇论文的 md 文件<b>开头约 32 行是另一篇完全无关的论文的串页垃圾</b>（讲的是多机器人持续巡查 / 巡逻优化，含优化问题 A4、加权刷新时间 RTI* 等），是 PDF 拼接或 OCR 串页导致，与 DBoW2 毫无关系。本课内容<b>只从该 md 中段（真正的「Bags of Binary Words…」正文）取</b>，绝不引用那段垃圾。</p>
+      </div>
+
+      <h2>1. 它到底在做什么：先讲人话</h2>
+      <p>想象你在给一栋楼做巡检机器人。它每走几米就拍一张照。过一会儿它又绕回同一层走廊——你怎么让它「意识到」自己回来过？最笨的办法是拿新照片和所有旧照片逐张像素比对，慢到不可用。DBoW2 的思路是：<b>别记照片长什么样，只记「这张照片里出现了哪些地标」</b>。比如「门把手、消火栓、墙角线」各算一种「视觉词」，一帧图就变成一袋词（bag of words）：{门把手:3, 消火栓:1, 墙角线:5}。下次再拍到一袋很像的词，机器人就判断「八九成是同一个地方」。</p>
+      <p>注意一个关键点：它<b>不存文字、不存像素</b>，只存「哪些视觉词、各出现了几次」。这跟我们查书先翻索引页、而不是把整本书背下来是一个道理。DBoW2 的贡献，是把这个想法用<b>二进制描述子（BRIEF）</b>做到又准又实时，还顺手解决了「怎么快速找回哪些图里有某个词」。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 词袋怎么建起来：视觉词、词表树、两种索引</h2>
+      <p>要造一袋「视觉词」，得先有本「词典」。DBoW2 的做法是：离线从大量无关图片里提 <b>FAST 角点 + BRIEF 二进制描述子（256 bit）</b>，用 k-medians 把它们聚成一棵<b>分层词表树</b>——树有 6 层、每层 10 个分支，叶子共 100 万个「视觉词」。来了一张新图，就把它的每个关键点描述子沿树往下走，落到哪个叶子，就记它属于哪个词。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">词袋像「书的索引页」：不记全文，只记「哪个词在哪几页」</text>
+          <!-- 左：相机图 -->
+          <rect x="40" y="70" width="120" height="90" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="70" cy="100" r="4" fill="#2f5b82"/><circle cx="95" cy="120" r="4" fill="#2f5b82"/><circle cx="120" cy="95" r="4" fill="#2f5b82"/><circle cx="85" cy="135" r="4" fill="#2f5b82"/>
+          <text x="100" y="182" text-anchor="middle" font-size="10" fill="#3a6a90">一帧图像</text>
+          <text x="100" y="200" text-anchor="middle" font-size="9.5" fill="#8a7365">4 个关键点</text>
+          <!-- 箭头到词袋 -->
+          <line x1="160" y1="115" x2="250" y2="115" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="250,115 242,110 243,121" fill="#6b5a4e"/>
+          <!-- 中：词袋 -->
+          <rect x="255" y="60" width="200" height="110" rx="8" fill="#fff7ee" stroke="#e0a98f" stroke-width="1.6"/>
+          <text x="355" y="84" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8432c">这一帧的 BoW 向量</text>
+          <text x="270" y="108" font-size="10" fill="#5b4636">门把手 → 3</text>
+          <text x="270" y="128" font-size="10" fill="#5b4636">消火栓 → 1</text>
+          <text x="270" y="148" font-size="10" fill="#5b4636">墙角线 → 5</text>
+          <text x="270" y="166" font-size="9.5" fill="#8a7365">（只记「有哪些词、各几次」）</text>
+          <!-- 右：索引页 -->
+          <rect x="500" y="55" width="340" height="150" rx="6" fill="#f7fbf6" stroke="#c3d9c6" stroke-width="1.4"/>
+          <text x="670" y="78" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6136">书的索引页（倒排索引）</text>
+          <text x="515" y="102" font-size="10" fill="#3b6e49">门把手 … 12, 45, 78, <tspan font-weight="700" fill="#a8432c">本帧</tspan></text>
+          <text x="515" y="124" font-size="10" fill="#3b6e49">消火栓 … 33, <tspan font-weight="700" fill="#a8432c">本帧</tspan>, 90</text>
+          <text x="515" y="146" font-size="10" fill="#3b6e49">墙角线 … 3, 20, 61, <tspan font-weight="700" fill="#a8432c">本帧</tspan></text>
+          <text x="515" y="168" font-size="9.5" fill="#8a7365">一个词一张卡：列出含它的所有图</text>
+          <line x1="455" y1="115" x2="498" y2="115" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="498,115 490,110 491,121" fill="#6b5a4e"/>
+          <text x="450" y="250" text-anchor="middle" font-size="10.5" fill="#8a7365">「倒排索引」让提问「哪些图里有门把手」一查即得，检索无需遍历所有图</text>
+          <!-- 底注 -->
+          <text x="450" y="300" text-anchor="middle" font-size="10.5" fill="#8a7365">direct index（直接索引）：存「本帧每个关键点落在词表第几层」→ 几何校验时快速取对应点</text>
+          <text x="450" y="322" text-anchor="middle" font-size="10.5" fill="#8a7365">inverse index（倒排索引）：存「每个词出现在哪些图」→ 候选检索时快速反查</text>
+          <text x="450" y="360" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">要记住：词袋只记「词频」，不记「词在图里哪」——位置信息靠 direct index 单帧内保存</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边一帧图像被提了 4 个关键点；中间把它压成一袋「视觉词」（只看有哪些词、各出现几次）；右边是「书的索引页」式倒排索引——每个词一张卡，列出所有含它的图，本帧出现过的词被标红。底下点出 direct index 与 inverse index 的分工。<br>
+          <b>怎么看这张图：</b>① 一本书的索引页不抄全文，只告诉你「消火栓在 33、90 页」——回环检测同理，靠「词袋向量」而非像素。② 倒排索引的妙处：问「哪些图里有门把手」直接翻门把手那张卡即可，<b>不用把全部历史图遍历一遍</b>。③ direct index 是本帧私有的「小抄」，记录每个关键点对应词表树第几层，几何校验时用来快速取对应点、加速 RANSAC。<br>
+          <b>要记住的一句话：</b>词袋用「词频向量」代替「像素」，再用倒排索引把「按词找图」做成 O(1) 查询——这就是它快的根本。
+        </figcaption>
+      </figure>
+
+      <p>这里有两套索引，初学者容易混，务必分清：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>inverse index（倒排索引）</h4>
+          <p>「某词 → 出现在哪些图」。检索时拿着当前帧的词去翻卡，立刻得到候选图，<b>不必遍历整个地图库</b>。这是回环「快」的来源。</p>
+        </div>
+        <div class="mini-card">
+          <h4>direct index（直接索引）</h4>
+          <p>「本帧 → 每个关键点落在词表第几层、对应哪些特征」。几何校验（RANSAC 求基本矩阵）时，凭它直接取两帧的对应点，<b>免去重新匹配</b>，把校验从 14 ms 压到 0.8 ms。</p>
+        </div>
+      </div>
+      <p>作者还做了一个反直觉的设计：<b>词表越大反而越快</b>。他用 100 万词（常规方法只用 1–4 万）。词越多，每帧命中的词越稀疏，倒排索引里每张卡挂的图越少，查询扫描的项反而更少——原话是「a big vocabulary can improve the computation time」。这就是 DBoW2 在 26 292 帧序列上做到约 22 ms/帧（比 SIFT/SURF 方法快一个数量级）的底气。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">图书馆卡片柜：一个词一张卡，卡上写「哪些书里有它」</text>
+          <!-- 卡片柜 -->
+          <rect x="120" y="60" width="660" height="210" rx="8" fill="#efe7da" stroke="#a98f6f" stroke-width="2"/>
+          <line x1="120" y1="130" x2="780" y2="130" stroke="#a98f6f" stroke-width="1.4"/>
+          <line x1="120" y1="200" x2="780" y2="200" stroke="#a98f6f" stroke-width="1.4"/>
+          <line x1="340" y1="60" x2="340" y2="270" stroke="#a98f6f" stroke-width="1.4"/>
+          <line x1="560" y1="60" x2="560" y2="270" stroke="#a98f6f" stroke-width="1.4"/>
+          <!-- 抽屉标签 -->
+          <rect x="135" y="72" width="180" height="44" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1"/>
+          <text x="225" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#7a5b34">抽屉：门把手</text>
+          <rect x="355" y="72" width="180" height="44" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1"/>
+          <text x="445" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#7a5b34">抽屉：消火栓</text>
+          <rect x="575" y="72" width="180" height="44" rx="4" fill="#fff" stroke="#c9b48f" stroke-width="1"/>
+          <text x="665" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#7a5b34">抽屉：墙角线</text>
+          <!-- 卡片内容 -->
+          <text x="225" y="160" text-anchor="middle" font-size="9.5" fill="#5b4636">图12, 45, 78…</text>
+          <text x="225" y="178" text-anchor="middle" font-size="9.5" fill="#a8432c" font-weight="700">＋本帧</text>
+          <text x="445" y="160" text-anchor="middle" font-size="9.5" fill="#5b4636">图33, 90…</text>
+          <text x="445" y="178" text-anchor="middle" font-size="9.5" fill="#a8432c" font-weight="700">＋本帧</text>
+          <text x="665" y="160" text-anchor="middle" font-size="9.5" fill="#5b4636">图3, 20, 61…</text>
+          <text x="665" y="178" text-anchor="middle" font-size="9.5" fill="#a8432c" font-weight="700">＋本帧</text>
+          <text x="225" y="232" text-anchor="middle" font-size="9.5" fill="#5b4636">同一词 → 多图列表</text>
+          <text x="445" y="232" text-anchor="middle" font-size="9.5" fill="#5b4636">同一词 → 多图列表</text>
+          <text x="665" y="232" text-anchor="middle" font-size="9.5" fill="#5b4636">同一词 → 多图列表</text>
+          <!-- 机器人查询 -->
+          <circle cx="60" cy="165" r="22" fill="#2f5b82"/>
+          <text x="60" y="170" text-anchor="middle" font-size="10" fill="#fff">机器人</text>
+          <line x1="82" y1="165" x2="118" y2="165" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="118,165 110,160 111,171" fill="#6b5a4e"/>
+          <text x="450" y="300" text-anchor="middle" font-size="10.5" fill="#8a7365">检索 = 拿着本帧的词，去每个对应抽屉翻卡，取并集 → 候选图。无需逐图比对像素</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个三行三列的卡片柜，每个抽屉是一种「视觉词」，抽屉里列着所有含该词的图；本帧出现过的词被标红加进对应卡。左侧机器人拿本帧的词去翻抽屉，取并集即得候选图。<br>
+          <b>怎么看这张图：</b>① 这就是 inverse index 的具象版——「门把手」抽屉里挂着所有拍到门把手的图。② 检索时只看本帧命中了哪几个词、翻那几张卡，<b>候选图范围瞬间缩小</b>，这正是 DBoW2 实时性的核心。③ 注意它是「词 → 图」的反向结构，所以叫「倒排」（inverted）。<br>
+          <b>要记住的一句话：</b>倒排索引把「在百万张图里找相似的」变成「翻几张词卡取并集」——复杂度从线性降到几乎常数。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 怎么判断「又回到老地方了」：相似度与三重保险</h2>
+      <p>有了词袋向量，下一步是算「两帧有多像」。DBoW2 用 <b>L1-score</b>：先把两帧的 tf-idf 加权向量各自归一化，算它们的 L1 距离，再用 1 减去，得到 0–1 之间的分数（完全一样是 1，完全不同是 0）。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$s(v_1,v_2)=1-\frac{1}{2}\Big\|\frac{v_1}{\|v_1\|}-\frac{v_2}{\|v_2\|}\Big\|_1$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>把两帧的描述子向量各自归一化（消掉「这帧词多、那帧词少」的量纲差），算它们的 L1 距离，再用 1 减掉——<b>越像分数越接近 1，越不像越接近 0</b>。tf-idf 加权让「罕见地标词」比「到处都有的词」更有判别力。</p>
+      <p>光看单帧相似度还不够稳，DBoW2 叠了三重保险，这也是它敢宣称「0 假阳性」的原因：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>① 归一化打分</h4>
+          <p>用 $\eta(v_t,v_{t_j})=s(v_t,v_{t_j})/s(v_t,v_{t-\Delta t})$ 做时间归一化，再用阈值 $\alpha=0.3$ 过滤掉「和历史平均差不多」的弱相似，压住日常雷同场景的误报。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 时间一致性</h4>
+          <p>要求连续 $k=3$ 帧都判为同一地点才接受（islands 分组），防止单帧抽风。作者还用「islands」避免时序相邻同地点帧互相竞争。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 几何校验</h4>
+          <p>用 direct index 取出的对应点跑 RANSAC 求基本矩阵，至少 12 个内点才最终确认。这一步把「看着像」变成「真的对得上几何」。</p>
+        </div>
+      </div>
+      <p>这里有个和现代学习的对照：DBoW2 的几何校验是<b>显式 RANSAC + 基本矩阵</b>，而本季后面的学习式方法（如 0138 SALAD、0140 LCR-Net）往往把「对应」也学出来。但 DBoW2 在 2012 年就已经把「检索 → 校验」这条流水线定了下来，<b>0045 ORB-SLAM 的回环几乎原样继承</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_Bags_of_Binary_Words_for_Fast_Place_Recognition_in_Image/444b3082a9080232d72a235c0e0ae0b15d52f383fcdb8928d083f73066c115e9.jpg" alt="Vocabulary tree and direct/inverse indexes">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Example of vocabulary tree and direct and inverse indexes that compose the image database. The vocabulary words are the leaf nodes of the tree. The inverse index stores the weight of the words in the images in which they appear. The direct index stores the features of the images and their associated nodes at a certain level of the vocabulary tree.<br>
+          <b>怎么看这张图：</b>左边是分层词表树，叶子节点就是 100 万个「视觉词」；中间 inverse index 把「词 → 含它的图」列出来；右边 direct index 把「图 → 它各层结点上的特征」存下来。三者合起来就是上面的「索引页 / 卡片柜」那两张自绘图的工程真身。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 实验结果：快、准、0 假阳性</h2>
+      <p>作者在 5 个差异很大的数据集（NewCollege、Bicocca25b、Ford2、Malaga6L、CityCentre，总长 0.7–4 km）上测试，整条流程含特征提取约 22 ms/帧（26 292 帧均值 21.6 ms，峰值 51.7 ms），比 SIFT/SURF 方法的 300–700 ms 快一个数量级。召回率在默认配置下从 30.6%（CityCentre）到 81.2%（Bicocca25b）不等，但<b>全部 100% 精度、0 假阳性</b>。</p>
+      <p>注意一个诚实的细节：在 CityCentre 上，它的召回（30.61%）其实<b>低于</b>对比方法 FAB-MAP 2.0（38.77%）——作者归因于 direct index（DI2）在视角差大时退化。也就是说，DBoW2 不是「处处最强」，而是「快且稳、绝不乱报」。这恰好印证了 <b>第一季 0014 的回环假阳性铁律</b>：一次假阳性就能毁掉整张地图，所以「0 假阳性」比「高召回」在某些场景更值钱。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_Bags_of_Binary_Words_for_Fast_Place_Recognition_in_Image/08fcdbfccdc6d844fceb64ebe6690ce85aa2564160e9fede61583ad6b8e5a261.jpg" alt="Loops detected in five datasets">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Loops detected by our system in the five datasets (Top to bottom: NewCollege, Bicocca25b, Ford2, Malaga6L, and CityCentre), with some examples of correct loops detected in scenes with motion blur and slight scale and perspective change. On the right-hand side, lines depict final corresponding features. On the left-hand side, the trajectory of the robot is depicted with thin black lines in new places and with thick red lines in revisited areas. There are no false positives in any case.<br>
+          <b>怎么看这张图：</b>左边是机器人轨迹，细黑线是新地方、粗红线是「被判为重访」的区域；右边是几组正确回环的对应特征连线。作者特意强调「any case 都没有假阳性」——粗红线恰好盖在真实回环区，没有把不相关的路段错误连起来。这正是 0014 铁律最想要的性质。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_Bags_of_Binary_Words_for_Fast_Place_Recognition_in_Image/83c618df72af0f3dd27a2c7648e3091be72c71d61274801c72415c067fb9c657.jpg" alt="Words matched by BRIEF and SURF64">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Examples of words matched by using (pair on the left) BRIEF and (pair on the right) SURF64 descriptors.<br>
+          <b>怎么看这张图：</b>左列用 BRIEF（本文方法）、右列用 SURF64 配同一对回环帧，连线是把「同一个视觉词」连起来。大多数情况下 BRIEF 配到的正确词不比 SURF64 少；第二例里只有 BRIEF 能闭环。这说明二进制描述子在平面相机运动（地面机器人常态）下「够用且快 10×」。但第三例相机倾斜、出现旋转，BRIEF 就败下阵来——这正是下一节要讲的先天短板。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 诚实的局限：BRIEF 的先天缺陷</h2>
+      <p>DBoW2 快和省内存（32 MB 词表 vs SIFT 的 256 MB）的代价，是选了 BRIEF 这种<b>没有旋转与尺度不变性</b>的二进制描述子。作者自己把这个列为首要局限：它只适合「平面相机运动」的地面 / 城市机器人，<b>不适合全地形、空天、穿戴相机</b>。原话建议后续改用 ORB / BRISK 这类兼具不变性的二进制描述子。</p>
+      <div class="callout">
+        <p><b>和前面课程怎么接：</b>这正好解释了为什么 <b>0043–0045 ORB-SLAM 用的是 ORB 描述子而非 BRIEF</b>——ORB 在 BRIEF 基础上加了旋转不变（oFAST 定向 + rBRIEF），正是为了补 DBoW2 这里点名的坑。所以本课和 ORB-SLAM 回环是「父子」关系：父亲（DBoW2）定框架、用二进制词袋；儿子（ORB-SLAM）换上更鲁棒的描述子把框架落地成完整 SLAM。这也告诉我们 <b>0011 那句「检索被吃掉」要加时间定语</b>：2012 年检索还是纯手工，是后面 0135–0140 的学习式方法才把它「吃掉」。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 DBoW2 的「快」和「0 假阳性」，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。DBoW2 靠「倒排索引 + 大词表（100 万词）」把候选检索做成近乎 O(1)，整帧约 22 ms；并用时间一致性 + 几何校验（RANSAC）三重保险，在 5 个数据集上做到 100% 精度、0 假阳性（尽管 CityCentre 召回低于 FAB-MAP）。它快且稳，但不等于处处召回最高。" onclick="lessonKit.answer(this,'q0134a')">靠倒排索引与三重保险做到又快又不乱报</button>
+          <button data-correct="no" data-explanation="不对。DBoW2 在 CityCentre 的召回（30.6%）其实低于 FAB-MAP 2.0（38.8%），作者归因于 direct index 在视角差大时退化。它的核心是「0 假阳性 + 实时」，不是「处处召回最高」。" onclick="lessonKit.answer(this,'q0134a')">它在所有数据集上召回都远高于对比方法</button>
+        </div>
+        <div class="quiz-feedback" id="q0134a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 和前面课程怎么接 + 本块收束</h2>
+      <p>把本课放进本季「检索 / 回环」这条线，定位就清楚了：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>它是「检索」手工时代的标杆</h4>
+          <p>0011 说「深度学习先吃掉检索」——但 2012 年检索还完全靠词袋 + 几何校验，<b>不需要任何神经网络</b>。本课立住这个基准，后面 0135–0140 才用学习式方法跟它比「谁更准、谁更鲁棒」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>它是 ORB-SLAM 回环的祖先</h4>
+          <p>0043–0045 的 BoW 回环直接源于此；ORB 描述子是为了补本节点名的「BRIEF 无旋转不变」短板。理解 DBoW2，就读懂了 ORB-SLAM 为什么能实时回环。</p>
+        </div>
+        <div class="mini-card">
+          <h4>它回应了假阳性铁律</h4>
+          <p>第一季 0014 立下「一次假阳性毁整张地图」。DBoW2 用三重保险交出了「0 假阳性」的工程答案；但它是激光/视觉的<b>手工</b>答案，0140 才会用学习式方法重新回答这条铁律。</p>
+        </div>
+      </div>
+      <p>下一节（0135）我们离开「图像词袋」，进入<b>激光点云</b>的几何描述子——Scan Context 与 Scan Context++。它会和 <b>第四季 0093 的 RING++</b> 正面撞上：同样是「免训练的几何描述子」，谁对旋转 / 平移更鲁棒？这正是 0011 那句话在激光侧的延伸。</p>
+
+      <section class="exercise-box">
+        <ol>
+          <li>用「书索引页」类比，向没学过 SLAM 的人解释词袋（BoW）为什么能让回环检测变快。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>查书时我们翻索引页看「消火栓在 33、90 页」，而不是把整本书背下来逐字比对。回环检测同理：一帧图被压成「哪些视觉词、各出现几次」的向量，再靠倒排索引（一个词一张卡，列着含它的所有图）反查候选——候选范围瞬间缩小，无需把百万张历史图逐张像素比对，所以能实时。这就是 DBoW2 快的根本。</p>
+            </div></details>
+          </li>
+          <li>direct index 和 inverse index 分别解决什么、为什么都需要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>inverse index（倒排索引）是「词 → 哪些图」，用来快速反查候选图，让检索近乎 O(1)；direct index（直接索引）是「本帧 → 每个关键点落在词表第几层」，几何校验时凭它直接取两帧对应点、免去重新匹配，把 RANSAC 从 14 ms 压到 0.8 ms。一个管「找候选」，一个管「做校验」，缺了任何一个都既慢又难保证几何正确。</p>
+            </div></details>
+          </li>
+          <li>为什么作者说「词表越大反而越快」？这和直觉相反，请解释机制。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>词越多（100 万 vs 常规 1–4 万），每帧命中的词越稀疏，倒排索引里每张卡挂的图越少，查询时要扫描的项反而更少。所以「大词表」不是负担，而是让倒排索引更稀疏、查询更快——作者原话即「a big vocabulary can improve the computation time」。</p>
+            </div></details>
+          </li>
+          <li>DBoW2 的「0 假阳性」靠哪三重保险？它和第一季 0014 假阳性铁律是什么关系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>三重保险：① 时间归一化 + 阈值 α=0.3 过滤弱相似；② 时间一致性 k=3 连续帧都判同地；③ 几何校验 RANSAC 求基本矩阵、至少 12 内点。它用「绝不乱报」回应了 0014 铁律「一次假阳性毁整张地图」——但这是手工方案的答案，且代价是 CityCentre 召回偏低（30.6%）。学习式方法能否既压假阳性又不丢召回，要等 0140 来结账。</p>
+            </div></details>
+          </li>
+          <li>为什么 ORB-SLAM 用 ORB 而不是 BRIEF 做词袋？这和上节 DBoW2 的局限有何联系？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>DBoW2 自陈首要局限是 BRIEF 无旋转/尺度不变性，只适合平面相机运动的地面机器人。ORB 在 BRIEF 上加了方向（oFAST 定向 + rBRIEF），补上旋转不变，因此 ORB-SLAM 选 ORB 当词袋描述子。这正是「父子」关系：DBoW2 定框架、用二进制词袋；ORB-SLAM 换更鲁棒的描述子把它落地成完整 SLAM。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0133-SiLK2023-极简前端与匹配块小结.html">← SiLK 2023：极简前端与匹配块小结</a>
+        <a class="next" href="0135-ScanContext与加加-免训练的几何描述子.html">下一课：Scan Context 与 ++ →</a>
+      </div>
+      <p class="foot-note">DBoW2 把「检索」做成手工时代工程标准，也是 ORB-SLAM 回环的心脏。下一节进入激光点云的几何描述子 📚</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DINOv2 与 SAM · 两个通用零件 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0147</div>
+      <h1>DINOv2 与 SAM：两个通用零件</h1>
+      <p class="subtitle">战场换了一块：不再是「学习式方法替换流水线的某一步」，而是「基础模型变成流水线里直接能调的零件」🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：自监督通用特征 + 可提示分割</span>
+        <span>👥 作者：Meta AI Research（DINOv2 与 Inria 合作）</span>
+        <span>📅 2023 · <i>DINOv2: Learning Robust Visual Features without Supervision</i> / <i>Segment Anything</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">接在谁后面</a>
+        <a href="#c">DINOv2：不用标签学特征</a>
+        <a href="#d">SAM：一个点，三个 mask</a>
+        <a href="#e">在 SLAM 里当什么零件</a>
+        <a href="#f">三张自绘图</a>
+        <a href="#g">三处必须诚实标注的地方</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>搞懂这一块和前几块<b>叙事上的根本不同</b>：<b>0129–0146</b> 讲的是「学习式方法<b>替换</b>流水线里的某一步」（匹配、检索、位姿），而 <b>0147–0150</b> 讲的是「学习式方法<b>变成</b>流水线里可以直接调用的零件」。本节先看两个最通用的零件：<b>DINOv2</b>（自监督通用视觉特征）与 <b>SAM</b>（可提示分割）。要讲清 DINOv2 的 <b>LVD-142M、ViT-g 约 11 亿参数、用自监督而不是标签</b>，SAM 的 <b>SA-1B（11M 图 / 1.1B mask）</b>与<b>三重歧义设计（一个点提示输出 3 个 mask）</b>；并且<b>显式标出 DINOv2 正文公平性数字与它自己 Table 12 对不上的那处矛盾</b>。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>第六季 0121 WildGS-SLAM</b>：它已经拿 DINOv2 的特征不确定度来剔动态物体——这就是「基础模型当零件」的现成例子，本课必须回链，别让 DINOv2 显得凭空冒出来。<b>第六季 0114 动态场景三种打法</b>与 <b>0120 SNI-SLAM</b>（高斯带语义标签）：前者用语义/特征剔动态，后者要语义标签，都是 SAM 这一类零件能直接补上的位置。<b>第四季 0082 SuMa++</b>：用语义剔动态的激光版先例。<b>0129–0133 匹配块</b>：SuperGlue/SiLK 用网络<b>学</b>特征，而 DINOv2 提供一个<b>免微调、直接能用</b>的通用特征——两条路要对照着看。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>想象你在一间不熟悉的房子里找一个插座。你不需要先看说明书、也不需要预先记住插座长什么样——你脑子里有一套「通用的视觉本事」：不管插座是白的还是黑的、在墙上还是桌子后面、亮着灯还是关了灯，你都能认出来。这套本事是你在生活里<b>看了无数东西自己攒出来的</b>，没人给你一张一张贴标签。</p>
+      <p>DINOv2 干的就是这件事：<b>让网络自己在几亿张没标签的图上学会这套通用视觉本事</b>，然后把这份本事冻结（frozen）下来，交给别人当零件用。SAM 干的是另一件事：<b>你随便点一下，它就给你圈出那个东西的轮廓</b>。它俩都不关心几何、不输出位姿、也不建图——它们是两个「通用零件」。</p>
+      <p>术语先露脸：<b>自监督（self-supervised）</b>＝没有人工标签，网络靠「同一样东西的不同视角/不同遮挡」互相监督着学；<b>冻结特征（frozen features）</b>＝拿到特征后<b>不再微调</b>，直接喂给下游小模型（线性分类器、匹配器）就能干活；<b>prompt（提示）</b>＝你给模型的「要分割哪儿」的指示，可以是点、框、掩码或文本；<b>mask（掩码）</b>＝一张和原图同尺寸的二值图，白色就是「圈出来的区域」；<b>[CLS] token</b>＝ViT 里专门用来概括整张图的那个向量，对应本节说的<b>图像级特征</b>；<b>patch token</b>＝每个 14×14 小块的向量，对应<b>像素级特征</b>。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面：从「替换一步」到「调用零件」</h2>
+      <p>先把这个转折讲清楚。前面四块是这么一条线：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">块</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">课号</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">它替换了流水线的哪一步</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">特征匹配</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">0129–0133</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">数据关联 / 前端特征（第一季 0004 那一环）</td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">场景识别与回环</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">0134–0140</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">检索（第一季 0014 假阳性铁律的心腹之患）</td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">端到端里程计</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">0141–0146</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">位姿（只吃掉了很窄的一段）</td></tr>
+          <tr><td style="padding:.55rem .7rem;font-weight:700">视觉基础模型</td><td style="padding:.55rem .7rem;font-weight:700">0147–0150</td><td style="padding:.55rem .7rem">它<b>不替换</b>某一步，它变成<b>可以被任何一步调用的零件</b></td></tr>
+        </tbody>
+      </table>
+      <p>「零件」这个词不是修辞。一个东西要能当零件，得满足三条：<b>①通用</b>（换个场景、换个任务照样能用）；<b>②免微调</b>（拿来就用，不用为你这个数据集再训一遍）；<b>③接口干净</b>（输入输出是什么，一目了然）。DINOv2 和 SAM 恰好各有一次「开箱即用」的公开发布（都是 Apache 2.0 开源），这是它们能变成零件的前提。</p>
+      <div class="callout">
+        <p><b>已经在用它的课</b>：第六季 <b>0121 WildGS-SLAM</b> 用 <b>DINOv2 的特征不确定度</b>判断「这个像素可能不是真的」，从而在<b>不需要深度、也不需要语义标签</b>的情况下把走过的人从建图里剔掉——这就是「基础模型当零件」的现成案例，比本课早一季出现。第六季 <b>0114</b> 的三篇动态工作与 <b>0120 SNI-SLAM</b> 需要语义标签，而 SAM 正好能免训练补上这类标签；第四季 <b>0082 SuMa++</b> 是激光侧「用语义剔动态」的先行者。所以本课不是新话题，而是把那些「已经在被悄悄调用」的零件正式摆上台面。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. DINOv2：不用标签，学出一套通用特征</h2>
+      <p>DINOv2 的输入输出简单得让人意外：<b>输入一张 RGB 图，输出两组特征向量</b>——图像级的 <b>[CLS] token</b>（概括整张图）和像素级的 <b>patch token</b>（每个 14×14 小块一个向量）。注意它输出的是<b>特征向量</b>，不是标签、不是框、不是图；也没有归一化到 0–1，是原始表征。主干是标准 ViT，最大的 <b>ViT-g/14</b> 隐藏维 1536、24 个头、约 <b>11 亿参数</b>。</p>
+      <h3>3.1 数据：LVD-142M 是怎么来的</h3>
+      <p>自监督最怕的是「数据不够杂」。论文做了一条自动数据管线：先把已有的精选集（ImageNet-22k、ImageNet-1k、Google Landmarks 等）当查询，去一个 <b>12 亿张的无标注池</b>里按视觉相似度检索（每个查询取 4 个近邻），最后得到 <b>LVD-142M＝1.42 亿张精选图</b>。整条管线<b>不依赖任何元数据或文本，纯靠视觉相似度</b>。用 20 个节点 × 8 张 V100-32GB，不到 2 天就能产出这个数据集。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_DINOv2/707817c37f8bcffbbc8b75f24e75df5b59fbf1761b975a2128a4fc213fdbc012.jpg" alt="DINOv2 data processing pipeline">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b>Overview of our data processing pipeline. Images from curated and uncurated data sources are first mapped to embeddings. Uncurated images are then deduplicated before being matched to curated images. The resulting combination augments the initial dataset through a self-supervised retrieval system.（数据管线总览：精选集与非精选集先各自映射成嵌入；非精选集先去重，再与精选图匹配；合成结果通过自监督检索系统扩充初始数据集。）</p>
+          <p><b>怎么看这张图：</b>盯住中间那条「检索」的分岔：左边是人工整理好的精选集，右边是原始无标注池。原始池先去重（去掉近乎重复的图），再被当作「候选」与精选图做相似度匹配，被选中的才留下来。所以 <b>1.42 亿不是随便抓来的，是被「筛选」出来的</b>——这也解释了论文为什么说「没有精选数据就很难有好特征」。</p>
+          <p><b>要记住的一句话：</b>DINOv2 的燃料不是「更多图」，而是「更挑的图」——数据管线和网络结构一样是贡献点。</p>
+        </figcaption>
+      </figure>
+      <h3>3.2 怎么在没有标签的情况下学</h3>
+      <p>思路叫「教师—学生」：同一张图的两种视角分别送进<b>学生网络</b>和<b>教师网络</b>（教师是学生的指数滑动平均 EMA，不是另外训练出来的），然后要求学生输出的分布去<b>逼近</b>教师的分布。因为「这是猫还是狗」的标签根本不存在，能当监督信号的只有「两边的输出要一致」——这就是自监督。论文把图像级的 DINO 交叉熵损失与 patch 级的 iBOT 损失合起来，并加了 SwAV 式中心化（Sinkhorn-Knopp）与 KoLeo 正则；训练效率相对 iBOT 约 <b>2× 更快、只用约 1/3 显存</b>。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathcal{L} \;=\; \mathcal{L}_{\text{图像级}} \;+\; \mathcal{L}_{\text{patch 级}} \;=\; -\!\!\sum_{i} P^{\text{教师}}_{i}\log P^{\text{学生}}_{i} \;+\; \big(\text{被遮住的小块也要猜回来}\big) $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>第一项是「图像级」的：把教师网络输出的概率分布 $P^{\text{教师}}$ 当答案，让学生网络的分布 $P^{\text{学生}}$ 去贴合它——因为没人给标签，只能拿「教师的看法」当答案，所以叫自监督。第二项是「patch 级」的：故意遮住图上的若干小块，要求学生把被遮住那块的表示猜回来（iBOT 那一套），这样特征才在<b>像素级</b>也靠得住。注意指数的写法是示意，原文是 DINO 交叉熵 + iBOT 两项的组合，不是这一个式子。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_DINOv2/af0259d862a004849b68cfebf0b1f138ff3e8d006c2dd50fccca47190d3890d1.jpg" alt="DINOv2 model scale versus data scale">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>Model scale versus data scale. Evolution of performance as a function of model size for two different pretraining datasets: ImageNet-22k (14M images) and LVD-142M (142M images). The ViT-g trained on LVD-142M surpasses the ViT-g trained on ImageNet-22k on most benchmarks.（模型规模对数据规模：同一横轴是模型大小，两条线分别是 1400 万张的 ImageNet-22k 与 1.42 亿张的 LVD-142M；在 LVD-142M 上训出的 ViT-g 在多数基准上超过在 ImageNet-22k 上训出的 ViT-g。）</p>
+          <p><b>怎么看这张图：</b>横轴是模型从小到大，纵轴是性能，两条线分别是两个数据集。要看的不是「越大越好」（这谁都知道），而是<b>两条线之间的落差</b>：同样的模型大小，数据喂对了的那条明显更高。这说明在自监督里，<b>「数据选得好」和「模型变大」是两件独立的事</b>，不能互相替代。</p>
+          <p><b>要记住的一句话：</b>这一块的账要分开算——模型规模 11 亿参数是一笔，1.42 亿精选图是另一笔，两笔都花出去才有「开箱即用」。</p>
+        </figcaption>
+      </figure>
+      <h3>3.3 它到底「通用」在哪</h3>
+      <p>论文的核心卖点是「frozen 特征在图像级与像素级都超过当时最好的 OpenCLIP，而且不用微调」。图像级好理解（分类、检索）；<b>像素级才是 SLAM 关心的</b>——patch token 可以直接当稠密特征用，做匹配、做对应。另外还有一个训练细节值得记：高分辨率阶段把图升到 <b>518×518</b> 短训一下，像素级任务明显变好。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_DINOv2/f26238095557a4a2b20119e81a67cdab74b9e464808c69c0200f02d0b4c40f09.jpg" alt="DINOv2 first PCA components visualization">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>Visualization of the first PCA components. We compute a PCA between the patches of the images from the same column (a, b, c and d) and show their first 3 components. Each component is matched to a different color channel. Same parts are matched between related images despite changes of pose, style or even objects. Background is removed by thresholding the first PCA component.（前三个 PCA 主成分的可视化：同一列的图之间对 patch 做 PCA，三个主成分分别映射到三个颜色通道。尽管姿态、风格甚至物体都变了，相关的图之间「相同的部位」还是对上了；背景用第一主成分阈值去掉。）</p>
+          <p><b>怎么看这张图：</b>这是全篇最能说明「特征通用」的一张。每一列里几张图是<b>同一类东西的不同姿态、不同风格、甚至不同个体</b>，把它们的 patch 特征做 PCA 后映射成颜色，你会发现<b>同色区域落在同一个语义部位上</b>（都是「眼睛」、都是「轮子」、都是「把手」）。这说明网络学到的不是像素颜色，而是「这个部位是干什么用的」。</p>
+          <p><b>要记住的一句话：</b>通用特征的意思是——<b>不用重新训练，它已经知道「哪些部位是同一类部位」</b>；这正是它能被别的系统当零件调用的原因。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_DINOv2/c83471a922991485e5383d751797de666fd2942be03c4754b1bd877245f54837.jpg" alt="DINOv2 matching across images">
+        <figcaption>
+          <p><b>原图注（Fig. 10）：</b>Matching across images. We match patch-level features between images from different domains, poses and even objects that share similar semantic information. This exhibits the ability of our model to transfer across domains and understand relations between similar parts of different objects.（跨图匹配：在不同领域、不同姿态、甚至只是语义相近的不同物体之间做 patch 级特征匹配。这展示了模型跨域迁移、以及理解不同物体「相似部位之间关系」的能力。）</p>
+          <p><b>怎么看这张图：</b>连线跨越了灰度图、彩色图、不同物种、不同姿态。要盯着看的是<b>连线有没有乱</b>——如果特征只记住了颜色和纹理，跨域就会连错；这里能连对，说明特征抓的是<b>语义部位</b>。对 SLAM 来说这正是「不换模型就能跨场景用」的底气。</p>
+          <p><b>要记住的一句话：</b>DINOv2 的匹配本事是「跨域」的——它给的不是某个数据集的特征，而是「什么部位像什么部位」的常识。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. SAM：一个点提示，为什么要吐三个 mask</h2>
+      <p>SAM 的队伍比 DINOv2 还大一截：它一次性交出了三件东西——<b>可提示分割</b>这个新任务、<b>SAM 模型</b>本身、以及数据引擎产出的 <b>SA-1B</b> 数据集（<b>1100 万张</b>授权高清图、<b>11 亿个</b> mask，其中 <b>99.1% 是全自动生成</b>的）。数据引擎分三阶段：辅助人工阶段产出 430 万 mask / 12 万图；半自动阶段再加 590 万 / 18 万图；最后的全自动阶段用 <b>32×32 的规则网格点</b>去提示，一次刷出 1100 万图、11 亿 mask。质量抽查（随机 500 张人工校对）显示 <b>94% 的自动 mask 与人工标注 IoU 超过 90%</b>——作为参照，人工之间的标注一致性只有 85–91%。</p>
+      <h3>4.1 三件组件：贵的一件，便宜的两件</h3>
+      <p>模型被刻意拆成三块：<b>图像编码器</b>（MAE 预训练的 ViT-H，最贵，但每张图只跑一次、结果可复用）、<b>prompt 编码器</b>（点/框用位置编码 + 类型嵌入、文本用 CLIP 文本编码器、掩码用卷积嵌入）、<b>mask 解码器</b>（两类 cross-attention 的 Transformer 解码块 + 动态 mask head）。这样拆的好处在数字上很直观：<b>图像编码只做一次，之后 prompt + 解码在浏览器 CPU 上只要约 50 毫秒</b>。损失是 focal loss 与 dice loss 的组合，训练时每个 mask 随机采 11 轮 prompt。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_SegmentAnything/0783d60ca16f16e75aa4689ef9f1c9457ca9621f20a85aa3dbff70e464cdf4f5.jpg" alt="SAM overview">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>Segment Anything Model (SAM) overview. A heavyweight image encoder outputs an image embedding that can then be efficiently queried by a variety of input prompts to produce object masks at amortized real-time speed. For ambiguous prompts corresponding to more than one object, SAM can output multiple valid masks and associated confidence scores.（SAM 总览：重量级图像编码器输出图像嵌入，随后可被各种输入 prompt 高效查询，以摊薄后的实时速度产出物体掩码。对于对应多个物体的歧义 prompt，SAM 可以输出多个合法掩码及各自的置信度。）</p>
+          <p><b>怎么看这张图：</b>顺着箭头走一遍就懂了这个架构的用意：上半部分是「重」的（图像编码器），下半部分分出去的三条支路是「轻」的（点、框、掩码/文本提示）。因为上半部分只跑一次，所以不管你换多少个提示、圈多少个东西，<b>边际成本都很低</b>——这就是论文说的 amortized real-time（摊薄后的实时）。</p>
+          <p><b>要记住的一句话：</b>SAM 的快不是因为它小，而是因为它把「重活」和「反复问」这两件事拆开了。</p>
+        </figcaption>
+      </figure>
+      <h3>4.2 ★ 三重歧义：一个点，三个都成立的答案</h3>
+      <p>这是 SAM 最容易被漏掉、也最关键的一个设计。你在一张照片上点一下一个人身上的衣服，问「分割这里」——可是「这里」到底指什么？<b>那件衣服？那个人？还是整张画面里的人加车加背景？</b>三个答案都合法，问题本身有歧义。</p>
+      <p>SAM 的处理方式不是硬猜一个，而是<b>单次预测直接输出 3 个 mask，每个带一个「预测 IoU」作置信度</b>，让下游自己挑。论文用这个设计在 23 个数据集的单点分割评测里，有 <b>16 个超过当时最强的单点方法 RITM，最高领先 47 IoU</b>。这也解释了为什么评测里要专门画「oracle 圈」——单点提示可能对不上某一份真值，但 SAM 的三个预测里往往有一个是对的。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_SegmentAnything/c79fb5b0d595530c36ca5e7fe0c7a5ae9fcfd6c0775cc691174d3c39a4f83350.jpg" alt="Three valid masks from one ambiguous point prompt">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b>Each column shows 3 valid masks generated by SAM from a single ambiguous point prompt (green circle).（每一列展示的是：SAM 由同一个有歧义的点提示（绿圈）生成的 3 个合法掩码。）</p>
+          <p><b>怎么看这张图：</b>竖着看一列就是一问三答：照片没变、绿点没变，三行的 mask 粒度却不一样——有的圈得很大（整个物体甚至带周边），有的圈到中等部件，有的只圈一小块。这不是模型「拿不准」，而是<b>它把「你要多大一块」这个歧义显式地交回给你</b>。横着看几列，会发现不同物体的歧义程度不同——有的物体本身就是小物件，三答差别不大。</p>
+          <p><b>要记住的一句话：</b>SAM 的三重歧义设计＝<b>不替你决定「该多大」，而是给你三个粒度 + 置信度，让你按用途挑</b>。这是它能直接当零件的前提。</p>
+        </figcaption>
+      </figure>
+      <h3>4.3 作者自己承认的局限</h3>
+      <p>照本项目的规矩，作者自述的弱点要写出来：SAM <b>容易漏掉细结构、偶尔产生小碎块</b>；<b>边界不如专门的 zoom-in 类方法锐利</b>；<b>纯图像编码器整体并不实时</b>（实时的是「提示 + 解码」那一步）；<b>文本提示比较初步、不够稳健</b>。在 SLAM 里用得最多的是「框或点 → 物体掩码」这条最稳的路径。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 这两个零件在 SLAM 里怎么用</h2>
+      <p>关键是要说清：<b>这两个东西都不给你几何</b>。DINOv2 给特征向量，SAM 给掩码。它们不输出位姿、不输出深度，所以它们不会「替换」SLAM 的哪一步，而是<b>被哪一步调用</b>。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>DINOv2 → 稠密视觉描述子</h4>
+          <p><b>图像级</b>：做检索 / 回环检测的全局描述子。<br><b>像素级</b>：做稠密匹配，或当替代手工特征的前端。<br><b>已经发生的例子</b>：第六季 <b>0121 WildGS-SLAM</b> 用它的特征不确定度剔动态，不需要深度也不需要语义标签。</p>
+        </div>
+        <div class="mini-card">
+          <h4>SAM → 语义 / 实例掩码</h4>
+          <p>用检测器给的框、或直接点提示，得到物体掩码，喂给：语义地图、物体级地图、<b>动态物体剔除</b>。<br>和第四季 <b>0082 SuMa++</b>（语义剔动态的激光版）、第六季 <b>0120 SNI-SLAM</b>（高斯带语义标签）是同一用途。</p>
+        </div>
+        <div class="mini-card">
+          <h4>为什么能不微调就用</h4>
+          <p>两者的公开版都是 <b>Apache 2.0</b>，且论文反复强调「零样本 / 免微调」——这是它们能当「零件」而不是「又一篇要复现的论文」的工程前提。</p>
+        </div>
+        <div class="mini-card">
+          <h4>它们的接口干净在哪</h4>
+          <p>DINOv2：图进、特征出。<br>SAM：图 + 提示进、掩码出。<br><b>没有隐藏状态、没有需要配合的其它模块</b>——这才是「零件」的含义。</p>
+        </div>
+      </div>
+      <p>顺带说一句<a href="#b">第 2 节</a>那张表第三行的道理：为什么零件化比「替换一步」的影响更大？因为替换某一环，你得先有一整套流水线；而零件是可以<b>塞进任何一条流水线</b>的。这也是为什么 0147 这一课放在「战场」的最后——它是前面所有工作的<b>公共基础设施</b>。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 三张自绘图：把「通用」和「歧义」画出来</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">同一把椅子，四季昼夜雨雪各拍一张——特征落点却挤成一簇</tspan></text>
+
+          <text x="240" y="58" text-anchor="middle" font-size="12" fill="#5b6472">生活里：同一把椅子，条件全变了</text>
+
+          <rect x="30" y="70" width="95" height="150" rx="4" fill="#e8f4ff" stroke="#9bbce6"/>
+          <rect x="55" y="120" width="45" height="55" fill="#b07a4a"/>
+          <rect x="48" y="175" width="59" height="9" fill="#8a5f38"/>
+          <line x1="54" y1="184" x2="54" y2="208" stroke="#8a5f38" stroke-width="4"/>
+          <line x1="100" y1="184" x2="100" y2="208" stroke="#8a5f38" stroke-width="4"/>
+          <circle cx="106" cy="88" r="9" fill="#f6c445"/>
+          <text x="77" y="238" text-anchor="middle" font-size="11" fill="#5b6472">① 晴</text>
+
+          <rect x="140" y="70" width="95" height="150" rx="4" fill="#dbe6ef" stroke="#8ba8c4"/>
+          <rect x="165" y="120" width="45" height="55" fill="#8d6440"/>
+          <rect x="158" y="175" width="59" height="9" fill="#6d4c2e"/>
+          <line x1="164" y1="184" x2="164" y2="208" stroke="#6d4c2e" stroke-width="4"/>
+          <line x1="210" y1="184" x2="210" y2="208" stroke="#6d4c2e" stroke-width="4"/>
+          <line x1="200" y1="80" x2="194" y2="94" stroke="#5b86a8" stroke-width="2"/>
+          <line x1="212" y1="86" x2="206" y2="100" stroke="#5b86a8" stroke-width="2"/>
+          <line x1="218" y1="74" x2="212" y2="88" stroke="#5b86a8" stroke-width="2"/>
+          <text x="187" y="238" text-anchor="middle" font-size="11" fill="#5b6472">② 雨</text>
+
+          <rect x="250" y="70" width="95" height="150" rx="4" fill="#f2f6fa" stroke="#b9c6d4"/>
+          <rect x="275" y="120" width="45" height="55" fill="#9c8470"/>
+          <rect x="268" y="175" width="59" height="9" fill="#7c6857"/>
+          <line x1="274" y1="184" x2="274" y2="208" stroke="#7c6857" stroke-width="4"/>
+          <line x1="320" y1="184" x2="320" y2="208" stroke="#7c6857" stroke-width="4"/>
+          <circle cx="300" cy="80" r="2.5" fill="#8ba8c4"/>
+          <circle cx="312" cy="90" r="2.5" fill="#8ba8c4"/>
+          <circle cx="292" cy="92" r="2.5" fill="#8ba8c4"/>
+          <circle cx="306" cy="74" r="2.5" fill="#8ba8c4"/>
+          <text x="297" y="238" text-anchor="middle" font-size="11" fill="#5b6472">③ 雪</text>
+
+          <rect x="360" y="70" width="95" height="150" rx="4" fill="#dfe3f2" stroke="#8e97c4"/>
+          <rect x="385" y="120" width="45" height="55" fill="#5d5a52"/>
+          <rect x="378" y="175" width="59" height="9" fill="#45423c"/>
+          <line x1="384" y1="184" x2="384" y2="208" stroke="#45423c" stroke-width="4"/>
+          <line x1="430" y1="184" x2="430" y2="208" stroke="#45423c" stroke-width="4"/>
+          <circle cx="436" cy="88" r="9" fill="#4a5390"/>
+          <circle cx="441" cy="85" r="8" fill="#dfe3f2"/>
+          <text x="407" y="238" text-anchor="middle" font-size="11" fill="#5b6472">④ 夜</text>
+
+          <text x="240" y="278" text-anchor="middle" font-size="11.5" fill="#5b6472">① 到 ④ 是同一把椅子</text>
+          <text x="240" y="302" text-anchor="middle" font-size="11.5" fill="#5b6472">相机、光照、天气、季节全不一样</text>
+
+          <line x1="462" y1="145" x2="508" y2="145" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="508,145 498,140 498,150" fill="#c9a13a"/>
+
+          <rect x="520" y="70" width="350" height="250" rx="10" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="695" y="94" text-anchor="middle" font-size="12.5" fill="#3a4a5a">特征向量空间</text>
+          <line x1="560" y1="120" x2="560" y2="300" stroke="#d7dce5" stroke-width="1.5"/>
+          <line x1="560" y1="300" x2="845" y2="300" stroke="#d7dce5" stroke-width="1.5"/>
+          <circle cx="795" cy="150" r="6" fill="#9aa3b0"/>
+          <text x="795" y="132" text-anchor="middle" font-size="11" fill="#8a93a0">另一个东西</text>
+          <circle cx="655" cy="238" r="6" fill="#e0392b"/>
+          <circle cx="672" cy="250" r="6" fill="#e0392b"/>
+          <circle cx="640" cy="256" r="6" fill="#e0392b"/>
+          <circle cx="668" cy="264" r="6" fill="#e0392b"/>
+          <text x="770" y="250" text-anchor="middle" font-size="12" fill="#9d553f">四个落点挤成一簇</text>
+
+          <text x="450" y="352" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">网络不认识「椅子」这个词，但它让这四张图的特征落点几乎重合——这就是通用特征</tspan></text>
+          <text x="450" y="382" text-anchor="middle" font-size="11.5" fill="#5b6472">所以一套冻结特征能跨场景、跨传感器直接拿来用，不必为每个新任务重新训练</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边是同一把椅子在晴天、雨天、雪天、夜晚各拍的一张照片（相机位置、光照、天气、季节全变）；右边是这些照片在「特征向量空间」里的落点——<b>红色四个点几乎挤在一起</b>，而另一个不相干的东西（灰点）落在很远的地方。</p>
+          <p><b>怎么看这张图：</b>① 先看左边的变化有多大：同一件东西，像素几乎完全不同；② 再看右边界里的距离：四个红点之间的间距远小于它们到灰点的距离，说明网络把「同一件东西的不同拍法」压成同一处；③ 关键是<b>没有任何标签参与</b>——没人告诉网络「这四张是同一把椅子」，是它自己对出来的（下一张图讲怎么做到的）。</p>
+          <p><b>要记住的一句话：</b>「通用特征」的意思是——<b>特征空间里的距离反映的是「是不是同一类东西」，而不是「像素像不像」</b>；这就是它换个场景还能用的原因。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">自监督：没人告诉它「这两张是同一个场景」，它自己把特征对齐</tspan></text>
+
+          <rect x="30" y="64" width="200" height="150" rx="4" fill="#eef4f9" stroke="#9bbce6"/>
+          <text x="40" y="84" font-size="11" fill="#3a4a5a">视角 1</text>
+          <line x1="40" y1="200" x2="220" y2="200" stroke="#b9c6d4" stroke-width="1.5"/>
+          <rect x="60" y="110" width="50" height="90" fill="#c9dcec" stroke="#8ba8c4"/>
+          <rect x="140" y="150" width="46" height="50" fill="#d9b98f"/>
+          <rect x="134" y="196" width="58" height="7" fill="#b08a5d"/>
+          <circle cx="196" cy="88" r="8" fill="#f6c445"/>
+
+          <rect x="30" y="240" width="200" height="130" rx="4" fill="#eef4f9" stroke="#9bbce6"/>
+          <text x="40" y="260" font-size="11" fill="#3a4a5a">视角 2（往前走了一步）</text>
+          <line x1="40" y1="354" x2="220" y2="354" stroke="#b9c6d4" stroke-width="1.5"/>
+          <rect x="70" y="250" width="70" height="104" fill="#c9dcec" stroke="#8ba8c4"/>
+          <rect x="165" y="288" width="60" height="66" fill="#d9b98f"/>
+          <rect x="155" y="350" width="76" height="8" fill="#b08a5d"/>
+
+          <line x1="232" y1="140" x2="295" y2="180" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="295,180 284,177 289,170" fill="#c9a13a"/>
+          <line x1="232" y1="305" x2="295" y2="262" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="295,262 284,265 289,272" fill="#c9a13a"/>
+
+          <rect x="305" y="140" width="180" height="150" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="395" y="200" text-anchor="middle" font-size="13" fill="#2f5b82">同一个网络</text>
+          <text x="395" y="224" text-anchor="middle" font-size="11" fill="#3a4a5a">共享权重 · 教师靠 EMA</text>
+
+          <line x1="487" y1="185" x2="550" y2="130" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="550,130 539,132 544,139" fill="#c9a13a"/>
+          <line x1="487" y1="250" x2="550" y2="300" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="550,300 539,297 544,290" fill="#c9a13a"/>
+
+          <rect x="557" y="70" width="300" height="115" rx="6" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="567" y="90" font-size="11" fill="#3a4a5a">视角 1 的特征图</text>
+          <rect x="580" y="102" width="22" height="20" fill="#d94f3d"/><rect x="606" y="102" width="22" height="20" fill="#3d7ad9"/><rect x="632" y="102" width="22" height="20" fill="#d9b43d"/><rect x="658" y="102" width="22" height="20" fill="#3da85c"/>
+          <rect x="580" y="126" width="22" height="20" fill="#8a5f38"/><rect x="606" y="126" width="22" height="20" fill="#a03dd9"/><rect x="632" y="126" width="22" height="20" fill="#3dd9c4"/><rect x="658" y="126" width="22" height="20" fill="#d93d8a"/>
+          <rect x="580" y="150" width="22" height="20" fill="#c8cdd4"/><rect x="606" y="150" width="22" height="20" fill="#6b7280"/><rect x="632" y="150" width="22" height="20" fill="#2f6f4f"/><rect x="658" y="150" width="22" height="20" fill="#b0562f"/>
+
+          <rect x="557" y="245" width="300" height="115" rx="6" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="567" y="265" font-size="11" fill="#3a4a5a">视角 2 的特征图</text>
+          <rect x="580" y="277" width="22" height="20" fill="#d94f3d"/><rect x="606" y="277" width="22" height="20" fill="#3d7ad9"/><rect x="632" y="277" width="22" height="20" fill="#d9b43d"/><rect x="658" y="277" width="22" height="20" fill="#3da85c"/>
+          <rect x="580" y="301" width="22" height="20" fill="#8a5f38"/><rect x="606" y="301" width="22" height="20" fill="#a03dd9"/><rect x="632" y="301" width="22" height="20" fill="#3dd9c4"/><rect x="658" y="301" width="22" height="20" fill="#d93d8a"/>
+          <rect x="580" y="325" width="22" height="20" fill="#c8cdd4"/><rect x="606" y="325" width="22" height="20" fill="#6b7280"/><rect x="632" y="325" width="22" height="20" fill="#2f6f4f"/><rect x="658" y="325" width="22" height="20" fill="#b0562f"/>
+
+          <text x="707" y="228" text-anchor="middle" font-size="11.5" fill="#9d553f">同色 = 网络认为</text>
+          <text x="707" y="244" text-anchor="middle" font-size="11.5" fill="#9d553f">它们是同一个东西</text>
+
+          <text x="450" y="382" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">没有一张标签：能当监督信号的只有「两种视角的输出必须一致」——这就是自监督</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边是同一间屋子的两张照片（视角 1 站在原处、视角 2 往前走了一步），中间是<b>同一个网络</b>（共享权重），右边是两幅特征图——<b>同一个格子位置的颜色是一样的</b>，表示网络认为它们对应同一个东西。</p>
+          <p><b>怎么看这张图：</b>① 注意中间的方框只有<b>一个</b>，两张图走的是同一套权重，不是两个模型；② 右边两张特征图逐格比对：相同的颜色出现在相同的位置，说明「同一个物体」在两幅图里落到了同一个表示上；③ 最要紧的是<b>整张图里没有一个「标签」</b>——监督信号就是「两种视角的输出要一致」，再叠加「被遮住的小块要猜回来」这一项。</p>
+          <p><b>要记住的一句话：</b>自监督 = <b>把「输入自己的另一面」当成答案</b>；不用人来贴标签，也能把「什么是同一个东西」这条常识灌进网络。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">SAM：同一个点提示，三种都合法的答案</tspan></text>
+
+          <rect x="30" y="60" width="200" height="200" rx="6" fill="#eef4f9" stroke="#9bbce6"/>
+          <rect x="50" y="90" width="60" height="60" fill="#d6e6f4"/>
+          <line x1="40" y1="230" x2="220" y2="230" stroke="#b9c6d4" stroke-width="2"/>
+          <circle cx="156" cy="122" r="13" fill="#4a6fa5"/>
+          <line x1="156" y1="135" x2="158" y2="188" stroke="#4a6fa5" stroke-width="8"/>
+          <line x1="157" y1="148" x2="184" y2="160" stroke="#4a6fa5" stroke-width="5"/>
+          <circle cx="134" cy="210" r="14" fill="none" stroke="#3a4a5a" stroke-width="3"/>
+          <circle cx="184" cy="210" r="14" fill="none" stroke="#3a4a5a" stroke-width="3"/>
+          <line x1="134" y1="210" x2="158" y2="188" stroke="#3a4a5a" stroke-width="2.5"/>
+          <line x1="184" y1="210" x2="158" y2="188" stroke="#3a4a5a" stroke-width="2.5"/>
+          <circle cx="156" cy="164" r="7" fill="#2fa84f" stroke="#ffffff" stroke-width="2"/>
+          <polygon points="164,170 164,196 170,190 176,200 181,196 175,186 183,184" fill="#2b2b2b"/>
+          <text x="130" y="282" text-anchor="middle" font-size="11" fill="#5b6472">输入：一张照片 + 一个点</text>
+
+          <text x="590" y="52" text-anchor="middle" font-size="12.5" fill="#9d553f">同一个点、三种都成立的答案（各带一个预测 IoU）</text>
+
+          <rect x="290" y="60" width="200" height="200" rx="6" fill="#ffffff" stroke="#c9d2e0"/>
+          <line x1="300" y1="230" x2="480" y2="230" stroke="#dde3ea" stroke-width="2"/>
+          <circle cx="416" cy="122" r="13" fill="#f0a03c"/>
+          <line x1="416" y1="135" x2="418" y2="188" stroke="#f0a03c" stroke-width="8"/>
+          <line x1="417" y1="148" x2="444" y2="160" stroke="#f0a03c" stroke-width="5"/>
+          <circle cx="394" cy="210" r="14" fill="none" stroke="#f0a03c" stroke-width="4"/>
+          <circle cx="444" cy="210" r="14" fill="none" stroke="#f0a03c" stroke-width="4"/>
+          <line x1="394" y1="210" x2="418" y2="188" stroke="#f0a03c" stroke-width="3"/>
+          <line x1="444" y1="210" x2="418" y2="188" stroke="#f0a03c" stroke-width="3"/>
+          <text x="390" y="282" text-anchor="middle" font-size="11" fill="#5b6472">整体：骑手 + 自行车</text>
+
+          <rect x="490" y="60" width="200" height="200" rx="6" fill="#ffffff" stroke="#c9d2e0"/>
+          <line x1="500" y1="230" x2="680" y2="230" stroke="#dde3ea" stroke-width="2"/>
+          <circle cx="616" cy="122" r="13" fill="#f0a03c"/>
+          <line x1="616" y1="135" x2="618" y2="188" stroke="#f0a03c" stroke-width="8"/>
+          <line x1="617" y1="148" x2="644" y2="160" stroke="#f0a03c" stroke-width="5"/>
+          <circle cx="594" cy="210" r="14" fill="none" stroke="#c9d2e0" stroke-width="3"/>
+          <circle cx="644" cy="210" r="14" fill="none" stroke="#c9d2e0" stroke-width="3"/>
+          <line x1="594" y1="210" x2="618" y2="188" stroke="#c9d2e0" stroke-width="2.5"/>
+          <line x1="644" y1="210" x2="618" y2="188" stroke="#c9d2e0" stroke-width="2.5"/>
+          <text x="590" y="282" text-anchor="middle" font-size="11" fill="#5b6472">局部：只圈骑手的人形</text>
+
+          <rect x="690" y="60" width="200" height="200" rx="6" fill="#ffffff" stroke="#c9d2e0"/>
+          <line x1="700" y1="230" x2="880" y2="230" stroke="#dde3ea" stroke-width="2"/>
+          <circle cx="816" cy="122" r="13" fill="#c9d2e0"/>
+          <line x1="816" y1="135" x2="818" y2="188" stroke="#c9d2e0" stroke-width="8"/>
+          <line x1="817" y1="148" x2="844" y2="160" stroke="#c9d2e0" stroke-width="5"/>
+          <circle cx="794" cy="210" r="14" fill="none" stroke="#c9d2e0" stroke-width="3"/>
+          <circle cx="844" cy="210" r="14" fill="none" stroke="#c9d2e0" stroke-width="3"/>
+          <line x1="794" y1="210" x2="818" y2="188" stroke="#c9d2e0" stroke-width="2.5"/>
+          <line x1="844" y1="210" x2="818" y2="188" stroke="#c9d2e0" stroke-width="2.5"/>
+          <rect x="806" y="138" width="24" height="50" rx="4" fill="#f0a03c" opacity="0.75"/>
+          <text x="790" y="282" text-anchor="middle" font-size="11" fill="#5b6472">更小局部：只圈上衣</text>
+
+          <text x="450" y="330" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">prompt 编码器 + mask 解码器：点一下就直接吐轮廓，解码只要约 50 毫秒</tspan></text>
+          <text x="450" y="362" text-anchor="middle" font-size="11.5" fill="#5b6472">为什么不只给一个答案？因为「这块该多大」本来就没有唯一解——网络把歧义交回给下游自己挑</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>最左是输入——一张街上骑车的照片，加一个绿点提示（旁边那个黑色箭头就是「点一下」的光标）；右边三格是 SAM 对<b>同一个点</b>给出的三个答案，橙色区域逐格变小：从「骑手 + 自行车」到「骑手的人形」再到「只圈上衣」。</p>
+          <p><b>怎么看这张图：</b>① 三格里<b>照片和绿点完全没变</b>，变的只有 mask 的粒度——这不是模型答错，是问题本身有歧义；② 灰色的部分是「没被选中」的，橙色是「被选中的」，一眼能看出三档粒度；③ 真正落地时，网络会同时给这三块 mask 各配一个置信度（预测 IoU），下游按用途挑——要做语义地图大概选「局部」，要剔动态物体大概选「整体」。</p>
+          <p><b>要记住的一句话：</b>SAM 的强不是「更懂你要什么」，而是<b>它把「你要多大一块」这件说不清的事，变成三个可以自己挑的选项</b>。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h4>互动一：DINOv2 能被当零件用，关键靠什么？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0147a')">免微调就可用</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0147b')">参数量最大</button></p>
+        <p class="quiz-feedback" id="q0147a" hidden>正确。DINOv2 的卖点是 frozen 特征——图像级与像素级都超过当时的 OpenCLIP，而且不需要为下游任务微调。参数大（ViT-g 约 11 亿）和数据多（LVD-142M）是前提，但真正让它成为「零件」的是「拿来就用、接口干净」：图进、特征出。这正是 0147–0150 这一块与前四块的根本差别——不是替换某一步，而是被任何一步调用。</p>
+        <p class="quiz-feedback" id="q0147b" hidden>不对。参数多只是它变强的原因之一，不是它能当零件的原因。论文里恰恰强调了另一面：训练完还要<b>蒸馏成一系列小模型</b>，并用 high-resolution 短训阶段提升像素级任务；而且它发布的价值在于 frozen（免微调）可用。若只记住「因为它大」，就漏掉了「零件化」这件事的本质——接口干净、免微调、可被任意流水线调用。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 三处必须诚实标注的地方</h2>
+      <h3>7.1 ★ 公平性数字与论文自己的表格对不上</h3>
+      <p>论文第 8.1 节在讨论地理与收入公平性时，正文这样写：<b>非洲地区的性能比欧洲低 25.7%</b>，<b>高收入与低收入家庭之间差 31.7%</b>。但它自己的 <b>Table 12</b>（Dollar Street 数据集，16,073 张图、289 个家庭、54 个国家，识别 94 个概念）实测是：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">对照项</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">较弱的组</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">较强的组</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">正文声称</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">按表格算</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.55rem .7rem;border-bottom:1px solid #eee">地区</td>
+            <td style="padding:.55rem .7rem;border-bottom:1px solid #eee">Africa <b>74.0</b></td>
+            <td style="padding:.55rem .7rem;border-bottom:1px solid #eee">Europe <b>89.7</b></td>
+            <td style="padding:.55rem .7rem;border-bottom:1px solid #eee">低 25.7%</td>
+            <td style="padding:.55rem .7rem;border-bottom:1px solid #eee">相对差约 <b>17.5%</b>（绝对差 15.7 个点）</td>
+          </tr>
+          <tr>
+            <td style="padding:.55rem .7rem">收入</td>
+            <td style="padding:.55rem .7rem">low <b>67.4</b></td>
+            <td style="padding:.55rem .7rem">high <b>90.5</b></td>
+            <td style="padding:.55rem .7rem">差 31.7%</td>
+            <td style="padding:.55rem .7rem">相对差约 <b>25.5%</b>（绝对差 23.1 个点）</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>两种算法都对不上正文那两个数。所以本课的立场是：<b>引用公平性数字时以表格为准，并把矛盾显式标出</b>。表格给出的其它数字是：Asia 81.6、Americas 86.2、medium 83.3；作为对比，同为大规模自监督的 SEERv2 分别是 Africa 65.9、low 59.7、high 86.6——所以 DINOv2 确实比 SEERv2 更公平一些，<b>但它确实仍然偏向西方国家与富裕家庭</b>，这一点论文自己也承认。</p>
+      <div class="callout">
+        <p><b>为什么这处矛盾值得花一段讲</b>：它示范了本项目一直强调的那件事——<b>「诚实标注不确定性」不是客套，而是技术判断的一部分</b>。如果直接把 25.7% 抄进课件，读者会以为 DINOv2 的地区差距比实测大得多；如果反过来因为「表格更好看」就只引表格，又会掩盖论文自己承认的偏差。正确做法是<b>把两套数字都摆出来，并说明以哪个为准、为什么</b>。</p>
+      </div>
+      <h3>7.2 训练成本：一张要写进账本的账单</h3>
+      <p>「通用零件」不是天上掉下来的。论文 Table 14 给了碳足迹：DINOv2-g 在 A100-40GB（400W）上跑了 <b>22,016 GPU-hours</b>，PUE 取 1.1，总耗电 <b>9.7 MWh</b>，碳排放 <b>3.7 tCO₂eq</b>。训练用的是 A100 + PyTorch 2.0，还自己实现了 FlashAttention。</p>
+      <p>这笔账要记住的意义是：<b>你现在能「免费」调用的零件，代价是别人一次性付掉的</b>。它把成本从「每个使用者各付一次」变成了「一次付清、大家共享」——这是基础模型在工程上真正的价值主张。但也意味着<b>如果你要自己训一个，门槛是两万多个 GPU 小时</b>。</p>
+      <h3>7.3 两个零件的局限（作者自述）</h3>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>DINOv2</h4>
+          <p>仍然偏向西方国家、富裕家庭（见 7.1）；<b>需要精选数据才有好特征</b>——数据管线本身是贡献点，不是可选项。</p>
+        </div>
+        <div class="mini-card">
+          <h4>SAM</h4>
+          <p>易漏细结构、偶发小碎块；边界不如 zoom-in 类方法锐利；<b>纯图像编码器整体非实时</b>（实时的是提示+解码那一步）；文本提示较初步、不稳健。</p>
+        </div>
+      </div>
+      <p>一句提醒：这两个零件<b>都不输出几何</b>。它们不会替你解决尺度、不会替你算位姿。下一节 <b>0148 DUSt3R</b> 开始，我们才进入「几何」这一侧的基础模型。</p>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 读完你应该能回答</h2>
+      <ul>
+        <li>为什么说 0147–0150 是「学习式方法<b>变成</b>零件」，而 0129–0146 是「学习式方法<b>替换</b>某一步」？</li>
+        <li>DINOv2 的输入输出分别是什么？[CLS] token 与 patch token 各对应什么级别的任务？</li>
+        <li>LVD-142M 是怎么从 12 亿张无标注图里「挑」出 1.42 亿张的？为什么论文强调数据管线不依赖元数据与文本？</li>
+        <li>自监督的监督信号来自哪里？教师网络的权重是怎么得到的？</li>
+        <li>SAM 的三重歧义设计是什么？为什么它不直接输出一个 mask？</li>
+        <li>DINOv2 正文的 25.7% / 31.7% 与 Table 12 对不上，本课要求你怎么引用？</li>
+        <li>这两个零件在 SLAM 里分别在什么位置被调用？各举一个已经出现在前几季的例子。</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>用自己的话解释「自监督」，并说明它为什么能在没有标签的情况下起作用。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>自监督的意思是：<b>监督信号来自数据自己，而不是人来贴的标签</b>。DINOv2 的具体做法是教师—学生结构：同一张图的两种视角分别送进教师网络（学生权重的 EMA，不单独训练）和学生网络，然后要求学生输出的分布去逼近教师的分布。</p>
+              <p>为什么可行：因为「同一件东西在不同视角下应该是同一个东西」这条<b>常识本身就是免费的监督信号</b>。标签告诉你「这是猫」，而自监督告诉你「这两张图的这一块应该是同一个东西」——后者不需要人工标注，但足以把「什么部位像什么部位」学进网络。再叠加 patch 级的 iBOT 损失（遮住小块要求学生猜回来），特征在像素级也靠得住。</p>
+            </div></details>
+          </li>
+          <li>SAM 为什么要把「一个点提示」变成「三个 mask」？这个设计在 SLAM 里为什么反而更方便？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>为什么是三个：</b>因为点提示本身有歧义——你点在一个人身上，可能指那件衣服、可能指这个人、也可能指「画面里这一个整体」。三个答案都合法，而模型没法知道你的用途。硬猜一个必然在某些用途上出错，所以论文选择<b>把三种粒度都给出，各带一个预测 IoU 置信度</b>。</p>
+              <p><b>为什么在 SLAM 里更方便：</b>因为 SLAM 里的不同任务要的粒度本来就不同。做<b>动态物体剔除</b>（对照 0121 WildGS-SLAM、0114 动态三篇）通常希望圈得大一点、把整个会动的东西都盖住；做<b>语义 / 物体级地图</b>（对照 0120 SNI-SLAM）则希望精确到物体或部件。三个候选项省掉了「为了不同粒度再训一个模型」的麻烦——这就是「零件」的价值：<b>把选择权留给下游，而不是替下游拍板</b>。</p>
+            </div></details>
+          </li>
+          <li>为什么本课说 DINOv2 属于「感知前端零件」，而它在 0121 WildGS-SLAM 里被用来剔动态物体？这两件事矛盾吗？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不矛盾。「感知前端零件」说的是<b>它提供什么</b>：图像级 / 像素级的特征向量，<b>不含几何、不含位姿</b>。而 0121 的用法是<b>在这些特征之上再做一步判断</b>：把「同一个空间位置在不同帧里的特征不一致」当作「这里的特征不确定度偏高」的信号，从而判断这个像素可能不是真的（比如一个走过的人）。</p>
+              <p>也就是说，WildGS-SLAM 并没有让 DINOv2 去解决几何问题，而是<b>把特征当输入、把不确定度当输出</b>——DINOv2 在这个组合里仍然是零件，只是被接在了一个更聪明的判断模块前面。这条链正好说明「基础模型当零件」的生产方式：<b>零件提供表示，系统设计者决定怎么用这份表示</b>。</p>
+            </div></details>
+          </li>
+          <li>如果只允许你记住一个数字来向别人说明「训练一个通用零件有多贵」，你会选哪个？为什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>选 <b>22,016 GPU-hours</b>（A100-40GB、400W），或者换算后的 <b>9.7 MWh 耗电 / 3.7 tCO₂eq 碳排放</b>。理由：单纯说「1.42 亿张图」或「11 亿参数」只传达了规模，没传达成本；而 GPU-hours 是一个<b>可以和你自己的机器直接换算</b>的量——你把它除以手头的显卡数，就大致知道「自己复现一遍要多久」。</p>
+              <p>更重要的理由是它揭示了基础模型的商业逻辑：<b>成本从「每个使用者各付一次」变成「一次付清、大家共享」</b>。你之所以能「免费用一个通用零件」，是因为有人已经把这两万多小时花掉了。所以第 7 节说这笔账要写进本子——它既解释了零件的价值，也解释了自己复现的门槛。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0146-DPVO2023-图像块跟踪替代稠密光流.html">← 上一节：0146 DPVO 图像块跟踪替代稠密光流</a>
+        <a class="next" href="0148-DUSt3R2024-不必标定与位姿的重建.html">下一节：0148 DUSt3R：不必标定与位姿的重建 →</a>
+      </div>
+      <p class="foot-note">位姿战场打完，这一块换了个打法：不再替换某一步，而是造出谁都能调的零件。下一节开始，零件要从「感知」走向「几何」🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

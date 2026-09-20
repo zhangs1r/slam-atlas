@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MASt3R-SLAM 2025 · 双视图先验做实时 SLAM — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0149</div>
+      <h1>MASt3R-SLAM（2025）：用双视图先验做实时 SLAM</h1>
+      <p class="subtitle">0147/0148 讲的是「零件」；这一节要看清一件容易搞混的事——<b>它本身就是一套 SLAM 系统</b>，不是被别人调用的零件 🏗️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：双视图重建先验当底座 · 通用相机模型 · 15 FPS</span>
+        <span>👥 作者：R. Murai、E. Dexheimer、A. J. Davison（Imperial College London）</span>
+        <span>📅 2025 · <i>MASt3R-SLAM: Real-Time Dense SLAM with 3D Reconstruction Priors</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">身份差别</a>
+        <a href="#c">双视图先验当底座</a>
+        <a href="#d">通用相机模型</a>
+        <a href="#e">后端：Sim(3) 与全局优化</a>
+        <a href="#f">实测评率与精度</a>
+        <a href="#g">两张自绘图</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>搞清一件最容易被误解的事：<b>MASt3R-SLAM 本身就是一套完整的单目稠密 SLAM 系统</b>——它有跟踪、有局部融合、有图构建与回环、有后端全局优化，它<b>不是</b>「被别人当零件调用的基础模型」。要讲清它的三个设计：① 底座是 <b>MASt3R 的两视图重建先验</b>（MASt3R 是 DUSt3R 加匹配头的后继）；② 用<b>射线</b>表示把「相机模型」放宽到「所有射线过唯一相机中心」这一条假；③ 位姿用 <b>Sim(3)</b>、后端是「固定首帧 7 自由度」的二阶全局优化。还要记住它的实测评率：<b>15 FPS</b>、TUM 平均 ATE <b>0.030 m</b>、7-Scenes <b>0.047 m</b>、EuRoC <b>0.041 m</b>。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0148 DUSt3R</b>：本课直接建立在它的后继 MASt3R 之上——pointmap 表示、置信度、全局对齐的思路全部继承，只是从「离线、无序图像集合」搬到了「在线、增量视频」。<b>0145 DROID-SLAM</b>：这是最直接的对照对象（同为稠密单目 SLAM，它的 BA 是逐像素的、要 24GB 显存），本课却做到了 15 FPS。<b>0027 COLMAP</b> 与 <b>0148</b> 是「离线 SfM」，本课是在线 SLAM。<b>第三季 0040 的「尺度暗线」</b>在 0148 分岔出「不做度量」这一支，本课用 <b>Sim(3)</b> 把它接住。<b>0043–0045 ORB-SLAM 的 BoW 回环</b>在这里换成了 ASMK 检索 + MASt3R 解码验证。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话：这一次，它是「系统」不是「零件」</h2>
+      <p>前两节讲的都是零件：DINOv2 给你特征，SAM 给你掩码，DUSt3R 给你两张图的点图。它们都是「你喂它一点东西，它还你一点东西」，本身不构成一个能自己跑的系统。</p>
+      <p>MASt3R-SLAM 不一样。它是一个<b>吃着视频流、自己往前跑</b>的东西：新的帧进来 → 跟当前关键帧比一比、算出自己现在在哪 → 把这帧的几何融合进地图 → 判断要不要开一个新关键帧 → 定期检查有没有回到老地方（回环）→ 在后台把所有位姿和几何统一优化一遍。<b>这四件事（跟踪、融合、回环、全局优化）本来就是 SLAM 的定义</b>，所以它是系统。</p>
+      <p>术语先露脸：<b>先验（prior）</b>＝不需要你现场算、已经现成给你的信息（这里指 MASt3R 预训练模型训出来的那套「两张图之间该长什么样」的本事）；<b>底座</b>＝整个系统最底层依赖的那个东西，替换它整个系统都要重做；<b>关键帧</b>＝不把每一帧都存进地图，只挑有代表性的少数帧；<b>回环（loop closure）</b>＝发现「我回到了之前走过的地方」，然后修正累积误差（第一季 <b>0014</b> 那条假阳性铁律就是为它立的）；<b>Sim(3)</b>＝带尺度因子的相似变换（旋转 + 平移 + 缩放），比 SE(3) 多一个尺度自由度。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 身份差别：这一块六篇里只有两篇是系统</h2>
+      <p>这个块的名字叫「视觉基础模型」，但六篇的身份并不一样。必须把这张表摆在前面，否则很容易误以为六篇都是「一类东西」：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">篇目</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">课号</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">输入 → 输出</th>
+            <th style="text-align:left;padding:.6rem .7rem;border-bottom:2px solid rgba(204,120,92,.35)">身份</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">DINOv2</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">0147</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">单图 → 图像级 / 像素级特征</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">零件（感知特征）</td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">SAM</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">0147</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">图 + 提示 → 掩码</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">零件（分割）</td></tr>
+          <tr><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">DUSt3R</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">0148</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">≥2 张无约束图 → 点图 + 置信度</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">零件（几何先验）</td></tr>
+          <tr style="background:rgba(63,122,79,.06)"><td style="padding:.55rem .7rem;border-bottom:1px solid #eee;font-weight:700">MASt3R-SLAM</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee;font-weight:700">0149</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">单目 RGB 视频 → 轨迹 + 稠密几何</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee"><b>系统（是 SLAM）</b></td></tr>
+          <tr style="background:rgba(63,122,79,.06)"><td style="padding:.55rem .7rem;border-bottom:1px solid #eee;font-weight:700">SLAM3R</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee;font-weight:700">0150</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee">单目 RGB 视频 → 稠密点云</td><td style="padding:.55rem .7rem;border-bottom:1px solid #eee"><b>系统（偏重建）</b></td></tr>
+          <tr><td style="padding:.55rem .7rem">Metric3D v2</td><td style="padding:.55rem .7rem">0150</td><td style="padding:.55rem .7rem">单图（+ 焦距）→ 度量深度 + 法线</td><td style="padding:.55rem .7rem">零件（度量深度）</td></tr>
+        </tbody>
+      </table>
+      <p>该论文自己也把身份说得很清楚：它是<b>首个</b>把「两视图三维重建先验」当作跟踪、建图、重定位的<b>统一底座</b>的实时 SLAM 框架。论文还特别交代了一句关键差异：以前也有人把这些先验用在 SfM 上，但那是<b>离线、无序图像集合</b>的做法；而 SLAM 的数据是<b>增量到来的</b>，必须维持实时，所以需要全新的「低延迟匹配、地图维护、高效大尺度优化」这几件事——这恰好就是本课的三个贡献点。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 双视图先验当底座：底座换成了什么</h2>
+      <p>先说清楚它继承了什么。MASt3R 是 DUSt3R 的后继，输出比 DUSt3R 更丰富：<b>两张图的 pointmap + 置信度 + d 维匹配特征</b>（以及特征自己的置信度）。也就是说，它不只告诉你「这两张图的每个像素在哪」，还告诉你「这两张图里哪些像素是同一个东西」。这就是「两视图重建<b>与匹配</b>先验」的由来。</p>
+      <p>有了这份先验，很多传统 SLAM 里最麻烦的活就变样了：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>匹配不再靠手工描述子</h4>
+          <p>传统做法是 ORB/SIFT 提点再匹配（第一季 <b>0004</b> 那一环）。这里是<b>在两张 pointmap 之间做投影搜索</b>：把参考点图归一化成「像素 → 射线」的映射，然后迭代优化像素坐标，使两条射线的<b>夹角最小</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>它比原生 MASt3R 快 1000 倍</h4>
+          <p>论文的数字很直白：<b>对全部像素直接跑 MASt3R 匹配要 2000 毫秒，它自己的匹配只要 2 毫秒</b>，整个系统因此快了约 <b>40 倍</b>（FPS 口径）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>跟踪用「射线角误差」</h4>
+          <p>解相对位姿时比较的是<b>射线之间的夹角</b>，而不是三维点之间的欧氏距离。原因是深度预测本身有误差，用角误差对它更鲁棒。求解用 Gauss-Newton + IRLS（迭代重加权）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>局部融合用加权滑动平均</h4>
+          <p>每个关键帧有一张 canonical pointmap，多帧观测到同一区域时把它们<b>加权平均</b>融合起来。论文的消融（Table 5）显示：无标定时加权融合的 ATE 最低，在 EuRoC 上比另一种做法改善 1.3 cm。</p>
+        </div>
+      </div>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \theta \;=\; \angle\big(\psi\big([X^{i}_{i}]_{\mathbf p}\big),\ \psi(\mathbf x)\big),\qquad \mathbf p^{*}=\arg\min_{\mathbf p}\ \theta $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>$\psi(\cdot)$ 把点图归一化成<b>单位长度的方向射线</b>；$[X^{i}_{i}]_{\mathbf p}$ 是参考点图里第 $\mathbf p$ 个像素那条射线，$\mathbf x$ 是待匹配的那个三维点。式子说：请找一个像素位置 $\mathbf p$，让「这个像素射出去的方向」和「待匹配点的方向」<b>夹角最小</b>；夹角最小就认为它们对应同一个东西。注意它比的是<b>方向</b>而不是距离——所以深度的不准不会直接毁掉匹配，这就是它对深度误差鲁棒的原因。论文说由于射线图是平滑的，这个迭代对几乎所有有效像素都能在 10 次内收敛。</p>
+      <figure class="figure">
+        <img src="../../md/images/2025_MASt3R-SLAM/770b19defd7c636d0974e51ce8d762b6a2f2095c742e47b0fcfd2db10f91197c.jpg" alt="MASt3R-SLAM iterative projective matching">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b>Overview of iterative projective matching: given the two pointmap predictions from MASt3R, the reference pointmap is normalised $\psi(X^{i}_{i})$ to give a smooth pixel to ray mapping. For an initial estimate of the projection $\mathbf p_0$ of 3D point $\mathbf x$ from pointmap $X^{j}_{i}$, the pixel is iteratively updated to minimise the angular difference $\theta$ between the queried ray $\psi([X^{i}_{i}]_{\mathbf p})$ and the target ray $\psi(\mathbf x)$. After finding the pixel $\mathbf p^{*}$ that achieves the minimum error, we have a pixel correspondence between $\mathcal T^{i}$ and $\mathcal T^{j}$.（迭代投影匹配总览：给定 MASt3R 的两张点图，把参考点图归一化为 $\psi(X^{i}_{i})$，得到一个平滑的「像素 → 射线」映射。先从点图 $X^{j}_{i}$ 里 3D 点 $\mathbf x$ 得到一个初始投影估计 $\mathbf p_0$，然后迭代更新像素坐标，使被查询的射线 $\psi([X^{i}_{i}]_{\mathbf p})$ 与目标射线 $\psi(\mathbf x)$ 的夹角 $\theta$ 最小；找到误差最小的像素 $\mathbf p^{*}$，就得到了 $\mathcal T^i$ 与 $\mathcal T^j$ 之间的像素对应。）</p>
+          <p><b>怎么看这张图：</b>盯住那个角 $\theta$：它是<b>两条射线的夹角</b>，不是两点之间的距离。迭代的过程就是不断调整像素位置，把这个角越压越小，直到 $\mathbf p^{*}$ 处夹角最小。这里没有任何「特征描述子」出现——匹配完全靠几何方向，这就是它 2 毫秒做到的事。</p>
+          <p><b>要记住的一句话：</b>把「找对应的像素」变成「找夹角最小的射线」，匹配就从<b>描述子比对</b>变成了一个<b>平滑的迭代优化</b>——这是它能又快又准的根本。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2025_MASt3R-SLAM/32655f57a34c44f5695c0f81c703e1fccb712ce1a5b04a7bce90679f8fddf16d.jpg" alt="MASt3R-SLAM system diagram">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b>System diagram of MASt3R-SLAM. New images are tracked against the current keyframe by predicting a pointmap from MASt3R and finding pixel matches using our efficient iterative projection pointmap matching. Tracking estimates the current pose and performs local pointmap fusion. When new keyframes are added to the backend, loop closure candidates are selected by querying the retrieval database, and then verified... （系统框图：新图像通过与当前关键帧做跟踪——用 MASt3R 预测点图、再用高效的迭代投影点图匹配找像素对应；跟踪估计当前位姿并做局部点图融合。新关键帧加入后端时，通过查询检索数据库选出回环候选，再做验证……）</p>
+          <p><b>怎么看这张图：</b>这张图是本节最该记住的一张——它把「这是一套 SLAM 系统」这句话画了出来。请顺着箭头的<b>环</b>走一遍：新帧 → 与当前关键帧跟踪（出位姿）→ 局部融合 → 判断新关键帧 → 送进后端 → 检索回环候选并验证 → 全局优化 → 回到位姿与几何。这个环里的每一环都是 SLAM 的标准部件，只不过「匹配」那一环被换成了 MASt3R + 迭代投影。</p>
+          <p><b>要记住的一句话：</b>它不是在某个环节插了个网络，而是<b>整套流水线的地基都换成了「两视图重建先验」</b>——追踪靠它、融合靠它、回环验证也靠它。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 通用相机模型：只假设「所有射线过唯一相机中心」</h2>
+      <p>传统 SLAM 都要求你告诉它「相机是哪种模型」——针孔？鱼眼？畸变系数多少？因为从三维点投到像素需要一个<b>闭式的投影公式</b>。MASt3R-SLAM 把这条要求砍到最薄：它只假设<b>所有射线都过唯一一个相机中心</b>（论文叫 generic central camera）。</p>
+      <p>怎么做到？用上一节那个 $\psi$ 函数：把每个关键帧的 pointmap 归一化成「单位方向的射线」，于是<b>每个点图自己就在定义这一帧的相机模型</b>。这样一来：<b>变焦（焦距随时间变）</b>只是射线怎么散开变了；<b>镜头畸变</b>也只是射线怎么散开变了——而「所有射线交于一点」这条性质不变。所以它不需要一个固定或参数化的相机模型，也不需要标定就能跑。</p>
+      <p>论文还讲了一段很有意思的动机：他们的匹配灵感来自<b>稠密 SLAM 里的投影式数据关联</b>，但那种做法需要一个能写出闭式投影的参数化相机模型；而他们从「通用相机标定」那条思路上借了办法——<b>没有闭式投影，就逐点迭代地把投影解出来</b>。这就是第 3 节那个迭代的来历。</p>
+      <figure class="figure">
+        <img src="../../md/images/2025_MASt3R-SLAM/3a5cdfceb7da3139b963923d849efe274216860aad0c449740a18c5acd090f01.jpg" alt="MASt3R-SLAM uncalibrated SLAM with extreme zoom changes">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b>Dense uncalibrated SLAM with extreme zoom changes shown by two consecutive keyframes for an outdoor scene.（无标定的稠密 SLAM，在户外场景中连续两个关键帧之间出现了剧烈的变焦。）</p>
+          <p><b>怎么看这张图：</b>要看的重点是<b>两帧之间的视角/焦距差别有多大</b>——从一个很广的视角一下子推近。传统系统在这种「相机模型在变」的情况下要么得先标定、要么得假设焦距固定，很容易崩。<b>这张图是「只假设射线过同一个中心」这条设计到底值多少的直接证据</b>。</p>
+          <p><b>要记住的一句话：</b>把相机模型的要求减到只剩「一个中心点」，换来的是——<b>变焦、畸变、焦距未知都能跑，而且不用标定</b>。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 后端：Sim(3) 位姿与二阶全局优化</h2>
+      <p>尺度这件事在 <b>0148</b> 已经说透了：DUSt3R / MASt3R 的 pointmap 是 <b>up-to-scale</b>，形状对、整体尺度不定。论文在这里做了一个很务实的选择——<b>不去争「米」，而是把那个未知尺度当成一个待估量吸收掉</b>。所以位姿不用 SE(3) 而用 <b>Sim(3)</b>：旋转 $R$、平移 $t$，再加一个尺度 $s$。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathbf T=\begin{bmatrix} s\mathbf R & \mathbf t\\ \mathbf 0 & 1\end{bmatrix},\qquad \mathbf T \leftarrow \tau \oplus \mathbf T \;\triangleq\; \mathrm{Exp}(\tau)\circ \mathbf T $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>上半行把位姿写成「旋转 × 尺度 + 平移」这种带 $s$ 的形式（这就是 Sim(3)，比常见的 SE(3) 多了一个尺度自由度）。下半行说的是「怎么更新它」：把增量 $\tau$ 取指数映射 $\mathrm{Exp}(\tau)$ 之后<b>左乘</b>到当前位姿上（写成 $\tau\oplus\mathbf T$ 是流形上的加法约定）——这和第二季 <b>0020</b> 讲的「在李群上用 $\boxplus$ 做加法」是同一套手法，只是这次流形换成了 Sim(3)。</p>
+      <p>后端是在关键帧图上做的<b>二阶（稀疏 Cholesky）全局优化</b>，并且<b>固定首帧的 7 个自由度</b>（3 旋转 + 3 平移 + 1 尺度）来消除规范自由度（gauge freedom，第二季 <b>0018/0019</b> 讲过同一件事）。每个新关键帧最多迭代 10 次。回环候选靠 <b>ASMK 检索</b>选出，再用 MASt3R 解码做验证——这一步很关键：它和第一季 <b>0014</b>「一次假阳性就能毁掉整张地图」的铁律是同一个问题的同一个答案：<b>检索只负责提名，验证才负责定罪</b>。</p>
+      <p>论文的消融（Table 7）还说了一件必须如实交代的事：<b>回环确实同时改善位姿和几何，而且在越长的序列上收益越明显</b>——这句话背后的意思是「MASt3R 的输出本身仍有偏置、会累积漂移，我们这些模块就是专门为缓解它设计的」。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实测评率与精度（硬数字）</h2>
+      <p>测试平台写得很具体：桌面 <b>Intel Core i9-12900K 3.50GHz + 单张 RTX 4090</b>；因为系统跑 <b>约 15 FPS</b>，所以对数据集<b>每隔 2 帧取 1 帧</b>来模拟实时；用的是 MASt3R 的全分辨率输出（最长边缩放到 512）。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>速度与效率</h4>
+          <p><b>15 FPS</b>（RTX 4090）。匹配耗时 <b>2 ms</b>，而对全部像素原生跑 MASt3R 匹配要 <b>2000 ms</b>；系统整体快约 <b>40×</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>TUM RGB-D（有标定）</h4>
+          <p>平均 ATE <b>0.030 m</b>，优于 GO-SLAM <b>0.035</b> 与 DROID-SLAM <b>0.038</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>7-Scenes（有标定）</h4>
+          <p>平均 ATE <b>0.047 m</b>；DROID-SLAM <b>0.049</b>、NICER-SLAM <b>0.086</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>EuRoC（11 序列，有标定）</h4>
+          <p>平均 ATE <b>0.041 m</b>。<b>这里 DROID-SLAM 更低</b>（表格里为 0.022），论文自己承认被它超过，并解释 DROID 在训练时额外加了 10% 灰度图。</p>
+        </div>
+        <div class="mini-card">
+          <h4>无标定也能跑</h4>
+          <p>不喂标定（记为 Ours*）时：TUM <b>0.060</b>、7-Scenes <b>0.066</b>、EuRoC <b>0.164</b>（ATE，米）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>速度牺牲在哪</h4>
+          <p>前端对 pointmap 做了滤波，但<b>全局优化并不会细化所有几何</b>——这点和 DROID-SLAM 的逐像素 BA 不同。另外 MASt3R 只在针孔相机上训练过，畸变大的时候会退化；解码器的全分辨率是延迟瓶颈。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2025_MASt3R-SLAM/d1ac946ea4461eed06e4cbba7fc185f7d570ed02c689ee61b3339ba4a0c21347.jpg" alt="MASt3R-SLAM reconstruction on Burghers sequence">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>Reconstruction from our dense monocular SLAM system on the Burghers sequence. Using two-view predictions from MASt3R shown on the left, our system achieves globally consistent poses and geometry in real-time without a known camera model.（在 Burghers 序列上，我们的稠密单目 SLAM 系统的重建结果。左边是所用到的 MASt3R 两视图预测；系统在<b>相机模型未知</b>的情况下实时得到了全局一致的位姿与几何。）</p>
+          <p><b>怎么看这张图：</b>左边那一小块是「底座」——MASt3R 只给了两张图的预测；右边一整片是「系统跑完之后」的结果。对比一下规模差别，就能明白第 2 节为什么要强调身份：<b>MASt3R 是零件，MASt3R-SLAM 是把它变成了系统</b>。还要注意图注里的「without a known camera model」——这句话就是第 4 节那条射线假设挣到的。</p>
+          <p><b>要记住的一句话：</b>从「两张图的预测」到「一整段轨迹与稠密地图」，中间那些活（跟踪、融合、回环、优化）就是「系统」这两个字的分量。</p>
+        </figcaption>
+      </figure>
+      <p>怎么读这些数字才不偏？两个提醒：<b>① EuRoC 上它是输给 DROID-SLAM 的</b>，论文自己也明确写了——不要把它说成「全面 SOTA」；<b>② 论文对 EuRoC 的落败给了理由也给了限定</b>：所有胜过它的方法都建立在 DROID-SLAM 的基础上，而它走的是一条新路子（用三维重建先验）。这两句话放在一起看，才是完整的结论。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 两张自绘图：先验怎么用、相机模型怎么放宽</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">双视图先验：两张照片就换来一张「已经建好的局部地图」</tspan></text>
+
+          <rect x="30" y="70" width="110" height="80" rx="4" fill="#c9dcec" stroke="#8ba8c4"/>
+          <text x="85" y="90" text-anchor="middle" font-size="11" fill="#2f5b82">照片 1</text>
+          <line x1="45" y1="132" x2="125" y2="132" stroke="#8ba8c4"/>
+          <rect x="55" y="108" width="30" height="24" fill="#8ba8c4"/>
+          <rect x="150" y="70" width="110" height="80" rx="4" fill="#d9b98f" stroke="#b08a5d"/>
+          <text x="205" y="90" text-anchor="middle" font-size="11" fill="#7a5a34">照片 2</text>
+          <line x1="165" y1="132" x2="245" y2="132" stroke="#b08a5d"/>
+          <rect x="185" y="106" width="34" height="26" fill="#b08a5d"/>
+
+          <line x1="266" y1="110" x2="312" y2="110" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="312,110 302,105 302,115" fill="#c9a13a"/>
+
+          <rect x="320" y="70" width="200" height="80" rx="8" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="420" y="102" text-anchor="middle" font-size="13" fill="#2f5b82">MASt3R</text>
+          <text x="420" y="126" text-anchor="middle" font-size="11" fill="#3a4a5a">两视图重建先验</text>
+
+          <line x1="526" y1="110" x2="572" y2="110" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="572,110 562,105 562,115" fill="#c9a13a"/>
+
+          <rect x="580" y="60" width="290" height="100" rx="8" fill="#ffffff" stroke="#9bbce6"/>
+          <text x="725" y="82" text-anchor="middle" font-size="12" fill="#2f5b82">局部地图（已经建好的两帧）</text>
+          <polygon points="610,148 700,148 716,98 626,98" fill="#eaf1fb" stroke="#9bbce6"/>
+          <polygon points="720,148 810,148 826,98 736,98" fill="#eef7ee" stroke="#8fbf8f"/>
+          <line x1="640" y1="120" x2="760" y2="118" stroke="#d97757" stroke-width="1.6"/>
+          <line x1="660" y1="136" x2="782" y2="134" stroke="#d97757" stroke-width="1.6"/>
+          <line x1="646" y1="106" x2="748" y2="104" stroke="#d97757" stroke-width="1.6"/>
+
+          <line x1="660" y1="162" x2="424" y2="230" stroke="#c9a13a" stroke-width="2" stroke-dasharray="7 5"/>
+          <polygon points="424,230 428,219 434,225" fill="#c9a13a"/>
+
+          <rect x="30" y="235" width="140" height="70" rx="8" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="100" y="262" text-anchor="middle" font-size="12" fill="#3a4a5a">新的一帧</text>
+          <text x="100" y="284" text-anchor="middle" font-size="11" fill="#5b6472">又从视频里进来</text>
+
+          <line x1="176" y1="270" x2="214" y2="270" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="214,270 204,265 204,275" fill="#c9a13a"/>
+
+          <rect x="220" y="235" width="200" height="70" rx="8" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="320" y="262" text-anchor="middle" font-size="12" fill="#2f5b82">拿先验做配对</text>
+          <text x="320" y="284" text-anchor="middle" font-size="11" fill="#3a4a5a">射线夹角最小 → 解出相对位姿</text>
+
+          <line x1="426" y1="270" x2="464" y2="270" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="464,270 454,265 454,275" fill="#c9a13a"/>
+
+          <rect x="470" y="235" width="180" height="70" rx="8" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="560" y="262" text-anchor="middle" font-size="12" fill="#3a4a5a">融进地图</text>
+          <text x="560" y="284" text-anchor="middle" font-size="11" fill="#5b6472">加权融合 + 选关键帧</text>
+
+          <line x1="656" y1="270" x2="694" y2="270" stroke="#c9a13a" stroke-width="2.5"/>
+          <polygon points="694,270 684,265 684,275" fill="#c9a13a"/>
+
+          <rect x="700" y="235" width="170" height="70" rx="8" fill="#eef7ee" stroke="#8fbf8f"/>
+          <text x="785" y="262" text-anchor="middle" font-size="12" fill="#2f6136">后端全局优化</text>
+          <text x="785" y="284" text-anchor="middle" font-size="11" fill="#3b6e49">每个关键帧 ≤10 次迭代</text>
+
+          <text x="450" y="348" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">整条链里没有「提特征、匹配描述子」这些环节——地基被换成了两视图重建先验</tspan></text>
+          <text x="450" y="382" text-anchor="middle" font-size="11.5" fill="#5b6472">虚线是「把这张已经建好的局部地图当作新一帧的参照」；关键帧加进后端后，还会去检索回环候选并验证</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>上半是「底座」：两张照片送进 MASt3R，直接换来一张<b>已经建好的局部地图</b>（图中两片小网格就是两帧的点图，红连线表示它们之间的像素匹配）。下半是「系统」：从视频里又来了一帧，<b>拿刚才那张局部地图当参照</b>去配对、解位姿、融合进地图、并在后端做全局优化。</p>
+          <p><b>怎么看这张图：</b>① 注意上半的箭头只有<b>一个</b>方框（MASt3R）——这是「先验」的意思：不用现算，模型已经会了；② 那条从局部地图斜着往下指的虚线是全图的关键，它表示「<b>先验被复用</b>」——不是每来一帧都从头算一遍；③ 下半那一排方框恰好就是 SLAM 的标准四件套（跟踪 / 融合 / 关键帧 / 后优化），所以这张图同时在回答「它是什么身份」这个问题。</p>
+          <p><b>要记住的一句话：</b>MASt3R 提供的是「两帧之间该长什么样」的<b>常识</b>；MASt3R-SLAM 做的是把这个常识<b>串成一条能实时跑的流水线</b>。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">相机模型放宽到只剩一条：所有射线过唯一相机中心</tspan></text>
+
+          <rect x="30" y="60" width="400" height="250" rx="8" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="230" y="90" text-anchor="middle" font-size="12" fill="#3a4a5a">普通镜头：射线均匀散开</text>
+          <rect x="60" y="168" width="60" height="44" rx="6" fill="#3a4a5a"/>
+          <circle cx="120" cy="190" r="4" fill="#2b6cb0"/>
+          <line x1="120" y1="190" x2="415" y2="105" stroke="#9bbce6" stroke-width="1.4"/>
+          <line x1="120" y1="190" x2="415" y2="133" stroke="#9bbce6" stroke-width="1.4"/>
+          <line x1="120" y1="190" x2="415" y2="161" stroke="#9bbce6" stroke-width="1.4"/>
+          <line x1="120" y1="190" x2="415" y2="189" stroke="#9bbce6" stroke-width="1.4"/>
+          <line x1="120" y1="190" x2="415" y2="217" stroke="#9bbce6" stroke-width="1.4"/>
+          <line x1="120" y1="190" x2="415" y2="245" stroke="#9bbce6" stroke-width="1.4"/>
+          <line x1="120" y1="190" x2="415" y2="273" stroke="#9bbce6" stroke-width="1.4"/>
+          <text x="230" y="296" text-anchor="middle" font-size="11" fill="#5b6472">射线起点 = 唯一相机中心</text>
+
+          <rect x="470" y="60" width="400" height="250" rx="8" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="670" y="90" text-anchor="middle" font-size="12" fill="#3a4a5a">变焦 / 有畸变：散法变了，中心没变</text>
+          <rect x="500" y="168" width="60" height="44" rx="6" fill="#3a4a5a"/>
+          <circle cx="560" cy="190" r="4" fill="#d97757"/>
+          <line x1="560" y1="190" x2="855" y2="80" stroke="#e0b48f" stroke-width="1.4"/>
+          <path d="M 560 190 Q 710 122 855 118" fill="none" stroke="#e0b48f" stroke-width="1.4"/>
+          <line x1="560" y1="190" x2="855" y2="155" stroke="#e0b48f" stroke-width="1.4"/>
+          <line x1="560" y1="190" x2="855" y2="190" stroke="#e0b48f" stroke-width="1.4"/>
+          <line x1="560" y1="190" x2="855" y2="225" stroke="#e0b48f" stroke-width="1.4"/>
+          <path d="M 560 190 Q 710 258 855 262" fill="none" stroke="#e0b48f" stroke-width="1.4"/>
+          <line x1="560" y1="190" x2="855" y2="300" stroke="#e0b48f" stroke-width="1.4"/>
+          <text x="670" y="296" text-anchor="middle" font-size="11" fill="#5b6472">射线起点 = 同一个相机中心</text>
+
+          <text x="450" y="348" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">只要把点图归一化成单位方向射线，「相机是什么型号」这件事就不必再回答了</tspan></text>
+          <text x="450" y="380" text-anchor="middle" font-size="11.5" fill="#5b6472">代价是：没有闭式投影公式，只能逐点迭代把对应像素解出来——这就是那套 2 毫秒匹配的来历</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左右各一台相机。左边是普通镜头，射线均匀散开；右边换了镜头（变焦了、还有一点畸变），所以射线的<b>散法完全不一样</b>（有两条还画成了弯的）。但两张图里，<b>所有射线都从同一个相机中心出发</b>。</p>
+          <p><b>怎么看这张图：</b>① 先比较两侧射线的「散法」——差别很大，这正是传统方法最头疼的地方（相机模型变了）；② 再比较两侧的那个<b>起点圆点</b>——它们的位置关系没变，都是「所有线交于一点」；③ 所以说「把相机模型放宽到只剩一条假设」的意思是：<b>放弃对「怎么散」的要求，只保留对「从哪出发」的要求</b>；点图归一化成单位射线之后，每帧的「怎么散」由它自己的点图来描述。</p>
+          <p><b>要记住的一句话：</b>把要求砍到只剩「一个中心点」，换来的是<b>变焦能跑、畸变能跑、不标定也能跑</b>；代价是没有闭式公式，得靠迭代把像素解出来。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h4>互动：MASt3R-SLAM 在这六篇里是什么身份？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0149a')">本身就是一套系统</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0149b')">只是被调用的零件</button></p>
+        <p class="quiz-feedback" id="q0149a" hidden>正确。它有完整的 SLAM 部件：跟踪（与当前关键帧配对、解相对位姿）、局部 pointmap 融合、关键帧与图构建、ASMK 检索 + 验证的回环、以及固定首帧 7 自由度的二阶全局优化。论文自称是首个把「两视图三维重建先验」当作跟踪/建图/重定位统一底座的实时 SLAM 框架。它与 0150 的 SLAM3R 是本块六篇里唯一的两个「系统」，另四篇（DINOv2、SAM、DUSt3R、Metric3D v2）才是被调用的零件。</p>
+        <p class="quiz-feedback" id="q0149b" hidden>不对。它确实<b>使用</b>了一个零件（MASt3R 的两视图重建先验），但它自己不是零件。判断标准很清楚：它包含跟踪、局部融合、关键帧管理、回环检测与验证、后端全局优化——这些是 SLAM 系统的定义性部件。如果只因为「它建立在 MASt3R 之上」就把它当成零件，就等于把「用别人的地基盖了房子」说成「自己是一块砖」。注意 0150 的 SLAM3R 也是系统，本块六篇里只有这两篇是。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 读完你应该能回答</h2>
+      <ul>
+        <li>为什么说 MASt3R-SLAM「本身就是一套 SLAM 系统」？它包含哪四件标准部件？</li>
+        <li>MASt3R 相比 0148 的 DUSt3R 多了什么输出？为什么这多出来的一项对 SLAM 特别有用？</li>
+        <li>「迭代投影匹配」在优化什么量？为什么它比「比三维点距离」更鲁棒？</li>
+        <li>「只假设所有射线过唯一相机中心」具体放弃了什么、又换来了什么？代价是什么？</li>
+        <li>为什么位姿用 Sim(3) 而不是 SE(3)？这跟 0148 的 up-to-scale 是什么关系？</li>
+        <li>它在 TUM / 7-Scenes / EuRoC 上的平均 ATE 各是多少？哪一个数据集上它是输给 DROID-SLAM 的？</li>
+        <li>它的回环为什么要「检索提名 + MASt3R 验证」两步？这跟第一季 0014 的铁律有什么关系？</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>「2 毫秒 vs 2000 毫秒」这个对比，具体对比的是哪两件事？为什么差的不是一点点？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>对比的是<b>两种「找像素对应」的做法</b>：一种是<b>把 MASt3R 的匹配直接对全部像素跑一遍</b>（2000 毫秒），另一种是论文自己的<b>并行迭代投影匹配</b>（2 毫秒，加上特征精修后为 2 毫秒/15.1 FPS 量级；加速主要来自并行化与特征精修）。整个系统的 FPS 因此快了约 40 倍。</p>
+              <p>为什么差这么多：① 传统做法是对每个像素独立做一次昂贵的解码/比对，成本随像素数线性堆；而论文的做法是<b>利用 SLAM 的增量性</b>——跟踪时总有上一帧的匹配可以当初始值，迭代几次就收敛（论文说由于射线图平滑，几乎对所有有效像素 10 次内收敛）；② 匹配放在 GPU 上大规模并行；③ 而且它<b>不依赖自身位姿估计</b>（论文称之为 unbiased），所以不会因为位姿漂移而反过来把匹配带偏，避免了恶性循环。</p>
+            </div></details>
+          </li>
+          <li>为什么 MASt3R-SLAM 要用 Sim(3) 而不是 SE(3)？如果用 SE(3) 会发生什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为底座 MASt3R 的输出是 <b>up-to-scale</b>（见 0148）：它的点图形状对，但整体尺度可以任意缩放。而 MASt3R-SLAM 是把「不同帧对」的预测拼到一起，<b>不同帧对的尺度因子并不天然一致</b>——论文明确说「作者发现尺度是主要的不一致来源」。</p>
+              <p>如果用 SE(3)（只有旋转 + 平移），系统就必须假装各帧对共享同一个尺度，那些尺度不一致只能变成几何误差被硬吞下去，表现为地图扭曲、轨迹漂移。</p>
+              <p>用 Sim(3) 相当于<b>多给系统一个「尺度」参数去吸收这些不一致</b>：每一帧的位姿自带一个 $s$，优化时连同 $R,t$ 一起估。代价是必须处理 Sim(3) 上的更新（论文用左乘指数映射 $\mathbf T\leftarrow\mathrm{Exp}(\tau)\circ\mathbf T$，并固定首帧的 7 个自由度消除规范自由度）。<b>注意这只是「把尺度吸收掉」，不是「求出米」</b>——绝对尺度要靠 0150 的 Metric3D v2 那条线。</p>
+            </div></details>
+          </li>
+          <li>把它和 0145 DROID-SLAM 对照：同为稠密单目 SLAM，两者换掉的东西有什么不同？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p><b>DROID-SLAM（0145）</b>换掉的是「BA 这一环」：它把 BA 做成网络里一个<b>可微的稠密层</b>（每像素深度都参与优化），用 CorrBlock 从稠密光流里建对应，循环迭代更新。代价是显存 24GB、快动掉到 11 FPS。</p>
+              <p><b>MASt3R-SLAM（0149）</b>换掉的是「地基」：它不做逐像素 BA，而是让一个<b>预训练的两视图重建先验</b>提供点图与匹配，前端只做轻量的迭代投影匹配与加权融合，后端是二阶稀疏全局优化。它的代价是<b>全局优化不细化所有几何</b>、以及 MASt3R 只在针孔上训过、畸变大时退化。</p>
+              <p><b>结果对比</b>：TUM 上 MASt3R-SLAM（0.030）优于 DROID-SLAM（0.038），7-Scenes 上也略胜（0.047 vs 0.049），但 <b>EuRoC 上 DROID-SLAM 更好</b>（表格里 0.022 vs 0.041），论文自己也承认这一点。所以更准确的结论是：<b>用先验替换地基，是一条能与 DROID 系抗衡、但还没全面超越的路</b>。</p>
+            </div></details>
+          </li>
+          <li>「无标定也能跑」这件事在这篇里是靠什么实现的？为什么它对真实使用场景重要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>靠两件事配合：① <b>只假设「所有射线过唯一相机中心」</b>——把相机模型的要求压到最薄，于是「焦距未知」「镜头在变焦」「有畸变」都不再是必须先解决的问题；② <b>把点图归一化成单位方向射线</b>，让每一帧的点图自己承担「描述这一帧相机怎么投影」的职责；匹配与跟踪都在<b>射线夹角</b>这个量上做，而不是依赖某个参数化模型的闭式投影。</p>
+              <p>为什么重要：现实里你拿到的视频经常是<b>手机、运动相机、网上抓的素材</b>，内参根本不知道，甚至同一段视频里还在变焦（对照 Fig. 7 那两个差别极大的连续关键帧）。传统系统遇到这种情况通常得先标定，标不了就只能不用。而「不用标定也能跑」让这类方法能直接用在这些数据上——代价是无标定时精度会掉（TUM 0.030 → 0.060，EuRoC 0.041 → 0.164）。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0148-DUSt3R2024-不必标定与位姿的重建.html">← 上一节：0148 DUSt3R 不必标定与位姿的重建</a>
+        <a class="next" href="0150-前馈重建与度量深度.html">下一节：0150 前馈重建与度量深度（SLAM3R + Metric3D v2） →</a>
+      </div>
+      <p class="foot-note">0134 的 DBoW、0043 的 BoW 回环，在这里换成了 ASMK 检索 + 先验验证——但「检索只提名、验证才定罪」这条规矩没变 🏗️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

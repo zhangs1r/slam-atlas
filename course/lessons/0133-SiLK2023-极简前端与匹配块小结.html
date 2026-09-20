@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SiLK 2023 · 极简前端与匹配块小结 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0133</div>
+      <h1>SiLK 2023 · 极简前端与匹配块小结</h1>
+      <p class="subtitle">把「检测器+描述子」做回极简：两卷积 + 余弦相似度 + 互近邻，照样能赢 —— 复杂度不是越多越好 🪶</p>
+      <div class="hero-meta">
+        <span>🎯 主题：极简 detect-and-describe 前端</span>
+        <span>👥 作者：Meta / 牛津等（Tiny 等）</span>
+        <span>📅 2023 · <i>SiLK: Simple Learned Keypoints</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先纠正归类</a>
+        <a href="#b">SiLK 是「前端」不是「中间端」</a>
+        <a href="#c">极简架构与 double-softmax</a>
+        <a href="#d">实验：极简也能打</a>
+        <a href="#e">匹配块小结</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出 SiLK 与 SuperGlue/LoFTR/LightGlue 的本质归类区别；② 用生活类比解释「double-softmax 的往返一致性」；③ 讲清「极简前端 + 简单匹配」为何也能赢，收束整个匹配块。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它与 <b>0129–0131 同属本季匹配块，但位置不同</b>：SuperGlue/LoFTR/LightGlue 是<b>中间端（middle-end）</b>，吃前端产物、吐匹配；SiLK 是<b>前端（front-end）</b>，自己干「检测+描述」，匹配只靠余弦相似度 + 互近邻（MNN）。它替换的是 <b>SuperPoint 那类前端</b>，而非 SuperGlue 那类匹配器。这也呼应 <b>第四季 0084 FAST-LIO2「干脆不提取特征」</b> 的极简思路——视觉侧与激光侧的「少即是多」遥相呼应。</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><b>⚠️ 先纠正一个归类（本季硬要求）：</b>SiLK 被排进「特征匹配子块」，但它<b>不是匹配中间端</b>，而是<b>「检测器+描述子」前端</b>（detect-and-describe）。SuperGlue / LoFTR / LightGlue 三篇才是 middle-end；RAFT 则是稠密光流。SiLK 自己<b>不做</b> SuperGlue 那套注意力/最优传输，匹配只用<b>余弦相似度 + 互近邻（MNN）</b>。这正是本季「复杂与极简之争」的收束论点：<b>「极简前端 + 简单匹配」也能赢，复杂度不是越多越好</b>。</p>
+      </div>
+
+      <h2>1. 它到底在做什么：先讲人话</h2>
+      <p>前面三节（SuperGlue / LoFTR / LightGlue）一个比一个复杂：图神经网络、Transformer、最优传输、自适应停止……给人的感觉是「匹配太难，必须上重武器」。SiLK 偏要唱反调：<b>匹配这件事，也许根本不需要那么重</b>。它把「检测器+描述子」做回一个极简模块——一个轻量骨干网络，直接吐出「哪里是点」和「每个点的描述子」，然后匹配就用一个最朴素的规则：<b>描述子余弦相似度最高、且彼此互为最近邻的，就是一对</b>。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. SiLK 是「前端」不是「中间端」</h2>
+      <p>SLAM 流水线里，「前端」负责从原始图像产生「点 + 描述子」，「中间端」负责把这些点两两配对。SiLK 干的是前者。下面这张图把它的位置标清楚。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 300" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">SiLK 坐在「前端」：它产点+描述子，不负责配对</text>
+          <!-- 相机 -->
+          <rect x="40" y="120" width="50" height="34" rx="5" fill="#3d6b96" stroke="#24486b" stroke-width="1.2"/>
+          <text x="65" y="178" text-anchor="middle" font-size="9.5" fill="#3a6a90">相机</text>
+          <!-- 前端 SiLK -->
+          <rect x="120" y="110" width="160" height="70" rx="9" fill="#eef4f9" stroke="#2f5b82" stroke-width="2"/>
+          <text x="200" y="138" text-anchor="middle" font-size="12" font-weight="700" fill="#2f5b82">前端 SiLK</text>
+          <text x="200" y="160" text-anchor="middle" font-size="9.5" fill="#3a6a90">检测 + 描述</text>
+          <!-- 中间端 -->
+          <rect x="330" y="110" width="190" height="70" rx="9" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.5"/>
+          <text x="425" y="138" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8432c">中间端（匹配）</text>
+          <text x="425" y="160" text-anchor="middle" font-size="9.5" fill="#b3532f">SuperGlue/LoFTR/LightGlue</text>
+          <!-- 后端 -->
+          <rect x="570" y="110" width="150" height="70" rx="9" fill="#f7fbf6" stroke="#c3d9c6" stroke-width="1.5"/>
+          <text x="645" y="138" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6136">后端 BA</text>
+          <text x="645" y="160" text-anchor="middle" font-size="9.5" fill="#3b6e49">位姿 / 地图</text>
+          <!-- 箭头 -->
+          <line x1="90" y1="137" x2="118" y2="137" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="118,137 110,132 111,143" fill="#6b5a4e"/>
+          <line x1="280" y1="145" x2="328" y2="145" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="328,145 320,140 321,151" fill="#6b5a4e"/>
+          <line x1="520" y1="145" x2="568" y2="145" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="568,145 560,140 561,151" fill="#6b5a4e"/>
+          <!-- 括号 -->
+          <line x1="120" y1="200" x2="280" y2="200" stroke="#2f5b82" stroke-width="1.4"/>
+          <line x1="120" y1="194" x2="120" y2="200" stroke="#2f5b82" stroke-width="1.4"/>
+          <line x1="280" y1="194" x2="280" y2="200" stroke="#2f5b82" stroke-width="1.4"/>
+          <text x="200" y="220" text-anchor="middle" font-size="10" font-weight="700" fill="#2f5b82">SiLK 在这里（前端）</text>
+          <text x="425" y="220" text-anchor="middle" font-size="10" fill="#a8432c">SuperGlue 系在这里（中间端）</text>
+          <text x="460" y="270" text-anchor="middle" font-size="10.5" fill="#8a7365">注意：LoFTR 虽「不用检测器」，但它仍是吃特征、吐匹配的「中间端」；SiLK 才是真正产点的前端</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>相机 → 前端 SiLK（产「点+描述子」）→ 中间端 SuperGlue/LoFTR/LightGlue（产「匹配」）→ 后端 BA。红蓝括号把 SiLK 和 SuperGlue 系分到不同段落：<b>SiLK 是前端，不在中间端</b>。<br>
+          <b>怎么看这张图：</b>① SiLK 的输出是「一堆带描述子的点」，和 SuperPoint 的输出是同一类东西——它替换的是前端，不是匹配器。② 下面那句提醒很重要：LoFTR 去掉了「检测」这一步，但它依然消费特征、吐出匹配，所以归在中间端；别因为它「不用检测器」就和 SiLK 混为一谈。<br>
+          <b>要记住的一句话：</b>SiLK 解决的是「怎么从图里挑点并描述」，不是「怎么把两图的点配对」——这是它和本块其他三篇的根本分界。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 极简架构与 double-softmax</h2>
+      <p>SiLK 沿用了 SuperPoint 的 detect-and-describe 框架：骨干网络 → 两个头（关键点 logits、稠密描述子图）。它的两个「极简」巧思：① 关键点概率等效于 cell 大小 N=1 的 cell-based 方法，于是 softmax 退化成 <b>sigmoid</b>，省掉稀疏约束和 NMS；② 匹配概率用 <b>double-softmax 的往返一致性</b> 来定义「好点」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">double-softmax：去得动、回得来，才算好匹配</text>
+          <!-- 左照片 -->
+          <rect x="60" y="80" width="180" height="160" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="120" cy="150" r="6" fill="#2f5b82"/><text x="120" y="175" text-anchor="middle" font-size="10" fill="#2f5b82">点 i（图A）</text>
+          <!-- 右照片 -->
+          <rect x="680" y="80" width="180" height="160" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="740" cy="150" r="6" fill="#2f8a4f"/><text x="740" y="175" text-anchor="middle" font-size="10" fill="#2f6136">点 j（图B）</text>
+          <!-- 双向箭头 -->
+          <path d="M126,146 Q420,90 734,146" fill="none" stroke="#2f5b82" stroke-width="2.2"/>
+          <text x="430" y="100" text-anchor="middle" font-size="10" fill="#2f5b82">正向 P i→j（行 softmax）</text>
+          <path d="M734,154 Q420,210 126,154" fill="none" stroke="#2f8a4f" stroke-width="2.2"/>
+          <text x="430" y="222" text-anchor="middle" font-size="10" fill="#2f6136">反向 P j→i（列 softmax）</text>
+          <!-- 乘积 -->
+          <rect x="380" y="250" width="160" height="44" rx="8" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.3"/>
+          <text x="460" y="270" text-anchor="middle" font-size="10.5" font-weight="700" fill="#a8432c">P_ij = P_i→j · P_j→i</text>
+          <text x="460" y="288" text-anchor="middle" font-size="9.5" fill="#8a7365">往返都最高 → 高置信</text>
+          <line x1="200" y1="172" x2="378" y2="270" stroke="#bbb" stroke-width="1.2"/>
+          <line x1="740" y1="172" x2="542" y2="270" stroke="#bbb" stroke-width="1.2"/>
+          <text x="460" y="330" text-anchor="middle" font-size="10.5" fill="#8a7365">不靠注意力、不靠最优传输——只用「互为最近邻」就筛出可靠匹配</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>图 A 的点 i 去图 B 找最像的点（正向，行 softmax 得 P_i→j），图 B 的点 j 反过来去图 A 找最像的点（反向，列 softmax 得 P_j→i）。只有「i 选了 j、且 j 也选了 i」的往返一致对，乘积 P_ij 才高，被认定为可靠匹配。<br>
+          <b>怎么看这张图：</b>① 这其实就是「互近邻（MNN）」的可微写法——双向都投缘才算数。② 它完全不需要 SuperGlue 的注意力上下文或最优传输，<b>靠「往返一致性」这一个极简原则</b>就筛出了可靠匹配。<br>
+          <b>要记住的一句话：</b>SiLK 把「好匹配」定义成「去得动、回得来」——这是它极简却有效的核心。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$P_{i\to j}=\text{softmax}_{\text{行}}(S)_{ij},\quad P_{j\to i}=\text{softmax}_{\text{列}}(S)_{ji},\quad P_{ij}=P_{i\to j}\cdot P_{j\to i}$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>相似度矩阵 $S$ 里，$P_{i\to j}$ 是「在 i 这一行里 j 排第几」，$P_{j\to i}$ 是「在 j 这一列里 i 排第几」；两者相乘才是最终置信度。只有双向都靠前，乘积才高。（注：原文 §3.3 公式误写成 $P_{ij}=P_{ij}P_{ij}$，应为 $P_{ij}=P_{i\to j}\cdot P_{j\to i}$，已按正确形式写出；另处温度 "2 0^{-1}" 应为 "2.0^{-1}"，即相似度除以 2。）</p>
+
+      <h3>3.1 训练：用「往返」当监督，不用 3D / 位姿</h3>
+      <p>SiLK 的自监督目标非常优雅：对单张图施加一个随机（线性）单应变换得到另一视图，要求「点 i 在变换后还能被找回来」。描述子损失就是往返负对数似然：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathcal L_{\text{desc}}=-\big(\log P_{i\to i'}+\log P_{i\leftarrow i'}\big)$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>「好关键点」被定义成「能在匹配算法里可靠地被往返找回来的点」。于是用<b>一个自监督目标</b>就同时学好了描述子和检测，既不需要 3D、也不需要位姿监督，更不需要上下文聚合（CA）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_SiLK__Simple_Learned_Keypoints/18f374a5d4c77986e020a814d218a438ded1475eee548f72b86c0fbfd3e1dc33.jpg" alt="Architecture for SiLK">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Architecture for SiLK.<br>
+          <b>怎么看这张图：</b>骨干网络后面跟两个头——关键点 logits 头和稠密描述子头。注意它<b>没有</b> SuperGlue 那种注意力/最优传输模块，也没有 LoFTR 的 Transformer；结构极简，这正是它「极简前端」名字的由来。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 实验：极简也能打</h2>
+      <p>SiLK 最「反直觉」的地方在于：它不用上下文聚合，却在不少基准上和 heavy 方法持平甚至更好。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.82rem">
+        <thead>
+          <tr style="background:rgba(61,107,150,.1)">
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">测试</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">SiLK</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">对照</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">IMC 2022 mAA（private/public）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">0.685 / 0.684</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">SuperGlue 0.676/0.678；LoFTR 0.735/0.721</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">ScanNet 位姿 AUC@20°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">50.4（SiLK+MNN）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">SuperGlue 51.8（无 CA 仍略高）</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">超轻量（VGGnp-µ）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">76k 参数 · 36.5 FPS · 23 GFLOP</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">heavy 方法通常数百万～上千万参数</td></tr>
+          <tr><td style="padding:.5rem .6rem;font-weight:700">训练耗时</td><td style="padding:.5rem .6rem">82×82 图仅 1.7 小时</td><td style="padding:.5rem .6rem">SuperGlue 约 7 天；LightGlue 2 GPU-day</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>作者自己的结论（Table 1 与 SuperGlue/LoFTR 并列）：</b>「这些任务未必需要上下文聚合（CA）」。这直接挑战了 0129 那句「上下文比匹配求解本身更关键」——SiLK 用证据说明：<b>对很多任务，去掉 CA 只是小幅度掉点，却换来数量级的轻量</b>。代价是：在需要大感受野的难场景（如 ScanNet 大视角），它仍略逊于 LoFTR。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_SiLK__Simple_Learned_Keypoints/cf8d25822c2251dac397e736f7b91fbcaa749eff7e64a26030ed4d1fe0182280.jpg" alt="Keypoint matching under viewpoint change">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The top image is an example of keypoint matching under viewpoint change; correct matches are green, incorrect ones are red. The bottom image shows keypoints which are cycle-consistent by SiLK. SiLK has learned to find distinctive geometric features (corners, curves, intersections) from single non-annotated images.<br>
+          <b>怎么看这张图：</b>上排是视角变化下的匹配（绿对/红错），下排是 SiLK 学到的「往返一致」关键点——它从单张无标注图像就学会了挑角点、曲线、交点这些有判别力的几何特征。这正是 double-softmax 往返一致性在可视化上的体现。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_SiLK__Simple_Learned_Keypoints/652a059e78f27dbda7f8d56fed9dfca5d632ac3f411510eceb8bd5bbb4acb47b.jpg" alt="Pixel-accurate contrastive loss">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>The pixel-accurate contrastive loss results in very discriminative local features, thus reshaping the error distribution to make fewer local errors (MMA@1). This differs from interpolated, cell-based descriptors used in SuperPoint, which produces less accurate keypoints (MMA@3+).<br>
+          <b>怎么看这张图：</b>SiLK 的像素级对比损失让局部特征更有判别力，错误分布更集中（MMA@1 更好）；而 SuperPoint 的 cell-based 插值描述子精度略低（MMA@3+）。这是它「极简但不糊」的底层原因。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 匹配块小结：0129–0133 我们学到了什么</h2>
+      <p>读到这里，本季「特征匹配子块」五篇都读完了。把它们放在一条「复杂度轴」上，能看清全貌。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">匹配块五篇的「复杂度轴」：从极简前端到重中间端</text>
+          <!-- 轴 -->
+          <line x1="120" y1="170" x2="800" y2="170" stroke="#bbb" stroke-width="2"/>
+          <text x="110" y="174" text-anchor="end" font-size="10" fill="#3b6e49">极简</text>
+          <text x="812" y="174" text-anchor="start" font-size="10" fill="#a8432c">复杂</text>
+          <!-- 标记 -->
+          <circle cx="170" cy="170" r="8" fill="#2f6136"/>
+          <text x="170" y="200" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f6136">SiLK (0133)</text>
+          <text x="170" y="218" text-anchor="middle" font-size="9" fill="#3b6e49">前端·余弦+MNN</text>
+          <circle cx="320" cy="170" r="8" fill="#5a8a6b"/>
+          <text x="320" y="200" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f6136">SuperPoint</text>
+          <text x="320" y="218" text-anchor="middle" font-size="9" fill="#3b6e49">前端（被替换对象）</text>
+          <circle cx="470" cy="170" r="8" fill="#c08a3c"/>
+          <text x="470" y="200" text-anchor="middle" font-size="10.5" font-weight="700" fill="#a8432c">SuperGlue (0129)</text>
+          <text x="470" y="218" text-anchor="middle" font-size="9" fill="#b3532f">GNN+最优传输</text>
+          <circle cx="590" cy="170" r="8" fill="#c0683c"/>
+          <text x="590" y="200" text-anchor="middle" font-size="10.5" font-weight="700" fill="#a8432c">LoFTR (0130)</text>
+          <text x="590" y="218" text-anchor="middle" font-size="9" fill="#b3532f">去检测+Transformer</text>
+          <circle cx="710" cy="170" r="8" fill="#a8432c"/>
+          <text x="710" y="200" text-anchor="middle" font-size="10.5" font-weight="700" fill="#a8432c">LightGlue (0131)</text>
+          <text x="710" y="218" text-anchor="middle" font-size="9" fill="#b3532f">自适应+门控</text>
+          <!-- RAFT 单独 -->
+          <circle cx="780" cy="280" r="8" fill="#3a4278"/>
+          <line x1="780" y1="172" x2="780" y2="272" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
+          <text x="780" y="302" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3a4278">RAFT (0132)</text>
+          <text x="780" y="320" text-anchor="middle" font-size="9" fill="#5a4a90">稠密光流·另一范式</text>
+          <!-- 区段标注 -->
+          <text x="320" y="120" text-anchor="middle" font-size="10" fill="#2f6136">← 往下减（极简）这一端</text>
+          <text x="620" y="120" text-anchor="middle" font-size="10" fill="#a8432c">往上加（复杂）这一端 →</text>
+          <text x="460" y="338" text-anchor="middle" font-size="10.5" fill="#8a7365">RAFT 不在同一轴：它是逐像素稠密对应，不是「挑点配对」范式</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把匹配块五篇按「复杂度」排成一条轴——左端是 SiLK（极简前端：余弦+MNN），中间是 SuperGlue（重中间端），右端是 LightGlue（最精致的重中间端）；RAFT 因为范式不同（稠密光流），单独放在轴下方，用虚线连着表示它不属于「挑点配对」这条轴。<br>
+          <b>怎么看这张图：</b>① 0129–0131 在轴右端「往上加复杂度」，0133 SiLK + 0132 RAFT 在「往下减」。② 关键结论：<b>复杂度不是越多越好</b>——SiLK 用极简前端在 IMC2022 持平 SuperGlue、训练快几千倍；RAFT 用「相关体+循环」这种极简机制拿下稠密对应。③ 它们各有主场：难纹理/大视角下 heavy 方法仍更好，但「轻量够用」是真实存在的选项。<br>
+          <b>要记住的一句话：</b>整个匹配块收束成一句话——<b>「复杂度」和「效果」不是单调关系，选多重取决于你的速度与精度预算</b>。
+        </figcaption>
+      </figure>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>0129 SuperGlue</h4>
+          <p>中间端开山：GNN + 最优传输 + dustbin + Sinkhorn。贡献是「上下文」与「部分指派」。代价：二次复杂度、依赖前端。</p>
+        </div>
+        <div class="mini-card">
+          <h4>0130 LoFTR</h4>
+          <p>去掉检测器：1/8 稠密 + Transformer 全局感受野 + coarse-to-fine。专治纹理缺失。dual-softmax 替代 OT。</p>
+        </div>
+        <div class="mini-card">
+          <h4>0131 LightGlue</h4>
+          <p>SuperGlue 轻量重构：解耦 matchability + 深度自适应 + point pruning。更快更准更易训，落在「该省就省」一端。</p>
+        </div>
+        <div class="mini-card">
+          <h4>0132 RAFT</h4>
+          <p>稠密光流（非稀疏匹配）：4D 相关体 + 循环 GRU 迭代。证明「极简机制反复迭代」也能拿 SOTA。是 DROID-SLAM 的祖先。</p>
+        </div>
+        <div class="mini-card">
+          <h4>0133 SiLK</h4>
+          <p>极简前端：detect-and-describe，余弦+MNN，无 CA。轻量到 76k 参数。证明「这些任务未必需要上下文聚合」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>三条收束结论</h4>
+          <p>① 匹配被「吃掉」了（0011 兑现）；② 复杂度非单调；③ SiLK 是前端、RAFT 是稠密光流——别被「匹配块」这个筐带偏。</p>
+        </div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 SiLK 的归类，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。SiLK 是「检测器+描述子」前端（detect-and-describe），自己产点和描述子，匹配只靠余弦相似度+互近邻（MNN），不含 GNN/最优传输/Transformer 等中间端机制。它替换的是 SuperPoint 那类前端，不是 SuperGlue 那类匹配器。" onclick="lessonKit.answer(this,'q0133a')">SiLK 是前端，匹配只用余弦相似度 + MNN</button>
+          <button data-correct="no" data-explanation="不对。SiLK 不做 SuperGlue 那套注意力/最优传输，也没有 LoFTR 的 Transformer。它是 detect-and-describe 前端；把 SuperGlue/LoFTR/LightGlue 三篇才是 middle-end（吃前端产物、吐匹配）。" onclick="lessonKit.answer(this,'q0133a')">SiLK 和 SuperGlue 一样是带最优传输的中间端</button>
+        </div>
+        <div class="quiz-feedback" id="q0133a"></div>
+      </div>
+
+      <h3>5.1 和前面课程怎么接（收束）</h3>
+      <p>本块五篇是<b>第一季 0011 那句「深度学习先吃掉匹配」的第一个重头证据</b>：匹配这个环节确确实实被吃掉了，而且吃法不止一种——可以是 SuperGlue 的重武器，也可以是 SiLK 的极简前端。同时，它们也回应了<b>第一季 0004 的手工特征匹配与数据关联</b>，以及<b>第四季 0084 FAST-LIO2「干脆不提取特征」</b>：激光侧用「直接配准」省掉特征，视觉侧用 LoFTR/SiLK 省掉/简化检测，是同一「少即是多」思路在两个传感器上的回响。下一节（0134）我们要离开匹配，进入 0011 那句话的第二个战场——<b>检索与回环</b>。</p>
+
+      <section class="exercise-box">
+        <ol>
+          <li>用生活类比解释 SiLK 的 double-softmax「往返一致性」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>像两个人互发好友申请：A 把 B 加为「最想联系的人」，同时 B 也把 A 加为「最想联系的人」，才算真朋友（高置信匹配）；如果只有单向，就把他晾在一边。SiLK 用「行 softmax × 列 softmax」把这种「互选」变成可微的置信度，不靠注意力也不靠最优传输。</p>
+            </div></details>
+          </li>
+          <li>为什么说 SiLK 是对 0129 那句「上下文比匹配求解本身更关键」的挑战？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>SuperGlue 的消融结论是「去掉 GNN（上下文）精度暴跌，说明上下文最关键」。SiLK 反其道而行：它<b>显式声明不用上下文聚合（CA）</b>，却在 IMC2022 与 SuperGlue 持平、训练快几千倍。作者据此认为「这些任务未必需要 CA」。这并不推翻 SuperGlue 在难场景下的优势，但说明「上下文」对很多任务是<b>锦上添花而非必需</b>——复杂度与效果非单调。</p>
+            </div></details>
+          </li>
+          <li>SiLK 和 SuperPoint 是什么关系？它替换的是流水线的哪一段？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>SiLK 和 SuperPoint 是<b>同类</b>——都是 detect-and-describe 前端，产出「点 + 描述子」。SiLK 替换的是 SuperPoint 那类前端，而不是 SuperGlue 那类匹配器。它的极简之处在于：cell 大小退化成 1（softmax 变 sigmoid，去掉 NMS 与稀疏约束），且自监督训练只需单图 + 随机单应，无需 3D/位姿。</p>
+            </div></details>
+          </li>
+          <li>把 0129–0133 五篇放进「复杂度轴」，你的收束判断是什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>五篇里 0129–0131 在轴右端「往上加复杂度」（GNN/Transformer/自适应），0133 SiLK + 0132 RAFT 在「往下减」。收束判断：<b>复杂度与效果不是单调关系</b>——heavy 方法在难纹理/大视角仍更好，但极简方案在「轻量、快、易训」上优势巨大，且精度往往够用。选多重，取决于速度/精度预算。另需牢记两条归类：SiLK 是前端、RAFT 是稠密光流，都不在「稀疏匹配中间端」那一格。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0132-RAFT2020-循环迭代式光流.html">← RAFT 2020：循环迭代式光流</a>
+        <a class="next" href="0134-DBoW2-2012-词袋法怎么变成工程标准.html">下一课：DBoW2 2012 →</a>
+      </div>
+      <p class="foot-note">匹配块收束：复杂度不是越多越好。下一节离开「匹配」，进入 0011 那句话的第二个战场——检索与回环 🪶</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

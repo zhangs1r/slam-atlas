@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>混合架构与统一检索 2023 · Hybrid 与 R²Former — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0139</div>
+      <h1>混合架构与统一检索 2023 · Hybrid 与 R²Former</h1>
+      <p class="subtitle">Hybrid 把 CNN 局部细节和 Transformer 空间上下文焊一起，R²Former 用 ViT 一个框架统一检索与重排序 —— 单阶段 vs 两阶段 🏗️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：图像 VPR 的混合架构 / 统一检索重排序</span>
+        <span>👥 作者：Hybrid（Y. Zhang 等）/ R²Former（S. Wang 等）</span>
+        <span>📅 2023 · <i>Hybrid CNN-Transformer / R²Former</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">Recall@1 是什么</a>
+        <a href="#c">Hybrid：CNN+Transformer+语义</a>
+        <a href="#d">R²Former：统一检索与重排序</a>
+        <a href="#e">和前面课程怎么接</a>
+        <a href="#f">练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能回答① 解释 Recall@1 / Recall@1% 怎么看（候选列表第一位 / 前 1% 是否正确）；② 说清 Hybrid 如何用「CNN 局部 + Transformer 上下文 + 语义先验」做单阶段检索；③ 说清 R²Former 如何用 ViT 一个框架统一「检索 + 重排序」；④ 解释「单阶段 vs 两阶段」的取舍。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本篇是 <b>0011「检索被吃掉」</b> 在图像 VPR 的「架构演进」：接 0138 的 CricaVPR / SALAD（都是单阶段），Hybrid 是另一条单阶段路线（CNN-Transformer + 语义），R²Former 则是<b>检索+重排序两阶段</b>的代表。⚠️ 关键对照：<b>SALAD（单阶段）在 MSLS-ch 反超 R²Former（两阶段）</b>——这是「聚合比重排序更关键」的实证，本课要用它收束「单阶段 vs 两阶段」之争。</p>
+        </div>
+      </div>
+
+      <h2>1. 它到底在做什么：先讲人话</h2>
+      <p>图像地点识别说到底就一句：给一张查询图，从地图库里找出「最像」的那张。怎么造「最像」的向量、怎么比，前面几节各显神通。本节两篇代表两种工程取向：</p>
+      <ul>
+        <li><b>Hybrid</b>：单阶段。把「CNN 的局部细节」和「Transformer 的长程上下文」焊在一起，再叠语义先验，一个向量定终身。</li>
+        <li><b>R²Former</b>：两阶段。先用 ViT 的 class token 做一次粗检索，再用 patch token 做一次「重排序」精修——一个框架干两件事。</li>
+      </ul>
+      <p>在聊它们之前，先统一评测语言：<b>Recall@1 / Recall@1%</b> 到底在看什么。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. Recall@1 与 Recall@1%：候选列表的第一位对不对</h2>
+      <p>检索系统对每张查询图，会按相似度排一张<b>候选列表</b>（最像的排最前）。Recall@1 看「正确匹配有没有排在第 1 位」；Recall@1% 看「正确匹配有没有进前 1%（前 N 张，N = 数据库大小的 1%）」。注意第一季 0013 警告过：R@100P 这类指标有坑，Recall@1 只是「最严格的一条」，要配合 PR 曲线看。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">候选列表：Recall@1 看「第 1 位对不对」，Recall@1% 看「进没进前 1%」</text>
+          <!-- 列表 -->
+          <rect x="300" y="55" width="300" height="40" rx="6" fill="#dff0e2" stroke="#2f8a4f" stroke-width="2"/>
+          <text x="315" y="80" font-size="11" font-weight="700" fill="#2f6136">#1 ✅ 正确匹配（最像）</text>
+          <rect x="300" y="103" width="300" height="34" rx="5" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="315" y="125" font-size="10" fill="#8a7365">#2 次像（干扰）</text>
+          <rect x="300" y="145" width="300" height="34" rx="5" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="315" y="167" font-size="10" fill="#8a7365">#3 干扰</text>
+          <rect x="300" y="187" width="300" height="34" rx="5" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="315" y="209" font-size="10" fill="#8a7365">#4 干扰</text>
+          <rect x="300" y="229" width="300" height="34" rx="5" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="315" y="251" font-size="10" fill="#8a7365">#5 干扰</text>
+          <text x="450" y="288" text-anchor="middle" font-size="10" fill="#8a7365">… 列表继续到第 N 张（N = 数据库大小）</text>
+          <!-- 标记 -->
+          <line x1="295" y1="75" x2="295" y2="252" stroke="#2f8a4f" stroke-width="2.4"/>
+          <text x="285" y="165" text-anchor="end" font-size="10" font-weight="700" fill="#2f6136">Recall@1</text>
+          <text x="285" y="183" text-anchor="end" font-size="9.5" fill="#2f6136">（第1位正确？）</text>
+          <!-- 1% 括号 -->
+          <line x1="612" y1="75" x2="612" y2="252" stroke="#a8432c" stroke-width="2"/>
+          <line x1="608" y1="75" x2="616" y2="75" stroke="#a8432c" stroke-width="2"/>
+          <line x1="608" y1="252" x2="616" y2="252" stroke="#a8432c" stroke-width="2"/>
+          <text x="628" y="168" font-size="10" font-weight="700" fill="#a8432c">Recall@1%</text>
+          <text x="628" y="186" font-size="9.5" fill="#a8432c">（前 1% 含正确？）</text>
+          <text x="450" y="330" text-anchor="middle" font-size="10.5" fill="#8a7365">绿色在第 1 位 → Recall@1 命中；只要绿色在前 1% 区间内 → Recall@1% 命中</text>
+          <text x="450" y="352" text-anchor="middle" font-size="10.5" fill="#8a7365">R@1 更严格；R@1% 容错（前 1% 里任取其一即可），常与 PR 曲线配合看</text>
+          <text x="450" y="388" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">要记住：Recall@1 看「榜首对不对」，Recall@1% 看「榜首附近（前1%）对不对」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>右边是按相似度排好的候选列表，最像的排 #1。绿色 #1 是正确匹配。左侧绿线标出「Recall@1」——只看第 1 位对不对；右侧红括号标出「Recall@1%」——看正确匹配有没有落进「前 1% 张」区间。<br>
+          <b>怎么看这张图：</b>① Recall@1 最苛刻：正确匹配必须排榜首才算命中。② Recall@1% 宽松些：只要在前 1%（比如库有 1 万张，就是前 100 张）里就算命中，常用于大库评测。③ 配合 PR 曲线看更全面——单看 R@1 可能掩盖「榜首偶尔错但前几名都对」的情况（呼应第一季 0013 的评测坑）。<br>
+          <b>要记住的一句话：</b>Recall@1 看榜首、Recall@1% 看榜首附近（前 1%）——两者都在看「候选列表里正确项排多前」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. Hybrid：CNN 局部 + Transformer 上下文 + 语义</h2>
+      <p>Hybrid 的观点：纯 CNN 有局部性、难建模长程空间结构；纯 Transformer 擅空间上下文、但缺局部细节。它把两者焊起来，再叠语义先验。结构：VGG-16 提 Conv1_2/2_2/3_3 特征金字塔 → 与图同切成 N 个 patch 拼接 → 投影进 Swin-B（4 阶段）→ 多尺度 token 融合 → <b>语义增强 NetVLAD</b> 聚合 → PCA 白化 + L2 得 4096 维描述子。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>语义增强 NetVLAD</h4>
+          <p>在 vanilla NetVLAD 残差上乘类内显著性权重 $\beta_k(x_i)$，质心由 DeepLabV3+ 在 Cityscapes 预训练得到（建筑/树等作代表质心，人/车/天空作阴影质心）。消融显示语义增强贡献最大。</p>
+        </div>
+        <div class="mini-card">
+          <h4>自适应 triplet loss</h4>
+          <p>动态 margin $m_a^i=\frac{\varphi(q,n)_{max}-\varphi(q,n_i)+\alpha}{\varphi(q,n)_{max}-\varphi(q,n_{min}}+\beta}$（α=0.15, β=1e-8）。对「相似但异地」的难负给更小 margin，使其继续贡献学习。</p>
+        </div>
+        <div class="mini-card">
+          <h4>数字</h4>
+          <p>Pitts30k R@1 <b>86.3</b>、Tokyo24/7 <b>78.9</b>（比纯 CNN 70.2、纯 Transformer 73.0 都高）。推理 48.4 ms/query，仍是单阶段。</p>
+        </div>
+        <div class="mini-card">
+          <h4>反直觉</h4>
+          <p>低层 token 比高层好（S1 84.95 > S3 83.48 on Pitts30k）——局部细节比高层语义更重要；纯 ViT 输入在 Pitts 上弱于 CNN，但在 Tokyo 上强于 CNN。</p>
+        </div>
+      </div>
+      <p>注意它是<b>纯单阶段全局检索</b>，未来工作才提到「可加局部特征重排序」。这说明即使不加两阶段，混合架构本身已经很强。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">Hybrid 为什么把三种东西焊在一起：同一张街景，三条支路各看走一部分</text>
+          <!-- 街景 -->
+          <rect x="60" y="60" width="340" height="230" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.2"/>
+          <rect x="60" y="60" width="340" height="52" fill="#cfe3f2"/>
+          <rect x="300" y="74" width="62" height="38" fill="#b8b0a0"/>
+          <rect x="312" y="82" width="12" height="22" fill="#e2ddd2"/>
+          <rect x="332" y="82" width="12" height="22" fill="#e2ddd2"/>
+          <rect x="80" y="100" width="90" height="112" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="90" y="112" width="26" height="22" fill="#f2efe8"/>
+          <rect x="130" y="112" width="26" height="22" fill="#f2efe8"/>
+          <rect x="90" y="146" width="26" height="22" fill="#f2efe8"/>
+          <rect x="130" y="146" width="26" height="22" fill="#f2efe8"/>
+          <rect x="90" y="182" width="66" height="14" fill="#b5765a"/>
+          <circle cx="250" cy="150" r="28" fill="#6fae7f"/>
+          <line x1="215" y1="100" x2="215" y2="212" stroke="#8a7f70" stroke-width="2.5"/>
+          <rect x="60" y="212" width="340" height="40" fill="#d8d4cd"/>
+          <rect x="300" y="204" width="70" height="22" rx="3" fill="#8fa3b5"/>
+          <circle cx="120" cy="160" r="12" fill="#2f5b82"/>
+          <text x="120" y="165" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">1</text>
+          <circle cx="331" cy="100" r="12" fill="#a8432c"/>
+          <text x="331" y="105" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">2</text>
+          <circle cx="110" cy="240" r="12" fill="#2f6136"/>
+          <text x="110" y="245" text-anchor="middle" font-size="11" font-weight="700" fill="#ffffff">3</text>
+          <text x="230" y="312" text-anchor="middle" font-size="9.5" fill="#4a342c">同一张街景（三个支路各看一部分）</text>
+          <!-- 三张说明卡 -->
+          <rect x="430" y="80" width="470" height="56" rx="6" fill="#eef4f9" stroke="#2f5b82" stroke-width="1.3"/>
+          <circle cx="454" cy="108" r="11" fill="#2f5b82"/>
+          <text x="454" y="113" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">1</text>
+          <text x="474" y="102" font-size="10" font-weight="700" fill="#2f5b82">CNN 支路：只看局部细节</text>
+          <text x="474" y="122" font-size="9.5" fill="#3d2a22">窗框的直角、树叶纹理、招牌笔画</text>
+          <rect x="430" y="152" width="470" height="56" rx="6" fill="#fdf0ec" stroke="#a8432c" stroke-width="1.3"/>
+          <circle cx="454" cy="180" r="11" fill="#a8432c"/>
+          <text x="454" y="185" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">2</text>
+          <text x="474" y="174" font-size="10" font-weight="700" fill="#a8432c">Transformer 支路：看长程上下文</text>
+          <text x="474" y="194" font-size="9.5" fill="#3d2a22">整条街的布局、电线、远处塔楼的关系</text>
+          <rect x="430" y="224" width="470" height="56" rx="6" fill="#f7fbf6" stroke="#2f6136" stroke-width="1.3"/>
+          <circle cx="454" cy="252" r="11" fill="#2f6136"/>
+          <text x="454" y="257" text-anchor="middle" font-size="10" font-weight="700" fill="#ffffff">3</text>
+          <text x="474" y="246" font-size="10" font-weight="700" fill="#2f6136">语义增强 NetVLAD：借 DeepLabV3+ 先验</text>
+          <text x="474" y="266" font-size="9.5" fill="#3d2a22">天空 / 路面当阴影，建筑 / 树 / 电线杆当代表</text>
+          <rect x="430" y="296" width="470" height="50" rx="6" fill="#eef4f9" stroke="#2f5b82" stroke-width="1.5"/>
+          <text x="665" y="326" text-anchor="middle" font-size="10" fill="#2f5b82">三条支路拼起来 → 语义增强 NetVLAD → PCA 白化 → 4096 维描述子</text>
+          <text x="470" y="372" text-anchor="middle" font-size="9.5" fill="#5b4636">纯 CNN 有局部性、难建模长程结构；纯 Transformer 缺局部细节；语义先验再补一刀</text>
+          <text x="470" y="396" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">要记住：Hybrid 是纯单阶段检索，它的强项就是「局部细节 + 空间上下文 + 语义」三合一</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一张真实街景（天空、远处的塔、左侧楼房的窗和门头招牌、一棵树、一根电线杆、路面上一辆车）。图上三个彩色圆点分别标出三条支路各自关心的地方：1 号看窗框和纹理，2 号看远处塔楼与整体布局，3 号看天空与路面这类语义区域。右边三张卡片分别说明这三条支路在干什么，最下面是它们拼起来之后的产物。<br>
+          <b>怎么看这张图：</b>① 点 1 落在窗框和树叶上——这是 CNN 最擅长的高频局部细节，也是论文里「低层 token 比高层更好」那条反直觉结论的来源。② 点 2 落在远处塔楼与整条街的走向上——这是 Transformer 的长程建模能力，CNN 的局部感受野不容易做到。③ 点 3 落在天空和路面上——语义先验把它们当「阴影质心」压下去，把建筑、树、电线杆当「代表质心」抬起来，所以消融里语义增强贡献最大。<br>
+          <b>要记住的一句话：</b>Hybrid 不是把 CNN 与 Transformer 简单叠起来，而是明确分工：局部细节、长程上下文、语义先验各管一段，最后由语义增强 NetVLAD 聚成一个 4096 维描述子。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Hybrid_CNN-Transformer_Features_for_Visual_Place_Recogni/26ccc0d0714dad3adcc6fa3aa459088c0b8a35591a21f9e8e27fec032563c554.jpg" alt="Hybrid overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Overview of the proposed methods. The hybrid CNN-Transformer first obtains feature maps rich in local details through a shallow CNN, divides the input image and CNN feature maps into the same number of patches, and concatenates the patch features at the same spatial location to acquire pyramid features. Then the flattened feature sequence is input to the Transformer encoder to obtain multi-level output tokens from shallow to deep stages… Finally, the output token sequence is chunked and viewed as token maps, which are aggregated through the semantic enhanced NetVLAD layer…<br>
+          <b>怎么看这张图：</b>从浅 CNN 出局部细节 → 同空间位置 patch 拼接成金字塔特征 → Transformer 出多级 token → 多尺度融合 → 语义增强 NetVLAD 聚合成全局描述子。这条「CNN 局部 + Transformer 上下文 + 语义」链就是混合架构的全景。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Hybrid_CNN-Transformer_Features_for_Visual_Place_Recogni/177006574e4a09579718f317cc3feecb215f4c58820cded980da5922998e1081.jpg" alt="Hybrid network schematic">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Schematic diagram of the hybrid CNN-Transformer feature extraction network. The left of the figure is the VGG-16 spatial pyramid convolutional feature extraction network. The green, blue and orange squares represent the Conv1, Conv2 and Conv3 layers of VGG-16, respectively. The right of the figure is the Swin Transformer model.<br>
+          <b>怎么看这张图：</b>左边 VGG-16 三层（绿/蓝/橙=Conv1/2/3）出金字塔特征，右边 Swin Transformer 建模长程依赖。CNN 与 Transformer 左右并置、信息在多层 token 上融合——直观展示「局部细节」与「空间上下文」如何互补。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. R²Former：一个 ViT 框架统一检索与重排序</h2>
+      <p>R²Former 的核心主张：传统流水线用「聚合 CNN 特征检索 + RANSAC 几何验证重排序」，而 RANSAC 只用几何信息。R²Former 用纯 Transformer 把<b>检索和重排序做成两阶段一体</b>：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>检索（class token）</h4>
+          <p>ViT-S（12 层，384 维），class token 直接当 256 维全局特征（线性降维 + L2）。平方 L2 做检索，margin triplet 训练。</p>
+        </div>
+        <div class="mini-card">
+          <h4>重排序（patch token）</h4>
+          <p>倒数第二层 patch token 降为 128 维，按 attention 选 Top-500（每特征存 128+3=131 维）。对 top-100 候选构造 <b>500×500×7 关联矩阵</b>（坐标/注意力/余弦相似）送 Transformer 重排。</p>
+        </div>
+        <div class="mini-card">
+          <h4>重排序模块</h4>
+          <p>融合「特征关联 + 注意力值 + xy 坐标」学二分类（同地/异地），比 RANSAC 更快更准。可插到别的 CNN/Transformer backbone。</p>
+        </div>
+        <div class="mini-card">
+          <h4>数字</h4>
+          <p>MSLS-val R@1 <b>89.7</b>、MSLS-ch <b>73.0</b>；reranking 202.37 ms、显存 4.79 GB（比 Patch-NetVLAD-p 的 908 GB 降约 189×）。</p>
+        </div>
+      </div>
+      <p>R²Former 是<b>检索 + 重排序两阶段</b>的代表——这恰是和 CricaVPR / SALAD / Hybrid（单阶段）的本质区别。但本季最反直觉的结论是：<b>单阶段的 SALAD 在 MSLS-ch（75.0）超过了两阶段的 R²Former（73.0）</b>。也就是说，「好的聚合」有时比重排序更关键。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">重排序（reranking）：先粗筛一大池候选，再用更贵的模型只精修前几名</text>
+          <!-- 候选池 -->
+          <rect x="40" y="80" width="110" height="170" fill="#fffdf9" stroke="#c79a6a" stroke-width="1.3"/>
+          <rect x="48" y="88" width="30" height="30" fill="#e6e0d4"/>
+          <rect x="82" y="88" width="30" height="30" fill="#d8cfc0"/>
+          <rect x="116" y="88" width="30" height="30" fill="#e6e0d4"/>
+          <rect x="48" y="122" width="30" height="30" fill="#efe7da"/>
+          <rect x="82" y="122" width="30" height="30" fill="#e6e0d4"/>
+          <rect x="116" y="122" width="30" height="30" fill="#efe7da"/>
+          <rect x="48" y="156" width="30" height="30" fill="#e6e0d4"/>
+          <rect x="82" y="156" width="30" height="30" fill="#efe7da"/>
+          <rect x="116" y="156" width="30" height="30" fill="#e6e0d4"/>
+          <rect x="48" y="190" width="30" height="30" fill="#efe7da"/>
+          <rect x="82" y="190" width="30" height="30" fill="#e6e0d4"/>
+          <rect x="116" y="190" width="30" height="30" fill="#d8cfc0"/>
+          <text x="95" y="66" text-anchor="middle" font-size="10" font-weight="700" fill="#3d2a22">① 候选池</text>
+          <text x="95" y="272" text-anchor="middle" font-size="9.5" fill="#5b4636">粗检索返回的一百张</text>
+          <line x1="155" y1="185" x2="213" y2="185" stroke="#6b5a4e" stroke-width="1.6"/>
+          <polygon points="217,185 207,180 208,190" fill="#6b5a4e"/>
+          <text x="185" y="173" text-anchor="middle" font-size="9" fill="#6b5a4e">检索</text>
+          <!-- 粗排序 -->
+          <text x="345" y="66" text-anchor="middle" font-size="10" font-weight="700" fill="#3d2a22">② 粗排序（只看全局描述子）</text>
+          <rect x="220" y="86" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="232" y="108" font-size="10" fill="#8a7365">#1 异地</text>
+          <rect x="220" y="126" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="232" y="148" font-size="10" fill="#8a7365">#2 异地</text>
+          <rect x="220" y="166" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="232" y="188" font-size="10" fill="#8a7365">#3 异地</text>
+          <rect x="220" y="206" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="232" y="228" font-size="10" fill="#8a7365">#4 异地</text>
+          <rect x="220" y="246" width="250" height="34" rx="4" fill="#dff0e2" stroke="#2f8a4f" stroke-width="1.6"/>
+          <text x="232" y="268" font-size="10" font-weight="700" fill="#2f6136">#5 ★ 正确参考图</text>
+          <text x="345" y="300" text-anchor="middle" font-size="9.5" fill="#5b4636">正确参考只排到第 5 位</text>
+          <line x1="475" y1="185" x2="551" y2="185" stroke="#6b5a4e" stroke-width="1.6"/>
+          <polygon points="555,185 545,180 546,190" fill="#6b5a4e"/>
+          <text x="514" y="173" text-anchor="middle" font-size="9" fill="#6b5a4e">重排序</text>
+          <!-- 重排序后 -->
+          <text x="685" y="66" text-anchor="middle" font-size="10" font-weight="700" fill="#3d2a22">③ 重排序后（用更贵的模型）</text>
+          <rect x="560" y="86" width="250" height="34" rx="4" fill="#dff0e2" stroke="#2f8a4f" stroke-width="1.6"/>
+          <text x="572" y="108" font-size="10" font-weight="700" fill="#2f6136">#1 ★ 正确参考图</text>
+          <rect x="560" y="126" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="572" y="148" font-size="10" fill="#8a7365">#2 异地</text>
+          <rect x="560" y="166" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="572" y="188" font-size="10" fill="#8a7365">#3 异地</text>
+          <rect x="560" y="206" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="572" y="228" font-size="10" fill="#8a7365">#4 异地</text>
+          <rect x="560" y="246" width="250" height="34" rx="4" fill="#fdf0ec" stroke="#e0c3b0" stroke-width="1"/>
+          <text x="572" y="268" font-size="10" fill="#8a7365">#5 异地</text>
+          <text x="685" y="300" text-anchor="middle" font-size="9.5" fill="#5b4636">正确参考升到第 1 位</text>
+          <text x="470" y="336" text-anchor="middle" font-size="9.5" fill="#5b4636">重排序只对前面这几个候选动手：拿 patch 特征 + 注意力 + 坐标再看一遍，不是全池重排</text>
+          <text x="470" y="360" text-anchor="middle" font-size="9.5" fill="#5b4636">R²Former 用 500×500×7 的关联矩阵喂 Transformer 学「同地 / 异地」二分类，取代 RANSAC</text>
+          <text x="470" y="384" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">要记住：两阶段 = 便宜粗检索先缩小范围 + 昂贵重排序精修前几名；但 SALAD 单阶段反而更准</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>① 是粗检索返回的候选池（一整池一百张）。② 是按全局描述子距离排出来的粗排序——绿色那一张才是正确参考图，可它只排在第 5 位。③ 是用更贵的重排序模型精修前几名之后的列表：正确参考图升到了第 1 位。<br>
+          <b>怎么看这张图：</b>① 先看 ② 和 ③ 的差别：两张表里装的是同一批候选，只有顺序被改了——重排序并不新增候选，它只把「真正对的那些」往前提。② 再看 ② 里那道绿色：#5 说明单靠全局描述子，正确参考被四个相似但异地的地点压住了，这正是「检索漏了」的典型情形。③ 注意重排序的代价：它要对候选取 patch 特征、算关联矩阵、过 Transformer（R²Former 是 500×500×7 的关联矩阵），所以只敢对前几名做——这就是两阶段的分工。<br>
+          <b>要记住的一句话：</b>两阶段 = 「便宜的粗检索缩小范围 + 昂贵的重排序精修前几名」；但 SALAD 单阶段（MSLS-ch 75.0）反超 R²Former（73.0），说明把聚合做好的收益可能大于多加一道重排序。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023__R__2___Former__Unified_Retrieval_and_Reranking_Transfor/817f18c173ec27ea256138c810332a24449924d61111625ccfe718d5782b0bc3.jpg" alt="R2Former unified framework">
+        <figcaption>
+          <b>原图注（Fig. 1，正文描述）：</b>…we integrate the global retrieval and reranking into one unified framework employing only transformers (Fig. 1), abbreviated as R²Former… The global retrieval is tackled based on the class token without additional aggregation modules and the other image tokens are adopted as local features.<br>
+          <b>怎么看这张图：</b>一个 ViT 同时出 class token（全局检索）和 patch token（局部特征），后者喂重排序模块。检索与重排在「同一个前向」里完成，共享 backbone——这就是「统一框架」的含义，也是它比「CNN 聚合 + 独立 RANSAC」更省显存的原因。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023__R__2___Former__Unified_Retrieval_and_Reranking_Transfor/d0cc722e5c072314751cb84d916947d9a400e2161a4e05bf161e3fad746610bc.jpg" alt="R2Former framework overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>An overview of the proposed framework. Both the global and local features are extracted as the class token and patch tokens, followed by dimension reduction using linear layers. The important local features are then selected based on the attention map (Fig. 3) and fed into the reranking module. Both the global retrieval and reranking modules consist of only transformer and linear layers.<br>
+          <b>怎么看这张图：</b>class token → 全局特征（检索）；patch token → 降维 → 按 attention 选 Top-500 重要局部特征 → 关联矩阵 → 重排序模块。整条链只有 Transformer + 线性层，没有一个额外聚合模块，干净且高效。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023__R__2___Former__Unified_Retrieval_and_Reranking_Transfor/5fc124a4402670114714ed450bba2b802778b65bf921c7949db137b761cf1252.jpg" alt="Reranking case study">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>…we show a detailed case where the global retrieval fails on the top-3 results. Fig. 4 (b) and (c) show the attention map and the selected patches… Both RANSAC and our method work well on reranking the top-100 candidates and our method finds more correct reference images in the top-3 results.<br>
+          <b>怎么看这张图：</b>全局检索在 top-3 翻车时，重排序模块（基于 attention 选的重要 patch + 关联矩阵）把正确参考图拉回 top-3。这直观展示了「两阶段」的价值：检索漏的，重排序补——但也说明若聚合本身够好（如 SALAD），也许根本不需要这步。</p>
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于「单阶段 vs 两阶段」检索，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。SALAD（单阶段全局检索）在 MSLS Challenge R@1 达 75.0，超过两阶段 R²Former 的 73.0 与 TransVPR 的 63.9，且 latency 仅 2.41 ms。这说明 2024 年「更好的描述子聚合」有时比「检索后再重排序」更关键。但两阶段在难感知混叠场景仍有价值，并非绝对输。" onclick="lessonKit.answer(this,'q0139a')">SALAD 单阶段反超 R²Former 两阶段，聚合更关键</button>
+          <button data-correct="no" data-explanation="不对。SALAD 单阶段在 MSLS-ch 是 75.0，R²Former 两阶段是 73.0——单阶段反而更高，且快得多。说「两阶段一定更好」与 Table 2 实测相反；两阶段的价值在难混淆场景，但不是普遍碾压。" onclick="lessonKit.answer(this,'q0139a')">两阶段重排序一定比单阶段检索更准</button>
+        </div>
+        <div class="quiz-feedback" id="q0139a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 和前面课程怎么接 + 本块收束</h2>
+      <p>把 0138–0139 四篇图像 VPR 方法放进「检索范式三分」看：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.82rem">
+        <thead>
+          <tr style="background:rgba(61,107,150,.1)">
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">范式</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">方法</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">聚合 / 关键</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">代表数字</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">单阶段检索</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">CricaVPR / SALAD / Hybrid</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">跨图关联 / OT 聚合 / CNN-T+语义</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">SALAD MSLS-ch 75.0</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">检索+重排序</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">R²Former</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">ViT class/patch + 关联 Transformer</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">MSLS-ch 73.0</td></tr>
+          <tr><td style="padding:.5rem .6rem;font-weight:700">检索+位姿</td><td style="padding:.5rem .6rem">LCR-Net（0140）</td><td style="padding:.5rem .6rem">NetVLAD 检索 + Sinkhorn 位姿</td><td style="padding:.5rem .6rem">KITTI AUC 0.958</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>本块（0134–0139）收束判断（这是判断，不是原文自评）：</b>图像 VPR 的「检索」一侧，深度学习确实把 0134 DBoW2 那套手工词袋吃掉了——而且吃法不止一种（跨图关联、OT 聚合、混合架构）。但<b>「单阶段 vs 两阶段」没有单调优劣</b>：SALAD 单阶段反超 R²Former 两阶段，说明「聚合质量」常是瓶颈；两阶段在极端感知混叠下仍有价值。激光侧（0135–0137）则更多是「免训练几何描述子 vs 学习式」的拉锯，且大多不出位姿。真正的「回环 + 重定位一体」与「假阳性铁律复查」，要交给 <b>0140 LCR-Net</b>。</p>
+      </div>
+
+      <section class="exercise-box" id="f">
+        <ol>
+          <li>用候选列表解释 Recall@1 与 Recall@1% 的区别，并说明为什么单看 R@1 可能不够。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>候选列表按相似度排序，Recall@1 看正确匹配是否排 #1（最严），Recall@1% 看是否落进前 1% 区间（较松）。单看 R@1 可能掩盖「榜首偶尔错、但前几名都对」的情况；且大库里前 1% 已经很大，R@1% 更贴近实际可用召回。呼应第一季 0013：R@100P 等也有坑，应配合 PR 曲线。</p>
+            </div></details>
+          </li>
+          <li>Hybrid 为什么要把 CNN 和 Transformer 焊在一起？纯用哪一个会缺什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>纯 CNN 有局部性、难建模长程空间结构；纯 Transformer 擅空间上下文、但缺局部细节（且低层 token 比高层更有用，说明局部细节关键）。Hybrid 用 VGG 金字塔取局部细节、Swin 取多尺度上下文、语义增强 NetVLAD 聚合，三者互补。实证：纯 CNN 70.2、纯 Transformer 73.0，混合 78.9（Tokyo24/7），混合明显更好。</p>
+            </div></details>
+          </li>
+          <li>R²Former 的重排序模块比 RANSAC 几何验证强在哪？它靠什么信息？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>RANSAC 只用几何信息（局部特征对）。R²Former 的重排序模块融合「特征关联（余弦相似）+ 注意力值 + xy 坐标」成 500×500×7 关联矩阵，送 Transformer 学二分类（同地/异地）。它不只看几何，还看「哪些 patch 更重要、关联多强」，因此更准且显存骤降（4.79 GB vs Patch-NetVLAD-p 908 GB）。模块还可插到其他 backbone。</p>
+            </div></details>
+          </li>
+          <li>为什么说 SALAD 单阶段反超 R²Former 两阶段是「反直觉」？这说明了什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>直觉上「检索后再重排序」应该更准，但 SALAD（单阶段，MSLS-ch 75.0）> R²Former（两阶段，73.0），且快 3× 以上。说明当描述子本身聚合得足够好（DINOv2 + OT + dustbin），「重排序」带来的增益有限，「聚合质量」才是瓶颈。这推翻了「两阶段必然更优」的默认假设。但两阶段在难感知混叠下仍有价值，并非绝对输。</p>
+            </div></details>
+          </li>
+          <li>把 0134–0139 的「检索」演进用一句话收束，并点明还欠 0014 什么账。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>从 DBoW2（手工视觉词袋，0134）→ Scan Context 系（免训练几何，0135）→ LCDNet/OT/BEVPlace/SeqOT（学习式投影图/序列，0136–0137）→ CricaVPR/SALAD/Hybrid/R²Former（学习式图像 VPR，0138–0139），「检索」被深度学习一步步吃掉，且吃法多元。但本块还没正面回答第一季 0014 的「回环假阳性铁律」：学习式方法把假阳性率压下去了吗？代价是什么？新失效模式是什么？这笔账要等 0140 LCR-Net（完整回环+重定位系统）来结。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0138-视觉地点识别的两种聚合.html">← 视觉地点识别的两种聚合：CricaVPR 与 SALAD</a>
+        <a class="next" href="0140-端到端回环与重定位-兼答复假阳性铁律.html">下一课：端到端回环与重定位 →</a>
+      </div>
+      <p class="foot-note">Hybrid 混架构单阶段、R²Former 统一检索重排序；SALAD 单阶段反超两阶段说明聚合更关键 🏗️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

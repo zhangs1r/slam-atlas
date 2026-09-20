@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DPVO 2023 · 图像块跟踪替代稠密光流 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0146</div>
+      <h1>DPVO（2023）：用图像块跟踪替代稠密光流</h1>
+      <p class="subtitle">本块收尾：DROID 的稀疏化 VO 分叉——精度反升、速度快 3×、显存 &lt;1/3，走的是「往下减」这条暗线 🪶</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稀疏 patch graph + 可微 BA + 循环迭代</span>
+        <span>👥 作者：Z. Teed、A. Lipson、J. Deng（Princeton）</span>
+        <span>📅 2023 · <i>Deep Patch Visual Odometry</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">接在谁后面</a>
+        <a href="#c">DPVO 长什么样</a>
+        <a href="#d">patch graph：把稠密流换成稀疏块</a>
+        <a href="#e">训练信号与损失</a>
+        <a href="#f">又准又快又省</a>
+        <a href="#g">三张自绘图</a>
+        <a href="#h">往下减这条暗线</a>
+        <a href="#i">练习</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>搞懂 DPVO 是<b>0145 DROID-SLAM 的稀疏化 VO 分叉</b>：它把 DROID 那套「每像素稠密光流」换成「每帧随机采几十个图像块（patch）的跨帧轨迹」，靠 1D 时序卷积 + 图消息传递在 patch 间传信息，反而<b>更准、更快、更省显存</b>。要显式回链 <b>0132</b> RAFT（CorrBlock 一系的继承），并点明它走的是和 0129–0131「上复杂度」相反的「往下减」暗线——呼应 <b>0004</b> KISS-ICP「少即是多」的方法论取向。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0145</b> DROID-SLAM：DPVO 复用它的可微 BA 层（DBA）与 RAFT 式循环迭代，只是把稠密光流换成稀疏 patch——本课必须和 0145 并置。<b>0132</b> RAFT：DPVO 的 patch 相关体、循环更新算子直接来自这一系，必须回链。<b>0018/0019</b> BA：DROID/DPVO 的 BA 层都是可微、稠密/稀疏化的 BA 对照。<b>0129–0131</b> 是「上复杂度」；<b>0132/0133</b> 与本课是「往下减」——本季方法论暗线在 VO 块收口。<b>0004</b> KISS-ICP 的「少即是多」是同一精神。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>0145 的 DROID 很强，但有个毛病：它要把<b>每一帧的每一个像素</b>都拿去算光流（稠密光流），太吃算力、太吃显存（24GB），相机一动快了还会掉到 11FPS。DPVO 想：非要每个像素都看吗？</p>
+      <p>打个比方：你在陌生房间走路认路，不必盯住墙上每一根纹理，只要认准<b>几个固定标志物</b>（插座、门把手、画框），记住「这个标志物从一帧到下一帧挪到哪」，路就认出来了。DPVO 就是这么干：每帧<b>随机撒几十个图像块（patch，比如 96 个）</b>，循环网络跟踪「这些块跨时间怎么动」，再用一个可微 BA 层把块的运动换算成相机位姿。术语先露脸：<b>patch</b> = 图像上一块 p×p 的小区域（本课用「图像块」）；<b>patch graph / 图像块图</b> = 一个二部图，一头连 patch、一头连帧，边表示「这个块出现在哪几帧」（见 §9 自绘图）；<b>patch trajectory</b> = 同一个块从第一帧到最后帧的运动轨迹；<b>factor head</b> = 网络末端吐「修正量 δ + 置信度 Σ」的小头；<b>可微 BA 层</b> = 和 0145 一样能把几何误差反传回去的一层（见 0018/0019）。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面</h2>
+      <p>本块叙事收口：DeepVO（黑箱）→ D3VO（嵌几何）→ <b>0145 DROID-SLAM（可微稠密 BA 层）</b> → <b>0146 DPVO（同一范式的稀疏 VO 分叉）</b>。DPVO 和 DROID 同出 Princeton、同一团队，连 BA 层都共用——区别只在「喂给 BA 的是什么」：DROID 喂每像素稠密光流，DPVO 喂稀疏 patch 轨迹。</p>
+      <p>更关键的是<b>暗线</b>：本季匹配块里 0129 SuperGlue、0130 LoFTR、0131 LightGlue 一路「上复杂度」（图注意力、Transformer、最优传输）；而 0132 RAFT、0133 SiLK 已经开始「往下减」（循环迭代 + 极简前端）。DPVO 是这条「往下减」暗线在 VO 块的极点：它用<b>稀疏随机 patch</b> 反驳了「稠密流才冗余抗错」的假设——和第一季 <b>0004</b> KISS-ICP「少即是多」是同一方法论取向：<b>不是模块越复杂越好，往往是减对了地方反而更强</b>。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. DPVO 长什么样</h2>
+      <p>每帧：两个残差网络各提一份特征——<b>matching net</b>（1/4 分辨率、D=128、Instance Norm，用于查对应）和 <b>context net</b>（D=384、无 Norm，当记忆）；输出 1/4 与 1/8 两级金字塔。然后<b>每帧随机采 96 个 patch</b>（默认），组成 patch graph。Update Operator 在 patch 图的边上跑：correlation（在 7×7 网格内积查相似）→ 1D 时序卷积 → Softmax 消息传递（patch/frame 两种）→ Transition 块（门控残差 + LayerNorm）→ Factor Head 吐 2D 修正 δ 与置信度 Σ∈(0,1)。最后稀疏版 DBA 层把 δ 解成位姿与 patch 深度。图 1 是总览。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_DPVO/14163aa50e91c80061da10a6d7ed199cd6b73819e0e0e6d5509a949bac7c7b06.jpg" alt="DPVO 总览">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>Deep Patch Visual Odometry (DPVO). Camera poses and a sparse 3D reconstruction (top) are obtained by iterative 2D revisions of patch trajectories through time.</p>
+          <p><b>怎么看这张图：</b>输入是视频，输出是「相机位姿 + 稀疏三维重建」。核心是「patch trajectories」——图中那些在帧间连成线的小块，反复在 2D 上被修正，最终既得到位姿也得到稀疏点云。注意它是<b>稀疏</b>的（只有少数块），不是 DROID 那种每像素稠密图。</p>
+          <p><b>要记住的一句话：</b>DPVO = 跟踪少量图像块的跨帧轨迹 + 可微 BA；稀疏却能比稠密还准。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_DPVO/ec1fe7e7846755d976083df3f59621d960a9ee7c7926b6cb7fcb0fd2c2623d56.jpg" alt="DPVO patch graph">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b>The patch graph. Edges connect patches with frames. Multiple patches are extracted from each frame (e.g. blue) and are connected to nearby frames (green and purple).</p>
+          <p><b>怎么看这张图：</b>左是「patch↔帧」的二部图（一头蓝点=patch，一头绿/紫色=不同帧），边表示「这个 patch 出现在哪几帧」。右是它在图像上的具象——每帧采多个 patch，跨帧连成轨迹。这是 DPVO 整个表示的骨架，也是它比 DROID 省的根。</p>
+          <p><b>要记住的一句话：</b>patch graph 把「哪些块、出现在哪些帧」组织成一张可学习的二部图——稀疏散点替代稠密流场。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_DPVO/964a5c5233ff3d51e2d2c6cdcdcb44ec1a9c13456e9621b0981e10de2b4b154b.jpg" alt="DPVO patch 轨迹与置信度">
+        <figcaption>
+          <p><b>原图注（Fig. 5）：</b>A subset of the patch trajectories predicted by our method. Patches extracted from the green keyframe are tracked through subsequent frames. When a new keyframe is added (blue), additional patches are extracted and tracked. Our method produces confidence values which weight their respective contribution to the bundle adjustment.</p>
+          <p><b>怎么看这张图：</b>绿关键帧采的块沿后续帧连成轨迹（彩色线）；蓝关键帧加入时再采一批新块。每条轨迹带一个<b>置信度</b>，BA 时按置信度加权——「这块跟得准就多信它」。</p>
+          <p><b>要记住的一句话：</b>置信度 Σ 让 BA 自动忽略跟丢的块；所有帧都先当关键帧，所以帧率恒定（不像 DROID 快动掉帧）。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. patch graph：把稠密光流换成稀疏块（本节灵魂）</h2>
+      <p>DROID 的代价来自「<b>每像素</b>都要算光流」——那是 H×W 个量在每轮迭代里滚。DPVO 的洞察：光流里大量像素是<b>冗余</b>的（同一平面的像素个个都算一遍，信息重复）。既然 0145 的 DBA 层本质是在解「patch/像素的轨迹」，那干脆<b>只采少量 patch</b>（默认 96 个/帧），让它们之间的「<b>图消息传递</b>」去补偿被丢掉的冗余。</p>
+      <p>具体机制：① 在 patch 上做 correlation（7×7 邻域内积，比 DROID 全帧相关体轻）；② 用 <b>1D 时序卷积</b>沿「同一 patch 的时间轴」卷，把历史信息压进当前；③ 用 <b>Softmax 消息传递</b>在 patch 之间、patch↔帧之间传信息——同一平面的块会互相印证。反直觉结论：丢掉稠密冗余后，精度<b>不降反升</b>，且随机采 patch 中心点比 SIFT/ORB/SuperPoint/高梯度点都好（见 §6 消融）。</p>
+      <p>和 0018/0019 的对照仍在：DPVO 的 BA 层和 DROID 共用同一套可微 BA，只是 DPVO 是<b>稀疏版</b>——阻尼硬编码 1e-4、2 次 Gauss-Newton（DROID 学阻尼）。目标函数形式一致：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \sum_{(k,j)\in\mathcal E}\Big\|\hat\omega_{ij}(T,P_k)-\big[\hat P_{kj}'+\delta_{kj}\big]\Big\|_{\Sigma_{kj}}^2 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对 patch 图每条边 (k,j)，把 patch k 在帧 j 的「预测位置 $\hat P_{kj}'$」加网络给的 2D 修正 δ，和「用位姿 T 把 patch 投到帧 j 应该到的地方 $\hat\omega_{ij}(T,P_k)$」比，差多少按置信度 Σ 加权求和要最小。注意它优化的是<b>稀疏 patch 的轨迹</b>（不是每个像素），所以 BA 层是稀疏的、极轻——这就是 DPVO 又省又准的根。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 训练信号与损失：监督，合成真值</h2>
+      <p>DPVO 是<b>监督</b>，真值来自纯合成 <b>TartanAir</b>（和 0142 TartanVO、0145 DROID 同一数据源）。训练 24 万 iter、bs1、单 RTX3090、约 3.5 天、AdamW(lr 8e-5)、序列长 15（前 8 帧初始化）、展开 18 次更新。采样时让<b>帧间光流幅度 16–72px</b>（逼网络学大位移）。损失：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \mathcal L=10\,\mathcal L_{pose}+0.1\,\mathcal L_{flow} $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>位姿损失占大头（权重 10），光流损失辅助（权重 0.1）。位姿监督先用 <b>Umeyama</b> 把预测轨迹和真值对齐（消掉整体平移/旋转/尺度这种 gauge 自由度），再取 SE(3) Log 误差；光流监督取「patch 诱导出的流」和真值流的最小误差。权重 10:0.1 说明 DPVO 主要盯位姿准不准，光流只是帮 CorrBlock 学对应——和 0145 DROID 的「位姿+光流」双监督同思路，但更偏位姿。</p>
+      <table>
+        <thead>
+          <tr><th>对照项</th><th>DROID-SLAM（0145）</th><th>DPVO（本课）</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>监督信号</td><td>合成 TartanAir 真值</td><td>合成 TartanAir 真值</td></tr>
+          <tr><td>喂给 BA 的表示</td><td>每像素稠密光流</td><td>每帧 96 个稀疏 patch 轨迹</td></tr>
+          <tr><td>损失结构</td><td>位姿 + 光流（加权）</td><td>10·位姿 + 0.1·光流</td></tr>
+          <tr><td>BA 层</td><td>稠密、学阻尼</td><td>稀疏、阻尼硬编码 1e-4</td></tr>
+          <tr><td>展开更新次数</td><td>15</td><td>18</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 又准又快又省（硬数字，有实测）</h2>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>TartanAir Avg ATE</h4>
+          <p>Ours(Default) <b>0.21</b>，比 DROID-SLAM <b>0.33</b> 低 40%、比 DROID-VO <b>0.58</b> 低 64%。</p>
+        </div>
+        <div class="mini-card">
+          <h4>EuRoC 单目 VO</h4>
+          <p>Avg <b>0.105</b>，比 DROID-VO 0.186 低 43%；最快 120FPS 变体仍多数胜出。</p>
+        </div>
+        <div class="mini-card">
+          <h4>TUM / ICL-NUIM</h4>
+          <p>TUM <b>0.089</b>（vs 0.098）；ICL <b>0.097</b>（vs 0.215，快变体低 51%）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>效率与显存</h4>
+          <p>Default <b>60FPS / 4.9GB</b>、Fast <b>120FPS / 2.5GB</b>；DROID-VO 40FPS/8.7GB。帧率恒定（95% 帧 &gt;48FPS）。</p>
+        </div>
+      </div>
+      <p>「往下减」带来的回报很硬：精度在 4 个数据集全面超过 DROID-VO（TartanAir 甚至超过完整 DROID-SLAM），而速度是 1.5–3×、显存不到 1/3。关键反直觉消融（Fig 9c）：<b>随机采 patch 中心点</b>比 SIFT/ORB/SuperPoint/高梯度点都好——说明「让网络自己决定采哪」不如「撒一把随机块 + 靠消息传递补信息」。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_DPVO/88505e5aac3ce9b87eea5869ba555791654498eac10d1cd69dd050f1ac192c0b.jpg" alt="DPVO 帧率效率">
+        <figcaption>
+          <p><b>原图注（Fig. 8）：</b>Efficiency of DPVO compared to DROID-VO (the front-end of DROID-SLAM). The Default and Fast variants of DPVO run 1.5x (60FPS) and 3x (120FPS) faster on average. DPVO’s frame-rate is relatively stable, remaining above 48FPS and 98FPS for 95% of frames. In contrast, DROID-VO drops to 11FPS, an 8.9x difference.</p>
+          <p><b>怎么看这张图：</b>DPVO 的帧率曲线平（95% 帧 &gt;48FPS），DROID-VO 快动时暴跌到 11FPS（8.9× 差）。这是因为 DPVO「所有帧先当关键帧、只追 96 块」开销恒定，而 DROID 的稠密流随运动变难而变慢。</p>
+          <p><b>要记住的一句话：</b>稀疏化让速度恒定且便宜——这是「往下减」最直接的工程红利。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_DPVO/9b73adbddd85875a9f2d095ac9a90ec934d3c162d6aaaec53b15312dacd8de65.jpg" alt="DPVO 显存占用">
+        <figcaption>
+          <p><b>原图注（Fig. 10）：</b>Memory usage of DPVO compared to DROID-VO, measured on the EuRoC dataset. DROID-VO uses 8.7GB, DPVO (Default) uses 4.9GB and DPVO (Fast) uses 2.5GB.</p>
+          <p><b>怎么看这张图：</b>显存从 8.7GB 砍到 4.9/2.5GB（&lt;1/3）。代价几乎全在「不再存每像素稠密光流与相关体」——只存稀疏 patch 轨迹，内存自然塌下来。</p>
+          <p><b>要记住的一句话：</b>把稠密流换成稀疏块，显存不到 DROID 的三分之一，这是它能上消费级显卡的根。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_DPVO/c90e3ece909f69e92b2c0126da54ade5fa26379fef85edf54afc53a6a721414a.jpg" alt="DPVO 消融实验">
+        <figcaption>
+          <p><b>原图注（Fig. 9）：</b>Ablation experiments. (a) We show the importance of using patches over point features. (b) Removal of different components of the update operator degrades accuracy. (c) Randomly selecting patch centroids works better than 2D keypoint locations produced via SIFT [22], ORB [29], Superpoint [9], or pixels with high image gradient.</p>
+          <p><b>怎么看这张图：</b>(c) 是反直觉核心——随机采样 patch 中心比所有手工关键点（SIFT/ORB/SuperPoint/高梯度）都好。说明「稀疏块 + 图消息传递」自己就能学到该关注哪，不需要人类先验去挑点。</p>
+          <p><b>要记住的一句话：</b>随机撒块 &gt; 手工选点——这彻底坐实「往下减」不是偷工，是更对的归纳偏置。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 三张自绘图：patch 图、稀疏 vs 稠密、训练信号</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="patch graph 图像块跟踪">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="450" y="32" text-anchor="middle" font-size="19" fill="#2b6cb0"><tspan font-weight="700">patch graph：撒一把小方块，线粗 = 同一平面</tspan></text>
+          <rect x="60" y="55" width="350" height="300" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="235" y="84" text-anchor="middle" font-size="13" fill="#3a4a5a">帧 i（撒 96 个块）</text>
+          <rect x="95" y="120" width="22" height="22" fill="#e0392b" opacity="0.85"/>
+          <rect x="180" y="160" width="22" height="22" fill="#e0392b" opacity="0.85"/>
+          <rect x="280" y="130" width="22" height="22" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="150" y="240" width="22" height="22" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="300" y="270" width="22" height="22" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="360" y="200" width="22" height="22" fill="#7a3fa0" opacity="0.85"/>
+          <rect x="490" y="55" width="350" height="300" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="665" y="84" text-anchor="middle" font-size="13" fill="#3a4a5a">帧 j（同一批块挪了位）</text>
+          <rect x="140" y="150" width="22" height="22" fill="#e0392b" opacity="0.85"/>
+          <rect x="225" y="190" width="22" height="22" fill="#e0392b" opacity="0.85"/>
+          <rect x="325" y="160" width="22" height="22" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="195" y="270" width="22" height="22" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="345" y="300" width="22" height="22" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="405" y="230" width="22" height="22" fill="#7a3fa0" opacity="0.85"/>
+          <line x1="106" y1="131" x2="151" y2="161" stroke="#c65c47" stroke-width="4"/>
+          <line x1="191" y1="171" x2="236" y2="201" stroke="#c65c47" stroke-width="4"/>
+          <line x1="291" y1="141" x2="336" y2="171" stroke="#2b6cb0" stroke-width="2"/>
+          <line x1="161" y1="251" x2="206" y2="281" stroke="#2b6cb0" stroke-width="2"/>
+          <line x1="311" y1="281" x2="356" y2="311" stroke="#2b6cb0" stroke-width="2"/>
+          <line x1="371" y1="211" x2="416" y2="241" stroke="#7a3fa0" stroke-width="3"/>
+          <text x="235" y="358" text-anchor="middle" font-size="12" fill="#5b6472">粗红线 = 红块是同一平面，移得远（大位移）</text>
+          <text x="665" y="358" text-anchor="middle" font-size="12" fill="#5b6472">细线 = 蓝块同平面、移得近；紫块单独一条</text>
+          <text x="450" y="392" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">图上只撒少量方块；线越粗代表这两块被判定为同一平面、运动一致——稀疏却够用</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左帧撒几个小方块（patch），右帧同一批方块挪了位置，用线把「同一个块」连起来；线粗表示这两块被网络判定为<b>同一平面</b>、运动一致（粗红线移得远=大位移），细蓝线移得近，紫块单独一条。</p>
+          <p><b>怎么看这张图：</b>① 整张图只有不到 10 个块，不是每像素——这就是「稀疏」；② 线粗细编码「是否同一平面」，等价于 DSO 里「同一平面的点共线/共面」的几何先验；③ 只要这些块的轨迹被跟踪准，BA 就能解出位姿，无需稠密流。</p>
+          <p><b>要记住的一句话：</b>patch graph = 撒少量块 + 用线粗表示共面；稀疏表示替代稠密流场。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="稀疏 patch 与稠密光流对照">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="225" y="32" text-anchor="middle" font-size="18" fill="#9d553f"><tspan font-weight="700">DROID：每像素稠密光流</tspan></text>
+          <text x="675" y="32" text-anchor="middle" font-size="18" fill="#2b6cb0"><tspan font-weight="700">DPVO：每帧 96 个稀疏 patch</tspan></text>
+          <line x1="450" y1="44" x2="450" y2="388" stroke="#d7dce5" stroke-width="1.5"/>
+          <rect x="40" y="55" width="370" height="300" rx="12" fill="#fff4ec" stroke="#e0b48f"/>
+          <g stroke="#c65c47" stroke-width="1" opacity="0.7">
+            <line x1="80" y1="90" x2="95" y2="80"/>
+            <line x1="140" y1="100" x2="158" y2="92"/>
+            <line x1="200" y1="110" x2="216" y2="102"/>
+            <line x1="260" y1="95" x2="278" y2="86"/>
+            <line x1="320" y1="105" x2="338" y2="97"/>
+            <line x1="90" y1="160" x2="106" y2="152"/>
+            <line x1="150" y1="170" x2="168" y2="162"/>
+            <line x1="210" y1="175" x2="228" y2="167"/>
+            <line x1="270" y1="165" x2="288" y2="157"/>
+            <line x1="330" y1="172" x2="348" y2="164"/>
+            <line x1="85" y1="235" x2="101" y2="227"/>
+            <line x1="145" y1="245" x2="163" y2="237"/>
+            <line x1="205" y1="250" x2="223" y2="242"/>
+            <line x1="265" y1="240" x2="283" y2="232"/>
+            <line x1="325" y1="248" x2="343" y2="240"/>
+          </g>
+          <text x="225" y="300" text-anchor="middle" font-size="12" fill="#9d553f">H×W 个箭头每轮都算</text>
+          <text x="225" y="322" text-anchor="middle" font-size="12" fill="#9d553f">冗余多、显存 8.7GB</text>
+          <text x="225" y="344" text-anchor="middle" font-size="12" fill="#9d553f">快动掉到 11FPS</text>
+          <rect x="490" y="55" width="370" height="300" rx="12" fill="#eaf1fb" stroke="#9bbce6"/>
+          <rect x="540" y="110" width="24" height="24" fill="#e0392b" opacity="0.85"/>
+          <rect x="620" y="140" width="24" height="24" fill="#e0392b" opacity="0.85"/>
+          <rect x="700" y="120" width="24" height="24" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="560" y="230" width="24" height="24" fill="#2b6cb0" opacity="0.85"/>
+          <rect x="690" y="260" width="24" height="24" fill="#7a3fa0" opacity="0.85"/>
+          <rect x="780" y="200" width="24" height="24" fill="#7a3fa0" opacity="0.85"/>
+          <line x1="552" y1="122" x2="632" y2="152" stroke="#c65c47" stroke-width="3.5"/>
+          <line x1="712" y1="132" x2="572" y2="242" stroke="#2b6cb0" stroke-width="2"/>
+          <line x1="702" y1="272" x2="792" y2="212" stroke="#7a3fa0" stroke-width="3"/>
+          <text x="675" y="300" text-anchor="middle" font-size="12" fill="#2b6cb0">只 96 个块/帧</text>
+          <text x="675" y="322" text-anchor="middle" font-size="12" fill="#2b6cb0">显存 2.5–4.9GB</text>
+          <text x="675" y="344" text-anchor="middle" font-size="12" fill="#2b6cb0">帧率恒定 60–120FPS</text>
+          <text x="450" y="392" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">左：稠密流场处处有箭头、贵；右：稀疏块少而精、靠消息传递补信息——减对了反而更强</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左是 DROID——整帧密密麻麻都是光流箭头（H×W 个），冗余、贵、快动掉帧；右是 DPVO——每帧只 6 个示意块（实际 96），块间用粗/细线连表示共面，靠图消息传递补上丢掉的冗余。</p>
+          <p><b>怎么看这张图：</b>① 稠密不是「更稳」的同义词——DPVO 证明稀疏块 + 消息传递反而更准；② 代价差来自「不存每像素流与相关体」；③ 这正是 0004「少即是多」与 0132/0133「往下减」在 VO 块的落地。</p>
+          <p><b>要记住的一句话：</b>稠密流场 → 稀疏块，减的是冗余、留下的是信息；精度反升、速度 3×、显存 &lt;1/3。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DPVO 训练信号循环">
+          <rect x="0" y="0" width="900" height="410" fill="#fbfcfe"/>
+          <text x="450" y="32" text-anchor="middle" font-size="19" fill="#9d553f"><tspan font-weight="700">DPVO 训练信号：合成真值监督，位姿为主、光流为辅</tspan></text>
+          <rect x="70" y="70" width="200" height="90" rx="12" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="170" y="103" text-anchor="middle" font-size="13" fill="#3a4a5a">合成 TartanAir</text>
+          <text x="170" y="127" text-anchor="middle" font-size="12" fill="#5b6472">位姿真值 + 流真值</text>
+          <text x="300" y="120" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="330" y="70" width="220" height="90" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="440" y="100" text-anchor="middle" font-size="13" fill="#3a4a5a">patch 网络 + 循环算子</text>
+          <text x="440" y="124" text-anchor="middle" font-size="12" fill="#5b6472">吐 δ, Σ, 位姿, 深度</text>
+          <text x="580" y="120" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="610" y="70" width="220" height="90" rx="12" fill="#f1e9fb" stroke="#c4a9e6"/>
+          <text x="720" y="100" text-anchor="middle" font-size="13" fill="#3a4a5a">稀疏 DBA 层</text>
+          <text x="720" y="124" text-anchor="middle" font-size="12" fill="#5b6472">解出位姿/深度</text>
+          <path d="M 720 160 L 720 200 L 170 200 L 170 160" fill="none" stroke="#c9a13a" stroke-width="2.5" stroke-dasharray="7 5"/>
+          <text x="445" y="192" text-anchor="middle" font-size="12" fill="#c9a13a">展开 18 次更新，循环迭代</text>
+          <rect x="150" y="230" width="600" height="120" rx="12" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="450" y="262" text-anchor="middle" font-size="14" fill="#9d553f"><tspan font-weight="700">损失 L = 10 × 位姿项 + 0.1 × 光流项</tspan></text>
+          <text x="320" y="296" text-anchor="middle" font-size="12" fill="#5b6472">位姿项：Umeyama 对齐真值→SE(3) Log</text>
+          <text x="600" y="296" text-anchor="middle" font-size="12" fill="#5b6472">光流项：patch 诱导流 vs 真值流</text>
+          <text x="450" y="330" text-anchor="middle" font-size="12" fill="#5b6472">权重 10:0.1 → 主盯位姿准，光流只帮 CorrBlock 学对应</text>
+          <text x="450" y="392" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">监督来自纯合成；权重偏位姿——和 0145 同思路，只是表示稀疏、更偏位姿</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>合成 TartanAir 真值（位姿+流）→ 网络吐修正 δ、置信度 Σ、位姿、深度 → 稀疏 DBA 层解出位姿/深度 → 循环展开 18 次。损失是 10·位姿 + 0.1·光流，主盯位姿。</p>
+          <p><b>怎么看这张图：</b>① 训练信号和 0142 TartanVO、0145 DROID 同源（合成 TartanAir）；② 权重 10:0.1 说明 DPVO 比 DROID 更偏位姿；③ 循环展开是 RNN 那套「反复擦改草稿」（见 0145 自绘图），但优化对象是稀疏 patch 而非每像素。</p>
+          <p><b>要记住的一句话：</b>合成训、偏位姿、稀疏表示——DPVO 的训练信号是 DROID 的「轻量分叉」。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动：DPVO 比 DROID 强，靠的是「加模块」还是「减模块」？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0146a')">减掉稠密流</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0146b')">加注意力</button></p>
+        <p class="quiz-feedback" id="q0146a" hidden>正确。DPVO 是 DROID 的「稀疏化分叉」：它把每像素稠密光流换成每帧 96 个稀疏 patch 轨迹，靠 1D 时序卷积 + 图消息传递补回丢掉的冗余。结果精度反升、速度 1.5–3×、显存 &lt;1/3。这是「往下减」暗线（对照 0004 少即是多、0132/0133）在 VO 块的极点，不是又堆了一层注意力。</p>
+        <p class="quiz-feedback" id="q0146b" hidden>不对。DPVO 没有靠「加注意力」取胜——它的更新算子用的是 correlation + 1D 时序卷积 + Softmax 消息传递，是比 DROID 更轻的循环结构，不是叠 Transformer/图注意力。它赢在「减对地方」：用稀疏 patch 替代稠密流，靠消息传递补冗余。这属于本季 0129–0131「上复杂度」的反面——「往下减」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 这条线的账：位姿战场收官，与「往下减」暗线收口</h2>
+      <table>
+        <thead>
+          <tr><th>论文</th><th>喂给 BA 的表示</th><th>训练信号</th><th>速度/显存</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DeepVO</td><td>无（黑箱回归）</td><td>位姿真值</td><td>未给</td></tr>
+          <tr><td>D3VO</td><td>无（DSO 现成 BA）</td><td>自监督+合成</td><td>—</td></tr>
+          <tr><td>DROID-SLAM</td><td>每像素稠密光流</td><td>合成 TartanAir</td><td>40FPS / 24GB</td></tr>
+          <tr><td>DPVO</td><td>每帧 96 稀疏 patch</td><td>合成 TartanAir</td><td>60–120FPS / 2.5–4.9GB</td></tr>
+        </tbody>
+      </table>
+      <p>本块从 0141（PoseNet≠VO、DeepVO 起点）走到 0146，主线是「位姿被神经网络一点点吃掉」：DeepVO 把整条 VO 黑箱化 → 0142 自监督/跨域 → 0143 加后端 → 0144 D3VO 嵌几何 → <b>0145 DROID 把 BA 做成可微层</b> → <b>0146 DPVO 把稠密流减成稀疏块</b>。DPVO 是这条线上的「收口精简版」：它证明 0011「深度学习吃掉位姿」不只是「越复杂越能」，而是「网络+几何融合对了，还能往下减」。这恰好呼应本季方法论暗线——0129–0131 上复杂度、0132/0133 与 0146 往下减，而 0004 KISS-ICP 早把这话说过一遍。</p>
+      <div class="interactive-card">
+        <h4>互动：DPVO 的「随机采 patch 比 SIFT/ORB 好」说明什么？</h4>
+        <p>下面哪句是课文给的结论？<button class="quiz-options" onclick="lessonKit.answer(this,'q0146c')">稀疏+消息传递够</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0146d')">手工点更准</button></p>
+        <p class="quiz-feedback" id="q0146c" hidden>正确。Fig 9c 的反直觉结论是：随机撒 patch 中心点比 SIFT/ORB/SuperPoint/高梯度点都好。说明「稀疏块 + 图消息传递」自己就能学到该关注哪，不需要人类先验挑点——这坐实「往下减」不是偷工，是更对的归纳偏置。手工选点反而限制了网络。</p>
+        <p class="quiz-feedback" id="q0146d" hidden>不对。正好相反：课文 Fig 9c 明确说随机采 patch 中心点比 SIFT/ORB/SuperPoint/高梯度点都好。手工关键点（SIFT/ORB 等）是人类的「该关注哪」先验，但在 DPVO 这种「稀疏块 + 消息传递」框架里反而是约束、不如随机撒。若记成「手工点更准」就颠倒了课文的核心反直觉结论。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>DPVO 和 0145 DROID 共用什么、改了什么？它怎么把「稠密流」减成「稀疏 patch」？</li>
+        <li>patch graph 是什么（二部图、patch↔帧）？为什么线粗表示「同一平面」？</li>
+        <li>DPVO 的损失 L = 10·L_pose + 0.1·L_flow 偏哪头？训练信号来自哪？</li>
+        <li>DPVO 在 TartanAir/EuRoC/TUM/ICL 的 ATE 各多少？速度/显存比 DROID 强多少？</li>
+        <li>为什么 DPVO 是「往下减」暗线（对照 0004、0129–0131、0132/0133）的收口？它和 0145 是「同一范式分叉」还是「另起炉灶」？</li>
+      </ul>
+      <h2>10. 练习（收起，点开看解析）</h2>
+      <div class="exercise-box">
+        <details class="exercise-answer">
+          <summary>练习 1 · patch graph 怎么补回「稠密的冗余」？</summary>
+          <p>DROID 的稠密流里同一平面的像素逐个算，信息大量重复（冗余）。DPVO 只采 96 个块，看似丢了冗余，但用两条机制补回：① <b>1D 时序卷积</b>沿同一 patch 的时间轴卷，把该块的历史运动压进当前状态；② <b>Softmax 消息传递</b>在 patch 间、patch↔帧间传信息——同一平面的块会互相印证「我们该共面、该一起动」，等效于把「相邻像素该一致」的平滑先验用图结构表达。所以稀疏表示 + 图传播 ≈ 稠密流的冗余收益，但便宜得多。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 2 · 为什么随机采 patch 比 SIFT/ORB 好（Fig 9c）？</summary>
+          <p>SIFT/ORB 等是人工设计的「显著点」先验，假设「角点/高梯度」最该跟踪。但 DPVO 的 BA 靠的是块之间的几何一致性（共面、共线）和消息传递，而不靠单点显著。随机撒块覆盖更均匀、不偏重某些纹理，网络靠消息传递自己决定哪些块有用、并用置信度 Σ 把跟丢的块在 BA 里降权。手工选点反而把「该采哪」固化了，限制网络。这正是「让归纳偏置来自结构（图），不来自人工特征」的体现。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 3 · DPVO 与 RAFT（0132）的继承关系</summary>
+          <p>RAFT（0132）为光流建 4D 相关体 + 多尺度金字塔 + 循环更新算子。DROID/DPVO 同团队，把这套「查对应 + 循环迭代」拿来：DPVO 的 correlation（7×7 网格内积）和 Update Operator（1D 卷积 + 消息传递 + Transition + Factor Head）就是 RAFT 思路在「patch 轨迹」上的精简移植；区别是 RAFT 更新稠密光流、DPVO 更新稀疏 patch，且多一层可微 BA（稀疏版）把更新转成几何解。所以本课必须回链 0132。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 4 · DPVO 的 BA 层和 DROID 差在哪？</summary>
+          <p>两者共用同一套可微 BA 思想（目标都是让重投影/投影误差可反传）。差别：① DROID 是<b>稠密</b> BA（每像素深度参与），DPVO 是<b>稀疏</b> BA（只优化 96 个 patch 的轨迹与深度）；② DROID <b>学</b>阻尼，DPVO 把阻尼<b>硬编码</b> 1e-4；③ DPVO 只跑 2 次 Gauss-Newton（够用，因为变量少）。稀疏 + 硬编码阻尼是它显存砍到 1/3、速度恒定且便宜的直接原因。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 5 · 「往下减」暗线在本季怎么串？</summary>
+          <p>匹配块里 0129 SuperGlue / 0130 LoFTR / 0131 LightGlue 一路加复杂度（图注意力、Transformer、最优传输）；0132 RAFT 用循环迭代替代一次性稠密匹配、0133 SiLK 用极简前端+简单匹配，开始「往下减」。DPVO（0146）把这条线推到 VO 块极点：把 DROID 的稠密光流减成稀疏 patch，证明「减对地方反而更准更快更省」。这和第一季 0004 KISS-ICP「少即是多、反工程化」是同一方法论取向——本季在 VO 块用它收口。</p>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0145-DROID-SLAM2021-把BA做成一层的转折点.html">← 上一节：0145 DROID-SLAM 稠密 BA 层</a>
+        <a class="next" href="0147-DINOv2与SAM-两个通用零件.html">下一节：0147 DINOv2 与 SAM 两个通用零件 →</a>
+      </div>
+      <p class="foot-note">位姿战场到此收官：学习式方法吃到的是「挑战与跨域」，不是「同域高精度」。下一节换战场，去看两个通用零件 🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

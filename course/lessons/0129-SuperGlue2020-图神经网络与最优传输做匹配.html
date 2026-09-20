@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SuperGlue 2020 · 图神经网络与最优传输做匹配 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0129</div>
+      <h1>SuperGlue 2020 · 图神经网络与最优传输做匹配</h1>
+      <p class="subtitle">把「描述子相似就配对」升级成「图神经网络 + 最优传输」——匹配第一次有了「上下文」和「置信度」 🔗</p>
+      <div class="hero-meta">
+        <span>🎯 主题：可学习的中间端（middle-end）匹配</span>
+        <span>👥 作者：Magic Leap / ETH（Sarlin 等）</span>
+        <span>📅 2020 · <i>SuperGlue: Learning Feature Matching with Graph Neural Networks</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它解决什么</a>
+        <a href="#b">整体：可学习的中间端</a>
+        <a href="#c">注意力：让点互相看</a>
+        <a href="#d">代价矩阵+最优传输+dustbin</a>
+        <a href="#e">Sinkhorn 迭代求解</a>
+        <a href="#f">置信度与实验</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清 SuperGlue 为什么叫「中间端」、它替换了传统流水线的哪一段；② 用生活类比解释 self/cross attention、最优传输、dustbin、Sinkhorn 各自在干什么；③ 讲出那句反直觉结论——「上下文比匹配求解本身更关键」。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它接续<b>第一季 0004 课的手工特征匹配与数据关联</b>——那是 SIFT/ORB 描述子 + 最近邻 + 比值检验的时代。SuperGlue 把这个「匹配/数据关联」环节整个换成了可学习模块，正是<b>第一季 0011 那句「先吃掉匹配」</b>的第一个重头证据。它也复用<b>SuperPoint（前端检测器+描述子）</b>的输出，是它直接插入的「前端产物」。</p>
+        </div>
+      </div>
+
+      <h2>1. 它到底在解决什么：先讲人话</h2>
+      <p>想象两个人在同一间屋子里从<b>不同角度</b>各拍了一张照片。你的任务是：把左边照片里的「门把手」和右边照片里的「同一个门把手」连起来。手工时代怎么做？先各自找出一些「显著点」（角点、斑点），给每个点算一串数字（描述子），然后「谁的数字最像，谁就是同一个点」，最后再用几何关系（对极几何/单应）把明显错的剔除掉。</p>
+      <p>这套流程有两个老毛病：① <b>「最像」是孤立判断</b>——一个点在左边很独特，在右边却可能和好几个点都像，单看描述子就会配错；② <b>「挑错的」是事后补救</b>（比值检验、几何滤波），不是和匹配一起学的。SuperGlue 的思路是：<b>让所有点「开个会」，互相通风报信，再一起决定谁配谁</b>，而且把「这个点可能根本没法匹配」（被遮挡了）也当成一种正式的输出。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">cross-attention：判断左右两个圈是同一个「门把手」</text>
+          <!-- 左照片 -->
+          <rect x="60" y="70" width="170" height="140" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <text x="145" y="62" text-anchor="middle" font-size="10.5" fill="#3a6a90">图 A（角度一）</text>
+          <rect x="110" y="105" width="42" height="85" rx="3" fill="#cdd9e6" stroke="#9bb0c4" stroke-width="1"/>
+          <circle cx="120" cy="158" r="5" fill="#2f5b82"/>
+          <text x="120" y="178" text-anchor="middle" font-size="9" fill="#2f5b82">门把手</text>
+          <!-- 右照片 -->
+          <rect x="690" y="70" width="170" height="140" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <text x="775" y="62" text-anchor="middle" font-size="10.5" fill="#3a6a90">图 B（角度二）</text>
+          <rect x="745" y="115" width="42" height="75" rx="3" fill="#cdd9e6" stroke="#9bb0c4" stroke-width="1"/>
+          <circle cx="755" cy="160" r="5" fill="#2f5b82"/>
+          <text x="755" y="178" text-anchor="middle" font-size="9" fill="#2f5b82">同一个门把手</text>
+          <!-- 跨图射线 -->
+          <path d="M120,160 Q430,95 755,160" fill="none" stroke="#e0a23c" stroke-width="2.2"/>
+          <text x="430" y="108" text-anchor="middle" font-size="10.5" fill="#a8432c">cross-attention 射线：这两个是同一个点吗？</text>
+          <!-- 自注意力小图 -->
+          <rect x="350" y="240" width="220" height="100" rx="6" fill="#f7fbf6" stroke="#c3d9c6" stroke-width="1.3"/>
+          <text x="460" y="232" text-anchor="middle" font-size="10.5" fill="#3b6e49">self-attention：同图里互相看</text>
+          <circle cx="460" cy="290" r="5" fill="#2f6136"/>
+          <circle cx="385" cy="262" r="4" fill="#7a9c84"/>
+          <circle cx="535" cy="262" r="4" fill="#7a9c84"/>
+          <circle cx="390" cy="322" r="4" fill="#7a9c84"/>
+          <circle cx="530" cy="322" r="4" fill="#7a9c84"/>
+          <line x1="460" y1="290" x2="385" y2="262" stroke="#9bbf9f" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <line x1="460" y1="290" x2="535" y2="262" stroke="#9bbf9f" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <line x1="460" y1="290" x2="390" y2="322" stroke="#9bbf9f" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <line x1="460" y1="290" x2="530" y2="322" stroke="#9bbf9f" stroke-width="1.2" stroke-dasharray="3 3"/>
+          <text x="460" y="350" text-anchor="middle" font-size="9.5" fill="#3b6e49">一个点能看向图里任意位置，不只邻居</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是 cross-attention（跨图注意力）：SuperGlue 让图 A 的一个点（门把手）向图 B 的所有点「发射」注意力射线，判断哪个才是同一个点。右边是 self-attention（自注意力）：同一张图里，一个点可以和画面任意位置的点交换信息，而不受卷积「只看邻居」的限制。<br>
+          <b>怎么看这张图：</b>① 注意左边的射线是从 A 的一个点<b>连到 B 的若干候选</b>，最终由网络给每条射线一个权重，最重的就是匹配。② 右边的虚线说明 self-attention 能「跳过距离」——这正是 Transformer 相对卷积的优势（LoFTR 那节还会用图专门对比）。<br>
+          <b>要记住的一句话：</b>注意力让匹配从「孤立比数字」变成「<b>全图一起开会</b>再决定」，这就是 SuperGlue 上下文感知的来源。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 整体定位：一个可学习的「中间端」</h2>
+      <p>作者自己给 SuperGlue 的定位是 <b>middle-end（中间端）</b>：它夹在「手工或学习的前端（检测+描述，比如 SuperPoint）」和「后端（BA、位姿估计）」之间，专门吃前端吐出来的局部特征，吐出带置信度的匹配。下面这张原文架构图把它的两个大部件画得很清楚。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_SuperGlue/62ff9853ae953a4339a794db0ce02d6d4ec9e15db1f77b659a237c98ec04f4e3.jpg" alt="SuperGlue acts as a middle-end between front-end and back-end">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Feature matching with SuperGlue. Our approach establishes pointwise correspondences from off-the-shelf local features: it acts as a middle-end between handcrafted or learned front-end and back-end. SuperGlue uses a graph neural network and attention to solve an assignment optimization problem, and handles partial point visibility and occlusion elegantly, producing a partial assignment.<br>
+          <b>怎么看这张图：</b>顺着箭头看——前端先给出两幅图各自的一堆局部特征（点 + 描述子），SuperGlue 在中间把它们「配对」成带颜色的连线，再交给后端做位姿。它明确把自己放在前端和后端「中间」，所以叫中间端。注意图中连线有深有浅，深浅就是后文要讲的置信度。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_SuperGlue/d2ad16944eb75fa12c6216809bcccc9fb662b7276c4033a7e0e29cc6381eef42.jpg" alt="The SuperGlue architecture">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The SuperGlue architecture. SuperGlue is made up of two major components: the attentional graph neural network (Section 3.1), and the optimal matching layer (Section 3.2). The first component uses a keypoint encoder to map keypoint positions p and their visual descriptors d into a single vector, and then uses alternating self- and cross-attention layers (repeated L times) to create more powerful representations.<br>
+          <b>怎么看这张图：</b>上半部分是<b>注意力图神经网络</b>（把位置和描述子融成「会互相看」的表示），下半部分是<b>最优匹配层</b>（用最优传输求指派）。整条链路端到端可训练，后方还能把梯度回传给 SuperPoint 的描述子。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{输入 }(p,d) \;\xrightarrow{\text{KeyPoint Encoder}}\; \text{初态} \;\xrightarrow{L\text{ 层 self/cross-attn}}\; f \;\xrightarrow{\text{最优传输}}\; \text{partial assignment } P$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>整条流水线就是「先把每个点的位置 p 和描述子 d 拼成一个向量，让它们经过 L 层注意力互相打磨，得到更聪明的表示 f，最后用一个最优传输层决定谁配谁，并且允许「不配」。</p>
+
+      <div class="callout">
+        <p><b>诚实标注一处 OCR 疑点：</b>原文 Eq.3 的残差更新里，拼接符号被 OCR 识别成了 <code>⌈·⌉</code>，正确应为方括号拼接 <code>[·,·]</code>（把节点自身特征与邻居聚合结果拼起来再过 MLP）。公式含义（残差 MLP 更新）不受影响，但符号渲染有误，这里按正确形式写出。另，正文 "jointly nding" 是 "jointly finding" 的 OCR 漏空格，已修正。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 注意力：让匹配有了「上下文」</h2>
+      <p>传统匹配的「相似度」只看两个描述子本身。SuperGlue 的突破点之一是：先用一个<b>图神经网络（GNN）</b>把每个点放进「全局上下文」里再算相似度。它用的是<b>多重图（multiplex graph）</b>：同图内的边是 self-attention，跨图的边是 cross-attention，两者交替跑 L 层。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_SuperGlue/af0df1acb6c27fd866472f4e269822c5722153b3a46e1f12da45a890f90e2fee.jpg" alt="Visualizing self- and cross-attention">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Visualizing self- and cross-attention. Attentional aggregation builds a dynamic graph between keypoints. Weights $\alpha_{ij}$ are shown as rays. Self-attention (top) can attend anywhere in the same image, e.g. distinctive locations, and is thus not restricted to nearby locations. Cross-attention (bottom) attends to locations in the other image, such as potential matches.<br>
+          <b>怎么看这张图：</b>上方是 self-attention，一个点的注意力射线可以拉到同图任意位置（不受距离限制）；下方是 cross-attention，射线跨到另一张图去寻找潜在匹配。射线越粗/越亮，代表注意力权重越大。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$x_i \leftarrow x_i + \text{MLP}\big(\,[\,x_i,\;\sum_j \alpha_{ij}\, x_j\,]\,\big),\qquad \alpha_{ij}\propto \exp\!\big(q_i^\top k_j / \sqrt{d}\big)$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对每个点，先让它与邻居（同图或跨图）按注意力权重 $\alpha_{ij}$ 做个加权平均，再把「自己的旧表示 + 聚合来的新信息」拼起来过一个小网络，作为新一轮表示。换句话说——<b>每个点不再只代表自己，而是带上了「周围和对方图里谁在关注我」的信息</b>。</p>
+      <p>这里 $q,k$ 是把表示投影出来的「查询/键」，点积越大说明越相关。经过 L=9 层这样的打磨，出来的 $f$ 已经不是孤立的描述子，而是「知道全局上下文」的匹配描述子。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 代价矩阵 + 最优传输 + dustbin</h2>
+      <p>打磨完表示后，第一步是算一张<b>匹配代价矩阵（相似度矩阵）</b> $S$，其中 $S_{ij}$ 是图 A 第 i 个点和图 B 第 j 个点的相似度。但真正的难点是：怎么把这张表<b>变成一一对应的匹配</b>？这正是「指派问题」，而遮挡会让某些点根本没对应。</p>
+
+      <h3>4.1 代价矩阵：格子深浅表示「像不像」</h3>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">匹配代价矩阵：每个格子 = 一对点有多像</text>
+          <text x="100" y="80" text-anchor="end" font-size="11" font-weight="700" fill="#2f5b82">图A点 ↔ 图B点</text>
+          <!-- 列标签 -->
+          <text x="160" y="80" text-anchor="middle" font-size="11" fill="#2f5b82">B1</text>
+          <text x="220" y="80" text-anchor="middle" font-size="11" fill="#2f5b82">B2</text>
+          <text x="280" y="80" text-anchor="middle" font-size="11" fill="#2f5b82">B3</text>
+          <text x="340" y="80" text-anchor="middle" font-size="11" fill="#2f5b82">B4</text>
+          <text x="400" y="80" text-anchor="middle" font-size="11" fill="#2f5b82">B5</text>
+          <!-- 行标签 -->
+          <text x="100" y="125" text-anchor="end" font-size="11" fill="#2f5b82">A1</text>
+          <text x="100" y="185" text-anchor="end" font-size="11" fill="#2f5b82">A2</text>
+          <text x="100" y="245" text-anchor="end" font-size="11" fill="#2f5b82">A3</text>
+          <text x="100" y="305" text-anchor="end" font-size="11" fill="#2f5b82">A4</text>
+          <text x="100" y="365" text-anchor="end" font-size="11" fill="#2f5b82">A5</text>
+          <!-- 5x5 格子，格子 60 宽 高 -->
+          <!-- 行1 -->
+          <rect x="130" y="100" width="60" height="50" fill="#1f4e79"/><text x="160" y="131" text-anchor="middle" font-size="11" fill="#fff">0.95</text>
+          <rect x="190" y="100" width="60" height="50" fill="#dbe7f1"/><text x="220" y="131" text-anchor="middle" font-size="11" fill="#24486b">0.10</text>
+          <rect x="250" y="100" width="60" height="50" fill="#cfe0ee"/><text x="280" y="131" text-anchor="middle" font-size="11" fill="#24486b">0.20</text>
+          <rect x="310" y="100" width="60" height="50" fill="#dbe7f1"/><text x="340" y="131" text-anchor="middle" font-size="11" fill="#24486b">0.08</text>
+          <rect x="370" y="100" width="60" height="50" fill="#dbe7f1"/><text x="400" y="131" text-anchor="middle" font-size="11" fill="#24486b">0.05</text>
+          <!-- 行2 -->
+          <rect x="130" y="160" width="60" height="50" fill="#dbe7f1"/><text x="160" y="191" text-anchor="middle" font-size="11" fill="#24486b">0.07</text>
+          <rect x="190" y="160" width="60" height="50" fill="#1f4e79"/><text x="220" y="191" text-anchor="middle" font-size="11" fill="#fff">0.92</text>
+          <rect x="250" y="160" width="60" height="50" fill="#dbe7f1"/><text x="280" y="191" text-anchor="middle" font-size="11" fill="#24486b">0.06</text>
+          <rect x="310" y="160" width="60" height="50" fill="#cfe0ee"/><text x="340" y="191" text-anchor="middle" font-size="11" fill="#24486b">0.18</text>
+          <rect x="370" y="160" width="60" height="50" fill="#dbe7f1"/><text x="400" y="191" text-anchor="middle" font-size="11" fill="#24486b">0.04</text>
+          <!-- 行3 -->
+          <rect x="130" y="220" width="60" height="50" fill="#dbe7f1"/><text x="160" y="251" text-anchor="middle" font-size="11" fill="#24486b">0.09</text>
+          <rect x="190" y="220" width="60" height="50" fill="#dbe7f1"/><text x="220" y="251" text-anchor="middle" font-size="11" fill="#24486b">0.05</text>
+          <rect x="250" y="220" width="60" height="50" fill="#2f5b82"/><text x="280" y="251" text-anchor="middle" font-size="11" fill="#fff">0.88</text>
+          <rect x="310" y="220" width="60" height="50" fill="#dbe7f1"/><text x="340" y="251" text-anchor="middle" font-size="11" fill="#24486b">0.07</text>
+          <rect x="370" y="220" width="60" height="50" fill="#cfe0ee"/><text x="400" y="251" text-anchor="middle" font-size="11" fill="#24486b">0.21</text>
+          <!-- 行4 -->
+          <rect x="130" y="280" width="60" height="50" fill="#dbe7f1"/><text x="160" y="311" text-anchor="middle" font-size="11" fill="#24486b">0.06</text>
+          <rect x="190" y="280" width="60" height="50" fill="#dbe7f1"/><text x="220" y="311" text-anchor="middle" font-size="11" fill="#24486b">0.08</text>
+          <rect x="250" y="280" width="60" height="50" fill="#dbe7f1"/><text x="280" y="311" text-anchor="middle" font-size="11" fill="#24486b">0.05</text>
+          <rect x="310" y="280" width="60" height="50" fill="#1f4e79"/><text x="340" y="311" text-anchor="middle" font-size="11" fill="#fff">0.93</text>
+          <rect x="370" y="280" width="60" height="50" fill="#dbe7f1"/><text x="400" y="311" text-anchor="middle" font-size="11" fill="#24486b">0.06</text>
+          <!-- 行5：A5 被遮挡，全浅 -->
+          <rect x="130" y="340" width="60" height="50" fill="#eef4f9"/><text x="160" y="371" text-anchor="middle" font-size="11" fill="#24486b">0.03</text>
+          <rect x="190" y="340" width="60" height="50" fill="#eef4f9"/><text x="220" y="371" text-anchor="middle" font-size="11" fill="#24486b">0.04</text>
+          <rect x="250" y="340" width="60" height="50" fill="#eef4f9"/><text x="280" y="371" text-anchor="middle" font-size="11" fill="#24486b">0.02</text>
+          <rect x="310" y="340" width="60" height="50" fill="#eef4f9"/><text x="340" y="371" text-anchor="middle" font-size="11" fill="#24486b">0.03</text>
+          <rect x="370" y="340" width="60" height="50" fill="#eef4f9"/><text x="400" y="371" text-anchor="middle" font-size="11" fill="#24486b">0.05</text>
+          <!-- 图例 -->
+          <rect x="560" y="110" width="26" height="26" fill="#1f4e79"/>
+          <text x="596" y="129" font-size="11" fill="#24486b">深 = 很像（对角线上的就是真匹配）</text>
+          <rect x="560" y="150" width="26" height="26" fill="#cfe0ee"/>
+          <text x="596" y="169" font-size="11" fill="#24486b">中 = 有点像（易误配）</text>
+          <rect x="560" y="190" width="26" height="26" fill="#eef4f9"/>
+          <text x="596" y="209" font-size="11" fill="#24486b">浅 = 不像</text>
+          <text x="560" y="250" font-size="11" font-weight="700" fill="#a8432c">A5 整行都浅 → 它被遮挡了</text>
+          <text x="560" y="272" font-size="11" fill="#8a7365">传统「取每行最大值」会硬给它配一个错的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一张 5×5 的相似度矩阵，行是图 A 的点、列是图 B 的点，格子越深表示越像。对角线（A1→B1、A2→B2…）明显最深，是理想的一一对应。但最后一行 A5 整行都浅——它在图 B 里找不到对应，因为被遮挡了。<br>
+          <b>怎么看这张图：</b>① 深格子集中在对角线，说明「真匹配」本身就写在矩阵里，问题是<b>怎么把它挑出来</b>。② 浅行 A5 是难点：如果按「每行取最像的」这种朴素规则，A5 会被强行配到一个其实不像的点，制造错误匹配。<br>
+          <b>要记住的一句话：</b>匹配不是「挑每个点最像的」，而是「在所有点之间找一个<b>整体最合理</b>的一一对应」——这才是下一步最优传输要解的题。
+        </figcaption>
+      </figure>
+
+      <h3>4.2 最优传输 + dustbin：配不上的就丢进垃圾桶</h3>
+      <p>「整体最合理的一一对应」在数学上叫<b>线性指派问题</b>。SuperGlue 用一个漂亮的办法处理它，同时顺手解决了遮挡：给图 A 和图 B 各加一个叫 <b>dustbin（垃圾桶）</b>的虚拟列/行，专门接收「配不上任何人的点」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">最优传输 + dustbin：螺丝拧不进螺孔，就丢进垃圾桶</text>
+          <!-- 左椅子 + 螺丝 -->
+          <text x="150" y="62" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f5b82">椅子 A 的螺丝</text>
+          <rect x="70" y="80" width="160" height="14" rx="3" fill="#cdd9e6" stroke="#9bb0c4"/>
+          <rect x="70" y="80" width="14" height="120" rx="3" fill="#cdd9e6" stroke="#9bb0c4"/>
+          <circle cx="100" cy="170" r="6" fill="#2f5b82"/><text x="100" y="192" text-anchor="middle" font-size="10" fill="#2f5b82">s1</text>
+          <circle cx="140" cy="170" r="6" fill="#2f5b82"/><text x="140" y="192" text-anchor="middle" font-size="10" fill="#2f5b82">s2</text>
+          <circle cx="180" cy="170" r="6" fill="#2f5b82"/><text x="180" y="192" text-anchor="middle" font-size="10" fill="#2f5b82">s3</text>
+          <!-- 右椅子 + 螺孔 -->
+          <text x="560" y="62" text-anchor="middle" font-size="11.5" font-weight="700" fill="#2f6136">椅子 B 的螺孔</text>
+          <rect x="480" y="80" width="160" height="14" rx="3" fill="#d6e7d8" stroke="#9cbfa4"/>
+          <rect x="480" y="80" width="14" height="120" rx="3" fill="#d6e7d8" stroke="#9cbfa4"/>
+          <circle cx="510" cy="170" r="6" fill="none" stroke="#2f6136" stroke-width="2"/><text x="510" y="192" text-anchor="middle" font-size="10" fill="#2f6136">h1</text>
+          <circle cx="550" cy="170" r="6" fill="none" stroke="#2f6136" stroke-width="2"/><text x="550" y="192" text-anchor="middle" font-size="10" fill="#2f6136">h2</text>
+          <circle cx="590" cy="170" r="6" fill="none" stroke="#2f6136" stroke-width="2"/><text x="590" y="192" text-anchor="middle" font-size="10" fill="#2f6136">h3</text>
+          <!-- 匹配线 -->
+          <line x1="100" y1="170" x2="510" y2="170" stroke="#2f8a4f" stroke-width="2.2"/>
+          <line x1="140" y1="170" x2="550" y2="170" stroke="#2f8a4f" stroke-width="2.2"/>
+          <path d="M180,170 Q400,250 720,300" fill="none" stroke="#c0392b" stroke-width="2.2" stroke-dasharray="5 4"/>
+          <!-- 垃圾桶 -->
+          <text x="760" y="290" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8432c">dustbin</text>
+          <polygon points="730,300 790,300 778,350 742,350" fill="#f3e2dc" stroke="#c0876f" stroke-width="1.4"/>
+          <text x="760" y="328" text-anchor="middle" font-size="10" fill="#a8432c">垃圾桶</text>
+          <text x="430" y="270" text-anchor="middle" font-size="10.5" fill="#c0392b">s3 拧不进任何螺孔 → 丢进 dustbin</text>
+          <text x="330" y="350" text-anchor="middle" font-size="10.5" fill="#2f6136">绿色 = 成功配对；红色虚线 = 被判定「无匹配」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把匹配类比成「把椅子 A 的螺丝拧进椅子 B 的螺孔」。s1→h1、s2→h2 拧得上（绿线，是真匹配）；s3 这颗螺丝在 B 上找不到对应螺孔，于是被送进 dustbin（红虚线）——表示「这个点不可匹配 / 被遮挡」。<br>
+          <b>怎么看这张图：</b>① 左边三颗螺丝、右边三个螺孔，看似能一一对应，但现实中可能有螺丝多出来（遮挡、视野差异）。② dustbin 是一个<b>虚拟兜底列</b>，让最优化问题可以合法地「不匹配」某些点，而不是硬配。这就是所谓 <b>partial assignment（部分指派）</b>。<br>
+          <b>要记住的一句话：</b>dustbin 是 SuperGlue 处理「遮挡/不可见」的妙招——它把「配不上」变成一种<b>正式、可学习的输出</b>，而不是事后再删。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$S_{ij}=\langle f_i^A,\,f_j^B\rangle,\qquad \bar S=\begin{bmatrix}S & z\mathbf 1^\top \\ z\mathbf 1 & z\end{bmatrix}$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>相似度矩阵就用两个匹配描述子的内积 $S_{ij}$（注意 SuperGlue 的 $f$ 没做归一化，所以内积的大小本身就带着「有多自信」的意思）。下面那个加框的 $\bar S$ 是在右下角塞进一个 dustbin：给 A、B 各追加一行/一列，用同一个可学习参数 $z$ 填满，代表「不匹配」的代价。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. Sinkhorn 迭代：把「互检」变成可微的求解</h2>
+      <p>有了带 dustbin 的矩阵 $\bar S$，怎么求最优指派？SuperGlue 用 <b>Sinkhorn 算法</b>——一种交替归一化的迭代法，把「每行、每列都大致和为 1」的软分配逼出来。它是熵正则化最优传输的近似，关键是<b>全程可微</b>，所以能塞进神经网络一起训练。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">Sinkhorn：在「按行归一」和「按列归一」之间来回摆</text>
+          <!-- 三个小矩阵 -->
+          <text x="120" y="64" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">① 原始 exp(S̄)</text>
+          <rect x="70" y="76" width="100" height="70" fill="#f3f6f9" stroke="#9bb0c4" stroke-width="1.2"/>
+          <text x="90" y="104" font-size="11" fill="#24486b">7.4 1.0</text>
+          <text x="90" y="128" font-size="11" fill="#24486b">1.0 20.1</text>
+          <text x="120" y="164" text-anchor="middle" font-size="9.5" fill="#8a7365">行和≠1,列和≠1</text>
+
+          <text x="400" y="64" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">② 按行归一</text>
+          <rect x="350" y="76" width="100" height="70" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.2"/>
+          <text x="370" y="104" font-size="11" fill="#a8432c">0.88 0.12</text>
+          <text x="370" y="128" font-size="11" fill="#a8432c">0.05 0.95</text>
+          <text x="400" y="164" text-anchor="middle" font-size="9.5" fill="#8a7365">每行和=1 ✓</text>
+
+          <text x="680" y="64" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6136">③ 按列归一</text>
+          <rect x="630" y="76" width="100" height="70" fill="#f7fbf6" stroke="#a9c9af" stroke-width="1.2"/>
+          <text x="650" y="104" font-size="11" fill="#2f6136">0.95 0.11</text>
+          <text x="650" y="128" font-size="11" fill="#2f6136">0.05 0.89</text>
+          <text x="680" y="164" text-anchor="middle" font-size="9.5" fill="#8a7365">每列和=1 ✓</text>
+
+          <line x1="170" y1="111" x2="348" y2="111" stroke="#bbb" stroke-width="1.5"/>
+          <polygon points="348,111 340,106 340,116" fill="#bbb"/>
+          <line x1="450" y1="111" x2="628" y2="111" stroke="#bbb" stroke-width="1.5"/>
+          <polygon points="628,111 620,106 620,116" fill="#bbb"/>
+
+          <!-- 天平 -->
+          <text x="460" y="220" text-anchor="middle" font-size="11.5" font-weight="700" fill="#6b5a4e">反复「行↔列」来回，直到两边都为 1</text>
+          <line x1="460" y1="240" x2="460" y2="300" stroke="#9aa9b5" stroke-width="2"/>
+          <line x1="380" y1="250" x2="540" y2="250" stroke="#9aa9b5" stroke-width="2"/>
+          <polygon points="460,300 452,290 468,290" fill="#9aa9b5"/>
+          <circle cx="380" cy="246" r="9" fill="#e0a23c"/>
+          <circle cx="540" cy="246" r="9" fill="#2f8a4f"/>
+          <text x="380" y="272" text-anchor="middle" font-size="9.5" fill="#a8432c">按行</text>
+          <text x="540" y="272" text-anchor="middle" font-size="9.5" fill="#2f6136">按列</text>
+          <text x="460" y="340" text-anchor="middle" font-size="10.5" fill="#8a7365">SuperGlue 跑 T=100 次 → 软分配 P̄ → 丢掉 dustbin 得到 P</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>① 先对 $\exp(\bar S)$ 取一个 2×2 的小例子；② 第一次「按行归一」让每行和变成 1；③ 再「按列归一」让每列和变成 1。但这样一轮之后行和又不是 1 了，所以要在行、列之间反复横跳，直到两边几乎都是 1——此时矩阵就接近一个「每行每列只有一个重、其余接近 0」的指派。下方法则图把这种来回画成天平的左右摆动。<br>
+          <b>怎么看这张图：</b>① 注意矩阵里的数字只是<b>示意</b>（展示「行和=1 / 列和=1」的收敛趋势，非真实数值）。② 关键是这个迭代<b>全程可微</b>，所以梯度能一路反传到前面的注意力网络——「互检」不再是后处理，而是训练的一部分。③ SuperGlue 跑 T=100 次迭代，最后丢弃 dustbin 列得到最终匹配 $P$。<br>
+          <b>要记住的一句话：</b>Sinkhorn 用「行、列交替归一化」这样一种优雅又省事的迭代，把 NP 难的离散指派<b>松弛成可微的连续优化</b>。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\bar P = \text{Sinkhorn}\big(\exp(\bar S)\big),\qquad P\cdot \mathbf 1_N \le \mathbf 1_M$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对指数化的相似度矩阵做 Sinkhorn 迭代得到软分配 $\bar P$；最后的约束 $P\cdot\mathbf 1_N \le \mathbf 1_M$ 就是「图 A 的每一个点<b>至多</b>配图 B 的一个点」（允许不配，因为可以进 dustbin）。这就是原文 Eq.1 的问题定义。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 置信度与实验结论</h2>
+      <p>SuperGlue 给每个匹配都带一个<b>置信度</b>。低于阈值（实现里取 0.2）的连线直接丢弃。这正是第一季 0004 讲「数据关联」时想要的、却只能靠几何滤波事后补的东西——现在它成了匹配层<b>原生</b>的输出。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 320" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">置信度：绿=保留，黄=存疑，红=丢弃</text>
+          <!-- 左照片 -->
+          <rect x="60" y="70" width="170" height="140" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="100" cy="120" r="5" fill="#2f5b82"/><circle cx="160" cy="150" r="5" fill="#2f5b82"/><circle cx="120" cy="190" r="5" fill="#2f5b82"/><circle cx="190" cy="180" r="5" fill="#2f5b82"/>
+          <!-- 右照片 -->
+          <rect x="670" y="70" width="170" height="140" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="710" cy="125" r="5" fill="#2f5b82"/><circle cx="770" cy="155" r="5" fill="#2f5b82"/><circle cx="730" cy="195" r="5" fill="#2f5b82"/><circle cx="790" cy="185" r="5" fill="#2f5b82"/>
+          <!-- 绿 -->
+          <line x1="100" y1="120" x2="710" y2="125" stroke="#2f8a4f" stroke-width="2.4"/>
+          <line x1="160" y1="150" x2="770" y2="155" stroke="#2f8a4f" stroke-width="2.4"/>
+          <!-- 黄 -->
+          <line x1="120" y1="190" x2="730" y2="195" stroke="#e0a23c" stroke-width="2.2" stroke-dasharray="2 2"/>
+          <!-- 红 -->
+          <line x1="190" y1="180" x2="790" y2="185" stroke="#c0392b" stroke-width="2.2"/>
+          <text x="450" y="250" text-anchor="middle" font-size="11" fill="#2f8a4f">绿：高置信 → 保留进 BA</text>
+          <text x="450" y="272" text-anchor="middle" font-size="11" fill="#e0a23c">黄：中等置信 → 可犹豫</text>
+          <text x="450" y="294" text-anchor="middle" font-size="11" fill="#c0392b">红：低置信（&lt;0.2）→ 直接丢弃</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两幅图之间的匹配连线被按置信度分成三档：绿色高置信保留、黄色中等存疑、红色低置信（低于 0.2 阈值）直接丢弃。这对应 SuperGlue 输出的 confidence。<br>
+          <b>怎么看这张图：</b>传统流程里「红/黄」这种错配要靠几何滤波（RANSAC）事后发现；SuperGlue 在匹配层就给出了「我有多确定」的信号，后端可以据此加权或直接剔除。<br>
+          <b>要记住的一句话：</b>置信度让匹配从「给一组硬配对」升级成「给一组<b>带可信度的</b>配对」，后端 BA 用起来稳得多。
+        </figcaption>
+      </figure>
+
+      <h3>6.1 几个关键数字（来自正文 Table 1–4）</h3>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.85rem">
+        <thead>
+          <tr style="background:rgba(61,107,150,.1)">
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">测试</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">SuperGlue（SuperPoint+）</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">对照</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">Homography AUC</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">RANSAC 53.67 / DLT 65.85</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">NN+OANet 仅 44.55 / 52.29</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">室内 ScanNet AUC@20°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">51.84</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">NN+ratio 明显更低</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">室外 PhotoTourism AUC@20°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">64.16</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">—</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">消融：去掉 GNN</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">掉到 38.56</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">全模型 9 层 = 51.84</td></tr>
+          <tr><td style="padding:.5rem .6rem;font-weight:700">实现开销</td><td style="padding:.5rem .6rem">D=256, L=9, 12M 参数, 69ms（GTX1080, 15FPS）</td><td style="padding:.5rem .6rem">keypoint&gt;500 时因二次复杂度偏慢</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>最反直觉的结论：</b>消融实验里，把整个 GNN 去掉、只留最优传输层，AUC@20° 仍有 38.56；一旦把 GNN 加回来就跳到 51.84。作者据此认为——<b>「上下文聚合」比「匹配求解本身」更关键</b>。这和下一节 LoFTR、以及再后面 SiLK「不用上下文也能打」形成了有趣的张力。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 SuperGlue 的 dustbin，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。dustbin 是给 A、B 各追加的一个虚拟行列（用可学习参数 z 填满），专门接收「配不上任何点」的不可匹配点，从而让输出成为 partial assignment（部分指派）而不必强行一一对应。它同时优雅地处理了遮挡与不可见点。" onclick="lessonKit.answer(this,'q0129a')">dustbin 让模型能正式输出「这个点不配任何点」</button>
+          <button data-correct="no" data-explanation="不对。dustbin 是为了处理遮挡 / 不可匹配，不是用来提速的；SuperGlue 的加速来自注意力机制本身，且它对关键点数量是二次复杂度，keypoint 过多反而偏慢。" onclick="lessonKit.answer(this,'q0129a')">dustbin 是 SuperGlue 用来加速匹配的主要手段</button>
+        </div>
+        <div class="quiz-feedback" id="q0129a"></div>
+      </div>
+
+      <h3>6.2 和前面课程怎么接（再强调）</h3>
+      <p>这一节是第一季 0011 那句判断的<b>头号证据</b>：匹配这个环节，确实被「先吃掉了」。它替换的是第一季 0004 讲的「描述子相似度匹配 + 比值/互检 + 几何滤波」整段，变成一个可插入 SfM/SLAM 的 middle-end。但它也留下一条线——它仍然依赖 SuperPoint 这类前端，且对关键点数量是二次复杂度，这正是后面 LoFTR（去掉检测器）和 SiLK（极简前端）要补的短板。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用生活类比解释：为什么 SuperGlue 的匹配比「谁描述子最像就配谁」更稳？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>「谁最像就配谁」像每个人闭门造车、只看自己的小抄。SuperGlue 先让所有点「开会」（self/cross attention），每个点都知道了「周围和对方图里谁在关注我」，再一起决定配对。这样 A 图里一个在 B 图里其实和好几个点都像的点，会被全局上下文「劝退」错配。本质是<b>把孤立判断变成全局协商</b>。</p>
+            </div></details>
+          </li>
+          <li>dustbin 解决了传统匹配的哪个具体痛点？请结合 4.1 节那张代价矩阵里的 A5 行说明。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>传统「取每行最像的」规则，遇到 A5 这种整行都浅（被遮挡、在 B 里找不到对应）的点，会硬配一个其实不像的点，制造错误匹配。dustbin 提供了一个虚拟「不匹配」出口，让最优化可以合法地输出「A5 不配任何人」，变成 partial assignment，从而不制造假匹配。</p>
+            </div></details>
+          </li>
+          <li>为什么 Sinkhorn 对 SuperGlue 很重要？如果改用「每行取 argmax」会丢掉什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>Sinkhorn 是<b>可微</b>的——它用行/列交替归一化逼近软指派，整条链路梯度能反传到注意力网络，让「互检」成为训练的一部分。若改用每行 argmax，虽然快，但<b>不可微、丢失了软置信度</b>，也无法让「一对多 / 无匹配」这种结构自然涌现，训练就断了。</p>
+            </div></details>
+          </li>
+          <li>作者说「上下文比匹配求解本身更关键」，证据是什么？这个结论对本季后面哪几节构成了张力？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>证据来自消融：去掉 GNN 只留最优传输层仍有 38.56 的 AUC@20°，加上 GNN 才到 51.84——增益几乎全来自上下文聚合。这与<b>0130 LoFTR</b>（用全局注意力替代局部共识）一脉相承，但与<b>0133 SiLK</b>（明确声明「不用 context aggregation」、仅靠余弦相似度+MNN 也能有竞争力）构成直接张力——SiLK 认为「这些任务未必需要上下文聚合」。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0128-导览-第七季开场-一句话的面试.html">← 第七季开场：一句话的面试</a>
+        <a class="next" href="0130-LoFTR2021-不用检测器的稠密匹配.html">下一课：LoFTR 2021 →</a>
+      </div>
+      <p class="foot-note">SuperGlue 把「匹配」第一次做成了带上下文、带置信度、可端到端训练的中间端。下一节看 LoFTR 怎么干脆把「检测器」也扔掉 🔗</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

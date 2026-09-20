@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LightGlue 2023 · 该快的地方才快 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0131</div>
+      <h1>LightGlue 2023 · 该快的地方才快</h1>
+      <p class="subtitle">不是把 SuperGlue 做得更大，而是让它「简单图对少算几层、难图对才多算」——更快更准更易训 ⚡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：SuperGlue 的轻量重构 + 自适应停止</span>
+        <span>👥 作者：ETH（Lindenberger 等）</span>
+        <span>📅 2023 · <i>LightGlue: Local Feature Matching at Light Speed</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它在改什么</a>
+        <a href="#b">深度自适应：易图对早停</a>
+        <a href="#c">matchability 门控</a>
+        <a href="#d">point pruning 与架构</a>
+        <a href="#e">实验与暗线</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说出 LightGlue 相对 SuperGlue 的四条改进；② 用生活类比解释「深度自适应停止」「matchability 门控」「point pruning」；③ 讲清它为什么「更快、更准、更易训练」三者兼得。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>它是 <b>0129 SuperGlue 的 plug-and-play 替代</b>，同一战场（中间端匹配），同一批前端（SuperPoint）。SuperGlue 用 dustbin + Sinkhorn 解指派，LightGlue 把这两样都去掉，换成「双向 softmax × matchability 门控」。它也是本季「复杂 vs 极简」暗线里<b>「该省就省」</b>那一端的最典型代表。</p>
+        </div>
+      </div>
+
+      <h2>1. 它在改什么：先讲人话</h2>
+      <p>SuperGlue 很强，但有个怪现象：<b>哪怕两张图几乎一样（重叠很大、外观变化很小），它也要老老实实跑满 9 层、100 次 Sinkhorn 迭代</b>。这就像寄一封信到隔壁，却要走完跨国快递的全部流程。LightGlue 的核心观察是：<b>匹配的「难度」因图对而异，计算量也该因图对而异</b>。</p>
+      <p>于是它做了一件既简单又聪明的事——重构 SuperGlue 的几个设计，让模型<b>「对自己够不够有把握」能逐层判断，有把握就提前停</b>。简单图对可能第 4 层就停了，难图对才跑满。这就是标题里「Light Speed」的含义：不是绝对更快，而是<b>该快的地方才快</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_LightGlue/5e8c66cedb7693fc4c2a8235a34f02c52104051c4b194abf810a1fb057e4e6f8.jpg" alt="LightGlue matches faster and better than SuperGlue">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>LightGlue matches sparse features faster and better than existing approaches like SuperGlue. Its adaptive stopping mechanism gives a fine-grained control over the speed vs. accuracy trade-off. Our final, optimized model ⋆ delivers an accuracy closer to the dense matcher LoFTR at an 8× higher speed, here in typical outdoor conditions.<br>
+          <b>怎么看这张图：</b>横轴是速度、纵轴是精度，LightGlue（含优化版 ⋆）落在「又快又准」的右上角，且自适应机制让它可以沿一条曲线在速度/精度之间连续调节——这正是「该快的地方才快」的可视化。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 深度自适应：易图对早停</h2>
+      <p>LightGlue 的骨干是 L=9 个完全相同的层（每层 = self-attention + cross-attention）。但每一层结束后，它会用一个小组件预测「这批点现在有多 confident」；当足够比例的点都够自信，就<b>提前退出</b>，不再算后面的层。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">深度自适应：易图对第 4 层停，难图对到第 7 层才停</text>
+          <!-- 9 层 -->
+          <g>
+            <rect x="320" y="70" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="100" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="130" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="160" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="190" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="220" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="250" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="280" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+            <rect x="320" y="310" width="170" height="22" rx="5" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.1"/>
+          </g>
+          <text x="308" y="84" text-anchor="end" font-size="10" fill="#2f5b82">L1</text>
+          <text x="308" y="114" text-anchor="end" font-size="10" fill="#2f5b82">L2</text>
+          <text x="308" y="144" text-anchor="end" font-size="10" fill="#2f5b82">L3</text>
+          <text x="308" y="174" text-anchor="end" font-size="10" fill="#2f5b82">L4</text>
+          <text x="308" y="204" text-anchor="end" font-size="10" fill="#2f5b82">L5</text>
+          <text x="308" y="234" text-anchor="end" font-size="10" fill="#2f5b82">L6</text>
+          <text x="308" y="264" text-anchor="end" font-size="10" fill="#2f5b82">L7</text>
+          <text x="308" y="294" text-anchor="end" font-size="10" fill="#2f5b82">L8</text>
+          <text x="308" y="324" text-anchor="end" font-size="10" fill="#2f5b82">L9</text>
+          <!-- 易匹配 绿箭头 停在 L4 -->
+          <line x1="150" y1="174" x2="315" y2="174" stroke="#2f8a4f" stroke-width="2.4"/>
+          <polygon points="315,174 306,168 307,180" fill="#2f8a4f"/>
+          <text x="120" y="166" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f6136">易匹配图对</text>
+          <text x="120" y="190" text-anchor="middle" font-size="9.5" fill="#2f6136">第 4 层就停</text>
+          <text x="520" y="170" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f8a4f">✓ 提前退出</text>
+          <text x="520" y="188" text-anchor="middle" font-size="9.5" fill="#2f6136">省下 5 层</text>
+          <!-- 难匹配 红箭头 停在 L7 -->
+          <line x1="150" y1="264" x2="315" y2="264" stroke="#c0392b" stroke-width="2.4"/>
+          <polygon points="315,264 306,258 307,270" fill="#c0392b"/>
+          <text x="120" y="256" text-anchor="middle" font-size="10.5" font-weight="700" fill="#a8432c">难匹配图对</text>
+          <text x="120" y="280" text-anchor="middle" font-size="9.5" fill="#a8432c">第 7 层才停</text>
+          <text x="520" y="260" text-anchor="middle" font-size="10.5" font-weight="700" fill="#c0392b">继续算</text>
+          <text x="520" y="278" text-anchor="middle" font-size="9.5" fill="#a8432c">还需更深</text>
+          <text x="460" y="358" text-anchor="middle" font-size="10.5" fill="#8a7365">实测：易/中/难 平均停止层 4.7 / 5.5 / 6.9，整体平均加速 1.45×</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边一条 9 层堆叠（LightGlue 的骨干）。绿色箭头代表「易匹配图对」，跑到第 4 层模型觉得够自信就提前退出，省下后面 5 层；红色箭头代表「难匹配图对」，要一路算到第 7 层才退出。<br>
+          <b>怎么看这张图：</b>① 关键不是「层数固定」，而是<b>每层结束都做一次「要不要停」的判断</b>。② 易图对（重叠大、外观变化小）提前退，难图对（大视角、光照变化）才跑深——计算量随难度自适应。③ 底部数字是正文 Table 6 的实测：整体平均加速 1.45×。<br>
+          <b>要记住的一句话：</b>LightGlue 把「算多少层」从固定超参变成了<b>模型自己按把握决定的动态过程</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_LightGlue/69bdba30c1bded217e4e55758e3d52612fc3188a34f5630dd725f1aeeb2db1f7.jpg" alt="Depth adaptivity of LightGlue">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Depth adaptivity. LightGlue is faster at matching easy image pairs (top) than difficult ones (bottom) because it can stop at earlier layers when its predictions are confident.<br>
+          <b>怎么看这张图：</b>上方是「易」图对（重叠大），推断只用了较浅的层、耗时短；下方是「难」图对，需要更深的层和更长时间。原文用这个对比直观展示了自适应深度。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. matchability 门控：把「可不可匹配」单独学出来</h2>
+      <p>SuperGlue 用 dustbin 处理「不可匹配」，但 dustbin 和相似度纠缠在一起，梯度互相干扰。LightGlue 做了一件清爽的事：<b>把「相似度」和「可匹配性」拆成两个独立的可学习信号</b>。每个点先过一个 Sigmoid 得到一个 <b>matchability σ</b>（0=被遮挡/不可匹配，1=可匹配），最终匹配概率 = 相似度的双向 softmax × 两边的可匹配性门控。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">matchability 门控：σ&lt;0.5 的点直接被排除</text>
+          <!-- 左照片 -->
+          <rect x="60" y="70" width="180" height="160" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="100" cy="120" r="5" fill="#2f8a4f"/><text x="112" y="118" font-size="9" fill="#2f6136">σ=0.9</text>
+          <circle cx="150" cy="165" r="5" fill="#2f8a4f"/><text x="162" y="163" font-size="9" fill="#2f6136">σ=0.8</text>
+          <circle cx="110" cy="200" r="5" fill="#2f8a4f"/><text x="122" y="198" font-size="9" fill="#2f6136">σ=0.7</text>
+          <circle cx="180" cy="125" r="5" fill="#c0392b"/><text x="192" y="123" font-size="9" fill="#a8432c">σ=0.2</text>
+          <circle cx="175" cy="205" r="5" fill="#c0392b"/><text x="187" y="203" font-size="9" fill="#a8432c">σ=0.1</text>
+          <!-- 右照片 -->
+          <rect x="680" y="70" width="180" height="160" rx="6" fill="#eef4f9" stroke="#b8cfe0" stroke-width="1.3"/>
+          <circle cx="720" cy="125" r="5" fill="#2f8a4f"/>
+          <circle cx="770" cy="170" r="5" fill="#2f8a4f"/>
+          <circle cx="730" cy="205" r="5" fill="#2f8a4f"/>
+          <circle cx="790" cy="128" r="4" fill="#d9b3aa"/>
+          <circle cx="785" cy="208" r="4" fill="#d9b3aa"/>
+          <!-- 绿匹配线（仅绿点） -->
+          <line x1="100" y1="120" x2="720" y2="125" stroke="#2f8a4f" stroke-width="2"/>
+          <line x1="150" y1="165" x2="770" y2="170" stroke="#2f8a4f" stroke-width="2"/>
+          <line x1="110" y1="200" x2="730" y2="205" stroke="#2f8a4f" stroke-width="2"/>
+          <!-- 红点叉 -->
+          <text x="180" y="115" font-size="11" fill="#c0392b">✕</text>
+          <text x="175" y="195" font-size="11" fill="#c0392b">✕</text>
+          <!-- 中间门控漏斗 -->
+          <text x="430" y="62" text-anchor="middle" font-size="11" font-weight="700" fill="#6b5a4e">matchability 门控</text>
+          <polygon points="380,90 480,90 450,160 410,160" fill="#fdf0ec" stroke="#e0a98f" stroke-width="1.3"/>
+          <line x1="430" y1="125" x2="430" y2="125" stroke="#a8432c" stroke-width="1.5"/>
+          <text x="430" y="185" text-anchor="middle" font-size="9.5" fill="#a8432c">σ&lt;0.5 → 剔除</text>
+          <text x="430" y="205" text-anchor="middle" font-size="9.5" fill="#2f6136">σ≥0.5 → 保留</text>
+          <text x="430" y="320" text-anchor="middle" font-size="10.5" fill="#8a7365">绿=可匹配保留；红=不可匹配，在门控处被直接丢出，不进入后续匹配</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边图里 5 个候选点，其中 3 个 matchability σ 高（绿）、2 个 σ 低（红，被遮挡/不可匹配）。中间一个门控漏斗按 σ≥0.5 过滤：绿点通过、红点被剔除（画 ✕）。右边只留下 3 个绿点形成匹配连线，两个红点（淡色）根本没参与。<br>
+          <b>怎么看这张图：</b>① 注意红色点虽然描述子可能和某点「有点像」，但因为 σ 低，被<b>门控直接否决</b>，不会制造假匹配。② 这和 SuperGlue 的 dustbin 目标一样（排除不可匹配），但实现更干净——<b>σ 是独立学习的信号，不和相似度纠缠</b>。<br>
+          <b>要记住的一句话：</b>把「可不可匹配」单独学成一个开关，是 LightGlue 比 SuperGlue 更准、更易训练的关键一招。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$P_{ij}=\sigma_i^A\,\sigma_j^B\;\cdot\;\text{softmax}(S_{\cdot j})_i\;\cdot\;\text{softmax}(S_{i\cdot})_j$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>最终两点 i、j 的匹配概率，等于「i 可匹配吗 × j 可匹配吗」这个门控，乘以「在 j 所在的列里 i 排第几、在 i 所在的行里 j 排第几」的双向 softmax。门控为 0 时整个概率就是 0——这就是「matchability 门控」的数学形式，<b>没有 dustbin、没有 Sinkhorn</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_LightGlue/e332d8466759d8f9bcf123af9a96b2031bc4210e0f947aab83accc81fc11899d.jpg" alt="Benefit of the matchability">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Benefit of the matchability. The matchability helps filter out outliers (red) that are visually similar, retaining only inlier correspondences (green).<br>
+          <b>怎么看这张图：</b>即便某些红点是「视觉上很像」的干扰项，matchability 也能把它们识别为异常值过滤掉，只留下绿点的正确对应——这正是门控比单纯比描述子更稳的地方。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. point pruning 与整体架构</h2>
+      <p>matchability 还有个附带好处：既然某些点「 confidently 不可匹配」在浅层就能看出来，那后面几层就<b>干脆别带它们玩了</b>——把它们从注意力集合里剪掉（point pruning），后续的 self/cross attention 规模越来越小，越来越快。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 920 320" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="460" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">point pruning：浅层就认出不可匹配的点，提前剪掉</text>
+          <!-- 前 -->
+          <text x="190" y="58" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">浅层：点很多</text>
+          <circle cx="100" cy="120" r="5" fill="#2f5b82"/>
+          <circle cx="150" cy="100" r="5" fill="#2f5b82"/>
+          <circle cx="200" cy="130" r="5" fill="#c0392b"/>
+          <circle cx="120" cy="160" r="5" fill="#2f5b82"/>
+          <circle cx="180" cy="170" r="5" fill="#c0392b"/>
+          <circle cx="230" cy="110" r="5" fill="#2f5b82"/>
+          <circle cx="90" cy="200" r="5" fill="#2f5b82"/>
+          <circle cx="210" cy="210" r="5" fill="#2f5b82"/>
+          <!-- 后 -->
+          <text x="730" y="58" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6136">深层：只剩可匹配的点</text>
+          <circle cx="640" cy="120" r="5" fill="#2f6136"/>
+          <circle cx="690" cy="100" r="5" fill="#2f6136"/>
+          <circle cx="660" cy="160" r="5" fill="#2f6136"/>
+          <circle cx="730" cy="130" r="5" fill="#2f6136"/>
+          <circle cx="630" cy="200" r="5" fill="#2f6136"/>
+          <circle cx="710" cy="210" r="5" fill="#2f6136"/>
+          <!-- 中箭头 + 剪掉的点 -->
+          <line x1="260" y1="150" x2="610" y2="150" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="610,150 600,144 601,156" fill="#6b5a4e"/>
+          <text x="435" y="138" text-anchor="middle" font-size="10.5" fill="#6b5a4e">剪掉红点</text>
+          <text x="435" y="302" text-anchor="middle" font-size="10.5" fill="#8a7365">搜索空间随层数缩小 → 越算越快，和「深度自适应」叠加成双重加速</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是浅层时的一堆候选点（含两个红点，已被判为不可匹配）；右边是深层时，红点被剪掉，只剩绿点继续参与注意力。随着层数增加，参与计算的点越来越少。<br>
+          <b>怎么看这张图：</b>① 剪枝发生在<b>浅层</b>——因为 matchability 在浅层就能判断不可匹配，不必等到最后。② 它和「深度自适应停止」是双保险：点变少 → 注意力更便宜；早停 → 层数更少。<br>
+          <b>要记住的一句话：</b>LightGlue 的快，来自<b>「少算层」和「少算点」两件事同时发生</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_LightGlue/51c284991c108ceb8ddec61783fa2f7792532d386f654e59cad80651a96a485e.jpg" alt="The LightGlue architecture">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The LightGlue architecture. Given a pair of input local features (d, p), each layer augments the visual descriptors with context based on self- and cross-attention units with positional encoding. A confidence classifier c helps decide whether to stop the inference. If few points are confident, the inference proceeds to the next layer but we prune points that are confidently unmatchable.<br>
+          <b>怎么看这张图：</b>把前面三节的内容串起来了——每层 = self/cross attention + 位置编码；层末用 confidence 分类器决定「停不停」，并把 confidently unmatchable 的点剪掉。整张图就是「自适应深度 + point pruning」的工程实现。
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <p><b>诚实标注一处原文笔误：</b>LightGlue 自己的 Figure 2、Figure 4 图注里把模型名拼成了 "LigthGlue"（少了 h），这是<b>原文笔误</b>，不是 OCR；正文标题与摘要均为正确拼写 LightGlue。另，正文 Eq.1 附近 "x_i^I d_i^I" 缺了等号，应为 $x_i^I = d_i^I$。课里一律按正确形式书写。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 实验结论与本季暗线</h2>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.85rem">
+        <thead>
+          <tr style="background:rgba(61,107,150,.1)">
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">测试</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">LightGlue（自适应）</th>
+            <th style="text-align:left;padding:.5rem .6rem;border-bottom:2px solid rgba(61,107,150,.35)">SuperGlue</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">MegaDepth-1500 AUC@20°</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">80.1（31.4ms）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">80.6（70.0ms）</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">相对 SuperGlue 推理时间</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">−30%（自适应 &gt;2× 更快且更准）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">基准</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">Aachen 吞吐（对/秒）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">17.2 / 优化版 26.1</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">6.5</td></tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">消融：精度 / 召回</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">86.8 / 96.3（19.4ms）</td><td style="padding:.5rem .6rem;border-bottom:1px solid #eee">74.6 / 90.5（29.1ms）</td></tr>
+          <tr><td style="padding:.5rem .6rem;font-weight:700">训练成本</td><td style="padding:.5rem .6rem">2 GPU-day 达 SuperGlue 7 天精度</td><td style="padding:.5rem .6rem">约 7 天</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>为什么「更快 + 更准 + 更易训」能同时成立：</b>SuperGlue 的 dustbin 把「相似度」和「可不可匹配」搅在一起，梯度互相拖累；LightGlue 把它们解耦，又用 deep supervision（每层都能出预测）让梯度更好传，所以训练更快收敛（2 GPU-day 就追平 SuperGlue 7 天）。这不是「堆更大」，而是「设计更清爽」——典型的本季暗线里「该省就省」一端。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 LightGlue 比 SuperGlue「更快」，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。LightGlue 的快来自两条：① 深度自适应——简单图对提前停层；② point pruning——浅层就剪掉不可匹配点，缩小后续注意力规模。两者叠加，越容易的图对省得越多。" onclick="lessonKit.answer(this,'q0131a')">简单图对少算几层、并提前剪掉不可匹配的点</button>
+          <button data-correct="no" data-explanation="不对。LightGlue 并没有把模型做小（参数 d=256、L=9、4 heads 与 SuperGlue 基本一致，甚至用 2k 点/图比 SuperGlue 的 1k 更多）；它的快来自「按需计算」而非「绝对更小」。" onclick="lessonKit.answer(this,'q0131a')">它把模型整体缩小了一半所以更快</button>
+        </div>
+        <div class="quiz-feedback" id="q0131a"></div>
+      </div>
+
+      <h3>5.1 和前面课程怎么接（再强调）</h3>
+      <p>LightGlue 是 <b>0129 SuperGlue 的直接接班者</b>：同一战场（中间端）、同一前端（SuperPoint）、同一目标（可学习匹配），但它用「解耦 matchability + 深度自适应 + point pruning」把 SuperGlue 的 dustbin/Sinkhorn 整体替换掉，并落到本季暗线中「该省就省」那一端。下一节 RAFT 会把「简单机制反复迭代」这条极简思路推到另一类任务（稠密光流）上。</p>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用生活类比解释 LightGlue 的「深度自适应停止」。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>像寄信：近的信走个本地流程就到了，远的才走完整跨国链路。LightGlue 每算完一层就问自己「够不够有把握」，够把握就停（易图对第 4 层），不够就继续（难图对到第 7 层）。难点匹配得到更深的计算，简单匹配省下后面几层。</p>
+            </div></details>
+          </li>
+          <li>matchability 门控相对 SuperGlue 的 dustbin，解决了什么毛病？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>dustbin 把「相似度」和「不可匹配」混在同一个最优传输矩阵里，两者梯度互相纠缠，训练更难。LightGlue 把 matchability σ 单独学成一个 Sigmoid 开关，最终匹配概率 = σ 门控 × 双向 softmax。这样「可不可匹配」是独立信号，梯度干净，训练更快收敛，也更准。</p>
+            </div></details>
+          </li>
+          <li>point pruning 和深度自适应是怎么「叠加加速」的？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>深度自适应减少「算多少层」，point pruning 减少「每层算哪些点」。两者同时作用：浅层就剪掉不可匹配点，使后续层注意力规模变小；同时易图对提前停层。于是越容易的图对，省得越多，呈双重加速。</p>
+            </div></details>
+          </li>
+          <li>为什么 LightGlue「更快、更准、更易训练」三者能兼得，而不是此消彼长？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为它改进的是「结构」而非「堆料」：解耦 matchability 消除梯度纠缠、deep supervision 让每层都能出预测使梯度更好回传，所以训练更省时（2 GPU-day 追平 SuperGlue 7 天）；自适应与剪枝减少无效计算，所以推理更快；梯度更干净 + 早停避免过拟合式浪费，所以精度反而更高。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0130-LoFTR2021-不用检测器的稠密匹配.html">← LoFTR 2021：不用检测器的稠密匹配</a>
+        <a class="next" href="0132-RAFT2020-循环迭代式光流.html">下一课：RAFT 2020 →</a>
+      </div>
+      <p class="foot-note">LightGlue 证明：匹配这条线，「更聪明地省」比「更大地堆」更划算。下一节画风一转——RAFT 用一套极简机制去啃稠密光流 ⚡</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

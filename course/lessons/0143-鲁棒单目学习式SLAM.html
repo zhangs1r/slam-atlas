@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>鲁棒单目学习式 SLAM · DeepSLAM（2021）— SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0143</div>
+      <h1>鲁棒单目学习式 SLAM：DeepSLAM（2021）</h1>
+      <p class="subtitle">UnDeepVO 团队把「无监督 VO」升级成「完整 SLAM」：加回环、加图优化、加不确定度剔外点，挑战场景照样跑 🛡️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：无监督单目 SLAM（Mapping + Tracking + Loop + 图优化）</span>
+        <span>👥 作者：R. Li、S. Wang、G. Wang 等（同 UnDeepVO 团队）</span>
+        <span>📅 2021 · <i>DeepSLAM: A Robust Monocular SLAM System With Unsupervised Deep Learning</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">接在谁后面</a>
+        <a href="#c">DeepSLAM 长什么样</a>
+        <a href="#d">训练信号与损失</a>
+        <a href="#e">不确定度剔外点</a>
+        <a href="#f">实测与鲁棒性</a>
+        <a href="#g">两张自绘图</a>
+        <a href="#h">这条线的账</a>
+        <a href="#i">练习</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>看懂 UnDeepVO 团队怎么把「无监督 VO」补成「完整 SLAM」：Mapping-Net（深度）+ Tracking-Net（RCNN 位姿+不确定度）+ Loop-Net（回环）+ g2o 图优化后端；并搞懂它用<b>不确定度图</b>自适应剔外点（动物体/高不确定区）的鲁棒机制。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0142</b> 的 UnDeepVO 是「无监督 VO」——本节的 DeepSLAM 是同一团队、同一套自监督损失的「SLAM 化升级」。<b>0043–0045</b> ORB-SLAM 的「三线程 + 回环 + 图优化」是经典 SLAM 范本，DeepSLAM 用深度学习版对应物去追平它。<b>0014</b> 回环铁律在这里也有分量：DeepSLAM 的 Loop-Net 就是回环检测。<b>0040</b> 尺度暗线继续：它仍靠 stereo 训练给单目补尺度。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>上一节 UnDeepVO 能「边走边估位姿 + 深度」，但它还不是完整 SLAM——<b>缺两样东西</b>：① 没有<b>回环</b>（走回老地方认不出，地图会越画越歪）；② 没有<b>全局后端优化</b>（不把整段轨迹一起调直）；③ 对<b>动态物体/不确定区域</b>没专门防御。</p>
+      <p>DeepSLAM（2021）就是给 UnDeepVO 补上这三样：再加一个 Loop-Net 做回环、用 g2o 做位姿图优化、再用「不确定度图」决定哪些像素该被当外点丢掉。一句话：<b>UnDeepVO + 回环 + 图优化 + 不确定度掩码 = DeepSLAM</b>。术语先露脸：<b>SLAM</b> = 同时定位与建图（比 VO 多「建图 + 回环」）；<b>回环（Loop Closure）</b> = 认出「回到老地方」、把地图焊死；<b>位姿图优化</b> = 把一堆相对位姿一起调成最自洽；<b>不确定度</b> = 网络对自己某次预测「有多大把握」。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面</h2>
+      <p>本块叙事链：DeepVO（监督 VO）→ UnDeepVO（自监督 VO + 尺度）→ <b>DeepSLAM（自监督 SLAM）</b> → D3VO（网络嵌进几何后端）→ DROID/DPVO（可微 BA）。DeepSLAM 是「把无监督 VO 扩成完整系统」的代表作，承上（沿用 UnDeepVO 的自监督损失与 stereo 尺度）启下（不确定度思想被 D3VO 接过去做成光度残差加权）。</p>
+      <p>它和经典 SLAM 的对位：ORB-SLAM（0043）用特征点 + BoW 回环 + 位姿图/BA；DeepSLAM 用深度学习网络出深度/位姿/不确定度 + 预训练 Inception 出回环特征 + g2o 后端。两者都「前端+回环+后端」，只是零件换成了学习式。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. DeepSLAM 长什么样：三个网络 + 一个后端</h2>
+      <p>图 1 是测试框架总览：单目彩色图进系统，三个网络分别出深度图、位姿、点云。拆解：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>Mapping-Net</h4>
+          <p>encoder-decoder（VGG 式）出<b>稠密深度图</b>。训练用 stereo 恢复尺度。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Tracking-Net</h4>
+          <p>VGG-CNN + RNN（RCNN），序列长 5，出<b>位姿 + 不确定度</b>。建局部位姿图。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Loop-Net</h4>
+          <p>预训练 Inception-ResNet-V2（ImageNet，免训练）出特征向量，余弦距离做<b>回环</b>检测。</p>
+        </div>
+        <div class="mini-card">
+          <h4>g2o 后端</h4>
+          <p>把局部位姿图 + 全局回环边一起做<b>图优化</b>，整体调直。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis/9da60918180d9cb89d894cd457718ef48f2a1ca7197ccce7d828498530c91cc8.jpg" alt="DeepSLAM 测试框架">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>Testing framework of the proposed DeepSLAM. It takes monocular color images as input and produces depth maps, poses, and point clouds as outputs by using Mapping-Net, Tracking-Net, and Loop-Net. Mapping-Net is an autoencoder architecture for depth estimation. Tracking-Net is an RCNN-based architecture for pose estimation. Loop-Net is a CNN architecture for loop closure detection. Pose graph construction and optimization are implemented as the back end. (b) DeepSLAM demonstrates a robust performance in some challenging scenes.</p>
+          <p><b>怎么看这张图：</b>三路网络共享同一份单目输入：Mapping-Net 出深度、Tracking-Net 出位姿+不确定度、Loop-Net 出回环。Pose 那一栏说明它把帧组织成局部位姿图（序列长 5），Loop-Net 检到的全局回环再喂给 g2o。</p>
+          <p><b>要记住的一句话：</b>DeepSLAM = UnDeepVO 的三件套 + 回环 + 图优化，第一次凑齐「无监督完整 SLAM」。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis/fdda65adcad434239710709c8ae59788ae1529df71f5e027712f0edab93ba8b9.jpg" alt="DeepSLAM 训练方案">
+        <figcaption>
+          <p><b>原图注（Fig. 2）：</b>Training scheme of the proposed DeepSLAM system. We use stereo images to train the system in order to recover the scale information of the environment, which is similar to ones used in training. The spatial image losses between a stereo image pair and the temporal image losses between a sequence image pair are formulated to train the networks. The error map produced from the system is used as the loss masks for outlier rejection. The uncertainty produced from the system is also used to train the networks.</p>
+          <p><b>怎么看这张图：</b>训练仍用 stereo（空间损失）+ 连续帧（时序损失），和 UnDeepVO 同源；额外多了「误差图 → 不确定度 → 外点掩码」这条反馈环，用来在测试时剔坏点。</p>
+          <p><b>要记住的一句话：</b>训练沿用 UnDeepVO 的自监督套路，新加的是「不确定度→掩码」的鲁棒机制。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis/d1d7395911d46d63160f24a16ec177bd5c56bb2ad98fac6a4019f611da9f5a02.jpg" alt="DeepSLAM 位姿图">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>Pose graph with local and global connections. The dotted lines represent the global loops detected from Loop-Net, whereas the solid lines represent the local loops generated by Tracking-Net.</p>
+          <p><b>怎么看这张图：</b>实线是相邻帧的局部边（Tracking-Net 出的相对位姿），虚线是 Loop-Net 检到的全局回环边。两者一起进 g2o 优化——回环边把「走回老地方」的约束焊进图里，消除漂移。</p>
+          <p><b>要记住的一句话：</b>回环边 + 局部边 = 一张自洽的位姿图，这正是 SLAM 比 VO 多出来的那一半。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 训练信号与损失：自监督，五项约束</h2>
+      <p>DeepSLAM 是<b>自监督（仅 stereo，不需位姿真值）</b>，和 UnDeepVO 同源但更全。损失由空间（stereo 对）与时序（单目连续帧）两大家族组成：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ L^o=\lambda_p\|\hat{\mathbf x}_l-\hat{\mathbf x}_r\|_1+\lambda_r\|\hat{\boldsymbol\varphi}_l-\hat{\boldsymbol\varphi}_r\|_1,\quad L^g=\sum M_g\|E_g\|_1 $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>上面 $L^o$ 是「左右位姿一致性」——左右相机各预测一个位姿，硬要让它们一致（λ_p 远小于 λ_r，因为平移比旋转更难对齐）；下面 $L^g$ 是「3D 几何注册损失」，把预测点云当成一个整体对齐（类 ICP），每个外点掩码 $M_g$ 内的点才参与。两项都在逼「深度和位姿自洽」。</p>
+      <table>
+        <thead>
+          <tr><th>损失项</th><th>来源</th><th>在约束什么</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>左右光度一致性（L1+SSIM）</td><td>stereo 对</td><td>左右视角应一致 → 深度对</td></tr>
+          <tr><td>视差一致性</td><td>stereo 对</td><td>左右预测深度互相对应</td></tr>
+          <tr><td>左右位姿一致性 $L^o$</td><td>stereo 对</td><td>左右各预测位姿须一致 → 共享尺度</td></tr>
+          <tr><td>时序光度一致性</td><td>单目连续帧</td><td>帧间 warp 应一致</td></tr>
+          <tr><td>3D 几何注册损失 $L^g$</td><td>单目连续帧</td><td>预测点云整体对齐（受掩码约束）</td></tr>
+        </tbody>
+      </table>
+      <p>注意：上面五项和 UnDeepVO 几乎同构——DeepSLAM 的「增量」不在损失，而在<b>结构（多一个 Loop-Net）和鲁棒机制（不确定度掩码）</b>。这是组课判断，不是原文自评：它本质是 UnDeepVO 的 SLAM 化延伸，而非全新范式。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 不确定度剔外点：鲁棒性的灵魂</h2>
+      <p>DeepSLAM 最值得记的一招：它不从误差图直接剔点，而是先由误差图算<b>不确定度 σ</b>，再用 σ 动态决定「剔掉百分之多少」。公式上 σ 由光度/几何误差图的均值经 sigmoid 得到：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ \sigma=2\,S(\mu_p+\mu_p+\lambda_e(\mu_g+\mu_g))-1,\quad q_{th}=q_0+(1-q_0)(1-\sigma) $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>σ 是「我对这次估计有多没把握」——光度误差均值 μ_p 和几何误差均值 μ_g 越大，σ 越接近 1（越不放心）。然后掩码阈值 $q_{th}$ 随 σ 调：越不放心，剔掉的百分位数越高（宁可多丢点也别让坏点拖累）。红框=运动物体、绿框=高不确定深度（天空/暗处/边缘），都被当外点。</p>
+      <p>图 10 把它画成「几何掩码 + 光度掩码」：红框框住移动物体、绿框框住高不确定深度。图 11 进一步显示：估计的不确定度与平移/旋转误差<b>强相关</b>——网络「觉得自己不准」的地方，确实错得多，说明这个不确定度是真有用的信号（不是摆设）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis/b24904906fe9f4f153423cce948293c89c7521bedfd1559e9f497aa9bbf02f7f.jpg" alt="DeepSLAM 几何与光度掩码">
+        <figcaption>
+          <p><b>原图注（Fig. 10）：</b>Geometric mask and photometric mask for outlier rejection. The red boxes represent moving objects and the green boxes represent depth values with high uncertainty.</p>
+          <p><b>怎么看这张图：</b>红框是「被判定在动的物体」（行车、行人），绿框是「深度估不准的区域」（天空、暗角、边缘）。这两类都被掩码排除，不参与后续优化——动态物体和不确定区不再污染建图。</p>
+          <p><b>要记住的一句话：</b>不确定度不是炫技，是用来「该丢的点就丢」的硬机制。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis/a76896a1dd15a43daa6d1d7a01ea77acf10094a8f7963174406eee888d996847.jpg" alt="DeepSLAM 不确定度与误差相关">
+        <figcaption>
+          <p><b>原图注（Fig. 11）：</b>Estimated uncertainty against the corresponding translational and rotational errors. It shows that the estimated uncertainty values are strongly correlated with both of them. (a) Seq. 03. (b) Seq. 05.</p>
+          <p><b>怎么看这张图：</b>横轴是估计不确定度、纵轴是真实误差，点沿对角线分布——不确定度高时误差也高。说明网络估的「把握」和真实准确度对得上，这个不确定度可信。</p>
+          <p><b>要记住的一句话：</b>「知道自己不知道」是鲁棒 SLAM 的前提；DeepSLAM 用 σ 把这句话落进代码。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实测与鲁棒性：挑战场景照样跑</h2>
+      <p>KITTI（seq04）：<b>t_rel 4.56% / r_rel 1.90°</b>（对比 ORB-SLAM 单目 0.65/0.18、VISO2-S 2.12/2.12）。注意它比不过<b>同域</b>的 ORB-SLAM 单目——这符合本块总账「同域高精度仍是经典法强」。但它的杀手锏是<b>跨域鲁棒</b>：在 RobotCar 的雨/夜/过曝挑战场景，LSD-SLAM、ORB-SLAM-S 直接失效，DeepSLAM 仍工作（Table II 全 √）。深度 Abs Rel 0.147–0.172。实时：Tracking-Net 40Hz、整系统 ≈20Hz。</p>
+      <figure class="figure">
+        <img src="../../md/images/2021_DeepSLAM__A_Robust_Monocular_SLAM_System_With_Unsupervis/44b12a4d85ae2424a97a08156865363b569cda62b4ef04772b5e98667e63779e.jpg" alt="DeepSLAM RobotCar 鲁棒性">
+        <figcaption>
+          <p><b>原图注（Fig. 7）：</b>Robustness performance of our DeepSLAM on some challenging environments in RobotCar dataset. The left part of each subfigure shows the trajectory produced from our DeepSLAM, and the right part is the testing images taken in different locations. (a) Images with distortion. (b) Images with excessive exposure. (c) Images collected at night while raining. (d) Images collected while raining. Note that the GPS and INS data are very poor in RoboCar dataset 2015-05-29-09-36-29 (seq. 06) due to raining.</p>
+          <p><b>怎么看这张图：</b>四张子图分别是畸变、过曝、雨夜、下雨场景，左边轨迹、右边实景。DeepSLAM 在这些「经典法会挂」的条件下仍给出连贯轨迹——不确定度掩码把动态/高不确定区排掉是关键。</p>
+          <p><b>要记住的一句话：</b>学习式 VO/SLAM 的主场是「挑战/跨域」；同域高精度仍归经典法。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 两张自绘图：系统全貌与不确定度</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DeepSLAM 三网加后端">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="34" text-anchor="middle" font-size="19" fill="#9d553f"><tspan font-weight="700">DeepSLAM = 三网 + 后端：把无监督 VO 升成完整 SLAM</tspan></text>
+          <rect x="40" y="60" width="120" height="70" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="100" y="92" text-anchor="middle" font-size="13" fill="#3a4a5a">单目视频</text>
+          <text x="100" y="114" text-anchor="middle" font-size="12" fill="#5b6472">帧序列</text>
+          <text x="180" y="100" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="210" y="60" width="150" height="70" rx="12" fill="#7a4fb5"/>
+          <text x="285" y="92" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">Mapping-Net</tspan></text>
+          <text x="285" y="114" text-anchor="middle" font-size="11" fill="#ecdcf5">深度图</text>
+          <rect x="210" y="150" width="150" height="70" rx="12" fill="#9d553f"/>
+          <text x="285" y="182" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">Tracking-Net</tspan></text>
+          <text x="285" y="204" text-anchor="middle" font-size="11" fill="#f3dccf">位姿+不确定度</text>
+          <rect x="210" y="240" width="150" height="70" rx="12" fill="#2f8f5b"/>
+          <text x="285" y="272" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">Loop-Net</tspan></text>
+          <text x="285" y="294" text-anchor="middle" font-size="11" fill="#d6f0e1">回环检测</text>
+          <text x="400" y="200" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="430" y="140" width="180" height="110" rx="12" fill="#34415a"/>
+          <text x="520" y="180" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">g2o 后端</tspan></text>
+          <text x="520" y="204" text-anchor="middle" font-size="11" fill="#cfd6e2">局部位姿图</text>
+          <text x="520" y="224" text-anchor="middle" font-size="11" fill="#cfd6e2">+ 全局回环边</text>
+          <text x="520" y="244" text-anchor="middle" font-size="11" fill="#cfd6e2">一起优化调直</text>
+          <text x="650" y="200" text-anchor="middle" font-size="20" fill="#2b6cb0">→</text>
+          <rect x="680" y="140" width="180" height="110" rx="12" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="770" y="178" text-anchor="middle" font-size="13" fill="#3a4a5a">输出</text>
+          <text x="770" y="202" text-anchor="middle" font-size="12" fill="#9d553f"><tspan font-weight="700">位姿 + 深度</tspan></text>
+          <text x="770" y="224" text-anchor="middle" font-size="12" fill="#9d553f"><tspan font-weight="700">+ 点云地图</tspan></text>
+          <text x="770" y="246" text-anchor="middle" font-size="11" fill="#5b6472">回环焊死不漂</text>
+          <text x="450" y="326" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">比 UnDeepVO 多两样：Loop-Net（回环）+ g2o（全局后端）；多一层不确定度掩码剔外点</tspan></text>
+          <text x="450" y="352" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">左：前端三网各管一件事；右：后端把整张图调成最自洽</tspan></text>
+          <text x="450" y="378" text-anchor="middle" font-size="12" fill="#5b6472">（训练仍用 stereo 自监督，尺度由基线补——见 0142 / 0040 尺度暗线）</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>单目视频进三个网络：Mapping-Net 出深度、Tracking-Net 出位姿+不确定度、Loop-Net 出回环；三者汇进 g2o 后端做图优化，输出位姿+深度+点云地图。</p>
+          <p><b>怎么看这张图：</b>① 三网对应经典 SLAM 的「前端估计 + 回环 + 后端」；② 回环边把「走回老地方」焊进图，消除漂移——这是 VO 没有的；③ 不确定度从 Tracking-Net 流到掩码，决定哪些点被剔。</p>
+          <p><b>要记住的一句话：</b>DeepSLAM 是 UnDeepVO 的「SLAM 化」：加回环、加后端、加不确定度。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="不确定度与外点剔除">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="34" text-anchor="middle" font-size="19" fill="#2f8f5b"><tspan font-weight="700">不确定度：同一面墙，反复看过的更可信</tspan></text>
+          <rect x="40" y="60" width="380" height="170" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="230" y="88" text-anchor="middle" font-size="13" fill="#3a4a5a">场景：砖墙 + 行人 + 天空</text>
+          <rect x="70" y="110" width="200" height="100" fill="#f3d9a0" stroke="#c9a13a"/>
+          <text x="170" y="165" text-anchor="middle" font-size="12" fill="#3a4a5a">砖墙（反复扫）</text>
+          <circle cx="320" cy="140" r="22" fill="#e0392b" opacity="0.55"/>
+          <text x="320" y="200" text-anchor="middle" font-size="11" fill="#b4232a">行人（动）</text>
+          <rect x="70" y="110" width="380" height="0" fill="none"/>
+          <rect x="300" y="110" width="100" height="100" fill="#bcd6f0" opacity="0.7"/>
+          <text x="350" y="165" text-anchor="middle" font-size="11" fill="#2b6cb0">天空（空）</text>
+          <text x="230" y="252" text-anchor="middle" font-size="12" fill="#5b6472">左：原始场景，砖墙/行人/天空混在一起</text>
+          <rect x="480" y="60" width="380" height="170" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="670" y="88" text-anchor="middle" font-size="13" fill="#3a4a5a">网络给的「把握」图（σ 小=可信）</text>
+          <rect x="510" y="110" width="200" height="100" fill="#9bd0a8" stroke="#4f9a63"/>
+          <text x="610" y="165" text-anchor="middle" font-size="12" fill="#1f6f43"><tspan font-weight="700">砖墙：绿（自信）</tspan></text>
+          <circle cx="770" cy="140" r="22" fill="#e0392b"/>
+          <text x="770" y="200" text-anchor="middle" font-size="11" fill="#b4232a">行人：红框剔掉</text>
+          <rect x="710" y="110" width="100" height="100" fill="#e6b8b8"/>
+          <text x="760" y="165" text-anchor="middle" font-size="11" fill="#9d3b3b"><tspan font-weight="700">天空：红（不自信）</tspan></text>
+          <text x="670" y="252" text-anchor="middle" font-size="12" fill="#5b6472">右：颜色深=把握大；红框=被当外点丢掉</text>
+          <text x="450" y="300" text-anchor="middle" font-size="14" fill="#34415a"><tspan font-weight="700">「砖墙」被反复看 → 不确定度低 → 留用；「天空/行人」→ 不确定度高/在动 → 剔除</tspan></text>
+          <text x="450" y="340" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">图 11 证明：网络「觉得自己不准」处，真实误差确实高 → σ 可信</tspan></text>
+          <text x="450" y="372" text-anchor="middle" font-size="12" fill="#5b6472">这一思想被 0144 的 D3VO 接过去，做成光度残差加权</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>同一场景（砖墙+行人+天空），左是原图，右是网络估计的「把握图」：砖墙被反复扫过、绿色=自信留用；行人（在动）和天空（空、深度估不准）被标红、当外点剔掉。</p>
+          <p><b>怎么看这张图：</b>① 颜色深浅表示置信度——见得多、几何稳的区域更绿；② 红框就是不确定度掩码的执行：动态物体和空区域不进优化；③ 这正对应图 10（红框=动体、绿框=高不确定深度）。</p>
+          <p><b>要记住的一句话：</b>「知道自己不知道」→ 该丢就丢，是 DeepSLAM 在挑战场景不崩的原因。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动：DeepSLAM 比 UnDeepVO 多什么？</h4>
+        <p>下面哪个是 DeepSLAM 相对 UnDeepVO 真正的增量？<button class="quiz-options" onclick="lessonKit.answer(this,'q0143a')">回环+后端+掩码</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0143b')">换了个更大网络</button></p>
+        <p class="quiz-feedback" id="q0143a" hidden>正确。DeepSLAM 与 UnDeepVO 同源（同团队、同自监督损失、同 stereo 尺度），增量在结构：多一个 Loop-Net 做回环、用 g2o 做全局后端、用不确定度图动态剔外点。它本质是 UnDeepVO 的「SLAM 化」延伸，不是新范式——这点是组课判断。</p>
+        <p class="quiz-feedback" id="q0143b" hidden>不对。两者骨干都是 VGG 式，DeepSLAM 没有「换更大网络」式的本质升级。它的增量是功能性的：回环检测 + 图优化后端 + 不确定度外点剔除，把「VO」补成「SLAM」。损失项和 UnDeepVO 几乎同构。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 这条线的账：VO → SLAM 的升级</h2>
+      <p>把 0141–0143 收个口：</p>
+      <table>
+        <thead>
+          <tr><th>论文</th><th>身份</th><th>训练信号</th><th>比上一篇多什么</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DeepVO</td><td>端到端 VO（监督）</td><td>真值位姿</td><td>—（起点）</td></tr>
+          <tr><td>UnDeepVO</td><td>无监督 VO</td><td>stereo 自监督</td><td>免标签 + 尺度</td></tr>
+          <tr><td>DeepSLAM</td><td>无监督 SLAM</td><td>stereo 自监督</td><td>回环 + 后端 + 不确定度</td></tr>
+        </tbody>
+      </table>
+      <p>下一步 <b>0144 D3VO</b> 走另一条升级路：不自己当黑箱 VO，而是把深度/位姿/不确定度网络<b>嵌进经典 DSO 直接法</b>的前后两端——用学习补几何方法的尺度漂移与鲁棒性短板。注意 D3VO 的「不确定度加权光度残差」正是 DeepSLAM 不确定度思想的升级应用。本块到 D3VO 开始从「替换流水线」转向「网络+几何后端融合」。</p>
+      <div class="interactive-card">
+        <h4>互动：DeepSLAM 在同域 KITTI 打得过 ORB-SLAM 吗？</h4>
+        <p>按课文数字，下面哪句对？<button class="quiz-options" onclick="lessonKit.answer(this,'q0143c')">打不过（同域弱）</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0143d')">碾压（全面强）</button></p>
+        <p class="quiz-feedback" id="q0143c" hidden>正确。KITTI seq04 上 DeepSLAM t_rel 4.56%/r_rel 1.90°，而 ORB-SLAM 单目是 0.65/0.18——同域高精度仍是经典法强。DeepSLAM 的强项在跨域挑战场景（RobotCar 雨/夜），那里 LSD-SLAM、ORB-SLAM-S 失效它仍工作。这正印证 0011「位姿只被吃掉很窄一段」。</p>
+        <p class="quiz-feedback" id="q0143d" hidden>不对。同域 KITTI 上它明显弱于 ORB-SLAM 单目（4.56/1.90 vs 0.65/0.18）。它的价值不在「同域精度」，而在「挑战/跨域鲁棒」——雨夜、过曝、动态物体下仍跑。把学习式 VO 当成「全面碾压经典」是误解。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>DeepSLAM 比 UnDeepVO 多了哪三样东西？为什么说它是「SLAM 化升级」而非新范式？</li>
+        <li>DeepSLAM 的五个自监督损失项分别约束什么？（空间/时序各几项）</li>
+        <li>不确定度 σ 怎么算、怎么用来决定外点掩码阈值 $q_{th}$？图 11 证明了什么？</li>
+        <li>DeepSLAM 在同域 KITTI 和跨域 RobotCar 上的表现反差说明了什么？</li>
+        <li>DeepSLAM 的 Loop-Net 和 0014 回环铁律、0043 ORB-SLAM 回环有什么呼应？</li>
+      </ul>
+      <h2>10. 练习（收起，点开看解析）</h2>
+      <div class="exercise-box">
+        <details class="exercise-answer">
+          <summary>练习 1 · 为什么 DeepSLAM 还要用 stereo 训练？</summary>
+          <p>和 UnDeepVO 一样，单目本身无尺度。训练时用 stereo 图像对，由已知基线 B 推出 metric 深度，把尺度学进网络权重；测试时只喂单目也能出带尺度结果。这延续 0040 尺度暗线的「双目补尺度」一站。若纯用单目自监督，尺度会不可恢复。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 2 · 不确定度掩码和「直接剔误差大的点」有何不同？</summary>
+          <p>它不直接剔「误差大」的点（测试时没真值、算不了误差），而是用训练/推理时的光度/几何误差图估计不确定度 σ，再用 σ 动态定百分位阈值 $q_{th}$——越不放心剔得越多。这是「用模型自己的信心」当代理信号，比硬编码阈值自适应，且在没真值时也能用。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 3 · Loop-Net 为什么用预训练 Inception 而不训练？</summary>
+          <p>回环检测本质是「两张图像不像同一个地方」的检索任务，用 ImageNet 预训练的 Inception-ResNet-V2 提取通用特征、再算余弦距离即可，不必为 SLAM 重训。这和本季检索块（0134–0140）的思路一致：通用特征 + 距离度量就能做地点识别。它免训练、即插即用，是工程上的省力选择。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 4 · 为什么说 DeepSLAM 是「组课判断」而非原文自评？</summary>
+          <p>原文把它当独立系统介绍，但横向看：同团队、同自监督损失、同 stereo 尺度，结构只是 UnDeepVO 加了 Loop-Net + g2o + 掩码。本块把它定性为 UnDeepVO 的 SLAM 化延伸，是写作 agent 的归纳（规范允许这样的判断，但要求注明「是判断不是原文自评」）。它的创新更在「完整系统拼装」而非新理论。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 5 · 它和 0144 D3VO 的不确定度有何传承？</summary>
+          <p>DeepSLAM 用不确定度做「外点掩码」（二值剔点）；D3VO 把不确定度升级成「连续权重」，直接给光度残差加权（自动降权动态/反射/高频区），嵌进 DSO 的 BA。两者思想同源——「用网络估计的把握调节几何一致性」——DeepSLAM 是雏形，D3VO 做进优化层。这正是本块「网络+几何后端融合」的伏笔。</p>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0142-无监督与跨数据集泛化.html">← 上一节：0142 无监督与跨数据集泛化</a>
+        <a class="next" href="0144-D3VO2020-深度位姿与不确定性一起学.html">下一节：0144 D3VO 深度·位姿·不确定性 →</a>
+      </div>
+      <p class="foot-note">DeepSLAM 的价值不在同域精度，而在挑战场景不崩。下一节 D3VO 换一条路：不替换流水线，而是嵌进几何后端 🔧</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

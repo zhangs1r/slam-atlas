@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scan Context 与 ++ 2022 · 免训练的几何描述子 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0135</div>
+      <h1>Scan Context 与 ++ 2022 · 免训练的几何描述子</h1>
+      <p class="subtitle">不训练、不学，就把一帧激光压成「天空线轮廓图」，靠左右平移对齐搞定反向回环 —— 它是 RING++ 的直接对手 🔄</p>
+      <div class="hero-meta">
+        <span>🎯 主题：LiDAR 极坐标几何描述子（回环）</span>
+        <span>👥 作者：G. Kim 等（KAIST）</span>
+        <span>📅 2018 / 2022 · <i>Scan Context / Scan Context++</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">2018：极坐标天空线图</a>
+        <a href="#c">列移对齐：旋转不变</a>
+        <a href="#d">2022++：补上横向不变</a>
+        <a href="#e">和前面课程怎么接</a>
+        <a href="#f">练习</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能回答① 讲清 Scan Context 为什么「不用直方图、而用最大高度矩阵」；② 用「列循环移位」解释它如何对 yaw 旋转不变；③ 分清 <b>2018 只解决旋转、2022++ 才系统解决横向</b>；④ 说清它和第四季 0093 RING++ 谁对旋转/平移更鲁棒。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本篇是 <b>第一季 0011「检索被吃掉」</b> 在激光侧的<b>反例</b>：它<b>完全不训练</b>，纯几何描述子。同时它是 <b>第四季 0093 激光回环下（RING++）</b> 的<b>直接对手</b>——RING++ 用旋转平移不变 Gram 矩阵，Scan Context++ 用「极坐标 PC + 笛卡尔 CC」双描述子，两条「免训练几何描述子」路线正面撞上。也呼应 <b>0092 激光回环上（Cartographer / BoW3D）</b> 的「几何 vs 学习」之争。</p>
+        </div>
+      </div>
+
+      <h2>1. 它到底在做什么：先讲人话</h2>
+      <p>上节 DBoW2 把图像变成「一袋视觉词」。但激光点云没有「角点描述子」那么现成的东西，尤其想「免训练」时更麻烦。Scan Context 的思路极朴素：<b>从正上方俯看一帧激光，把场景按「环（半径）× 扇区（角度）」切成格子，每个格子记里面点云的最高点</b>。于是整帧激光变成一张「天空线轮廓图」——楼房高的地方格子亮、空地格子暗。两张图的天空线轮廓像，就判为同一地点。</p>
+      <p>为什么不用直方图（很多老方法用）？作者点名：直方图只给场景的<b>统计指标</b>（比如「高处点占多少」），丢了点的<b>绝对位置</b>，判别力弱、容易假阳性。Scan Context 用矩阵显式保留绝对几何结构，所以才能在做相似度时「把图左右挪一挪去对齐」——这正是它能检反向回环的关键。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 2018 原版：一张极坐标天空线图</h2>
+      <p>具体编码：以激光为中心，半径 0–80 m 切成 20 个环（每环 4 m），整圈 0–360° 切成 60 个扇区（每扇区 6°），得到 20×60 的矩阵。每个格子取落入点云的<b>最大 z 高度</b> $\phi(P_{ij})=\max z(p)$（空格记 0）。这就是「天空线轮廓」。它不是特征，是<b>直接可读的几何图</b>，因此不需要任何训练。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 500" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">Scan Context 就是「一条真实街道的俯视图叠上同心圆环」：每格只记该格内点的最高点</text>
+          <!-- ===== 左：真实街道俯视图 ===== -->
+          <rect x="30" y="58" width="400" height="372" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.3"/>
+          <!-- 人行道与车道 -->
+          <rect x="30" y="196" width="400" height="16" fill="#e6e0d4"/>
+          <rect x="30" y="278" width="400" height="16" fill="#e6e0d4"/>
+          <rect x="30" y="212" width="400" height="66" fill="#d8d4cd"/>
+          <line x1="30" y1="245" x2="430" y2="245" stroke="#ffffff" stroke-width="2" stroke-dasharray="10 8"/>
+          <!-- 北侧楼群 -->
+          <rect x="55" y="88" width="75" height="108" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <line x1="62" y1="114" x2="123" y2="114" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="62" y1="140" x2="123" y2="140" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="62" y1="166" x2="123" y2="166" stroke="#f2efe8" stroke-width="3"/>
+          <rect x="150" y="120" width="65" height="76" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <line x1="157" y1="142" x2="208" y2="142" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="157" y1="166" x2="208" y2="166" stroke="#f2efe8" stroke-width="3"/>
+          <rect x="250" y="66" width="82" height="130" fill="#c4bbac" stroke="#a89a86" stroke-width="1"/>
+          <line x1="257" y1="92" x2="325" y2="92" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="257" y1="120" x2="325" y2="120" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="257" y1="148" x2="325" y2="148" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="257" y1="176" x2="325" y2="176" stroke="#f2efe8" stroke-width="3"/>
+          <!-- 南侧楼群 -->
+          <rect x="88" y="294" width="102" height="88" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <line x1="95" y1="320" x2="183" y2="320" stroke="#f2efe8" stroke-width="3"/>
+          <line x1="95" y1="348" x2="183" y2="348" stroke="#f2efe8" stroke-width="3"/>
+          <rect x="250" y="294" width="100" height="66" fill="#d8cfc0" stroke="#a89a86" stroke-width="1"/>
+          <line x1="257" y1="322" x2="343" y2="322" stroke="#f2efe8" stroke-width="3"/>
+          <!-- 行道树 / 公交站台 / 路灯 / 围栏 -->
+          <circle cx="150" cy="284" r="8" fill="#6fae7f"/>
+          <circle cx="300" cy="284" r="8" fill="#6fae7f"/>
+          <circle cx="140" cy="204" r="8" fill="#6fae7f"/>
+          <circle cx="300" cy="204" r="8" fill="#6fae7f"/>
+          <rect x="206" y="188" width="50" height="8" fill="#c2b49c"/>
+          <rect x="196" y="196" width="6" height="14" fill="#8a7f70"/>
+          <line x1="60" y1="287" x2="120" y2="287" stroke="#a89a86" stroke-width="1.5"/>
+          <!-- 车辆 -->
+          <rect x="150" y="258" width="76" height="14" rx="3" fill="#7f97ab"/>
+          <line x1="200" y1="258" x2="200" y2="272" stroke="#e9eef2" stroke-width="2"/>
+          <rect x="96" y="258" width="36" height="14" rx="3" fill="#9fb0c0"/>
+          <rect x="330" y="218" width="36" height="14" rx="3" fill="#9fb0c0"/>
+          <rect x="216" y="232" width="30" height="26" rx="4" fill="#3d2a22"/>
+          <circle cx="230" cy="245" r="3.4" fill="#ffd166"/>
+          <!-- 同心环 + 扇区分隔线 -->
+          <circle cx="230" cy="245" r="44" fill="none" stroke="#c79a6a" stroke-width="1.1"/>
+          <circle cx="230" cy="245" r="88" fill="none" stroke="#c79a6a" stroke-width="1.1"/>
+          <circle cx="230" cy="245" r="132" fill="none" stroke="#c79a6a" stroke-width="1.1"/>
+          <circle cx="230" cy="245" r="176" fill="none" stroke="#c79a6a" stroke-width="1.1"/>
+          <line x1="230" y1="245" x2="230" y2="69" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="354" y2="121" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="406" y2="245" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="354" y2="369" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="230" y2="421" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="106" y2="369" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="54" y2="245" stroke="#c79a6a" stroke-width="1"/>
+          <line x1="230" y1="245" x2="106" y2="121" stroke="#c79a6a" stroke-width="1"/>
+          <!-- 街道标注 -->
+          <text x="291" y="58" text-anchor="middle" font-size="9" fill="#4a342c">塔楼 45 m</text>
+          <text x="92" y="84" text-anchor="middle" font-size="9" fill="#4a342c">写字楼 32 m</text>
+          <text x="182" y="114" text-anchor="middle" font-size="9" fill="#4a342c">商铺 18 m</text>
+          <text x="139" y="290" text-anchor="middle" font-size="9" fill="#4a342c">公寓 24 m</text>
+          <text x="366" y="288" text-anchor="middle" font-size="9" fill="#4a342c">矮房 14 m</text>
+          <text x="330" y="270" text-anchor="middle" font-size="9" fill="#2f6136">行道树 6 m</text>
+          <text x="231" y="208" text-anchor="middle" font-size="9" fill="#4a342c">公交站台 3 m</text>
+          <text x="231" y="228" text-anchor="middle" font-size="9" fill="#4a342c">自车（车顶激光）</text>
+          <text x="114" y="252" text-anchor="middle" font-size="9" fill="#4a342c">路边停车 1.5 m</text>
+          <text x="188" y="254" text-anchor="middle" font-size="9" fill="#4a342c">公交车 3 m</text>
+          <text x="274" y="241" text-anchor="middle" font-size="8.5" fill="#8a7365">20 m</text>
+          <text x="318" y="241" text-anchor="middle" font-size="8.5" fill="#8a7365">40 m</text>
+          <text x="362" y="241" text-anchor="middle" font-size="8.5" fill="#8a7365">60 m</text>
+          <text x="406" y="241" text-anchor="middle" font-size="8.5" fill="#8a7365">80 m</text>
+          <text x="230" y="450" text-anchor="middle" font-size="9.5" fill="#5b4636">环 = 半径（每环 4 m），扇区 = 角度（每扇区 6°），传感器在中心</text>
+          <!-- 编码箭头 -->
+          <line x1="436" y1="245" x2="552" y2="245" stroke="#6b5a4e" stroke-width="1.6"/>
+          <polygon points="556,245 546,240 547,250" fill="#6b5a4e"/>
+          <text x="496" y="236" text-anchor="middle" font-size="9.5" fill="#6b5a4e">逐格编码</text>
+          <!-- ===== 右：20×60 最大高度矩阵 ===== -->
+          <text x="730" y="62" text-anchor="middle" font-size="11.5" font-weight="700" fill="#a8432c">Scan Context 矩阵 20×60（每格 = 该格内点的最大高度）</text>
+          <text x="580" y="76" font-size="9" fill="#8a7365">0°（北）</text>
+          <text x="730" y="76" text-anchor="middle" font-size="9" fill="#8a7365">180°（南）</text>
+          <text x="878" y="76" text-anchor="end" font-size="9" fill="#8a7365">360°</text>
+          <rect x="580" y="82" width="300" height="340" fill="#fffdf9" stroke="#c79a6a" stroke-width="1.4"/>
+                    <rect x="740" y="371" width="35" height="17" fill="#6fae7f"/>
+          <rect x="755" y="354" width="30" height="17" fill="#6fae7f"/>
+          <rect x="770" y="337" width="20" height="17" fill="#6fae7f"/>
+          <rect x="775" y="320" width="15" height="17" fill="#6fae7f"/>
+          <rect x="845" y="320" width="5" height="17" fill="#e2c05c"/>
+          <rect x="585" y="303" width="10" height="17" fill="#6fae7f"/>
+          <rect x="595" y="303" width="10" height="17" fill="#9e2c17"/>
+          <rect x="705" y="303" width="10" height="17" fill="#e2c05c"/>
+          <rect x="780" y="303" width="15" height="17" fill="#6fae7f"/>
+          <rect x="850" y="303" width="5" height="17" fill="#e2c05c"/>
+          <rect x="855" y="303" width="10" height="17" fill="#e2924a"/>
+          <rect x="865" y="303" width="10" height="17" fill="#6fae7f"/>
+          <rect x="595" y="286" width="20" height="17" fill="#9e2c17"/>
+          <rect x="695" y="286" width="20" height="17" fill="#e2c05c"/>
+          <rect x="760" y="286" width="5" height="17" fill="#e2924a"/>
+          <rect x="785" y="286" width="10" height="17" fill="#6fae7f"/>
+          <rect x="845" y="286" width="25" height="17" fill="#e2924a"/>
+          <rect x="595" y="269" width="25" height="17" fill="#9e2c17"/>
+          <rect x="625" y="269" width="10" height="17" fill="#6fae7f"/>
+          <rect x="675" y="269" width="10" height="17" fill="#6fae7f"/>
+          <rect x="690" y="269" width="25" height="17" fill="#e2c05c"/>
+          <rect x="755" y="269" width="15" height="17" fill="#e2924a"/>
+          <rect x="785" y="269" width="10" height="17" fill="#6fae7f"/>
+          <rect x="840" y="269" width="30" height="17" fill="#e2924a"/>
+          <rect x="590" y="252" width="35" height="17" fill="#9e2c17"/>
+          <rect x="625" y="252" width="10" height="17" fill="#6fae7f"/>
+          <rect x="675" y="252" width="10" height="17" fill="#6fae7f"/>
+          <rect x="685" y="252" width="35" height="17" fill="#e2c05c"/>
+          <rect x="755" y="252" width="20" height="17" fill="#e2924a"/>
+          <rect x="780" y="252" width="5" height="17" fill="#6fae7f"/>
+          <rect x="835" y="252" width="35" height="17" fill="#e2924a"/>
+          <rect x="590" y="235" width="40" height="17" fill="#9e2c17"/>
+          <rect x="680" y="235" width="40" height="17" fill="#e2c05c"/>
+          <rect x="750" y="235" width="30" height="17" fill="#e2924a"/>
+          <rect x="780" y="235" width="10" height="17" fill="#6fae7f"/>
+          <rect x="820" y="235" width="10" height="17" fill="#6fae7f"/>
+          <rect x="830" y="235" width="40" height="17" fill="#e2924a"/>
+          <rect x="590" y="218" width="40" height="17" fill="#9e2c17"/>
+          <rect x="680" y="218" width="40" height="17" fill="#e2c05c"/>
+          <rect x="750" y="218" width="30" height="17" fill="#e2924a"/>
+          <rect x="795" y="218" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="820" y="218" width="10" height="17" fill="#6fae7f"/>
+          <rect x="835" y="218" width="40" height="17" fill="#e2924a"/>
+          <rect x="590" y="201" width="45" height="17" fill="#9e2c17"/>
+          <rect x="645" y="201" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="675" y="201" width="45" height="17" fill="#e2c05c"/>
+          <rect x="750" y="201" width="35" height="17" fill="#e2924a"/>
+          <rect x="795" y="201" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="840" y="201" width="35" height="17" fill="#e2924a"/>
+          <rect x="590" y="184" width="40" height="17" fill="#9e2c17"/>
+          <rect x="645" y="184" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="675" y="184" width="45" height="17" fill="#e2c05c"/>
+          <rect x="745" y="184" width="40" height="17" fill="#e2924a"/>
+          <rect x="785" y="184" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="795" y="184" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="825" y="184" width="5" height="17" fill="#c85f34"/>
+          <rect x="845" y="184" width="30" height="17" fill="#e2924a"/>
+          <rect x="590" y="167" width="35" height="17" fill="#9e2c17"/>
+          <rect x="645" y="167" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="675" y="167" width="35" height="17" fill="#e2c05c"/>
+          <rect x="745" y="167" width="40" height="17" fill="#e2924a"/>
+          <rect x="795" y="167" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="825" y="167" width="10" height="17" fill="#c85f34"/>
+          <rect x="850" y="167" width="20" height="17" fill="#e2924a"/>
+          <rect x="585" y="150" width="35" height="17" fill="#9e2c17"/>
+          <rect x="645" y="150" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="680" y="150" width="25" height="17" fill="#e2c05c"/>
+          <rect x="745" y="150" width="40" height="17" fill="#e2924a"/>
+          <rect x="825" y="150" width="15" height="17" fill="#c85f34"/>
+          <rect x="850" y="150" width="10" height="17" fill="#e2924a"/>
+          <rect x="585" y="133" width="30" height="17" fill="#9e2c17"/>
+          <rect x="685" y="133" width="15" height="17" fill="#e2c05c"/>
+          <rect x="745" y="133" width="45" height="17" fill="#e2924a"/>
+          <rect x="820" y="133" width="25" height="17" fill="#c85f34"/>
+          <rect x="850" y="133" width="5" height="17" fill="#e2924a"/>
+          <rect x="585" y="116" width="30" height="17" fill="#9e2c17"/>
+          <rect x="685" y="116" width="10" height="17" fill="#e2c05c"/>
+          <rect x="755" y="116" width="30" height="17" fill="#e2924a"/>
+          <rect x="820" y="116" width="25" height="17" fill="#c85f34"/>
+          <rect x="585" y="99" width="25" height="17" fill="#9e2c17"/>
+          <rect x="755" y="99" width="25" height="17" fill="#e2924a"/>
+          <rect x="790" y="99" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="820" y="99" width="30" height="17" fill="#c85f34"/>
+          <rect x="585" y="82" width="25" height="17" fill="#9e2c17"/>
+          <rect x="760" y="82" width="15" height="17" fill="#e2924a"/>
+          <rect x="790" y="82" width="5" height="17" fill="#b9c6d2"/>
+          <rect x="820" y="82" width="30" height="17" fill="#c85f34"/>
+          <text x="574" y="92" text-anchor="end" font-size="9" fill="#8a7365">行：上 = 远（80 m）</text>
+          <text x="574" y="418" text-anchor="end" font-size="9" fill="#8a7365">行：下 = 近（0 m）</text>
+          <text x="730" y="448" text-anchor="middle" font-size="9.5" fill="#5b4636">颜色越深 = 该格最高点越高；传感器脚下是路面，那几行本来就是空的</text>
+          <text x="730" y="470" text-anchor="middle" font-size="9" fill="#5b4636">蓝灰 = 车辆 · 绿 = 行道树 · 黄橙 = 矮层 · 橙 = 多层 · 深红 = 塔楼</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一条真实街道的俯视图（南北两侧的楼、行道树、公交站台、公交车与路边停的车都标了高度），传感器在中心，画了同心环（半径方向）和放射扇区（角度方向）。右边是把这张俯视图按「环×扇区」逐格编码成的 20×60 矩阵，每格颜色代表该格内点云的最大高度。<br>
+          <b>怎么看这张图：</b>① 它不是特征直方图，而是一张「可读的几何图」——你能直接看出「哪一圈、哪一扇区有高楼」。② 因为保留了绝对位置，两个地点的图才能拿来「对齐比较」，这是它区别于老方法的关键。③ 编码只用最大高度，对点的密度、法线不敏感，所以单帧创建比 M2DP/Z-projection/ESF 还快。<br>
+          <b>要记住的一句话：</b>Scan Context 把「一帧激光」变成「一张带坐标的天空线图」，且完全不训练。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_ScanContext/175c57264d59fe9f9bc001e272d0319051f60ec01d512288af520dbc206fe6ca.jpg" alt="Two-step scan context creation">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Two-step scan context creation. Using the top view of a point cloud from a 3D scan (a), we partition ground areas into bins, which are split according to both azimuthal (from 0 to 2π within a LiDAR frame) and radial (from center to maximum sensing range) directions. We refer to the yellow area as a ring, the cyan area as a sector, and the black-filled area as a bin. Scan context is a matrix as in (b) that explicitly preserves the absolute geometrical structure of a point cloud. The ring and sector described in (a) are represented by the same-colored column and row, respectively, in (b). The representative value extracted from the points located in each bin is used as the corresponding pixel value of (b). In this paper, we use the maximum height of points in a bin.<br>
+          <b>怎么看这张图：</b>(a) 是俯视分格（黄=环 ring、青=扇区 sector、黑=格子 bin），(b) 是编码出的矩阵——同色的行/列一一对应。这证实了上面自绘图：矩阵的行是环、列是扇区，像素值是该格最大高度。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 列循环移位：为什么它对旋转（yaw）不变</h2>
+      <p>关键问题来了：同一地点、车头朝向不同（比如反向回访），天空线图会整体「左右转」一格。Scan Context 的解法是：<b>把候选矩阵的列循环移位 n 格去和查询比，取最像的那个 n</b>。这个 n 就是 yaw 粗对齐量，还能当 ICP 初值。相似度用<b>列向余弦距离</b>：每一列单独算余弦距离，再平均；最后在「所有循环移位」里取最小。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$D(I_q,I_c)=\min_n\, d\big(I_q,\,I_c^{(n)}\big)$$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>把候选矩阵 $I_c$ 循环左移 $n$ 列（相当于把场景绕传感器转 $n$ 个扇区），和查询 $I_q$ 比相似度；遍历所有可能的 $n$ 取最像的那个作为最终距离，对应的最佳 $n^*$ 就是 yaw 粗对齐。因为对齐是所有 $n$ 里挑最好的，<b>初始 yaw 是多少都不影响结果</b>——这就是「旋转不变」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">列循环移位对齐：同一张图左右平移去「对齐全」，就是 yaw 不变</text>
+          <!-- 上排：三格真实街景俯视缩略图（同一条街、红塔位置物理固定，只有车头朝向不同） -->
+          <!-- ① 查询：车头朝北 -->
+          <rect x="60" y="44" width="200" height="100" rx="4" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.2"/>
+          <rect x="92" y="44" width="56" height="100" fill="#ded7cb"/>
+          <line x1="120" y1="44" x2="120" y2="144" stroke="#ffffff" stroke-width="1.4" stroke-dasharray="6 5"/>
+          <rect x="65" y="52" width="24" height="38" rx="2" fill="#cfc0ab" stroke="#b3a08a" stroke-width="0.8"/>
+          <rect x="198" y="52" width="30" height="42" rx="2" fill="#b5482f" stroke="#8f3320" stroke-width="0.8"/>
+          <circle cx="84" cy="122" r="6" fill="#7fae8c"/>
+          <circle cx="202" cy="130" r="6" fill="#7fae8c"/>
+          <rect x="113" y="82" width="14" height="24" rx="3" fill="#2f5b82"/>
+          <polygon points="120,68 114,82 126,82" fill="#2f5b82"/>
+          <text x="160" y="162" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2f5b82">❶ 车头朝北，塔在右前</text>
+          <!-- ② 候选：车头朝南（反向回访） -->
+          <rect x="370" y="44" width="200" height="100" rx="4" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.2"/>
+          <rect x="402" y="44" width="56" height="100" fill="#ded7cb"/>
+          <line x1="430" y1="44" x2="430" y2="144" stroke="#ffffff" stroke-width="1.4" stroke-dasharray="6 5"/>
+          <rect x="375" y="52" width="24" height="38" rx="2" fill="#cfc0ab" stroke="#b3a08a" stroke-width="0.8"/>
+          <rect x="508" y="52" width="30" height="42" rx="2" fill="#b5482f" stroke="#8f3320" stroke-width="0.8"/>
+          <circle cx="394" cy="122" r="6" fill="#7fae8c"/>
+          <circle cx="512" cy="130" r="6" fill="#7fae8c"/>
+          <rect x="423" y="80" width="14" height="24" rx="3" fill="#a8432c"/>
+          <polygon points="430,118 424,104 436,104" fill="#a8432c"/>
+          <text x="470" y="162" text-anchor="middle" font-size="9.5" font-weight="700" fill="#a8432c">❷ 车头朝南，塔变左后</text>
+          <!-- ③ 对齐后：把朝向转回来 -->
+          <rect x="680" y="44" width="200" height="100" rx="4" fill="#eef4ea" stroke="#b9cdb0" stroke-width="1.2"/>
+          <rect x="712" y="44" width="56" height="100" fill="#ded7cb"/>
+          <line x1="740" y1="44" x2="740" y2="144" stroke="#ffffff" stroke-width="1.4" stroke-dasharray="6 5"/>
+          <rect x="685" y="52" width="24" height="38" rx="2" fill="#cfc0ab" stroke="#b3a08a" stroke-width="0.8"/>
+          <rect x="818" y="52" width="30" height="42" rx="2" fill="#b5482f" stroke="#8f3320" stroke-width="0.8"/>
+          <circle cx="704" cy="122" r="6" fill="#7fae8c"/>
+          <circle cx="822" cy="130" r="6" fill="#7fae8c"/>
+          <rect x="733" y="82" width="14" height="24" rx="3" fill="#2f6136"/>
+          <polygon points="740,68 734,82 746,82" fill="#2f6136"/>
+          <text x="780" y="162" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2f6136">❸ 转回朝北，塔回右前</text>
+          <!-- 下排：三张矩阵（同一地点的描述子，列被整体挪了） -->
+          <text x="160" y="196" text-anchor="middle" font-size="11" font-weight="700" fill="#2f5b82">查询矩阵（车头朝北）</text>
+          <rect x="60" y="206" width="200" height="120" fill="#fff" stroke="#2f5b82" stroke-width="1.4"/>
+          <rect x="100" y="234" width="24" height="24" fill="#b5482f"/>
+          <rect x="180" y="274" width="24" height="24" fill="#c87a3a"/>
+          <rect x="140" y="214" width="24" height="24" fill="#e0b15a"/>
+          <text x="160" y="350" text-anchor="middle" font-size="9.5" fill="#5b4636">红色块在第 2 列</text>
+          <!-- 箭头 -->
+          <line x1="280" y1="266" x2="340" y2="266" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="340,266 332,261 333,272" fill="#6b5a4e"/>
+          <text x="310" y="254" text-anchor="middle" font-size="9.5" fill="#6b5a4e">反向回访</text>
+          <!-- 候选矩阵（块在第6列） -->
+          <text x="470" y="196" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">候选矩阵（车头朝南）</text>
+          <rect x="370" y="206" width="200" height="120" fill="#fff" stroke="#a8432c" stroke-width="1.4"/>
+          <rect x="500" y="234" width="24" height="24" fill="#b5482f"/>
+          <rect x="420" y="274" width="24" height="24" fill="#c87a3a"/>
+          <rect x="460" y="214" width="24" height="24" fill="#e0b15a"/>
+          <text x="470" y="350" text-anchor="middle" font-size="9.5" fill="#5b4636">同一地点，但红块跑到第 6 列</text>
+          <!-- 循环移位 -->
+          <line x1="590" y1="266" x2="650" y2="266" stroke="#6b5a4e" stroke-width="1.8"/>
+          <polygon points="650,266 642,261 643,272" fill="#6b5a4e"/>
+          <text x="620" y="254" text-anchor="middle" font-size="9.5" fill="#6b5a4e">循环左移 4 列</text>
+          <!-- 对齐后 -->
+          <text x="780" y="196" text-anchor="middle" font-size="11" font-weight="700" fill="#2f6136">对齐后</text>
+          <rect x="680" y="206" width="200" height="120" fill="#fff" stroke="#2f6136" stroke-width="1.4"/>
+          <rect x="720" y="234" width="24" height="24" fill="#b5482f"/>
+          <rect x="600" y="274" width="24" height="24" fill="#c87a3a"/>
+          <rect x="660" y="214" width="24" height="24" fill="#e0b15a"/>
+          <text x="780" y="350" text-anchor="middle" font-size="9.5" fill="#5b4636">红块回到第 2 列 → 完全吻合</text>
+          <text x="450" y="410" text-anchor="middle" font-size="10.5" fill="#8a7365">上排是真实街景：街和红塔在世界里没动，动的只是「车头朝哪」——矩阵是写在车自己的坐标系里的</text>
+          <text x="450" y="432" text-anchor="middle" font-size="10.5" fill="#8a7365">「循环移位」= 把最左列挪到最右（首尾相接），模拟车绕自身转过一个扇区；在所有可能的移位里挑最像的</text>
+          <text x="450" y="458" text-anchor="middle" font-size="10.5" fill="#8a7365">因为遍历了所有移位，所以初始朝向不影响判定 → yaw 不变</text>
+          <text x="450" y="492" text-anchor="middle" font-size="11" font-weight="700" fill="#a8432c">要记住：2018 原版只靠这个对齐解决「旋转」；横向平移它本不鲁棒</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上排是三格真实街景俯视图——同一条街、同一座红塔（它在世界里没动），唯一变的是「车头朝哪」：查询车头朝北时红塔在右前，反向回访车头朝南时红塔落到了左后。下排是同一地点对应的三张 Scan Context 矩阵：查询时红块在第 2 列，候选时红块跑到第 6 列；把候选矩阵循环左移 4 列后，红块回到第 2 列，两图完全重合。<br>
+          <b>怎么看这张图：</b>① 先看上排：街和塔都没动，只是车头转了 180°，可矩阵里的块却「换了个列号」——因为矩阵是写在<b>车自己的坐标系</b>里的。② 循环移位就是「把矩阵最左列挪到最右、首尾相接」，等价于让场景绕传感器转过一个扇区。③ 在所有可能的移位里取最像的，所以<b>不管初始车头朝哪，都能对齐</b>——这就是 yaw 旋转不变。④ 但注意：如果两图是「左右平移」（车道变了），列序本身会变，循环移位救不了——这是 2018 的软肋。<br>
+          <b>要记住的一句话：</b>2018 原版靠「列循环移位」搞定旋转；<b>横向平移不是它解决的问题</b>。
+        </figcaption>
+      </figure>
+
+      <p>2018 原版在 KITTI 08（纯反向回环）上显著领先，<b>M2DP 完全检不出反向回环</b>——这是它的核心卖点。但它对横向平移（换车道）鲁棒性弱，只靠 root-shifting 增强（邻域 8 个位移）勉强缓解；在窄路、高度重复结构（Complex Urban）上性能明显下降。这一点作者 2018 正文并未单列，但和 2022 的 ++ 自陈完全吻合。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_ScanContext/9341fbbbcb1c39394e8bcc781a624aec85ac201e6cbdfd0940776e20b859001e.jpg" alt="Scan contexts from same place with time interval">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Example of scan contexts from the same place with time interval. The change of the sensor viewpoint at the revisit causes column shifts of the scan context as in (a). However, the two matrices contain similar shapes and show the same row order.<br>
+          <b>怎么看这张图：</b>同一地点两次访问，因视角变化，矩阵的「列」整体平移了（(a) 的红蓝偏移示意）；但两矩阵形状相似、行序一致。这正是「列循环移位能对齐」的实证——也暗示了：只要变化是纯旋转（列移），就能对齐；若行序也乱了（横向平移），就不行。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 2022 Scan Context++：谁解决了横向不变</h2>
+      <p>⚠️ <b>本节是本季硬要求，务必分清「谁解决什么」</b>：<b>2018 原版只解决旋转（yaw）不变；横向平移（lateral）不变是 2022 的 Scan Context++ 才系统解决的。</b> 两篇同放本课，不能混。</p>
+      <p>Scan Context++ 的做法是<b>双描述子</b>：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>Polar Context（PC）</h4>
+          <p>极坐标（20×60），对齐轴=方位角 → <b>对旋转不变</b>。分辨率 4 m / 6°，ROI [0,80 m]×[0,360°]。纯反向回环（KITTI 08）靠它。</p>
+        </div>
+        <div class="mini-card">
+          <h4>Cart Context（CC）</h4>
+          <p>笛卡尔（40×40），对齐轴=横向 y → <b>对横向平移不变</b>。分辨率 5 m / 2 m，ROI [−100,100]×[−40,40] m。换车道（Riverside 02）靠它。</p>
+        </div>
+        <div class="mini-card">
+          <h4>retrieval / aligning key</h4>
+          <p>对行做 L1 聚合成 retrieval key（旋转/换道不变，建 KD 树快筛）；对列做 L1 聚合成 aligning key（暴力列移预对齐，输出 1-DOF 相对位姿）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>增强 augmentation</h4>
+          <p>A-PC：根移 ±2 m（2 个）；A-CC：双轴翻转（1 个）。把并发的旋转+横向变化也覆盖住。单 C++ 文件、CPU KITTI00 平均 7.4 ms，最高 100 Hz。</p>
+        </div>
+      </div>
+      <p>分工非常清楚：KITTI 08 纯反向时 PC 远优于 CC（AUC PC 0.55 / CC 0.00——CC 在纯旋转下失效，符合设计）；Riverside 02 纯横向时 <b>CC 大幅优于 PC</b>。作者还提出 DR（distribution–recall）曲线，衡量回环的时空分布多样性——不只是「检得多」，还要「检得散」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 940 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <text x="470" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#6b5a4e">换车道（横向平移）为什么 PC 救不了、CC 才行：两把尺子各量一个方向</text>
+          <!-- ① 真实场景：换车道 -->
+          <rect x="30" y="90" width="260" height="150" fill="#d8d4cd"/>
+          <line x1="30" y1="140" x2="290" y2="140" stroke="#ffffff" stroke-width="1.6" stroke-dasharray="8 7"/>
+          <line x1="30" y1="190" x2="290" y2="190" stroke="#ffffff" stroke-width="1.6" stroke-dasharray="8 7"/>
+          <rect x="40" y="66" width="240" height="22" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="40" y="242" width="240" height="36" fill="#cfc6b8" stroke="#a89a86" stroke-width="1"/>
+          <rect x="120" y="102" width="40" height="20" rx="3" fill="#b5482f"/>
+          <rect x="120" y="202" width="40" height="20" rx="3" fill="#2f5b82"/>
+          <text x="160" y="58" text-anchor="middle" font-size="10.5" font-weight="700" fill="#3d2a22">① 真实场景：换车道</text>
+          <text x="258" y="116" text-anchor="end" font-size="9" fill="#a8432c">查询：车道 ①</text>
+          <text x="258" y="216" text-anchor="end" font-size="9" fill="#2f5b82">库里：车道 ②</text>
+          <text x="160" y="300" text-anchor="middle" font-size="9.5" fill="#5b4636">同一路段，横向偏约 3.5 m</text>
+          <!-- ② PC -->
+          <text x="475" y="58" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f5b82">② Polar Context：行序乱了</text>
+          <rect x="350" y="80" width="100" height="110" fill="#fffdf9" stroke="#2f5b82" stroke-width="1.3"/>
+          <rect x="360" y="96" width="18" height="14" fill="#c85f34"/>
+          <rect x="480" y="80" width="100" height="110" fill="#fffdf9" stroke="#a8432c" stroke-width="1.3"/>
+          <rect x="490" y="148" width="18" height="14" fill="#c85f34"/>
+          <text x="400" y="206" text-anchor="middle" font-size="9" fill="#8a7365">PC（查询）</text>
+          <text x="530" y="206" text-anchor="middle" font-size="9" fill="#8a7365">PC（库里）</text>
+          <text x="475" y="236" text-anchor="middle" font-size="9" fill="#a8432c">楼的行号变了 → 列移救不了</text>
+          <!-- ③ CC -->
+          <text x="785" y="58" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2f6136">③ Cart Context：整体列移</text>
+          <rect x="680" y="80" width="210" height="54" fill="#fffdf9" stroke="#2f6136" stroke-width="1.3"/>
+          <rect x="706" y="86" width="14" height="42" fill="#c85f34"/>
+          <rect x="680" y="150" width="210" height="54" fill="#fffdf9" stroke="#2f6136" stroke-width="1.3"/>
+          <rect x="786" y="156" width="14" height="42" fill="#c85f34"/>
+          <text x="672" y="100" text-anchor="end" font-size="9" fill="#8a7365">CC（查询）</text>
+          <text x="672" y="170" text-anchor="end" font-size="9" fill="#8a7365">CC（库里）</text>
+          <text x="785" y="236" text-anchor="middle" font-size="9" fill="#2f6136">同一条楼变成整体右移 → 对得上</text>
+          <text x="470" y="296" text-anchor="middle" font-size="10" fill="#5b4636">PC 把点云铺成极坐标环：车一横挪，楼落在哪一环就变了 → 矩阵行序被打乱</text>
+          <text x="470" y="320" text-anchor="middle" font-size="10" fill="#5b4636">CC 把点云铺成笛卡尔网格、对齐轴换成横向 y：换车道只等于整体列移 → 能对齐</text>
+          <text x="470" y="368" text-anchor="middle" font-size="10.5" font-weight="700" fill="#a8432c">要记住：PC 吃旋转、CC 吃横向——两把尺子分工，2018 原版只带了 PC 那把</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>① 是一条三车道城市道路的俯视：查询帧里自车在车道 ①、库里那一帧在车道 ②，同一座楼在两帧里离车远近并不一样。② 展示极坐标 PC 的两张矩阵：同一个楼块从上面的行「掉」到了下面的行，行序被打乱。③ 展示笛卡尔 CC 的两张网格：同一个楼块只是整体右移了几列。<br>
+          <b>怎么看这张图：</b>① 先看 ① 里的横向位移——车没换朝向、只是横着挪了一个车道。② 再看 ②：PC 的行代表「半径」，横向一动半径就变，所以「行」错了位；列循环移位只能挪列、挪不了行，于是救不了。③ 最后看 ③：CC 把点云摊在笛卡尔网格上、把对齐轴换成横向 y，换车道就只是网格整体错开几列——正好是列移能对齐的形态。这就是「PC 管旋转、CC 管横向」的直观来源。<br>
+          <b>要记住的一句话：</b>PC 与 CC 不是「一好一坏」，而是两把量不同方向的不变尺子；2018 原版只有 PC，横向不变要等 2022++ 的 CC 才补上。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Scan_Context____Structural_Place_Recognition_Robust_to_R/02ce6ceb355828aac03591db19053dc4790f64694433119df8909065be6927b0.jpg" alt="Semimetric localization at max F1">
+        <figcaption>
+          <b>原图注（Fig. 17）：</b>Semimetric localization at max F1 score on Pangyo sequence. (a) and (c) Relative 1-D pose estimation via aligning key matching of A-PC (for relative rotation) and A-CC (for relative translation). Relative rotation (A-PC) and lateral translation (A-CC) are depicted in blue, while the red line indicates the true relative displacement obtained from the ground truth.<br>
+          <b>怎么看这张图：</b>上半 A-PC 给出相对旋转（蓝色曲线贴着红色真值），下半 A-CC 给出相对横向平移（平均误差 0.84 m）。这直观说明「PC 管旋转、CC 管横向」是两套并行的 1-DOF 半度量定位，而不是一套描述子同时搞定两者。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Scan_Context____Structural_Place_Recognition_Robust_to_R/c6c3fac0d2aa22c504de98eb7abccfdbd916752313ed009b0d1cd7480366db8b.jpg" alt="Sample point cloud rotational and translational motion">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Sample point cloud undergoing rotational (e.g., reversed revisits) and translational (e.g., lateral lane changes) motion. The red indicates the query scans, and the blue depicts experience in the database. Unlike the view in global coordinates (i.e., world coordinate, top row), the measurement looks different in the local coordinates (i.e., sensor coordinate and bottom row). Also, note that many dynamic objects exist in both scans.<br>
+          <b>怎么看这张图：</b>上排是世界坐标（红=查询、蓝=库里经验），下排是传感器局部坐标。反转回访（旋转）和换车道（横向）在局部坐标下长得完全不同——这正是 PC 与 CC 各自要对付的两种变化。图里还有不少动态物体，说明描述子对密度不敏感也有帮助。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Scan_Context____Structural_Place_Recognition_Robust_to_R/af1c1f6898ef7e33a8f58ada83cd3a333634d02a847948a1f65e2ce27c7485af.jpg" alt="Comparisons with deep learning based methods">
+        <figcaption>
+          <b>原图注（Fig. 21）：</b>Comparisons with deep learning based methods, SegMap, and PointNetVLAD. (a) KAIST 03 (b) Riverside 02 (c) KITTI 08.<br>
+          <b>怎么看这张图：</b>把这套「免训练几何描述子」和点云深度学习方法（SegMap、PointNetVLAD）放在一起比 PR 曲线。它想说明：<b>不训练、靠几何结构，照样能和学习式方法掰手腕</b>——这是本课回应 0011 那句话最有力的证据：在激光回环这条线，深度学习「没那么容易吃掉」手工法。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 Scan Context 与 ++ 的「旋转 / 横向不变」分工，下面哪种说法最准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。2018 原版靠列循环移位只解决 yaw 旋转不变；2022 的 Scan Context++ 才用「极坐标 PC（旋转不变）+ 笛卡尔 CC（横向不变）」双描述子系统解决横向。KITTI08 纯反向靠 PC，Riverside02 纯横向靠 CC，分工明确。" onclick="lessonKit.answer(this,'q0135a')">2018 只解决旋转，横向不变是 2022++ 才补上的</button>
+          <button data-correct="no" data-explanation="不对。2018 原版对横向平移鲁棒性弱，只靠 root-shifting 增强勉强缓解；「横向不变」是 2022 Scan Context++ 的 Cart Context（CC）才系统解决的。把横向归到 2018 是本课明确要纠正的归类错误。" onclick="lessonKit.answer(this,'q0135a')">2018 原版就已经同时解决旋转和横向不变</button>
+        </div>
+        <div class="quiz-feedback" id="q0135a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 和前面课程怎么接：它是 RING++ 的直接对手</h2>
+      <p>把本课放进本季与前面季的线里：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>对 0011「检索被吃掉」的反例</h4>
+          <p>Scan Context / ++ 完全不训练，是纯几何描述子，却在激光回环上不输多数学习式方法。说明 0011 那句话要加定语：<b>在激光点云这条线，深度学习「没那么容易吃掉」手工法</b>——至少到 2022 年还没吃掉。</p>
+        </div>
+        <div class="mini-card">
+          <h4>是 0093 RING++ 的直接对手</h4>
+          <p>第四季 0093 的 RING++ 用「旋转平移不变 Gram 矩阵」做激光回环；本课 Scan Context++ 用「PC+CC 双描述子」。两者都是<b>免训练几何描述子</b>，路线正面撞上：RING++ 一个矩阵同时吃旋转+平移，SC++ 用两个矩阵分工。谁的横向更稳，是本季要回答的问题之一。</p>
+        </div>
+        <div class="mini-card">
+          <h4>与 0092 激光回环上呼应</h4>
+          <p>0092 讲 Cartographer 分支定界 + BoW3D；本课是另一条「几何描述子」路。激光回环整体呈现「几何 vs 学习」拉锯，到 0140 LCR-Net 才用学习式统一回环+重定位。</p>
+        </div>
+      </div>
+      <p>下一节（0136）我们进点云回环的<b>学习式</b>两篇：LCDNet（PV-RCNN + 最优传输位姿头）和 OverlapTransformer（range image + Transformer）。注意 LCDNet 说 Scan Context「只估 yaw」指的就是<b>2018 原版</b>，别和 ++ 混。</p>
+
+      <section class="exercise-box" id="f">
+        <ol>
+          <li>用生活类比解释：为什么 Scan Context 用「最大高度矩阵」而不是「直方图」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>直方图只说「高处点占多少」，像一份统计摘要，丢了「高楼在第几圈、哪一扇区」的绝对位置。最大高度矩阵像一张带坐标的轮廓图，保留了绝对几何结构。正因为保留了位置，两张图才能「左右挪一挪去对齐」——这是它能检反向回环的前提。直方图法（ESF、Z-projection、M2DP）丢了位置，判别力弱、易假阳性。</p>
+            </div></details>
+          </li>
+          <li>「列循环移位」为什么让 Scan Context 对 yaw 旋转不变？它能不能处理横向平移？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>列循环移位 = 把矩阵最左列挪到最右、首尾相接，等价于场景绕传感器转过一个扇区。在所有可能移位里取最像的，初始车头朝向就不影响结果，故 yaw 不变。但横向平移会改变「行序」（哪一圈有什么），列移救不了——所以 <b>2018 原版对横向不鲁棒</b>，那是 2022++ 的 CC 才解决的。</p>
+            </div></details>
+          </li>
+          <li>Scan Context++ 的 PC 和 CC 各解决什么？请用 KITTI 08 与 Riverside 02 说明分工。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>PC（极坐标）对齐轴是方位角 → 旋转不变；CC（笛卡尔）对齐轴是横向 y → 横向不变。KITTI 08 是纯反向回访，PC 远优于 CC（AUC PC 0.55 / CC 0.00，CC 在纯旋转下失效）；Riverside 02 是纯横向换道，<b>CC 大幅优于 PC</b>。一个管旋转、一个管横向，各管一摊。</p>
+            </div></details>
+          </li>
+          <li>为什么说 Scan Context++ 是 0011「深度学习先吃掉检索」的反例？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>它零训练、纯靠几何结构编码，却在激光回环 PR 曲线上不输 SegMap、PointNetVLAD 等点云深度学习方法（Fig.21）。说明在激光点云这条线，到 2022 年深度学习还没把手工几何描述子「吃掉」——0011 那句话要加传感器定语：视觉检索被吃得早，激光检索被吃得晚、且至今仍有手工法坚守。</p>
+            </div></details>
+          </li>
+          <li>Scan Context++ 和第四季 0093 RING++ 的「取胜条件」有何不同？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>两者都是免训练几何描述子。RING++ 用一个「旋转平移不变 Gram 矩阵」一次性同时吃旋转+平移；SC++ 用两个描述子分工（PC 管旋转、CC 管横向），再靠 augmentation 覆盖并发变化。简言之：RING++ 是「一个不变矩阵」，SC++ 是「两个分工描述子 + 增强」。谁在极端横向/严重 roll-pitch 下更稳，是两者真正的较量点（SC++ 在 ±10–15° roll-pitch 下性能明显下降）。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0134-DBoW2-2012-词袋法怎么变成工程标准.html">← DBoW2 2012：词袋法怎么变成工程标准</a>
+        <a class="next" href="0136-点云回环两篇-描述子与位姿回归.html">下一课：点云回环两篇 →</a>
+      </div>
+      <p class="foot-note">Scan Context 用「免训练几何描述子」正面杠学习式方法；记住 2018 只解决旋转，横向是 2022++ 补的 🔄</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

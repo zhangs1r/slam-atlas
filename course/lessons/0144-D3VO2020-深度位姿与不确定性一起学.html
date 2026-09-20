@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3VO 2020 · 深度·位姿·不确定性一起学 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 G · 学习式方法 / Lesson 0144</div>
+      <h1>D3VO（2020）：深度、位姿、不确定性一起学</h1>
+      <p class="subtitle">不再当黑箱 VO，而是把深度/位姿/不确定度网络紧嵌进 DSO 直接法——用深度学习补几何方法的尺度漂移 🔧</p>
+      <div class="hero-meta">
+        <span>🎯 主题：网络嵌入几何后端（DSO）+ 不确定度加权</span>
+        <span>👥 作者：N. Yang、L. von Stumberg、R. Wang、D. Cremers</span>
+        <span>📅 2020 · <i>D3VO: Deep Depth, Deep Pose and Deep Uncertainty for Monocular VO</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先说人话</a>
+        <a href="#b">接在谁后面</a>
+        <a href="#c">D3VO 长什么样</a>
+        <a href="#d">训练信号与损失</a>
+        <a href="#e">不确定度那一块</a>
+        <a href="#f">实测与泛化</a>
+        <a href="#g">三张自绘图</a>
+        <a href="#h">这条线的账</a>
+        <a href="#i">练习</a>
+      </div>
+    </header>
+
+    <div class="lead-grid">
+      <div class="callout">
+        <h3>本节目标</h3>
+        <p>看懂 D3VO 如何从「用网络替换整条流水线」转向「<b>网络+几何后端融合</b>」：把自监督深度/位姿/不确定度三个网络紧嵌进经典 DSO 直接法的<b>前端跟踪</b>与<b>后端非线性优化</b>。重点吃透<b>不确定度</b>怎么给光度残差加权、自动降权动态/反射区。</p>
+      </div>
+      <div class="callout">
+        <h3>和前面课程怎么接</h3>
+        <p><b>0048</b>（第三季 DSO 光度标定与四象限）是本课必须回链的债——D3VO 的亮度仿射变换 $I^{a,b}=aI+b$ 直接沿用 DSO 思路，且把 DSO 的稀疏光度 BA 当后端。<b>0143</b> DeepSLAM 的不确定度只做「二值掩码」，D3VO 把它升级成「连续权重」做进 BA——思想同源、粒度更细。<b>0054–0056</b> 那代「用深度学习当深度」也在这里收口：D3VO 让深度网络直接服务经典后端。</p>
+      </div>
+    </div>
+
+    <section class="section-card" id="a">
+      <h2>1. 先说人话（助教带读）</h2>
+      <p>前面三篇（DeepVO/UnDeepVO/DeepSLAM）的思路都是<b>「端到端黑箱」</b>：一把网络吞掉图像、吐出位姿，几何方法被丢在一边。D3VO 换了个更聪明的姿势：<b>不丢几何方法，而是让网络给它当「辅助零件」</b>。</p>
+      <p>它选的几何后端是 <b>DSO</b>（Direct Sparse Odometry，第三季 0048 讲的直接法）——一个「不用特征点、直接拿像素亮度做光束法平差」的经典 VO。D3VO 给 DSO 配了三个神经网络：<b>深度网络</b>（给每点 metric 深度初值，治尺度漂移）、<b>位姿网络</b>（替 DSO 的恒定速度模型做前端初始化，并在 BA 里加位姿先验）、<b>不确定度网络</b>（给每个像素算「我有多准」，自动降权坏像素）。术语先露脸：<b>直接法（direct method）</b> = 不提特征、直接优化像素亮度一致性（见 0048）；<b>BA（Bundle Adjustment）</b> = 光束法平差，同时调相机位姿和三维点（见 0018/0019）；<b>异方差不确定度</b> = 每个像素有自己的噪声水平，不是全局一个值。</p>
+    </section>
+
+    <section class="section-card" id="b">
+      <h2>2. 它接在谁后面</h2>
+      <p>本块叙事的第二次转向：DeepVO→UnDeepVO→DeepSLAM 是「网络越来越完整」；D3VO 是「<b>网络和几何后端结婚</b>」。这正应了 0011 那句「位姿只被吃掉很窄一段」——学习式没想取代几何，而是去补几何最痛的两处：<b>尺度漂移</b>和<b>低纹理/快动不鲁棒</b>。</p>
+      <p>回链 0048：DSO 的核心就是「光度标定 + 稀疏直接 BA」。D3VO 站在 DSO 肩上，把 DSO 的「前端用恒定速度模型初始化、后端用光度残差」这套，分别换成「位姿网络初始化 + 不确定度加权残差」。所以读 D3VO 前，0048 的四象限和光度标定是必备背景。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. D3VO 长什么样：三网络嵌进 DSO</h2>
+      <p>图 1 一句话点题：D3VO 在<b>深度、位姿、不确定度</b>三个层面用深度网络，并把三者<b>紧嵌进稀疏直接法（DSO）的前端跟踪与后端非线性优化</b>。结构：DepthNet（UNet 类，单帧出深度 $D_t$、右图深度 $D_t^s$、不确定度图 $Σ_t$）；PoseNet（UNet 类，拼接两帧出相对位姿 $T$、亮度参数 $a,b$）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_D3VO__Deep_Depth__Deep_Pose_and_Deep_Uncertainty_for_Mon/c6544a5b787f03dcf630dd8b16f6e34e5ec010e9e80b3f928f0a0ab56803fd60.jpg" alt="D3VO 框架总览">
+        <figcaption>
+          <p><b>原图注（Fig. 1）：</b>We propose D3VO – a novel monocular visual odometry (VO) framework which exploits deep neural networks on three levels: Deep depth (D), Deep pose (T) and Deep uncertainty (Σ) estimation. D3VO integrates the three estimations tightly into both the front-end tracking and the back-end non-linear optimization of a sparse direct odometry framework [16].</p>
+          <p><b>怎么看这张图：</b>关键是「嵌」字——三个网络不是独立 VO，而是分别插进 DSO 的前端（跟踪初始化）和后端（BA 里的残差加权 / 位姿先验）。深度网络给 metric 初值消尺度漂移，位姿网络替恒定速度模型，不确定度网络给残差加权。</p>
+          <p><b>要记住的一句话：</b>D3VO = DSO + 三个学习式零件；网络是「辅助」，几何后端仍是主角。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2020_D3VO__Deep_Depth__Deep_Pose_and_Deep_Uncertainty_for_Mon/67f0b2634fcfc3bea1d6b7cb746cbee7d8493b95442ebbcd9658a9c2e7f9c4f2.jpg" alt="D3VO 亮度仿射变换">
+        <figcaption>
+          <p><b>原图注（Fig. 3）：</b>Examples of affine brightness transformation on EuRoC MAV. Originally the source image and the target image show different brightness. With the predicted parameters a, b, the transformed target images have similar brightness as the source images, which facilitates the self-supervised training based on the brightness constancy assumption.</p>
+          <p><b>怎么看这张图：</b>同一场景两帧因曝光/光照亮度不同（左源图、中目标图），PoseNet 预测 $a,b$ 把目标图做仿射变换 $I^{a,b}=aI+b$（右），亮度就和源图对齐了。这正是 DSO（0048）光度标定的学习式版本。</p>
+          <p><b>要记住的一句话：</b>亮度对齐是 DSO 直接法的命根；D3VO 用网络学 $a,b$，比 DSO 手工模型更准（EuRoC 上亮度变换贡献最大）。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2020_D3VO__Deep_Depth__Deep_Pose_and_Deep_Uncertainty_for_Mon/97ce3155963e7751f3c1482426a466724f56d3ca6735dbaad1b96593511eee12.jpg" alt="D3VO 深度与不确定度定性">
+        <figcaption>
+          <p><b>原图注（Fig. 4）：</b>Qualitative results from KITTI and EuRoC MAV. The original image, the predicted depth maps and the uncertainty maps are shown from the left to the right. The network is able to predict high uncertainty on object boundaries, moving objects, highly reflecting and high frequency areas.</p>
+          <p><b>怎么看这张图：</b>三列：原图、深度图、不确定度图。注意不确定度图里——物体边界、移动物体、反光面、高频纹理区都「发亮」（高不确定）。这正是网络知道自己「在哪不准」。</p>
+          <p><b>要记住的一句话：</b>不确定度图 = 网络的「没把握地图」；它会在 BA 里把亮区自动降权。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 训练信号与损失：自监督，光度 + 不确定度</h2>
+      <p>D3VO 是<b>自监督</b>，训练用 stereo 视频（无深度真值）。核心损失是「时序 + 静态 stereo 重投影光度误差」，并取多源帧的最小值（仿 Monodepth2，避免动态物体坑）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ L_{self}=\frac1{|V|}\sum_{\mathbf p\in V}\min_{t'}\,r\big(I_t^{a,b},\,I_{t'\to t}\big) $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>对每张图每个像素 p，用「亮度对齐后的当前帧 $I_t^{a,b}$」和「用深度/位姿把另一帧 warp 回来的 $I_{t'\to t}$」算光度残差 r；$\min_{t'}$ 表示「多取几个候选帧、挑残差最小的那个」——这样某帧里有车在动也不至于坑到损失。这就是自监督信号。</p>
+      <p>关键一步是把<b>光度不确定度</b>加进损失（Laplacian 负对数似然）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$ -\log p(y|\tilde y,\sigma)=\frac{|y-\tilde y|}{\sigma}+\log\sigma+const\;\Rightarrow\;\min\,\frac{r}{\Sigma_t}+\log\Sigma_t $$</div>
+      </div>
+      <p style="margin-top:.4rem"><b>这句话在说什么：</b>普通光度损失是「残差越小越好」；D3VO 改成「残差除以不确定度 σ、再加 log σ」。意思就是：<b>网络觉得这儿不准（σ 大），残差权重就自动变小</b>——相当于「我没把握的地方，你别拿我当真」。log σ 项是正则，防止 σ 被无脑调大而糊弄。</p>
+      <table>
+        <thead>
+          <tr><th>损失项</th><th>来源</th><th>在约束什么</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>重投影光度误差（取 min）</td><td>时序 + 静态 stereo</td><td>多视角亮度应一致 → 深度/位姿对</td></tr>
+          <tr><td>光度不确定度加权</td><td>网络 $Σ_t$</td><td>高不确定像素降权，自动躲动态/反射/高频</td></tr>
+          <tr><td>多尺度平滑</td><td>深度图</td><td>深度图别太碎、符合表面连续性</td></tr>
+          <tr><td>亮度正则 $L_{ab}$</td><td>PoseNet 的 a,b</td><td>逼 $a\to1,b\to0$，亮度变换别离谱</td></tr>
+        </tbody>
+      </table>
+      <p>训练里还有几项「嵌进 DSO」的玩法：深度网络给 DSO 每点 metric 初值（消尺度漂移）；位姿网络替恒定速度模型做前端初始化，并在 BA 里加位姿先验项 $E_{pose}$；虚拟 stereo 项（来自 DVSO）约束网络深度与几何深度一致。消融显示：<b>KITTI 上不确定度贡献最大</b>（车窗/移动车等非朗伯面），EuRoC 上亮度变换贡献最大。</p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 不确定度那一块（本节重点）</h2>
+      <p>D3VO 的不确定性是整篇的灵魂，也是本块「不确定性」抽象概念的主战场。它用<b>异方差（heteroscedastic）aleatoric 不确定度</b>——每个像素有自己的噪声水平 σ，不是全局一个值。作用有三层：</p>
+      <ul>
+        <li><b>前端</b>：深度网络给每点 metric 深度初值，DSO 不再从零估尺度，漂移被压住；</li>
+        <li><b>后端 BA</b>：光度残差被 $w_p=\alpha^2/(\alpha^2+\|Σ\|^2)$ 加权——不确定度大的像素（动态车、反光玻璃、高频纹理）自动少贡献；</li>
+        <li><b>诊断</b>：不确定度图直接告诉我们「网络在哪没把握」，如图 4 的物体边界/移动物体/反光区全发亮。</li>
+      </ul>
+      <p>注意它和 0143 DeepSLAM 的传承与升级：DeepSLAM 用 σ 做<b>二值掩码</b>（该丢就丢），D3VO 用 σ 做<b>连续权重</b>（该少贡献就少贡献，不硬删）。粒度更细，且直接写进 BA 的目标函数——这正是「网络+几何后端融合」的精髓。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 实测与泛化</h2>
+      <p>数字（重点栏，引用干净值）：KITTI 测试划分（01,02,06,08,09,10）<b>D3VO mean t_rel 0.82%</b>，远好于 DSO 单目、ORB 单目；Seq09/10 为 0.62/0.78。EuRoC <b>mean ATE 0.08m</b>（M03 0.12、MH05 0.09、V103 0.11、V203 0.05），比肩 VINS(0.17)/OKVIS(0.28) 等 VIO——<b>单目即达</b>。深度（KITTI Eigen）Abs Rel 0.099，超 Monodepth2。</p>
+      <p>⚠️ <b>OCR 疑点说明</b>：D3VO 原表 Table 4（KITTI 测试划分）存在严重串行——DSO/ORB 行数字「9.17 114 42.2 177 …」与表头错位，Mean 列显示的 65.8/37.0 实为 DSO/ORB 单目各自均值被拼接。规范要求在引用 D3VO 以外方法的数值前务必核对原表；<b>D3VO 自身 0.82% 与 Table 5 的 0.62/0.78 是干净的，可放心引用</b>（编写时已按规范标注此疑点）。</p>
+      <p>泛化：KITTI 深度网络训在 Eigen split，测 KITTI Odometry 与 EuRoC；但 EuRoC 深度泛化有限（MH 训→V 测变差，作者承认）。单目深度跨场景泛化仍是挑战——这点在收官 0151 还要点。</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_D3VO__Deep_Depth__Deep_Pose_and_Deep_Uncertainty_for_Mon/a0957db72b51a699c9dcd3a87b9448514d1a8d898af4a7fe8a3fe6ef6256c153.jpg" alt="D3VO EuRoC 轨迹对照">
+        <figcaption>
+          <p><b>原图注（Fig. 5）：</b>Qualitative comparison of the trajectories on MH 05 difficult and V1 03 difficult from EuRoC MAV.</p>
+          <p><b>怎么看这张图：</b>两难序列（MH05 difficult、V103 difficult）上 D3VO 轨迹贴真值。这些是传统纯视觉 VO 易失败的场景（低照度、运动模糊，见 Fig.2 插图），D3VO 靠深度初值+不确定度加权扛住。</p>
+          <p><b>要记住的一句话：</b>单目 D3VO 在 EuRoC 上已比肩 VIO——网络补的尺度与鲁棒性见效了。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 三张自绘图：嵌法、不确定度、亮度对齐</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="D3VO 三网络嵌进 DSO">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="34" text-anchor="middle" font-size="19" fill="#9d553f"><tspan font-weight="700">D3VO：三个网络紧嵌进 DSO 的前后两端</tspan></text>
+          <rect x="40" y="60" width="130" height="80" rx="10" fill="#eaf1fb" stroke="#9bbce6"/>
+          <text x="105" y="96" text-anchor="middle" font-size="13" fill="#3a4a5a">单目帧</text>
+          <text x="105" y="118" text-anchor="middle" font-size="12" fill="#5b6472">帧 t 与 t′</text>
+          <text x="190" y="104" text-anchor="middle" font-size="18" fill="#2b6cb0">→</text>
+          <rect x="220" y="60" width="160" height="80" rx="12" fill="#7a4fb5"/>
+          <text x="300" y="94" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">DepthNet</tspan></text>
+          <text x="300" y="116" text-anchor="middle" font-size="11" fill="#ecdcf5">深度 D + 不确定度 Σ</text>
+          <rect x="220" y="160" width="160" height="80" rx="12" fill="#9d553f"/>
+          <text x="300" y="194" text-anchor="middle" font-size="13" fill="#ffffff"><tspan font-weight="700">PoseNet</tspan></text>
+          <text x="300" y="216" text-anchor="middle" font-size="11" fill="#f3dccf">位姿 T + 亮度 a,b</text>
+          <text x="410" y="144" text-anchor="middle" font-size="18" fill="#2b6cb0">→</text>
+          <rect x="440" y="90" width="200" height="150" rx="12" fill="#34415a"/>
+          <text x="540" y="124" text-anchor="middle" font-size="14" fill="#ffffff"><tspan font-weight="700">DSO 直接法</tspan></text>
+          <text x="540" y="150" text-anchor="middle" font-size="12" fill="#cfd6e2">前端跟踪：位姿网络初始化</text>
+          <text x="540" y="172" text-anchor="middle" font-size="12" fill="#cfd6e2">后端 BA：Σ 加权残差</text>
+          <text x="540" y="194" text-anchor="middle" font-size="12" fill="#cfd6e2">深度初值消尺度漂移</text>
+          <text x="540" y="216" text-anchor="middle" font-size="12" fill="#cfd6e2">（稀疏光度 BA，见 0048）</text>
+          <text x="680" y="164" text-anchor="middle" font-size="18" fill="#2b6cb0">→</text>
+          <rect x="700" y="90" width="170" height="150" rx="12" fill="#fff4ec" stroke="#e0b48f"/>
+          <text x="785" y="130" text-anchor="middle" font-size="13" fill="#3a4a5a">输出</text>
+          <text x="785" y="156" text-anchor="middle" font-size="12" fill="#9d553f"><tspan font-weight="700">位姿 + 深度</tspan></text>
+          <text x="785" y="178" text-anchor="middle" font-size="12" fill="#9d553f"><tspan font-weight="700">+ 不确定度</tspan></text>
+          <text x="785" y="200" text-anchor="middle" font-size="11" fill="#5b6472">单目 VO，尺度稳</text>
+          <text x="785" y="222" text-anchor="middle" font-size="11" fill="#5b6472">鲁棒（见 Fig.5）</text>
+          <text x="450" y="290" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">网络不是 VO 本身，而是 DSO 的「辅助零件」：深度补尺度、位姿补初始化、Σ 补鲁棒</tspan></text>
+          <text x="450" y="330" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">左：三网络各自出什么；右：DSO 把三者用进前后端 —— 这是「网络+几何融合」不是「网络替换」</tspan></text>
+          <text x="450" y="372" text-anchor="middle" font-size="12" fill="#5b6472">对照 0143：DeepSLAM 把网络当 VO 主体；D3VO 把网络当几何后端的插件</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>单目帧进 DepthNet（出深度+不确定度）和 PoseNet（出位姿+亮度），二者不独立出位姿，而是分别插进 DSO 的直接法：前端用位姿网络初始化跟踪，后端 BA 用不确定度 Σ 给光度残差加权，深度初值消尺度漂移。</p>
+          <p><b>怎么看这张图：</b>① 主角仍是 DSO（灰色大框）；② 三个网络是「插件」，各自补 DSO 一个短板；③ 这和 DeepVO 那种「一口吞」的黑箱形成鲜明对比——D3VO 是融合派。</p>
+          <p><b>要记住的一句话：</b>D3VO 标志着本块从「替换流水线」转向「网络+几何后端融合」。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="不确定度加权光度残差">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="34" text-anchor="middle" font-size="19" fill="#2f8f5b"><tspan font-weight="700">不确定度：同一块砖墙 vs 一块玻璃，网络的把握不同</tspan></text>
+          <rect x="40" y="60" width="380" height="180" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="230" y="88" text-anchor="middle" font-size="13" fill="#3a4a5a">场景：砖墙 + 反光玻璃 + 车</text>
+          <rect x="70" y="110" width="170" height="110" fill="#f3d9a0" stroke="#c9a13a"/>
+          <text x="155" y="170" text-anchor="middle" font-size="12" fill="#3a4a5a">砖墙（朗伯）</text>
+          <rect x="260" y="110" width="130" height="110" fill="#cfe6f5" stroke="#7ab0d8"/>
+          <text x="325" y="170" text-anchor="middle" font-size="12" fill="#2b6cb0">玻璃（反光）</text>
+          <circle cx="155" cy="270" r="0" fill="none"/>
+          <rect x="480" y="60" width="380" height="180" rx="12" fill="#ffffff" stroke="#c9d2e0"/>
+          <text x="670" y="88" text-anchor="middle" font-size="13" fill="#3a4a5a">BA 里的「话语权」权重 w ∝ 1/σ</text>
+          <rect x="510" y="110" width="170" height="110" fill="#9bd0a8" stroke="#4f9a63"/>
+          <text x="595" y="165" text-anchor="middle" font-size="12" fill="#1f6f43"><tspan font-weight="700">砖墙：重（可信）</tspan></text>
+          <text x="595" y="188" text-anchor="middle" font-size="11" fill="#1f6f43">σ 小 → 多贡献</text>
+          <rect x="700" y="110" width="130" height="110" fill="#e6b8b8"/>
+          <text x="765" y="165" text-anchor="middle" font-size="12" fill="#9d3b3b"><tspan font-weight="700">玻璃：轻（不可信）</tspan></text>
+          <text x="765" y="188" text-anchor="middle" font-size="11" fill="#9d3b3b">σ 大 → 少贡献</text>
+          <text x="230" y="262" text-anchor="middle" font-size="12" fill="#5b6472">左：砖墙稳定、玻璃反光难测</text>
+          <text x="670" y="262" text-anchor="middle" font-size="12" fill="#5b6472">右：权重按不确定度自动分配</text>
+          <text x="450" y="310" text-anchor="middle" font-size="14" fill="#34415a"><tspan font-weight="700">残差改写：最小化 r/σ + log σ —— σ 大的像素，残差自动「轻拿轻放」</tspan></text>
+          <text x="450" y="350" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">动态车 / 反光玻璃 / 高频纹理 → σ 大 → 在 BA 里被无视，不再拖垮位姿</tspan></text>
+          <text x="450" y="384" text-anchor="middle" font-size="12" fill="#5b6472">对比 0143：DeepSLAM 用 σ 做二值掩码；D3VO 用 σ 做连续权重（更细）</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左是真实场景（稳定砖墙 + 反光玻璃 + 车），右是 BA 里各区域的「话语权」：砖墙 σ 小、权重重（绿），玻璃/车 σ 大、权重轻（红）。中间公式把残差除以 σ。</p>
+          <p><b>怎么看这张图：</b>① 不确定度是「连续」的，不是非黑即白；② 反光面、移动车、高频纹理这些经典直接法最怕的区域，被自动降权；③ 这正是 D3VO 在 KITTI 上不确定度贡献最大的原因（车窗/移动车）。</p>
+          <p><b>要记住的一句话：</b>把「我没把握」写进损失，BA 自然会少信坏像素——不确定度是 D3VO 鲁棒的引擎。</p>
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="亮度仿射对齐">
+          <rect x="0" y="0" width="900" height="400" fill="#fbfcfe"/>
+          <text x="450" y="34" text-anchor="middle" font-size="19" fill="#2b6cb0"><tspan font-weight="700">亮度仿射对齐：把暗帧拉到和亮帧一个亮度（回链 0048 DSO 光度标定）</tspan></text>
+          <rect x="40" y="60" width="250" height="160" rx="10" fill="#3a3a3a"/>
+          <text x="165" y="148" text-anchor="middle" font-size="13" fill="#e8e8e8">源帧（偏亮）</text>
+          <rect x="320" y="60" width="250" height="160" rx="10" fill="#1c1c1c"/>
+          <text x="445" y="148" text-anchor="middle" font-size="13" fill="#cfcfcf">目标帧（偏暗）</text>
+          <text x="295" y="146" text-anchor="middle" font-size="18" fill="#2b6cb0">≠</text>
+          <rect x="610" y="60" width="250" height="160" rx="10" fill="#3a3a3a"/>
+          <text x="735" y="130" text-anchor="middle" font-size="13" fill="#e8e8e8">变换后（已对齐）</text>
+          <text x="735" y="154" text-anchor="middle" font-size="12" fill="#bcbcbc">亮度≈源帧</text>
+          <text x="585" y="146" text-anchor="middle" font-size="18" fill="#2b6cb0">→</text>
+          <text x="735" y="200" text-anchor="middle" font-size="12" fill="#5b6472">网络预测 a,b 把暗图拉亮</text>
+          <text x="450" y="262" text-anchor="middle" font-size="14" fill="#34415a"><tspan font-weight="700">直接法靠「同一空间点亮度的像素值应一致」——亮度不齐就全错</tspan></text>
+          <text x="450" y="302" text-anchor="middle" font-size="14" fill="#34415a"><tspan font-weight="700">DSO（0048）用手工亮度模型；D3VO 用 PoseNet 学 a,b，更准</tspan></text>
+          <text x="450" y="344" text-anchor="middle" font-size="13" fill="#34415a"><tspan font-weight="700">EuRoC 上「亮度变换」对 D3VO 贡献最大 → 学习式光度标定值回票价</tspan></text>
+          <text x="450" y="382" text-anchor="middle" font-size="12" fill="#5b6472">亮度正则 L_ab 逼 a→1, b→0，防止网络把亮度乱改</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>同一场景两帧：源帧偏亮、目标帧偏暗，直接法没法比（≠）；PoseNet 预测仿射参数 a,b 把暗图做 $I^{a,b}=aI+b$ 变换，亮度拉回和源帧一致（右）。</p>
+          <p><b>怎么看这张图：</b>① 直接法（0048）的命根是「同空间点像素值一致」，曝光差一点就崩；② D3VO 让网络学 $a,b$ 动态对齐，比 DSO 固定模型更稳；③ 亮度正则 $L_{ab}$ 防止 a,b 乱飞。</p>
+          <p><b>要记住的一句话：</b>学习式光度标定 = 把 DSO 最脆弱的「亮度假设」交给网络补，是回链 0048 的现成例子。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动：D3VO 和 DeepVO 的根本区别？</h4>
+        <p>下面哪句最贴？<button class="quiz-options" onclick="lessonKit.answer(this,'q0144a')">网络嵌几何后端</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0144b')">纯黑箱端到端</button></p>
+        <p class="quiz-feedback" id="q0144a" hidden>正确。DeepVO 是「网络一口吞出位姿」的黑箱端到端；D3VO 把深度/位姿/不确定度网络当插件，紧嵌进 DSO 直接法的前端（初始化）与后端（BA 加权）。这是本块「从替换流水线 → 网络+几何融合」的转折点。DSO 才是主角，网络补它的尺度漂移和鲁棒短板。</p>
+        <p class="quiz-feedback" id="q0144b" hidden>不对。「纯黑箱端到端」是 DeepVO/UnDeepVO 那一派。D3VO 明确不是黑箱 VO，而是 VO 支线从「替换」转向「融合」的代表——三个网络嵌入 DSO 前后端。把 D3VO 说成纯端到端会漏掉它最关键的贡献（不确定度加权 BA + 深度初值消漂移）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 这条线的账：从替换到融合</h2>
+      <table>
+        <thead>
+          <tr><th>论文</th><th>路线</th><th>几何方法的位置</th><th>不确定度用法</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DeepVO</td><td>黑箱端到端</td><td>被丢弃</td><td>无</td></tr>
+          <tr><td>DeepSLAM</td><td>网络当 VO 主体</td><td>仅 g2o 后端</td><td>二值掩码</td></tr>
+          <tr><td>D3VO</td><td>网络嵌几何后端</td><td>DSO 是主角</td><td>连续权重进 BA</td></tr>
+        </tbody>
+      </table>
+      <p>到 D3VO，本块的范式第一次明确转向「<b>网络提供特征/深度/不确定度，可微优化层负责几何一致性</b>」。下一步 <b>0145 DROID-SLAM</b> 把这条路推到极点：它不嵌现成 BA，而是自己造一个<b>可微的稠密 BA 层</b>当网络的一层——把「BA」做成能反向传播的学习零件。这也是全季的转折点，下节细讲。</p>
+      <div class="interactive-card">
+        <h4>互动：D3VO 的 0.82% 能放心引用吗？</h4>
+        <p>引用 D3VO 自身 KITTI 均值 t_rel 0.82% 前，下面哪句对？<button class="quiz-options" onclick="lessonKit.answer(this,'q0144c')">干净可引用</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0144d')">也串行勿引</button></p>
+        <p class="quiz-feedback" id="q0144c" hidden>正确。D3VO 原表 Table 4 确有严重串行 OCR（DSO/ORB 行数字错位、Mean 列被拼接），但那是「D3VO 以外方法」的数字；D3VO 自身的 0.82% 与 Table 5 的 0.62/0.78 是干净的，编写时已按规范只引干净值并标注 Table 4 疑点。所以 D3VO 自己的数可放心用，别人对比的数要先核对原表。</p>
+        <p class="quiz-feedback" id="q0144d" hidden>不对。串行的只是 Table 4 里 DSO/ORB 等「对比方法」的数字（被错位拼接成 65.8/37.0），不是 D3VO 自己。D3VO 自身均值 0.82%（及 Table 5 的 0.62/0.78）是干净可引用的。规范要求是「引用 D3VO 以外方法的数值前核对原表」，不是连 D3VO 自己都别引。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>D3VO 把哪三个网络嵌进 DSO？各自补 DSO 什么短板？</li>
+        <li>自监督损失里 $\min_{t'}$ 在躲什么？光度不确定度怎么把残差改写？</li>
+        <li>不确定度在 D3VO 里起哪三层作用？和 0143 DeepSLAM 的掩码有何升级？</li>
+        <li>D3VO 的亮度仿射变换 $I^{a,b}=aI+b$ 和 0048 DSO 光度标定什么关系？</li>
+        <li>引用 D3VO 数字时要注意哪个 OCR 疑点？哪些值可放心引用？</li>
+      </ul>
+      <h2>10. 练习（收起，点开看解析）</h2>
+      <div class="exercise-box">
+        <details class="exercise-answer">
+          <summary>练习 1 · 为什么 D3VO 说「不是纯端到端黑箱」？</summary>
+          <p>因为它的输出位姿最终由 DSO 的稀疏直接 BA 解出，三个网络只是给 BA 提供初值/先验/加权，不直接回归位姿。位姿网络出的是「初始化 + BA 里的位姿先验项」，深度网络出 metric 初值，不确定度网络出残差权重——几何一致性仍由 BA 保证。所以它是「网络增强的几何 VO」，不是「网络替代的端到端 VO」。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 2 · 异方差不确定度为什么比全局一个噪声好？</summary>
+          <p>场景里不同像素噪声水平差很大：砖墙稳定（σ 小）、反光玻璃/动态车/高频纹理噪声大（σ 大）。若用全局单一噪声，要么对稳定区欠加权、要么对坏区过信任。异方差让每个像素自带 σ，BA 里「该信的信、该轻的轻」，整体更鲁棒。D3VO 在 KITTI 上不确定度贡献最大，正是因为它精准压住了车窗/移动车。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 3 · 为什么 D3VO 单目就能比肩 VIO？</summary>
+          <p>VIO（视觉+惯性）靠 IMU 补尺度与鲁棒，但增标定负担。D3VO 用深度网络给 DSO 每点 metric 深度初值，从根上消尺度漂移；又用不确定度加权躲动态/反光。于是单目（无 IMU）在 EuRoC 上 ATE 0.08m，比肩 VINS 0.17、OKVIS 0.28。说明「网络补尺度+鲁棒」能部分替代 IMU 的作用——这也是它相对 0048 纯 DSO 的跃升。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 4 · 回链 0048：D3VO 改了 DSO 哪几处？</summary>
+          <p>DSO（0048）三件套：光度标定、前端恒定速度模型初始化、后端稀疏光度 BA。D3VO 对应改：① 光度标定由手工模型改为 PoseNet 学 $a,b$（更准，EuRoC 上贡献最大）；② 前端初始化由恒定速度改为位姿网络预测 + BA 中位姿先验；③ 后端 BA 的光度残差由手工权重改为不确定度 Σ 加权。深度初值额外消尺度漂移。即「DSO 三处最脆弱的假设，都被网络补强」。</p>
+        </details>
+        <details class="exercise-answer">
+          <summary>练习 5 · D3VO 的跨场景短板在哪？</summary>
+          <p>作者承认：单目深度跨场景泛化仍是挑战——KITTI 深度网络在 Eigen split 训、测 KITTI Odometry 与 EuRoC 尚可，但 EuRoC 上「MH 训→V 测」明显变差。根因是单目深度本身依赖训练域外观，换了传感器/场景分布就掉。这点在收官 0151 还要作为「学习式 VO 的边界」点名。</p>
+        </details>
+      </div>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0143-鲁棒单目学习式SLAM.html">← 上一节：0143 鲁棒单目学习式 SLAM</a>
+        <a class="next" href="0145-DROID-SLAM2021-把BA做成一层的转折点.html">下一节：0145 DROID-SLAM 转折点 →</a>
+      </div>
+      <p class="foot-note">不确定度这一招，从 DeepSLAM 的二值掩码走到 D3VO 的连续权重；下一节 DROID-SLAM 要把它推成整季的转折点 🧠</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

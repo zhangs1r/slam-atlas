@@ -288,5 +288,64 @@ window.ACHIEVEMENT_CARDS = {
         "</svg>",
       card_file: "reference/成就卡-第六季.html"
     }
+,
+    {
+      id: "ach-stage-g",
+      title: "关联破解者",
+      icon: "🧩",
+      paper: "阶段 G · 学习式方法",
+      date: "2026-09-21",
+      rarity: "legendary",
+      thumb_b64:
+        "data:image/svg+xml;utf8," +
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'>" +
+        "<defs>" +
+        "<linearGradient id='bgg' x1='0' y1='0' x2='1' y2='1'>" +
+        "<stop offset='0%' stop-color='#1b2340'/>" +
+        "<stop offset='58%' stop-color='#33376e'/>" +
+        "<stop offset='100%' stop-color='#141a2e'/>" +
+        "</linearGradient>" +
+        "<radialGradient id='glowg' cx='50%' cy='36%' r='60%'>" +
+        "<stop offset='0%' stop-color='rgba(160,190,255,0.32)'/>" +
+        "<stop offset='100%' stop-color='rgba(160,190,255,0)'/>" +
+        "</radialGradient>" +
+        "</defs>" +
+        "<rect width='400' height='300' fill='url(%23bgg)'/>" +
+        "<rect width='400' height='300' fill='url(%23glowg)'/>" +
+        "<rect x='58' y='66' width='118' height='92' rx='7' fill='rgba(240,240,255,0.10)' stroke='rgba(226,224,255,0.78)' stroke-width='2.2'/>" +
+        "<rect x='224' y='66' width='118' height='92' rx='7' fill='rgba(240,240,255,0.10)' stroke='rgba(226,224,255,0.78)' stroke-width='2.2'/>" +
+        "<line x1='74' y1='140' x2='160' y2='140' stroke='rgba(226,224,255,0.28)' stroke-width='1.6'/>" +
+        "<line x1='240' y1='140' x2='326' y2='140' stroke='rgba(226,224,255,0.28)' stroke-width='1.6'/>" +
+        "<rect x='78' y='98' width='38' height='26' rx='3' fill='rgba(240,240,255,0.18)'/>" +
+        "<rect x='128' y='92' width='30' height='32' rx='3' fill='rgba(240,240,255,0.13)'/>" +
+        "<rect x='248' y='98' width='32' height='26' rx='3' fill='rgba(240,240,255,0.18)'/>" +
+        "<rect x='292' y='92' width='38' height='32' rx='3' fill='rgba(240,240,255,0.13)'/>" +
+        "<line x1='97' y1='111' x2='264' y2='111' stroke='#8ee8b8' stroke-width='3'/>" +
+        "<line x1='143' y1='108' x2='311' y2='108' stroke='#8ee8b8' stroke-width='3'/>" +
+        "<line x1='97' y1='130' x2='264' y2='130' stroke='#f5cf8a' stroke-width='2.6'/>" +
+        "<line x1='170' y1='86' x2='330' y2='86' stroke='rgba(255,160,150,0.85)' stroke-width='2.4' stroke-dasharray='6,5'/>" +
+        "<g stroke='rgba(255,160,150,0.95)' stroke-width='2.6'>" +
+        "<line x1='344' y1='132' x2='356' y2='144'/><line x1='356' y1='132' x2='344' y2='144'/>" +
+        "</g>" +
+        "<g fill='#f4f2ff'>" +
+        "<circle cx='97' cy='111' r='4.4'/><circle cx='264' cy='111' r='4.4'/>" +
+        "<circle cx='143' cy='108' r='4.2'/><circle cx='311' cy='108' r='4.2'/>" +
+        "<circle cx='97' cy='130' r='3.8'/><circle cx='264' cy='130' r='3.8'/>" +
+        "</g>" +
+        "<g stroke='rgba(226,224,255,0.70)' stroke-width='1.8' fill='rgba(240,240,255,0.09)'>" +
+        "<rect x='120' y='188' width='36' height='26' rx='3'/>" +
+        "<rect x='162' y='188' width='36' height='26' rx='3'/>" +
+        "<rect x='204' y='188' width='36' height='26' rx='3'/>" +
+        "<rect x='246' y='188' width='36' height='26' rx='3'/>" +
+        "</g>" +
+        "<g stroke='rgba(226,224,255,0.38)' stroke-width='1.4'>" +
+        "<line x1='127' y1='198' x2='149' y2='198'/><line x1='169' y1='198' x2='191' y2='198'/>" +
+        "<line x1='211' y1='198' x2='233' y2='198'/><line x1='253' y1='198' x2='275' y2='198'/>" +
+        "</g>" +
+        "<text x='200' y='252' font-size='27' font-weight='700' text-anchor='middle' fill='#f2f0ff' font-family='Helvetica, Arial, sans-serif'>关联破解者</text>" +
+        "<text x='200' y='280' font-size='13' text-anchor='middle' fill='rgba(238,236,255,0.72)' font-family='Helvetica, Arial, sans-serif'>阶段 G · 31 篇 · 匹配 / 检索 / 端到端 / 基础模型</text>" +
+        "</svg>",
+      card_file: "reference/成就卡-第七季.html"
+    }
   ]
 };
