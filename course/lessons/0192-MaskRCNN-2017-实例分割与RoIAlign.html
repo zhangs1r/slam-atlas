@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mask R-CNN（2017）：实例分割与 RoIAlign — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0192</div>
+      <h1>Mask R-CNN（2017）：实例分割与 RoIAlign</h1>
+      <p class="subtitle">它是整套课里在 SLAM 论文中出现频率最高的一个零件——但你只记住「它很准」是不够的。⚙️ 这一课要把两件事讲透：那条只多花了 20% 开销的第三条分支，以及那个「改一个取整符号就换回一大截精度」的算子。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：实例分割的行业标准件</span>
+        <span>👥 作者：K. He、G. Gkioxari、P. Dollár、R. Girshick（Facebook AI Research）</span>
+        <span>📅 年份 · <i>Mask R-CNN</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先分清三个词</a>
+        <a href="#b">第三条分支</a>
+        <a href="#c">★ RoIAlign 与那一个取整符号</a>
+        <a href="#d">损失与数字</a>
+        <a href="#e">它不完美在哪</a>
+        <a href="#f">和前面课程怎么接</a>
+        <a href="#g">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：① 说清<b>实例分割</b>与<b>语义分割</b>到底差在哪（一句话：要不要数个体）；② 讲出 Mask R-CNN 在 Faster R-CNN 上加的那<b>第三条分支</b>是什么，以及为什么掩码用 <b>sigmoid</b> 而不是 <b>softmax</b>；③ 画出 <b>RoIPool 的取整错位</b>与 <b>RoIAlign 的双线性插值</b>的区别，并说出它换回了多少精度；④ 复述 <b>5 fps / 195 ms</b> 这组数字，并解释 SLAM 论文为什么一边用它一边抱怨它。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本课是<b>前两课的汇合点</b>：<b>0190 FCN</b> 给了逐像素预测的思想（掩码分支本身就是一个小 FCN），<b>0191 YOLO</b> 给了 IoU 与候选框这套工具（RPN、正负样本判定都用它）。<b>先读那两课，再读这一课</b>会顺很多。★ 本课最重要的落地点是<b>第八季 0153–0159 动态环境块</b>：DynaSLAM 用它分割 <b>19 类「潜在动态」物体</b>并引了它 <b>195 ms/图</b>的真实耗时；MaskFusion 改用<b>实例级掩码</b>建 object-aware map，同时直言它「跑不到帧率、边界不精」。★ 第九季 <b>0180</b> 的纪律在这里尤其有用：<b>看到 AP 先问是 AP50 还是 AP75</b>——RoIAlign 的收益恰恰主要体现在更严的 AP75 上。</p></div>
+      </div>
+
+      <h2>1. 先分清三个词：这一课要补上的是最后一块</h2>
+      <p>我们在 0190 课用「两只挨在一起的猫」把三个词摆开过一次。这里把它收口，因为<b>恰恰是语义分割与实例分割之间的那道缝，决定了本课全部的技术细节</b>。</p>
+      <ul>
+        <li><b>目标检测（0191 YOLO）</b>：返回两个框 + 标签 cat, cat——知道有两只、知道大概在哪，<b>但不知道边界</b>。</li>
+        <li><b>语义分割（0190 FCN）</b>：返回一张图，所有属于猫的像素涂成同一色——<b>两只连成一片，分不出个体</b>。原文原话是语义分割 <b>classif[ies] each pixel into a fixed set of categories without differentiating object instances</b>。</li>
+        <li><b>实例分割（本课 Mask R-CNN）</b>：返回<b>两张独立的掩码</b>——<b>既知边界，又知个体</b>。</li>
+      </ul>
+      <p>那「分得出个体」这件事，在数学上靠什么实现？靠一个非常小的改动：<b>语义分割对每个像素做「多分类」，类别之间互相竞争（softmax，所有类概率加起来等于 1）；实例分割给每个类各出一张「是 / 否」的二值图，类别之间不竞争（sigmoid）。</b></p>
+      <p>这一个小解耦值多少钱？原文的消融实验给了答案：在 ResNet-50-C4 上，per-pixel softmax 是 <b>24.8</b> mask AP，换成 per-pixel sigmoid 是 <b>30.3</b>——<b>整整 +5.5 个点</b>（$\mathrm{AP}_{50}$ 还多 +7.1、$\mathrm{AP}_{75}$ 多 +6.4）。原文把它当作「best 结果的关键」之一。</p>
+      <p>为什么差这么多？因为 softmax 会强行让「掩码」和「分类」两件事<b>绑在一起互相制约</b>——每个像素必须在 80 个类里抢一个名额，于是模型被迫在画形状的同时还要反复重新判定类别；而 sigmoid 让掩码分支只回答一个更单纯的问题：<b>「在这个框里，属于类 k 的像素是哪些？」</b>类别判定已经交给分类分支了，掩码不必再操心。<b>分工一旦清楚，两边都能做得更好。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">同一张两只猫的照片：语义分割给一片，实例分割给两张</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">差别只有一个：掩码之间要不要互相竞争</text>
+          <text x="450" y="70" text-anchor="middle" fill="#ffd166" font-size="11">同一张输入照片，交给两代分割网络</text>
+
+          <rect x="60" y="84" width="370" height="216" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="245" y="108" text-anchor="middle" fill="#ff9f6b" font-size="12.5" font-weight="700">语义分割（FCN，0190）</text>
+          <text x="245" y="126" text-anchor="middle" fill="#9fb4ff" font-size="10">每个像素在固定类别集里选一个</text>
+          <rect x="200" y="176" width="26" height="34" rx="7" fill="#ff9f6b"/>
+          <ellipse cx="180" cy="194" rx="32" ry="21" fill="#ff9f6b"/>
+          <circle cx="153" cy="172" r="14" fill="#ff9f6b"/>
+          <polygon points="143,164 147,150 157,160" fill="#ff9f6b"/>
+          <polygon points="163,160 169,150 165,164" fill="#ff9f6b"/>
+          <ellipse cx="240" cy="194" rx="32" ry="21" fill="#ff9f6b"/>
+          <circle cx="267" cy="172" r="14" fill="#ff9f6b"/>
+          <polygon points="257,160 263,150 273,164" fill="#ff9f6b"/>
+          <polygon points="277,164 283,164 279,160" fill="#ff9f6b"/>
+          <text x="245" y="152" text-anchor="middle" fill="#ff9f6b" font-size="9">两只猫同一色</text>
+          <text x="245" y="228" text-anchor="middle" fill="#ff9f6b" font-size="9">中间这道桥把两只连成一片</text>
+          <rect x="90" y="250" width="62" height="22" rx="4" fill="#223052" stroke="#3a4a78"/>
+          <text x="121" y="265" text-anchor="middle" fill="#cdd6ff" font-size="9">墙 0.10</text>
+          <rect x="158" y="250" width="62" height="22" rx="4" fill="#223052" stroke="#3a4a78"/>
+          <text x="189" y="265" text-anchor="middle" fill="#cdd6ff" font-size="9">地 0.20</text>
+          <rect x="226" y="250" width="62" height="22" rx="4" fill="#3a2a10" stroke="#ff9f6b"/>
+          <text x="257" y="265" text-anchor="middle" fill="#ff9f6b" font-size="9">猫 0.60</text>
+          <rect x="294" y="250" width="62" height="22" rx="4" fill="#223052" stroke="#3a4a78"/>
+          <text x="325" y="265" text-anchor="middle" fill="#cdd6ff" font-size="9">人 0.05</text>
+          <rect x="362" y="250" width="62" height="22" rx="4" fill="#223052" stroke="#3a4a78"/>
+          <text x="393" y="265" text-anchor="middle" fill="#cdd6ff" font-size="9">树 0.05</text>
+          <text x="245" y="290" text-anchor="middle" fill="#9fb4ff" font-size="9.5">softmax：所有类加起来等于 1，互相抢名额</text>
+
+          <rect x="470" y="84" width="370" height="216" rx="8" fill="#0b1220" stroke="#5cffb0"/>
+          <text x="655" y="108" text-anchor="middle" fill="#5cffb0" font-size="12.5" font-weight="700">实例分割（Mask R-CNN，本课）</text>
+          <text x="655" y="126" text-anchor="middle" fill="#9fb4ff" font-size="10">每个类各出一张二值图，互不竞争</text>
+          <ellipse cx="590" cy="194" rx="32" ry="21" fill="#5cffb0"/>
+          <circle cx="563" cy="172" r="14" fill="#5cffb0"/>
+          <polygon points="553,164 557,150 567,160" fill="#5cffb0"/>
+          <polygon points="573,160 579,150 575,164" fill="#5cffb0"/>
+          <ellipse cx="650" cy="194" rx="32" ry="21" fill="#4ea8ff"/>
+          <circle cx="677" cy="172" r="14" fill="#4ea8ff"/>
+          <polygon points="667,160 673,150 683,164" fill="#4ea8ff"/>
+          <polygon points="687,164 693,164 689,160" fill="#4ea8ff"/>
+          <rect x="616" y="176" width="8" height="34" fill="#0b1220"/>
+          <text x="590" y="152" text-anchor="middle" fill="#5cffb0" font-size="9">掩码 ①</text>
+          <text x="650" y="152" text-anchor="middle" fill="#4ea8ff" font-size="9">掩码 ②</text>
+          <text x="655" y="228" text-anchor="middle" fill="#5cffb0" font-size="9">两张掩码在中间断开，互不重叠</text>
+          <rect x="510" y="250" width="94" height="22" rx="4" fill="#16203a" stroke="#5cffb0"/>
+          <text x="557" y="265" text-anchor="middle" fill="#5cffb0" font-size="9">是 person 0.90</text>
+          <rect x="610" y="250" width="94" height="22" rx="4" fill="#16203a" stroke="#5cffb0"/>
+          <text x="657" y="265" text-anchor="middle" fill="#5cffb0" font-size="9">是 cat 0.80</text>
+          <rect x="710" y="250" width="94" height="22" rx="4" fill="#16203a" stroke="#5cffb0"/>
+          <text x="757" y="265" text-anchor="middle" fill="#5cffb0" font-size="9">是 dog 0.05</text>
+          <text x="655" y="290" text-anchor="middle" fill="#9fb4ff" font-size="9.5">sigmoid：每类各判一次是或否，不必和为 1</text>
+
+          <text x="245" y="322" text-anchor="middle" fill="#cdd6ff" font-size="10.5">语义分割：涂得满，但不分个</text>
+          <text x="245" y="342" text-anchor="middle" fill="#9fb4ff" font-size="10">个体信息在 softmax 的竞争里被抹平</text>
+          <text x="655" y="322" text-anchor="middle" fill="#cdd6ff" font-size="10.5">实例分割：又涂又数</text>
+          <text x="655" y="342" text-anchor="middle" fill="#9fb4ff" font-size="10">个体信息靠「每类一张二值图」保下来</text>
+
+          <rect x="60" y="358" width="780" height="118" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="382" text-anchor="middle" fill="#cdd6ff" font-size="11.5">把掩码从 softmax 换成 sigmoid，在 ResNet-50-C4 上是 24.8 到 30.3 mask AP</text>
+          <text x="450" y="402" text-anchor="middle" fill="#5cffb0" font-size="11">整整 +5.5 个点（AP50 多 +7.1、AP75 多 +6.4）——原文把它当作拿最好成绩的关键之一</text>
+          <text x="450" y="422" text-anchor="middle" fill="#9fb4ff" font-size="10.5">softmax 让每个像素在 80 个类里抢一个名额，两只猫只能共用「猫」这一个答案</text>
+          <text x="450" y="442" text-anchor="middle" fill="#9fb4ff" font-size="10.5">sigmoid 让掩码分支只回答「属于类 k 的像素是哪些」，类别判定已交给分类分支</text>
+          <text x="450" y="462" text-anchor="middle" fill="#9fb4ff" font-size="10.5">原因：分工一旦清楚，分类和掩码两边都能做得更好</text>
+          <text x="450" y="504" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：实例分割与语义分割的差别，落在「掩码之间要不要竞争」这一行代码上</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两格是同一张两只猫的照片。左格是语义分割：两只猫涂成同一色、中间还被一道桥连成一片，下面画着一排类别概率条（墙 0.10、地 0.20、猫 0.60、人 0.05），标着「加起来等于 1，互相抢名额」。右格是实例分割：第 1 只猫绿、第 2 只猫蓝，中间特意断开，下面是一排「是 person 0.90 / 是 cat 0.80 / 是 dog 0.05」的独立判断，标着「各判各的，不必和为 1」。<br>
+          <b>怎么看这张图：</b>① 先找左格那道<b>桥</b>——它是 softmax 逼出来的结果：所有类抢一个名额，于是两只猫只能共用「猫」这一个答案；② 再看右格中间那道<b>缝</b>——sigmoid 让每个类各判一次，两只猫可以各自成图；③ 最后看底部：这一行代码的差别值 <b>+5.5 mask AP</b>，这就是原文说「掩码与分类解耦是关键」的全部含义。<br>
+          <b>要记住的一句话：</b>「实例分割」与「语义分割」的差距，不是网络更深，而是掩码之间<b>不竞争</b>。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 第三条分支：在 Faster R-CNN 上加了什么</h2>
+      <p>Mask R-CNN 的起点是 <b>Faster R-CNN</b>。这是它之前的实例检测标准件，结构可以一句话说完：<b>先用 RPN（Region Proposal Network）从图上找出可能是物体的候选框，再对每个候选框取一块特征，做两件事——判它是什么类、把框往哪儿挪。</b>也就是两条并列的输出分支。</p>
+      <p>这里要就地补三个词：</p>
+      <ul>
+        <li><b>RPN（区域候选网络）</b>：Faster R-CNN 用来生成候选框的小网络。它替代了 R-CNN 那一代用 Selective Search 手工生成的约 2000 个候选，直接把候选框<b>学出来</b>，数量 1 到 2 千。这就是 0191 课里说的「两阶段的第一道闸门」。</li>
+        <li><b>RoI（Region of Interest，感兴趣区域）</b>：候选框在特征图上圈出来的那一块。<b>后面的所有算子都作用在一块 RoI 上。</b></li>
+        <li><b>RoIPool</b>：把大小不一的 RoI 特征块，<b>统一压成固定尺寸</b>（比如 7×7）的算子。因为后面的全连接层要求固定输入尺寸。这个算子就是下一节的主角。</li>
+      </ul>
+      <p>Mask R-CNN 做的事，原文在 §3 开篇一句话就说完了：</p>
+      <div class="callout">
+        <h4>原文的关键一句</h4>
+        <p><b>Faster R-CNN has two outputs for each candidate object, a class label and a bounding-box offset; to this we add a third branch that outputs the object mask.</b></p>
+        <p>人话翻译：Faster R-CNN 对每个候选物体本来有两个输出——一个类标签、一个框偏移；<b>我们在这之上加了第三条分支，输出物体的掩码。</b></p>
+      </div>
+      <p>这条分支长什么样？原文的描述是：<b>它是一个作用在单个 RoI 上的小 FCN</b>，逐像素预测，输出 $K\cdot m^2$ 维（$K$ 个类各一张 $m\times m$ 的二值掩码）。COCO 上 $K=80$、$m=28$。这个「小孩」之所以能这么简单，是因为<b>分类的活已经被别人干完了</b>——它只需要回答形状。</p>
+      <p>有两个细节特别值得记：</p>
+      <ol>
+        <li><b>掩码用 per-pixel sigmoid + 二值交叉熵，而不是 FCN 惯用的 per-pixel softmax + 多项交叉熵。</b>上一节已经解释过，这值 +5.5 AP。</li>
+        <li><b>推理时是串行的，训练时是并行的。</b>训练时三条分支一起算；推理时<b>先跑分类与回归、做 NMS、然后只对得分最高的 100 个框跑掩码分支</b>。原文明确说这样做不但更快，而且更准——因为用的是「更少、更准的 RoI」。这是一个「故意不对称」的设计，很值得学。</li>
+      </ol>
+      <p>还有一个更微妙的发现：<b>类特定掩码与类无关掩码几乎一样好</b>——29.7 与 30.3 mask AP。原文对它的解读是：这进一步凸显了我们方法中的<b>分工</b>——分类已经在别处做完了，掩码只需回答「形状」。<b>这条正好解释了为什么第三条分支可以这么简单。</b></p>
+      <p>另外，掩码分支用 <b>FCN 头</b>（全卷积，conv 256→256→256→256→256→80）比用 <b>MLP 头</b>（全连接，fc 1024→1024→80·28²）高 <b>2.1</b> mask AP（33.6 对 31.5）。原文的解释是：FCNs improve results as they <b>take advantage of explicitly encoding spatial layout</b>——<b>能显式编码空间布局的方法更好</b>。这句话就是 0190 课那个核心论点在两年后的直接回响：<b>能保住空间信息的结构，就是更强。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="540" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">Mask R-CNN 加了什么：一条与分类、回归并列的第三条分支</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">分类和回归都是 Faster R-CNN 原有的；只有第三条是本文新增</text>
+
+          <rect x="350" y="72" width="200" height="58" rx="8" fill="#1b2338" stroke="#3a4a78"/>
+          <text x="450" y="94" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">骨干特征图（ResNet-FPN）</text>
+          <text x="450" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9.5">对每个 RoI 取出一小块特征</text>
+          <line x1="408" y1="130" x2="180" y2="172" stroke="#3a4a78" stroke-width="2"/>
+          <polygon points="174,174 186,170 182,182" fill="#3a4a78"/>
+          <line x1="450" y1="130" x2="450" y2="172" stroke="#3a4a78" stroke-width="2"/>
+          <polygon points="450,176 444,164 456,164" fill="#3a4a78"/>
+          <line x1="492" y1="130" x2="720" y2="172" stroke="#3a4a78" stroke-width="2"/>
+          <polygon points="726,174 718,182 714,170" fill="#3a4a78"/>
+          <text x="300" y="152" text-anchor="middle" fill="#9fb4ff" font-size="9.5">同一块 RoI 特征</text>
+
+          <rect x="80" y="180" width="180" height="110" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <text x="170" y="202" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">① 分类分支</text>
+          <text x="170" y="222" text-anchor="middle" fill="#9fb4ff" font-size="9.5">判它是什么类</text>
+          <text x="170" y="240" text-anchor="middle" fill="#9fb4ff" font-size="9">softmax：80 类里选 1</text>
+          <text x="170" y="256" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">person</text>
+          <text x="170" y="278" text-anchor="middle" fill="#9fb4ff" font-size="9">与 Faster R-CNN 相同</text>
+
+          <rect x="360" y="180" width="180" height="110" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <text x="450" y="202" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">② 回归分支</text>
+          <text x="450" y="222" text-anchor="middle" fill="#9fb4ff" font-size="9.5">把框往哪儿挪</text>
+          <text x="450" y="240" text-anchor="middle" fill="#9fb4ff" font-size="9">框的四个偏移量</text>
+          <text x="450" y="256" text-anchor="middle" fill="#4ea8ff" font-size="12" font-weight="700">Δx, Δy, Δw, Δh</text>
+          <text x="450" y="278" text-anchor="middle" fill="#9fb4ff" font-size="9">与 Faster R-CNN 相同</text>
+
+          <ellipse cx="740" cy="235" rx="118" ry="72" fill="none" stroke="#ff5d73" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="740" y="152" text-anchor="middle" fill="#ff5d73" font-size="11" font-weight="700">本文新增的唯一东西</text>
+          <text x="740" y="176" text-anchor="middle" fill="#9fb4ff" font-size="9">掩码：每个类各出一张</text>
+          <rect x="640" y="180" width="200" height="110" rx="8" fill="#3a1820" stroke="#ff5d73" stroke-width="1.5"/>
+          <text x="740" y="200" text-anchor="middle" fill="#ff9f6b" font-size="11" font-weight="700">③ 掩码分支（新加）</text>
+          <rect x="650" y="210" width="40" height="40" fill="none" stroke="#ff9f6b" stroke-width="1.5"/>
+          <line x1="658" y1="210" x2="658" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="666" y1="210" x2="666" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="674" y1="210" x2="674" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="682" y1="210" x2="682" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="650" y1="218" x2="690" y2="218" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="650" y1="226" x2="690" y2="226" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="650" y1="234" x2="690" y2="234" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="650" y1="242" x2="690" y2="242" stroke="#ff9f6b" stroke-width="0.8"/>
+          <rect x="658" y="218" width="16" height="16" fill="#ff9f6b"/>
+          <rect x="666" y="226" width="8" height="8" fill="#ff9f6b"/>
+          <rect x="692" y="210" width="40" height="40" fill="none" stroke="#ff9f6b" stroke-width="1.5"/>
+          <line x1="700" y1="210" x2="700" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="708" y1="210" x2="708" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="716" y1="210" x2="716" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="724" y1="210" x2="724" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="692" y1="218" x2="732" y2="218" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="692" y1="226" x2="732" y2="226" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="692" y1="234" x2="732" y2="234" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="692" y1="242" x2="732" y2="242" stroke="#ff9f6b" stroke-width="0.8"/>
+          <rect x="700" y="218" width="12" height="12" fill="#ff9f6b"/>
+          <rect x="734" y="210" width="40" height="40" fill="none" stroke="#ff9f6b" stroke-width="1.5"/>
+          <line x1="742" y1="210" x2="742" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="750" y1="210" x2="750" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="758" y1="210" x2="758" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="766" y1="210" x2="766" y2="250" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="734" y1="218" x2="774" y2="218" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="734" y1="226" x2="774" y2="226" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="734" y="234" x2="774" y2="234" stroke="#ff9f6b" stroke-width="0.8"/>
+          <line x1="734" y1="242" x2="774" y2="242" stroke="#ff9f6b" stroke-width="0.8"/>
+          <rect x="742" y="226" width="6" height="6" fill="#ff9f6b"/>
+          <text x="670" y="266" text-anchor="middle" fill="#ff9f6b" font-size="9">person 掩码</text>
+          <text x="712" y="266" text-anchor="middle" fill="#9fb4ff" font-size="9">cat 掩码</text>
+          <text x="754" y="266" text-anchor="middle" fill="#9fb4ff" font-size="9">dog 掩码</text>
+          <text x="740" y="284" text-anchor="middle" fill="#5cffb0" font-size="9.5">per-class sigmoid：各判各的，互不竞争</text>
+
+          <path d="M170,290 L170,322 L740,322 L740,294" fill="none" stroke="#ffd166" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <polygon points="740,288 734,300 746,300" fill="#ffd166"/>
+          <text x="450" y="342" text-anchor="middle" fill="#ffd166" font-size="10.5">分类分支判出的类 k，用来挑第 k 张掩码</text>
+          <text x="450" y="360" text-anchor="middle" fill="#9fb4ff" font-size="9.5">Faster R-CNN 本来只有左边这两条分支</text>
+
+          <rect x="60" y="372" width="780" height="130" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="394" text-anchor="middle" fill="#cdd6ff" font-size="11.5">每个 RoI 要算三笔账：它是什么类、它的框该往哪儿挪、它的像素轮廓长什么样</text>
+          <text x="450" y="414" text-anchor="middle" fill="#9fb4ff" font-size="10.5">掩码输出 K 张 m×m 二值图（COCO 上 K=80、m=28），只有被判为正样本的 RoI 才算这笔账</text>
+          <text x="450" y="434" text-anchor="middle" fill="#9fb4ff" font-size="10.5">掩码分支的输出是 K×m×m 维向量，对它施加 per-pixel sigmoid，损失定义为平均二值交叉熵</text>
+          <text x="450" y="454" text-anchor="middle" fill="#5cffb0" font-size="10.5">掩码分支相对 Faster R-CNN 只增加约 20% 开销，但输出粒度从「框」降到了「像素」</text>
+          <text x="450" y="474" text-anchor="middle" fill="#9fb4ff" font-size="10.5">训练时三条分支并行算；推理时先分类回归做 NMS，再只对前 100 个框跑掩码</text>
+          <text x="450" y="494" text-anchor="middle" fill="#9fb4ff" font-size="10.5">正因为掩码只需回答形状，它可以用一个极小的 FCN 实现——这就是「分工」的回报</text>
+          <text x="450" y="516" text-anchor="middle" fill="#ffd166" font-size="11.5" font-weight="700">要记住：这条分支本身是个小 FCN——它的血缘就在 0190 课</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>顶上是一块骨干特征图，向下分出三条并列的分支。① 分类分支输出 person，② 回归分支输出 Δx, Δy, Δw, Δh——这两条旁边都注着「与 Faster R-CNN 相同」。③ 掩码分支被一个红色虚线椭圆圈住，顶上写着「本文新增的唯一东西」，里面画了三张小方格图（person 掩码、cat 掩码、dog 掩码），标注为 per-class sigmoid。最低下有一条黄色虚线回路，从分类分支绕到掩码分支。<br>
+          <b>怎么看这张图：</b>① 先看<b>哪两条是有注释说明的</b>——① 和 ② 写着「与 Faster R-CNN 相同」，说明它们不是本文的贡献；② 再看被虚线圈住的那一条——<b>只有 ③ 是新的</b>，而且它是一个作用在单块 RoI 特征上的小 FCN；③ 最后看那条黄色虚线回路——它是全图最关键的一根线：<b>分类分支已经判出类 k 了，掩码分支只需把第 k 张图交出来</b>，正因为有这条分工，第三条分支才可以做得这么简单。<br>
+          <b>要记住的一句话：</b>Mask R-CNN 不是「又造了一个网络」，而是<b>在现成的两分支上并联了一条极小的第三分支，并且把两件事解耦开</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ RoIAlign 与那一个取整符号</h2>
+      <p>这一节是 Mask R-CNN 全文最漂亮的地方，也是本课篇幅最重的一节——它比「加第三条分支」更值得讲，理由有三条，每条都有原文数字撑腰：</p>
+      <ol>
+        <li>它的增益在最苛刻的设置下高达 <b>+7.3 mask AP</b>、<b>+10.5 mask AP75</b>，是<b>约 50% 的相对提升</b>；</li>
+        <li>它是少见的「<b>改一个取整符号就换回一大截精度</b>」的案例，最适合讲「工程细节有多值钱」；</li>
+        <li>但更重要的是——<b>SLAM 论文抱怨 Mask R-CNN 慢的时候，说的就是它</b>。这是一个「精度很高、落地很痛」的真实摩擦。</li>
+      </ol>
+
+      <h3>问题出在哪：RoIPool 的两次取整</h3>
+      <p>先讲清为什么会有这个问题。原文的逻辑链特别干净：<b>掩码是像素到像素的任务</b>，所以 RoI 特征<b>必须与输入精确对齐</b>。但 Faster R-CNN 在设计时<b>根本没考虑过输入输出之间的像素级对齐</b>——它的核心算子 RoIPool 是做<b>粗粒度空间量化</b>的。</p>
+      <p>具体来说，RoIPool 会做两次取整：</p>
+      <ol>
+        <li>把 RoI 的边界坐标（一个浮点数）<b>除以 stride 然后向下取整</b>；</li>
+        <li>再把 RoI 切成 $m\times m$ 个 bin 时，每个 bin 的边界<b>再取整一次</b>。</li>
+      </ol>
+      <p>这些取整对「判类别」无所谓——差半个像素格，人还是人。但<b>对「画像素级掩码」是致命的</b>：采样点整体被拽偏了，掩码边界自然对不上真实轮廓。</p>
+      <p>生活类比：你要照着原图描一幅画，但底下的格子纸和原图<b>错开了半个格子</b>。远看还认得出是什么，近看线条全是错的。</p>
+      <p><b>一句话说明 OCR 疑点（重要）：</b>原文描述这一步时写的是 <b>computing [x/16]</b>，md 版本把取整符号压成了方括号，语义从「向下取整」弱化成了「取整」。按 §3 后文自证（原文写 we use x/16 instead of [x/16]、以及 removes the harsh quantization），<b>正确的读法是向下取整 $\lfloor\cdot\rfloor$</b>。本课一律写「向下取整」。</p>
+
+      <h3>它的改法：不取整，直接插值</h3>
+      <p>RoIAlign 的改动小到近乎可笑。原文原话是：<b>we avoid any quantization of the RoI boundaries or bins（i.e., we use x/16 instead of ⌊x/16⌋）</b>——<b>RoI 的边界和 bin 都不做任何量化</b>。然后在每个 RoI bin 内，取 <b>4 个规则分布的采样点</b>，用<b>双线性插值</b>算出这些点的精确特征值，再聚合（max 或 average）。</p>
+      <p>原文还给了一句很关键的注脚：<b>这里用的是浮点连续坐标，不做取整</b>。这一点对零基础读者很重要——原文把「坐标除以步长」和「不取整」用了同一个符号 x/16，容易让人误以为是个坐标变换，其实它的意思只是「保留浮点坐标」。</p>
+      <p>为了证明「对齐」才是关键，原文还专门做了一个对照实验：把另一篇工作 MNC 的 <b>RoIWarp</b> 也拉来比。RoIWarp <b>同样用了双线性重采样</b>，但它<b>仍然在做量化</b>，结果效果只和 RoIPool 打平。原文由此下结论：这 demonstrating the <b>crucial role of alignment</b>——<b>真正起作用的不是「插值」，而是「不对齐」这件事被修掉了</b>。</p>
+      <p>还有一个细节能佐证这一点：<b>RoIAlign 对聚合方式（max 还是 average）不敏感</b>——30.2 对 30.3，几乎没差别，所以论文后面一律用 average。这说明<b>收益全部来自「对齐」，而不是聚合方式</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 584" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="584" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">RoIPool 的取整错位 vs RoIAlign 的双线性插值</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">同一张特征图、同一个 RoI，只差「要不要把坐标拽到格子线上」</text>
+
+          <text x="170" y="80" text-anchor="middle" fill="#ff9f6b" font-size="12.5" font-weight="700">RoIPool：先取整，再采样</text>
+          <text x="630" y="80" text-anchor="middle" fill="#5cffb0" font-size="12.5" font-weight="700">RoIAlign：不取整，用双线性插值</text>
+          <text x="450" y="100" text-anchor="middle" fill="#9fb4ff" font-size="10">同一张 6×6 的特征图格</text>
+
+          <text x="70" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">1</text>
+          <text x="110" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">2</text>
+          <text x="150" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">3</text>
+          <text x="190" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">4</text>
+          <text x="230" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">5</text>
+          <text x="270" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">6</text>
+          <text x="530" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">1</text>
+          <text x="570" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">2</text>
+          <text x="610" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">3</text>
+          <text x="650" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">4</text>
+          <text x="690" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">5</text>
+          <text x="730" y="114" text-anchor="middle" fill="#9fb4ff" font-size="9">6</text>
+
+          <line x1="50" y1="118" x2="290" y2="118" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="158" x2="290" y2="158" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="198" x2="290" y2="198" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="238" x2="290" y2="238" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="278" x2="290" y2="278" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="318" x2="290" y2="318" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="358" x2="290" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="50" y1="118" x2="50" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="90" y1="118" x2="90" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="130" y1="118" x2="130" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="170" y1="118" x2="170" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="210" y1="118" x2="210" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="250" y1="118" x2="250" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="290" y1="118" x2="290" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <rect x="102" y="166" width="136" height="136" fill="none" stroke="#ff5d73" stroke-width="2.5"/>
+          <rect x="90" y="158" width="120" height="120" fill="none" stroke="#ff5d73" stroke-width="2" stroke-dasharray="7 5"/>
+          <polygon points="90,158 102,158 102,166 90,166" fill="#ff5d73" opacity="0.45"/>
+          <polygon points="210,278 238,278 238,302 210,302" fill="#ff5d73" opacity="0.45"/>
+          <line x1="103" y1="167" x2="92" y2="160" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="90,158 98,162 94,168" fill="#ffd166"/>
+          <text x="296" y="172" fill="#ff5d73" font-size="9">真实边界</text>
+          <text x="296" y="192" fill="#ff9f6b" font-size="9">取整后边界</text>
+
+          <line x1="510" y1="118" x2="750" y2="118" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="158" x2="750" y2="158" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="198" x2="750" y2="198" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="238" x2="750" y2="238" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="278" x2="750" y2="278" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="318" x2="750" y2="318" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="358" x2="750" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="510" y1="118" x2="510" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="550" y1="118" x2="550" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="590" y1="118" x2="590" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="630" y1="118" x2="630" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="670" y1="118" x2="670" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="710" y1="118" x2="710" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="750" y1="118" x2="750" y2="358" stroke="#3a4a78" stroke-width="1"/>
+          <rect x="562" y="166" width="136" height="136" fill="none" stroke="#5cffb0" stroke-width="2.5"/>
+          <line x1="630" y1="166" x2="630" y2="302" stroke="#5cffb0" stroke-width="1" stroke-dasharray="4 3"/>
+          <line x1="562" y1="234" x2="698" y2="234" stroke="#5cffb0" stroke-width="1" stroke-dasharray="4 3"/>
+          <circle cx="579" cy="183" r="3.5" fill="#ffd166"/>
+          <circle cx="613" cy="183" r="3.5" fill="#ffd166"/>
+          <circle cx="647" cy="183" r="3.5" fill="#ffd166"/>
+          <circle cx="681" cy="183" r="3.5" fill="#ffd166"/>
+          <circle cx="579" cy="217" r="3.5" fill="#ffd166"/>
+          <circle cx="613" cy="217" r="3.5" fill="#ffd166"/>
+          <circle cx="647" cy="217" r="3.5" fill="#ffd166"/>
+          <circle cx="681" cy="217" r="3.5" fill="#ffd166"/>
+          <circle cx="579" cy="251" r="3.5" fill="#ffd166"/>
+          <circle cx="613" cy="251" r="3.5" fill="#ffd166"/>
+          <circle cx="647" cy="251" r="3.5" fill="#ffd166"/>
+          <circle cx="681" cy="251" r="3.5" fill="#ffd166"/>
+          <circle cx="579" cy="285" r="3.5" fill="#ffd166"/>
+          <circle cx="613" cy="285" r="3.5" fill="#ffd166"/>
+          <circle cx="647" cy="285" r="3.5" fill="#ffd166"/>
+          <circle cx="681" cy="285" r="3.5" fill="#ffd166"/>
+          <line x1="579" y1="183" x2="570" y2="178" stroke="#ffd166" stroke-width="1"/>
+          <line x1="579" y1="183" x2="610" y2="178" stroke="#ffd166" stroke-width="1"/>
+          <line x1="579" y1="183" x2="570" y2="218" stroke="#ffd166" stroke-width="1"/>
+          <line x1="579" y1="183" x2="610" y2="218" stroke="#ffd166" stroke-width="1"/>
+          <rect x="567" y="175" width="6" height="6" fill="#5cffb0"/>
+          <rect x="607" y="175" width="6" height="6" fill="#5cffb0"/>
+          <rect x="567" y="215" width="6" height="6" fill="#5cffb0"/>
+          <rect x="607" y="215" width="6" height="6" fill="#5cffb0"/>
+          <text x="754" y="183" fill="#ffd166" font-size="9">采样点</text>
+          <text x="754" y="203" fill="#5cffb0" font-size="9">双线性插值</text>
+
+          <text x="170" y="382" text-anchor="middle" fill="#ff9f6b" font-size="10">边界被拽到格子线上</text>
+          <text x="170" y="400" text-anchor="middle" fill="#9fb4ff" font-size="10">采样点因此整体偏移</text>
+          <text x="170" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">一个格子内最多差近一格</text>
+          <text x="170" y="436" text-anchor="middle" fill="#ff5d73" font-size="10">掩码边界因此对不上轮廓</text>
+          <text x="630" y="382" text-anchor="middle" fill="#5cffb0" font-size="10">边界保持浮点坐标</text>
+          <text x="630" y="400" text-anchor="middle" fill="#9fb4ff" font-size="10">采样点落在真实位置</text>
+          <text x="630" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">每个 bin 取 4 个采样点</text>
+          <text x="630" y="436" text-anchor="middle" fill="#5cffb0" font-size="10">掩码边界贴合真实轮廓</text>
+
+          <line x1="50" y1="452" x2="850" y2="452" stroke="#2a3a66" stroke-width="1"/>
+          <rect x="40" y="460" width="820" height="76" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="482" text-anchor="middle" fill="#cdd6ff" font-size="11">RoIPool：先取整再采样，于是错位；RoIAlign：不取整，直接双线性插值，于是对齐</text>
+          <text x="450" y="502" text-anchor="middle" fill="#ffd166" font-size="10.5">相同设置下 mask AP：26.9 变 30.3；stride 32 时 23.6 变 30.9（+7.3），AP75 从 21.6 变 32.1（+10.5，约 50% 相对提升）</text>
+          <text x="450" y="522" text-anchor="middle" fill="#9fb4ff" font-size="10">收益全部来自「对齐」：max 与 average 两种聚合方式的差别只有 0.1（30.2 与 30.3）</text>
+          <text x="450" y="560" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">要记住：把「向下取整」换成「保留浮点坐标」，换回了约 50% 的相对提升</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两块同样的 6×6 特征图格，上面叠着同一个红色 RoI。左半（RoIPool）：实线红框是<b>真实边界</b>，落在格子之间；虚线红框是<b>取整后的边界</b>，被硬拽到了格子线上，两处错开的地方涂成红色阴影，并有一个黄色箭头标出「拽动」的方向。右半（RoIAlign）：红框保持真实位置不动，框内画出 16 个黄色采样小圆点（每个 bin 4 个），其中一个采样点还画了四条细线连向周围四个格子中心，示意双线性插值。<br>
+          <b>怎么看这张图：</b>① 先看左半那<b>两个框错开的位置</b>——这就是「取整」造成的位移，它会让所有后续采样整体偏掉；② 再看右半——<b>框没有动，但采样点落在框内的规则位置上</b>，值是周围四个格子中心插出来的；③ 记住底部那组数字：这个改动在最苛刻的设置下换回 <b>+7.3 mask AP</b> 与 <b>+10.5 AP75</b>。<br>
+          <b>要记住的一句话：</b>一个「向下取整」的符号，就是像素级任务里最贵的那半个格子。
+        </figcaption>
+      </figure>
+
+      <p><b>为什么 stride 越大，对齐越要命？</b>这组数字很能说明问题：在 stride 16 的骨干上，RoIAlign 带来约 <b>+3</b> 点提升；而在 stride <b>32</b> 的骨干上，提升变成 <b>+7.3</b>（AP75 甚至 +10.5）。道理也不难：<b>stride 越大，一个像素格代表的原图区域越大，取整带来的物理位移就越大。</b>原文对这件事的总结值得直接引用：</p>
+      <div class="callout">
+        <h4>原文的关键一句</h4>
+        <p><b>RoIAlign largely resolves the long-standing challenge of using large-stride features for detection and segmentation.</b></p>
+        <p>人话翻译：RoIAlign 基本解决了「想用大 stride 特征做检测与分割」这个长期难题。也就是说，<b>它不只是修了一个小 bug，而是把「用粗特征」这条路重新打通了</b>——粗特征便宜，能用了就意味着整条流水线都能变快。</p>
+      </div>
+      <p>还有一条证据能证明「对齐」的通用性：<b>对齐不只是分割需要，关键点检测更需要。</b>原文的人体关键点实验里，即使在最细层 stride 只有 <b>4</b> 的 FPN 骨干上，RoIAlign 仍把关键点 AP 从 <b>59.8 抬到 64.2（+4.4）</b>。原文的原话是：keypoint detections are <b>more sensitive to localization accuracy</b>，所以 alignment is essential for pixel-level localization, including masks and keypoints——<b>对齐对所有像素级定位任务都是必需的</b>。</p>
+      <p><b>★ 一个 OCR 疑点，务必注意：</b>原文 Table 2c 里 RoIPool 那一行的 <b>align? 与 bilinear? 两列在 md 里是空白的</b>（原表应该是两个叉）。如果照着空白读，会得出「RoIPool 也支持对齐」的结论——<b>恰好把这张表的结论读反了</b>。本课不依赖这张表，但提醒你回原文核对时留意。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. 损失函数：三笔账一起算</h2>
+      <p>Mask R-CNN 的损失定义得很干净——就是三笔账相加：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$L=L_{cls}+L_{box}+L_{mask}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>这个损失定义在<b>每一个被采样的 RoI</b> 上。$L_{cls}$ 是分类损失，<b>与 Fast R-CNN 的定义完全相同</b>；$L_{box}$ 是边框回归损失，<b>同样与 Fast R-CNN 完全相同</b>；$L_{mask}$ 是掩码分支的损失——掩码分支对每个 RoI 输出 $K m^2$ 维向量（$K$ 张 $m\times m$ 的二值掩码），对它施加 <b>per-pixel sigmoid</b>，$L_{mask}$ 就是<b>平均二值交叉熵</b>。</p>
+      <p><b>它为什么这么算：</b>一个 RoI 要算三笔账——<b>它是什么类</b>（$L_{cls}$）、<b>它的框该往哪儿挪</b>（$L_{box}$）、<b>它的像素轮廓长什么样</b>（$L_{mask}$），三笔相加一起反传。三笔里掩码那笔有个特殊规则：<b>只在 RoI 被判为正样本（与真值框 IoU 大于等于 0.5）时才存在</b>，而且只在你答对的那个类上收账。</p>
+      <p><b>数字账：</b>COCO 上 $K=80$、$m=28$，所以每个 RoI 的掩码分支要吐出 $80\times 28^2 = 62720$ 个数；但对一个真值类为 $k$ 的 RoI，<b>其中只有 1 张（第 $k$ 张）参与损失计算，另外 79 张的输出完全不产生任何损失</b>。这也是「类之间不竞争」在损失层面的具体表现。</p>
+      <p>掩码的真值怎么定义？原文一句：<b>The mask target is the intersection between an RoI and its associated ground-truth mask.</b>——<b>掩码真值就是「这个 RoI」与「它对应的真值掩码」的交集</b>。也就是说，掩码分支学的不是「整只猫的形状」，而是<b>「框内那一块猫的形状」</b>。</p>
+      <p>最后再放一次那段最关键的对比，原文原句：</p>
+      <div class="callout">
+        <h4>原文的关键一句</h4>
+        <p><b>This is different from common practice when applying FCNs to semantic segmentation, which typically uses a per-pixel softmax and a multinomial cross-entropy loss. In that case, masks across classes compete; in our case, with a per-pixel sigmoid and a binary loss, they do not.</b></p>
+        <p>人话翻译：把 FCN 用在语义分割上的常见做法是 per-pixel softmax + 多项交叉熵，那样<b>类与类的掩码是互相竞争的</b>；我们用 per-pixel sigmoid + 二值损失，<b>它们不竞争</b>。</p>
+      </div>
+      <p><b>这句话为什么值 5.5 个 AP？</b>因为竞争意味着「一个像素只能属于一个类」。在真实场景里，一个像素确实只属于一个物体，所以竞争听起来合理——但问题在于：<b>模型此时还得顺带重新做一遍分类判断</b>。一旦分类判断出错，掩码也跟着错，两个错误互相放大。解耦之后，掩码分支只需要回答一个纯粹的形状问题，<b>两个任务各干各的，都做得更好</b>。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. 关键数字与「它不完美在哪」</h2>
+      <p>先把成绩单摆出来，再讲它落地时的真实摩擦——后者才是 SLAM 读者最该记住的部分。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>精度（COCO test-dev，mask AP）</h4><p>ResNet-101-C4 <b>33.1</b> → ResNet-101-FPN <b>35.7</b> → ResNeXt-101-FPN <b>37.1</b>。对手：MNC（COCO 2015 冠军）<b>24.6</b>；FCIS+OHEM（COCO 2016 冠军）<b>29.2</b>；FCIS+++（带多尺度 + 翻转 + OHEM）<b>33.6</b>——<b>被 35.7 的无技巧版直接超过</b>。</p></div>
+        <div class="mini-card"><h4>速度（★ 本节最重要）</h4><p><b>5 fps / 约 200 ms 每帧</b>。ResNet-101-FPN 共享特征版 <b>195 ms/图</b>（Nvidia Tesla M40）+ <b>15 ms</b> CPU 后处理；ResNet-101-C4 版要 <b>400 ms</b>——原文因此「不建议在实践中用 C4 变体」。掩码分支相对 Faster R-CNN 只增加约 <b>20%</b> 开销。</p></div>
+        <div class="mini-card"><h4>掩码解耦的收益</h4><p>per-pixel softmax <b>24.8</b> → sigmoid <b>30.3</b>（ResNet-50-C4），<b>+5.5</b> mask AP。</p></div>
+        <div class="mini-card"><h4>RoIAlign 的收益</h4><p>stride 16：26.9 → 30.3；stride 32：<b>23.6 → 30.9（+7.3）</b>，AP75 <b>21.6 → 32.1（+10.5）</b>。摘要写作「improves mask accuracy by relative 10% to 50%」。</p></div>
+        <div class="mini-card"><h4>掩码头：FCN 还是 MLP</h4><p>FCN 头 <b>33.6</b> 对 MLP 头 <b>31.5</b>，<b>高 2.1</b>。原文理由：能显式编码空间布局的方法更好——<b>这正是 0190 课那个论点的回响</b>。</p></div>
+        <div class="mini-card"><h4>采样与规模</h4><p>IoU 大于等于 <b>0.5</b> 的 RoI 为正样本，正负比 <b>1:3</b>；每图 RoI 数 N = <b>64</b>（C4）或 <b>512</b>（FPN）；推理用 300（C4）/ 1000（FPN）个候选，掩码只跑<b>得分最高的 100 个框</b>，阈值 0.5 二值化。训练 8 GPU、等效 minibatch 16、160k 迭代。</p></div>
+      </div>
+
+      <h3>它不完美在哪（一）：慢，而且是被 SLAM 论文点名地慢</h3>
+      <p>这是本课最需要读者带走的一条。<b>195 ms 一张图就意味着约 5 fps，而 SLAM 要实时。</b>语料库里的抱怨都很直接：</p>
+      <ul>
+        <li><b>2022_RGB-D_SLAM_in_Dynamic</b> 的原话：state-of-the-art segmentation methods such as Mask R-CNN are <b>still computationally intensive and often have to be run in a background thread</b> in practice to amortize their cost over several frames——<b>得分摊到好几帧上才跑得动</b>。</li>
+        <li><b>MaskFusion（2018）</b>把这件事写进了它的设计动机：<b>当前的 SOTA 方法 Mask-RCNN 无法在帧率下运行</b>。</li>
+        <li><b>MID-Fusion（2019）</b>的做法是干脆把它放到离线 / 后台线程里预计算，用公开权重、不微调。</li>
+        <li><b>DynaSLAM（2018）</b>引了一手数字：He 等报告 <b>Mask R-CNN 在 Nvidia Tesla M40 上每张图 195 ms</b>，并据此自承自己的系统「不面向实时操作优化」。</li>
+      </ul>
+
+      <h3>它不完美在哪（二）：边界不精，而且会「看不见」某些可移动物体</h3>
+      <ul>
+        <li><b>MaskFusion 的第一条观察</b>就是：当前的分割方法<b>擅长发现物体，但倾向于给出不完美的物体边界</b>（tend to provide imperfect object boundaries）。注意这是「拿它当零件用」的一手证据，比任何二手评价都可靠。</li>
+        <li><b>EM-Fusion（2019）</b>也说：虽然前景概率提供了分割线索，但它<b>不足以支撑鲁棒跟踪，因为 Mask R-CNN 的实例分割并不精确</b>。</li>
+        <li><b>PanopticFusion（2019）</b>指出另一类问题：<b>当物体只有一小部分可见时，Mask R-CNN 给出的类别标签常常不确定</b>——即使掩码本身是准的。</li>
+        <li><b>DynaSLAM 自己承认的能力边界</b>最值得记：there are objects that cannot be detected by this approach because they are <b>not a priori dynamic, but movable</b>——<b>有些物体检测不到，因为它们「不是先验动态的，但是可移动的」</b>（比如被人拿着的书、被推动的椅子）。<b>这一条直接引出了它后面的多视图几何第二级筛选。</b></li>
+      </ul>
+      <p>把这四条放在一起看，本季那条暗线就非常清楚了：<b>Mask R-CNN 是一个很强的零件，但它慢、边界不精、还会漏掉「可移动但非典型动态」的东西</b>。所以 SLAM 论文的做法从来不是「信它就好」，而是<b>语义给先验、几何做裁判</b>——这正是下一节要详细对账的内容。</p>
+      <p>再说一句作者自己的诚实之处：原文明确写了 <b>our design is not optimized for speed</b>，还说更好的速度精度折中「超出了本文范围」；同时承认 <b>RPN 默认与 Mask R-CNN 不共享特征</b>；多任务也并非全部互惠——<b>加关键点分支会略微拉低 box / mask AP</b>，原文说 while keypoint detection benefits from multitask training, it <b>does not in turn help</b> the other tasks。<b>这些自述的「不」，恰恰是它可信的原因。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Mask_R-CNN/6ebfaad492477cc707c084821a5a8197014c6dacd9cd5a0e0174ecf48c0b9e49.jpg" alt="The Mask R-CNN framework for instance segmentation">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The Mask R-CNN framework for instance segmentation.<br>
+          <b>怎么看这张图：</b>这是全篇的总览图，也是上一节那张自绘图的原型。<b>请顺着箭头从左往右数一遍</b>：输入图 → 骨干 + FPN → RPN 出候选框 → 对每个 RoI 做 RoIAlign → 分出三条并行的头（分类、回归、掩码）。<b>盯住最后那两个并排的掩码小图</b>——它们对应「两张独立掩码」这件事，也就是实例分割与语义分割的分水岭。<br>
+          <b>要记住的一句话：</b>整条框架里，<b>新的只有 RoIAlign 这个算子和最右边那条掩码分支</b>，其余全是现成的。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Mask_R-CNN/0316fd99428a838f3a0e22cff09a0103e68895648ad702b6c2ee6db365918b42.jpg" alt="Head Architecture, ResNet C4 and FPN backbones with mask branch added">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Head Architecture: We extend two existing Faster R-CNN heads [15, 22]. Left/Right panels show the heads for the ResNet C4 and FPN backbones, from [15] and [22], respectively, to which a mask branch is added. Numbers denote spatial resolution and channels. Arrows denote either conv, deconv, or fc layers as can be inferred from context (conv preserves spatial dimension while deconv increases it).<br>
+          <b>怎么看这张图：</b>这是「第三条分支长什么样」的施工图：左右两块分别是 C4 与 FPN 两种骨干下的头结构，数字标的是<b>空间分辨率与通道数</b>，箭头是 conv / deconv / fc 层。<b>盯住加了掩码分支之后那几层的输出尺寸</b>——它一路把空间尺寸推上去，最后落到 $28\times 28$ 的掩码上。这张图能让你看清「掩码分支就是一个小 FCN」这句话的字面意思。<br>
+          <b>要记住的一句话：</b>第三条分支不是在网络上加粗加厚，而是在旁边「另开一条很细的支路」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Mask_R-CNN/2f51e9ee9ef80dfe08341e9d59a0bd65f0c8e665400c1538164e44a7847493d1.jpg" alt="FCIS+++ vs Mask R-CNN on overlapping objects">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>FCIS+++ [21] (top) vs. Mask R-CNN (bottom, ResNet-101-FPN). FCIS exhibits systematic artifacts on overlapping objects.<br>
+          <b>怎么看这张图：</b>上下两排是同一个场景、两种方法的输出。上面是 FCIS+++（当时的强对手，走「位置敏感输出通道」的全卷积路线，很快），下面是 Mask R-CNN。<b>请专门找那些「物体互相重叠」的地方</b>——原文说 FCIS 会在重叠物体上产生 systematic artifacts（系统性伪影）与虚假边缘，而 Mask R-CNN 能分开。这正是「两阶段 + 逐 RoI 出掩码」相对「一张全卷积图直接出所有实例」的优势所在。<br>
+          <b>要记住的一句话：</b>实例分割的难点不在「画得准」，而在「<b>重叠的实例要分得开</b>」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Mask_R-CNN/0fc2c9fe5c5ab5c8473f8958cf7c5830048f00ef4656e06efe968e5f1e41b3cb.jpg" alt="Mask R-CNN results on the COCO test set">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Mask R-CNN results on the COCO test set. These results are based on ResNet-101 [15], achieving a mask AP of 35.7 and running at 5 fps. Masks are shown in color, and bounding box, category, and confidences are also shown.<br>
+          <b>怎么看这张图：</b>这是成品展示：彩色掩码 + 框 + 类别 + 置信度。<b>请特意找那些「一个框里其实有两个人」或者「两个人挨得很近」的图</b>——你会看到每个实例各有一块自己的颜色，这正是实例分割相对语义分割多出来的那件事。<b>同时注意它给出的置信度数字</b>：这个数字后面会被 SLAM 论文当作筛选门槛用（比如只信高于某个阈值的掩码）。<br>
+          <b>要记住的一句话：</b>这张图代表的，就是 SLAM 论文嘴里那个「很准但很慢」的分割零件。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 和前面课程怎么接：这个零件在前八季出现过的地方</h2>
+      <p>Mask R-CNN 是<b>本组被引用最多的一篇，没有之一</b>——语料库里 grep 它命中 <b>18 个真实论文文档</b>，其中至少 <b>8 篇 SLAM / SLAM 相关论文把它当作核心组件</b>。而它的主战场就是<b>第八季 0153–0159 动态环境块</b>。</p>
+      <p>先说清那一块的问题意识：<b>SLAM 的默认假设是「场景是静止的」，而现实里有人有车。</b>动态物体的特征点会被当成静态地标参与匹配，把轨迹带歪。所以大家都要在系统里加一个「<b>把会动的东西找出来并剔掉</b>」的环节。而它们找东西用的零件，就是 Mask R-CNN。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>2018_DynaSLAM —— 最经典的「用 Mask R-CNN 剔人」范式</h4><p>原文：我们实验里用的是 <b>Mask R-CNN，它是物体实例分割的 SOTA</b>。Mask R-CNN 能同时得到逐像素的语义分割与实例标签；<b>本工作用的是逐像素语义分割信息，而实例标签在未来可以用来跟踪不同的运动物体</b>。它的做法是分割那 <b>19 类「潜在动态或可移动」的物体</b>（人、自行车、车、摩托车、飞机、公交、火车、卡车、船、鸟、猫、狗、马、羊、牛、象、熊、斑马、长颈鹿）。<b>它引的耗时依据就是 195 ms/图</b>，并据此自承系统不是为实时优化的。</p></div>
+        <div class="mini-card"><h4>2018_MaskFusion —— 改用实例级掩码，并说出它的毛病</h4><p>原文：MaskFusion <b>充分利用实例级语义分割</b>，把语义标签融进一个 <b>object-aware map</b>——不像此前那些做体素级语义分割的语义 SLAM 系统。它的设计动机里有三条观察，其中两条是在说零件：<b>(i) 当前分割方法擅长检测物体，但倾向于给出不完美的物体边界；(ii) 当前的 SOTA 方法 Mask-RCNN 无法在帧率下运行。</b></p></div>
+        <div class="mini-card"><h4>2019_MID-Fusion / 2019_EM-Fusion</h4><p>MID-Fusion 把 <b>Mask R-CNN 预计算在 GPU 上</b>（用公开权重、不微调），每个物体存进各自的八叉树体素模型；图注写着「移动的人因 Mask R-CNN 的语义标注被剔除」。EM-Fusion 更直接：前景概率<b>不足以支撑鲁棒跟踪，因为 Mask R-CNN 的实例分割并不精确</b>——它把零件的不精确当成了方法设计的动机。</p></div>
+        <div class="mini-card"><h4>2023_SG-SLAM —— 一段把家谱捋清楚的原文</h4><p>原文一口气列了四条：Bescos 等用 <b>Mask R-CNN 的语义分割结果 + 多视图几何</b>来检测动态物体并剔除外点；Yu 等用光流做运动一致性检查，同时用 <b>SegNet</b> 在独立线程里做语义分割；Wu 等用 <b>YOLO</b> 检测先验动态物体；Chang 等用 <b>YOLACT</b> 分割动态物体。<b>一句话把 0190、0191、0192 三个零件全串起来了。</b></p></div>
+        <div class="mini-card"><h4>2022_WF-SLAM —— 把内部结构讲得最完整的一段</h4><p>原文：WF-SLAM 首先采用在 MS COCO 上训练好的 <b>Mask R-CNN</b> 做语义分割生成掩码；Mask R-CNN 的网络结构是在 <b>Faster-RCNN 与 FCN</b> 基础上改进的……它在每个 ROI 上加一条掩码预测分支，扩展了 Faster-RCNN；<b>这条新分支与原有的分类分支和边框回归分支并列</b>；<b>掩码分支本质上就是一个小小的、做逐像素掩码预测的 FCN 网络</b>。<b>这段话几乎就是本课前三节的现成教材。</b></p></div>
+        <div class="mini-card"><h4>2023_DGM-VINS / 2022_Accurate_Dynamic_SLAM</h4><p>DGM-VINS 把 Mask R-CNN 当作精度 / 速度基线，自己改用条件卷积的实例分割网络；2022_Accurate_Dynamic_SLAM 明确写「像 MaskFusion 那样，我们用 Mask R-CNN 预测的掩码识别动态区域，例如人」。<b>它们共同说明：在动态 SLAM 这个子领域里，「实例分割」几乎就等于 Mask R-CNN。</b></p></div>
+      </div>
+
+      <p>把这些引用串起来，可以看到一个很清楚的结构：<b>DynaSLAM 是第一代范式（语义掩码剔除 → 多视图几何把关），MaskFusion / MID-Fusion / EM-Fusion 是第二代（走向实例级、走向 object-aware map），而它们全都在同一个瓶口上卡住——慢和不精。</b></p>
+      <p>这也回答了本课开头提出的那个问题：<b>为什么 SLAM 论文一边大量使用它、一边抱怨它？</b>因为 195 ms/图这道门槛是硬的。SLAM 要 30 fps，它只给 5 fps，中间差了六倍。所以你会看到各种绕法——放后台线程、隔帧跑、预计算、或者干脆退回到更快的检测方案（这正是 0191 课里 SG-SLAM 的选择）。</p>
+      <p>再往上看一层。第八季那些「<b>语义 + 几何双保险</b>」的设计，正是被本课这个零件的<b>缺陷</b>逼出来的：</p>
+      <ul>
+        <li>因为<b>边界不精</b>（MaskFusion 的原话），所以不能只用掩码剔点，要用多视图几何再筛一遍；</li>
+        <li>因为<b>看不见「可移动但非先验动态」的物体</b>（DynaSLAM 的原话），所以必须有第二级基于几何的筛选；</li>
+        <li>因为<b>标签会不确定</b>（PanopticFusion 的原话），所以标签要按概率融合，而不是硬赋值；</li>
+        <li>因为<b>跑不到帧率</b>（MaskFusion 与 2022_RGB-D_SLAM_in_Dynamic 的原话），所以要放后台、要分摊、要降频。</li>
+      </ul>
+      <p><b>零件不完美，所以 SLAM 要加几何约束。</b>这句话在 Mask R-CNN 上体现得最完整——它是本季与第八季最重要的连接点。</p>
+      <p>最后回指一条横向纪律：<b>第九季 0180</b> 提醒「看到轨迹误差，先问真值有多准」。检测与分割这边对应的提醒是：<b>看到 mask AP，先问是 AP50 还是 AP75。</b>它在本课尤其有用——<b>RoIAlign 的收益恰好主要体现在更严的 AP75 上</b>（+10.5 对 +7.3）。因为 AP75 要求预测框与真值框的 IoU 达到 0.75 才算对，<b>「边界画得准不准」在这个指标里被放大了</b>。看不懂这一点，就看不出「对齐」为什么值那么多钱。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某 SLAM 论文写道：「我们用 Mask R-CNN 得到人的掩码，把掩码内的特征点全部剔除。」这段描述缺少了第八季教给我们的哪一步？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="换更快的分割网络确实能缓解速度问题，但它解决不了「掩码本身可能不准」这件事。" onclick="lessonKit.answer(this,'q0192a')">缺少更快的分割网络</button>
+          <button data-correct="no" data-explanation="标签不确定确实是 Mask R-CNN 的问题之一，但这段描述里「掩码内剔点」的漏洞不是靠标签阈值就能补上的。" onclick="lessonKit.answer(this,'q0192a')">缺少标签的置信度过滤</button>
+          <button data-correct="yes" data-explanation="对——掩码边界不精、还会漏掉「可移动但非先验动态」的物体，所以必须再补一层几何一致性检查，这就是第八季「语义加几何双保险」的由来。" onclick="lessonKit.answer(this,'q0192a')">缺少几何一致性第二级</button>
+        </div>
+        <div class="quiz-feedback" id="q0192a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 读完你应该能回答</h2>
+      <ol>
+        <li>语义分割与实例分割的差别，落到数学上是哪一行代码的差别？这一行值多少个 AP？</li>
+        <li>Mask R-CNN 在 Faster R-CNN 上加了什么？为什么掩码分支可以做得这么简单？分类分支与掩码分支之间那条「虚线」代表什么？</li>
+        <li>RoIPool 做了哪两次取整？为什么这些取整对「分类」无所谓、对「掩码」却是致命的？</li>
+        <li>RoIAlign 具体改了什么？为什么原文要特意拿 RoIWarp 来对比，这个对比证明了什么？</li>
+        <li>为什么 stride 越大，RoIAlign 的收益越大？这组数字和「它能用大 stride 特征」之间是什么关系？</li>
+        <li>Mask R-CNN 的 195 ms/图意味着大约几 fps？SLAM 论文抱怨它的时候，具体是怎么说的？举出至少两个出处。</li>
+        <li>MaskFusion 与 DynaSLAM 分别指出了它哪两个缺陷？这两个缺陷各自引出了 SLAM 里的什么对策？</li>
+        <li>为什么「看到 mask AP 先问 AP50 还是 AP75」这件事，在本课特别重要？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用「两只挨着的猫」讲清三个词，并指出实例分割是靠哪一行数学设置把「个体」保下来的。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>目标检测：返回两个框加 cat 标签，知道有两只、知道大概在哪，但不知道边界。语义分割：所有猫像素涂同一色，两只连成一片，<b>不区分个体</b>。实例分割：返回两张独立掩码，既知边界又知个体。保下个体靠的是<b>掩码用 per-pixel sigmoid + 二值交叉熵（每类各出一张二值图，类与类不竞争）</b>，而不是语义分割惯用的 per-pixel softmax + 多项交叉熵（类间竞争）。这一行差别在 ResNet-50-C4 上值 <b>+5.5 mask AP</b>（24.8 到 30.3）。</div></details>
+        </li>
+        <li>RoIPool 与 RoIAlign 的区别，能不能简化成「一个准一个不准」？为什么不能？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不能——那样就丢掉了机制。真实的区别是：RoIPool 对 RoI 边界<b>除以 stride 后向下取整</b>，切 bin 时<b>再取整一次</b>，采样点因此整体被拽偏；RoIAlign <b>不做任何量化</b>（保留浮点坐标），在每个 bin 内取 <b>4 个规则采样点</b>用<b>双线性插值</b>算出精确值再聚合。原文特意用 MNC 的 RoIWarp 做对照：RoIWarp 也用了双线性重采样，但<b>仍在量化</b>，结果只和 RoIPool 打平——这就证明了起作用的是「对齐」，不是「插值」。另外 RoIAlign 对 max / average 聚合不敏感（30.2 对 30.3），也说明收益全部来自对齐。</div></details>
+        </li>
+        <li>某 SLAM 系统用「Mask R-CNN 检测到的 19 类潜在动态物体」直接剔除特征点。请指出至少两处会出错的地方，并各给一条对策。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>出错点一：<b>掩码边界不精</b>（MaskFusion 原话：tend to provide imperfect object boundaries），所以掩码内会混进静态背景点、掩码外会漏掉动态点 → 对策：加多视图几何一致性检查（DynaSLAM 的做法），让几何做裁判。<br>出错点二：<b>看不见「非先验动态但可移动」的物体</b>（DynaSLAM 原话：not a priori dynamic, but movable，如被人拿着的书、被推动的椅子）→ 对策：同样靠第二级几何筛选补上，而不是靠扩大类别表。<br>（还可补：跑不到帧率，195 ms/图约 5 fps，对策是后台线程 / 隔帧 / 预计算。）</div></details>
+        </li>
+        <li>为什么可以说 RoIAlign「不只是修了一个小 bug」？请从「大 stride 特征」的角度回答。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为 stride 越大，一个特征图像素格代表的原图区域越大，取整造成的物理位移也越大。数据上：stride 16 时 RoIAlign 提升约 +3 点，stride 32 时提升 <b>+7.3</b>（AP75 甚至 +10.5）。而大 stride 特征意味着更便宜、更快的骨干。原文因此总结：RoIAlign <b>largely resolves the long-standing challenge of using large-stride features for detection and segmentation</b>——它把「用粗特征」这条路重新打通了，所以不只是修 bug，而是打开了一条更便宜的路。</div></details>
+        </li>
+        <li>本课提到一条 OCR 疑点：Table 2c 里 RoIPool 行的两列是空白。如果照着空白读，会得出什么错误结论？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>那两列是 align? 与 bilinear?，原文应为两个叉（表示 RoIPool 既不支持对齐、也不用双线性）。若照着空白读，会误以为「RoIPool 也支持对齐」，从而得出「RoIAlign 和 RoIPool 差别不大」的结论——<b>恰好把这张表的结论读反了</b>。这与 0193 课里「Table 2 行列错位」是同一类问题：md 抽取的表格不可全信，关键结论要回正文或原 PDF 核对。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0191-YOLO-2016-一步到位的检测.html">← 0191 YOLO：一步到位的检测</a>
+        <a class="next" href="0193-FocalLoss-2017-九成都是背景.html">0193 Focal Loss：九成都是背景怎么办 →</a>
+      </div>
+      <p class="foot-note">这一课真正的收获不是「Mask R-CNN 很好」，而是「一个取整符号值 50% 的相对提升」和「好零件落地时有多痛」。⚙️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

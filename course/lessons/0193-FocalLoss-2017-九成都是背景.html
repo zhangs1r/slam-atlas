@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Focal Loss（2017）：九成都是背景怎么办 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0193</div>
+      <h1>Focal Loss（2017）：九成都是背景怎么办</h1>
+      <p class="subtitle">一篇没有图片输出、只有一个公式的论文，为什么值得单独上一课？⚖️ 因为它诊断出「单阶段检测器打不过两阶段」的真正病因，并且只用一张「折扣券」就把天平掰了回来。这一课是全季最抽象的一节，所以我们全程用天平、折扣券和具体数字来说话。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：训练目标函数层面的一处改进</span>
+        <span>👥 作者：T.-Y. Lin、P. Goyal、R. Girshick、K. He、P. Dollár（FAIR）</span>
+        <span>📅 年份 · <i>Focal Loss for Dense Object Detection</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">病因：两道闸门与十万个位置</a>
+        <a href="#b">★ 天平：被背景淹没</a>
+        <a href="#c">★ 折扣券与曲线</a>
+        <a href="#d">公式与人话（含具体数字）</a>
+        <a href="#e">还有一处关键改动</a>
+        <a href="#f">它不完美在哪 · 引用度据实写</a>
+        <a href="#g">和前面课程怎么接</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：① 说清<b>单阶段检测器为什么难训</b>（用「两道闸门」与「十万个位置」），以及两阶段与单阶段的<b>分工差异</b>；② 用人话讲清 $(1-p_t)^\gamma$ 是干什么的（折扣券），并说出 <b>γ=2、α=0.25</b>；③ 给出<b>具体数字</b>——$p_t=0.9$ 的容易样本在 γ=2 时权重被压到 <b>0.01</b>；④ 说出「类别先验初始化」这一处<b>不属于损失函数</b>的关键改动；⑤ 如实说明它在 SLAM 语料库里的被引用情况。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ <b>上一课 0191 YOLO</b> 把五段流水线变成一段，代价是「更难训」——本课就是来还这笔账的。★ <b>0192 Mask R-CNN</b> 给了两阶段那一侧的具体样子（RPN 出候选框），本课要讲清「候选框这道闸门在训练时到底帮了什么忙」。★ <b>★★ 本课的被引用度必须据实写</b>：本语料库 <b>255 篇里没有任何一篇 SLAM 论文正面引用 Focal Loss</b>，唯一的实质引用来自那篇 2023 年自动驾驶 3D 检测综述。<b>它是一个被隐式使用的零件</b>——你在 SLAM 论文里看到的每个 YOLOv3 / v5 / v8 检测器，训练时都在用它这一族损失，<b>但 SLAM 论文只引 YOLO，不引它的损失</b>。★ 本课也是全季「零件不完美」主线的最后一环：FCN 会把救生衣当人、YOLO 会漏小物体、Mask R-CNN 边界不精且跑不到帧率、而 <b>Focal Loss 的出发点本身就是「朴素交叉熵根本训不起来」</b>。</p></div>
+      </div>
+
+      <h2>1. 病因：两阶段有两道闸门，单阶段只有十万个位置</h2>
+      <p>先把背景补齐。<b>0191 课</b>讲过：两阶段检测「先提一堆候选框，再一个个判」，单阶段检测「一次前向直接出框」。当时我们说单阶段「快得多，但更难训」。这一课就要把这个「难训」拆开看。</p>
+      <p>先说一个反直觉的事实：<b>两阶段检测器根本不觉得「类别不平衡」是个问题</b>——因为它们有两道闸门把它挡掉了。原文把这个说得很清楚：</p>
+      <ul>
+        <li><b>闸门一：级联。</b>第一阶段（Selective Search / EdgeBoxes / DeepMask / RPN）把「几乎无限个候选位置」砍到 <b>1 到 2 千</b>个，而且<b>这些候选不是随机选的</b>，大概率落在真物体位置上。于是绝大多数「一眼就对」的容易负样本被<b>直接移除了</b>。</li>
+        <li><b>闸门二：有偏采样。</b>第二阶段构造 minibatch 时，强制 <b>1:3</b> 的正负比。原文对这条的点评很妙：这个比例「就像一个隐式的 α 平衡因子，通过采样实现」。</li>
+      </ul>
+      <p>这两道闸门一叠加，两阶段在训练时「看到的」负样本数量就被控制在一个很小的量级上。<b>那单阶段呢？</b></p>
+      <p>单阶段没有第一道闸门——它必须在<b>规则稠密采样</b>上直接分类。原文给了一个具体量级：实际要枚举 <b>10 万个位置</b>，覆盖各种空间位置、尺度和长宽比。于是训练被「一眼就对」的背景彻底淹没。</p>
+      <p>原文把这个病说成两个症状，请逐字记住：</p>
+      <ol>
+        <li><b>训练低效。</b>大多数位置是 easy negatives，它们提供不了有用的学习信号；</li>
+        <li><b>成群的容易负样本会压垮训练、导致退化的模型。</b></li>
+      </ol>
+      <p>传统药方是 hard negative mining / bootstrapping / OHEM——<b>挑难的样本出来训</b>。但本文的答案是另一条路，我们在第 3 节讲。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 484" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="484" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">两道闸门 vs 十万个位置：同一个瓶口，两种训练处境</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">两阶段的答案是多采样；单阶段的困境是不采样就被淹没</text>
+
+          <rect x="40" y="74" width="400" height="256" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="240" y="96" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">① 两阶段：两道闸门把容易负样本挡掉</text>
+          <rect x="60" y="112" width="100" height="52" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="110" y="134" text-anchor="middle" fill="#cdd6ff" font-size="10" font-weight="700">输入图</text>
+          <text x="110" y="152" text-anchor="middle" fill="#9fb4ff" font-size="9">整张图</text>
+          <rect x="190" y="112" width="100" height="52" rx="6" fill="#16203a" stroke="#5cffb0"/>
+          <text x="240" y="132" text-anchor="middle" fill="#5cffb0" font-size="10" font-weight="700">闸门一</text>
+          <text x="240" y="150" text-anchor="middle" fill="#9fb4ff" font-size="9">候选框约 2000 个</text>
+          <rect x="320" y="112" width="100" height="52" rx="6" fill="#16203a" stroke="#5cffb0"/>
+          <text x="370" y="132" text-anchor="middle" fill="#5cffb0" font-size="10" font-weight="700">闸门二</text>
+          <text x="370" y="150" text-anchor="middle" fill="#9fb4ff" font-size="9">强制正负比 1 比 3</text>
+          <line x1="160" y1="138" x2="190" y2="138" stroke="#5cffb0" stroke-width="2"/>
+          <polygon points="190,138 180,133 180,143" fill="#5cffb0"/>
+          <line x1="290" y1="138" x2="320" y2="138" stroke="#5cffb0" stroke-width="2"/>
+          <polygon points="320,138 310,133 310,143" fill="#5cffb0"/>
+          <rect x="110" y="190" width="260" height="52" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="240" y="210" text-anchor="middle" fill="#cdd6ff" font-size="10" font-weight="700">训练时看到的负样本：可控</text>
+          <text x="240" y="228" text-anchor="middle" fill="#5cffb0" font-size="9.5">1 比 3 的正负比</text>
+          <line x1="240" y1="164" x2="240" y2="190" stroke="#5cffb0" stroke-width="2"/>
+          <polygon points="240,190 234,178 246,178" fill="#5cffb0"/>
+          <text x="60" y="258" fill="#cdd6ff" font-size="10">注意：这两道闸门是两阶段检测器本来就有的结构</text>
+          <text x="60" y="276" fill="#9fb4ff" font-size="10">闸门一把几乎无限个候选位置砍到 1 到 2 千个</text>
+          <text x="60" y="292" fill="#9fb4ff" font-size="10">而且这些候选不是随机选的，大概率是真物体位置</text>
+          <text x="60" y="312" fill="#9fb4ff" font-size="10">闸门二用采样把正负比钉在 1 比 3 —— 像一个隐式的 α 平衡</text>
+
+          <rect x="460" y="74" width="400" height="256" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="660" y="96" text-anchor="middle" fill="#ff5d73" font-size="12" font-weight="700">② 单阶段：直接在稠密位置上枚举</text>
+          <rect x="480" y="112" width="100" height="52" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="530" y="134" text-anchor="middle" fill="#cdd6ff" font-size="10" font-weight="700">输入图</text>
+          <text x="530" y="152" text-anchor="middle" fill="#9fb4ff" font-size="9">整张图</text>
+          <rect x="610" y="112" width="230" height="52" rx="6" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="725" y="132" text-anchor="middle" fill="#ff9f6b" font-size="10" font-weight="700">稠密枚举约 10 万个位置</text>
+          <text x="725" y="150" text-anchor="middle" fill="#9fb4ff" font-size="9">覆盖空间位置、尺度、长宽比</text>
+          <line x1="580" y1="138" x2="610" y2="138" stroke="#ff5d73" stroke-width="2"/>
+          <polygon points="610,138 600,133 600,143" fill="#ff5d73"/>
+          <rect x="480" y="176" width="360" height="14" fill="#223052" stroke="#3a4a78"/>
+          <circle cx="492" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="508" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="524" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="540" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="556" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="572" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="588" cy="183" r="2.5" fill="#ff5d73"/>
+          <circle cx="604" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="620" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="636" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="652" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="668" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="684" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="700" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="716" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="732" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="748" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="764" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="780" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="796" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="812" cy="183" r="2.5" fill="#8a8f9e"/>
+          <circle cx="828" cy="183" r="2.5" fill="#8a8f9e"/>
+          <text x="480" y="208" fill="#ff5d73" font-size="9">红点 = 那个正样本；其余全是背景</text>
+          <rect x="560" y="216" width="280" height="46" rx="6" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="700" y="236" text-anchor="middle" fill="#ff9f6b" font-size="10" font-weight="700">训练时看到的负样本：约 10 万个</text>
+          <text x="700" y="254" text-anchor="middle" fill="#ff5d73" font-size="9.5">前景比背景约 1 比 1000</text>
+          <text x="480" y="284" fill="#9fb4ff" font-size="10">没有第一道闸门，必须在规则稠密采样上直接分类</text>
+          <text x="480" y="304" fill="#9fb4ff" font-size="10">少量正样本的信号，被成群的容易负样本盖过去</text>
+          <text x="480" y="322" fill="#ff9f6b" font-size="10">这就是 Focal Loss 要治的那个病</text>
+
+          <rect x="40" y="350" width="820" height="88" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="374" text-anchor="middle" fill="#cdd6ff" font-size="11.5">同一个瓶口：单阶段要在 10 万个稠密位置上直接分类，而其中真正的物体只有一两个</text>
+          <text x="450" y="396" text-anchor="middle" fill="#ff9f6b" font-size="11">成群的容易负样本会「压过」那些真有物体的位置传来的梯度，导致训练早期就发散</text>
+          <text x="450" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10.5">传统药方是 hard negative mining 或 OHEM —— 把容易样本丢掉；Focal Loss 走的是另一条路</text>
+          <text x="450" y="462" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：不是「模型不行」，而是「容易的样本太多」，把梯度里的信号淹没了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两块并排。左边是两阶段：输入图经过「闸门一（候选框约 2000 个）」和「闸门二（强制正负比 1 比 3）」，输出「训练时看到的负样本：可控」。右边是单阶段：输入图直接进入「稠密枚举约 10 万个位置」，下面画了一条长长的点列，其中<b>只有一个小红点</b>是正样本，其余全是背景，结果写着「训练时看到的负样本：约 10 万个」。<br>
+          <b>怎么看这张图：</b>① 先看左边两道闸门的<b>颜色</b>——它们被涂成绿色，代表「这是好事」；② 再看右边那条点列——<b>盯住那个唯一的红点</b>，它周围是成百上千个灰点，这就是「1 比 1000」的直观样子；③ 最后看底部那行：原文说成群的容易负样本会 <b>overpowering the gradient from cells that do contain objects</b>（压过真有物体的位置传来的梯度）——<b>这就是「难训」的技术含义</b>。<br>
+          <b>要记住的一句话：</b>两阶段的答案是「<b>少采样</b>」，Focal Loss 的答案是「<b>不丢样本，只降权</b>」。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. ★ 天平：损失被容易的背景样本淹没</h2>
+      <p>这一张图是全课、也是全季最抽象的补偿。请把它当成一个<b>真实的天平</b>来看，不要当成示意图。</p>
+      <p>先讲清「淹没」是怎么发生的。交叉熵有一个常被忽略的性质，原文原话是：<b>even examples that are easily classified（$p_t \gg .5$）incur a loss with non-trivial magnitude</b>——<b>即使是一眼就分对的样本，它的损失也不是零</b>。单个看这笔损失很小，可是<b>数量一上去就压过了稀有类</b>。</p>
+      <p>打个生活比方：一个班上有一千个学生，其中只有两三个是「还没学会」的，其余九百九十多个都是「早就会了」；如果考试总分是<b>所有人分数直接相加</b>，那么这堂课的平均分几乎完全由那九百九十多个人决定——<b>老师根本看不出还有两三个学生没学会</b>。这就是「被淹没」。</p>
+      <p>下面这张天平图画的就是这件事。左盘是那九百多个「早就会了」的背景样本（每个都写着 $p=0.99$ ✓），右盘是寥寥几个「还没分对」的正样本（写着 $p=0.4$ ✗）。天平<b>严重向左倾斜，左盘压到地面</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 574" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="574" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">一根天平：一边是成千上万个「一眼就对」，一边是寥寥几个「难分」</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12">左边是「不加处理」的结果，右边是「乘上折扣券」之后的结果</text>
+          <text x="450" y="66" text-anchor="middle" fill="#ffd166" font-size="11">同一根天平、同一批样本，区别只在每个容易样本上盖没盖那张券</text>
+
+          <rect x="40" y="74" width="400" height="296" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="240" y="96" text-anchor="middle" fill="#ff9f6b" font-size="12.5" font-weight="700">① 不加处理：天平严重倾斜</text>
+          <text x="60" y="120" fill="#9fb4ff" font-size="9.5">背景样本：成千上万</text>
+          <text x="60" y="138" fill="#9fb4ff" font-size="9.5">p = 0.99，一眼就对</text>
+          <text x="60" y="176" fill="#9fb4ff" font-size="9">灰方块 = 背景样本</text>
+          <text x="60" y="194" fill="#9fb4ff" font-size="9">每个都写着 p = 0.99</text>
+          <text x="60" y="212" fill="#9fb4ff" font-size="9">数量多到漫出盘外</text>
+          <text x="60" y="230" fill="#9fb4ff" font-size="9">梯度信号全被它们占了</text>
+          <rect x="210" y="330" width="60" height="10" fill="#3a4a78"/>
+          <rect x="236" y="206" width="8" height="126" fill="#8a8f9e"/>
+          <circle cx="240" cy="212" r="6" fill="#ffd166"/>
+          <line x1="130" y1="246" x2="350" y2="178" stroke="#ffd166" stroke-width="3"/>
+          <line x1="130" y1="246" x2="106" y2="300" stroke="#8a8f9e" stroke-width="1.5"/>
+          <line x1="130" y1="246" x2="154" y2="300" stroke="#8a8f9e" stroke-width="1.5"/>
+          <rect x="100" y="300" width="60" height="8" fill="#8a8f9e"/>
+          <rect x="102" y="262" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="112" y="262" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="122" y="262" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="132" y="262" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="142" y="262" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="102" y="272" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="112" y="272" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="122" y="272" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="132" y="272" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="142" y="272" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="102" y="282" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="112" y="282" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="122" y="282" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="132" y="282" width="9" height="9" fill="#8a8f9e"/>
+          <rect x="142" y="282" width="9" height="9" fill="#8a8f9e"/>
+          <text x="110" y="326" text-anchor="middle" fill="#9fb4ff" font-size="9">约 10 万个 anchor / 张图</text>
+          <line x1="350" y1="178" x2="326" y2="232" stroke="#8a8f9e" stroke-width="1.5"/>
+          <line x1="350" y1="178" x2="374" y2="232" stroke="#8a8f9e" stroke-width="1.5"/>
+          <rect x="320" y="232" width="60" height="8" fill="#8a8f9e"/>
+          <rect x="332" y="210" width="14" height="14" fill="#ff5d73"/>
+          <rect x="348" y="210" width="14" height="14" fill="#ff5d73"/>
+          <text x="350" y="200" text-anchor="middle" fill="#ff5d73" font-size="9">约 1 到 2 个</text>
+          <text x="240" y="390" text-anchor="middle" fill="#ff5d73" font-size="10.5">天平严重倾斜：梯度几乎全部来自背景</text>
+          <text x="240" y="408" text-anchor="middle" fill="#9fb4ff" font-size="10">少数派的正样本被淹没，学不到东西</text>
+          <text x="240" y="426" text-anchor="middle" fill="#9fb4ff" font-size="10">左盘压到地面，右盘高高翘起</text>
+
+          <rect x="460" y="74" width="400" height="296" rx="8" fill="#0b1220" stroke="#5cffb0"/>
+          <text x="660" y="96" text-anchor="middle" fill="#5cffb0" font-size="12.5" font-weight="700">② 乘上折扣券：天平摆平</text>
+          <text x="500" y="120" fill="#9fb4ff" font-size="9.5">正样本：寥寥几个</text>
+          <text x="500" y="138" fill="#9fb4ff" font-size="9.5">p = 0.4，还没分对</text>
+          <text x="500" y="176" fill="#9fb4ff" font-size="9">红方块 = 正样本（难例）</text>
+          <text x="500" y="194" fill="#9fb4ff" font-size="9">写着 p = 0.4，还没分对</text>
+          <text x="500" y="212" fill="#9fb4ff" font-size="9">每个灰方块上盖一张折扣券</text>
+          <text x="500" y="230" fill="#9fb4ff" font-size="9">券值约 0，权重被压下去</text>
+          <rect x="630" y="330" width="60" height="10" fill="#3a4a78"/>
+          <rect x="656" y="206" width="8" height="126" fill="#8a8f9e"/>
+          <circle cx="660" cy="212" r="6" fill="#ffd166"/>
+          <line x1="560" y1="212" x2="760" y2="212" stroke="#ffd166" stroke-width="3"/>
+          <line x1="560" y1="212" x2="540" y2="286" stroke="#8a8f9e" stroke-width="1.5"/>
+          <line x1="560" y1="212" x2="580" y2="286" stroke="#8a8f9e" stroke-width="1.5"/>
+          <rect x="530" y="286" width="60" height="8" fill="#8a8f9e"/>
+          <rect x="542" y="272" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="552" y="272" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="562" y="272" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="572" y="272" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="542" y="280" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="552" y="280" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="562" y="280" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <rect x="572" y="280" width="7" height="7" fill="#5cffb0" opacity="0.4"/>
+          <text x="560" y="272" text-anchor="middle" fill="#5cffb0" font-size="9">券值约 0</text>
+          <line x1="760" y1="212" x2="740" y2="278" stroke="#8a8f9e" stroke-width="1.5"/>
+          <line x1="760" y1="212" x2="780" y2="278" stroke="#8a8f9e" stroke-width="1.5"/>
+          <rect x="730" y="278" width="60" height="8" fill="#8a8f9e"/>
+          <rect x="742" y="256" width="14" height="14" fill="#ff5d73"/>
+          <rect x="760" y="256" width="14" height="14" fill="#ff5d73"/>
+          <text x="760" y="248" text-anchor="middle" fill="#ff5d73" font-size="9">券值约 1，几乎不动</text>
+          <text x="660" y="390" text-anchor="middle" fill="#5cffb0" font-size="10.5">两盘回到水平：梯度几乎全部来自难例</text>
+          <text x="660" y="408" text-anchor="middle" fill="#9fb4ff" font-size="10">容易样本没被丢掉，只是被降到可忽略</text>
+          <text x="660" y="426" text-anchor="middle" fill="#9fb4ff" font-size="10">原文原话：绝大部分损失只来自极小一部分样本</text>
+
+          <rect x="40" y="440" width="820" height="88" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="464" text-anchor="middle" fill="#cdd6ff" font-size="11.5">不加处理时：每张图约 10 万个 anchor，其中正样本只有 1 到 2 个，比例约 1 比 1000</text>
+          <text x="450" y="486" text-anchor="middle" fill="#ffd166" font-size="11">折扣券就是调制因子 (1 - p_t) 的 γ 次幂：p_t 接近 1 时它接近 0，p_t 很小时它接近 1</text>
+          <text x="450" y="508" text-anchor="middle" fill="#9fb4ff" font-size="10.5">OHEM 是「完全丢弃」容易样本；Focal Loss 是「保留全部但降权」—— 原文强调的是这个区别</text>
+          <text x="450" y="554" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：不是样本不够好，而是「容易的样本太多」，把该听的信号盖住了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一根天平的两幅对照图。左幅：左盘堆着 15 个灰色小方块（标注「约 10 万个 anchor / 张图」「p = 0.99，一眼就对」），右盘只有 2 个红方块（标注「约 1 到 2 个」「p = 0.4 ✗」）；横梁向左侧严重倾斜，左盘压到接近地面。右幅：同样的天平，但每个灰方块上盖了一张券、变成半透明的绿色小方块，横梁回到水平，右盘的红方块几乎没变。<br>
+          <b>怎么看这张图：</b>① 先看左幅的<b>倾斜方向</b>——左边重是因为「数量」而不是因为「单个样本重要」，这正是原文说 easy negatives 会压垮训练的原因；② 再看右幅<b>灰方块发生了什么</b>——它们没有被删掉（数量没变），只是被压小了、变透明了，这就是「折扣券」；③ 记住底部那句话：<b>OHEM 完全丢弃，Focal Loss 保留但降权</b>——这是它和传统药方在哲学上的分界线。<br>
+          <b>要记住的一句话：</b>Focal Loss 做的事不是「挑出难样本」，而是「<b>把已经分对的样本的账本数字变小</b>」，让天平自己摆平。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ 折扣券：把 $(1-p_t)^\gamma$ 讲成人话</h2>
+      <p>天平那张图里说的「折扣券」，在公式里就是这一项：$(1-p_t)^\gamma$。原文管它叫 <b>modulating factor（调制因子）</b>。下面这一段是本课的核心，请慢慢读。</p>
+      <p>先解释 $p_t$ 是什么。<b>$p_t$ 是「模型对正确答案那一类的估计概率」</b>——分对的时候它接近 1，分错的时候它接近 0。比如一个背景样本，模型说「这里是背景」的概率是 0.99，那 $p_t = 0.99$。</p>
+      <p>现在看 $(1-p_t)^\gamma$ 在干什么：</p>
+      <ul>
+        <li>样本<b>已经分对</b>（$p_t$ 接近 1）→ $1-p_t$ 接近 0 → <b>折扣券接近 0</b> → 这个样本的损失几乎被完全忽略；</li>
+        <li>样本<b>分错了</b>（$p_t$ 很小）→ $1-p_t$ 接近 1 → <b>折扣券接近 1</b> → 损失<b>原封不动保留</b>。</li>
+      </ul>
+      <p>原文原句是这样说的：<b>When an example is misclassified and $p_t$ is small, the modulating factor is near 1 and the loss is unaffected. As $p_t \to 1$, the factor goes to 0 and the loss for well-classified examples is down-weighted.</b></p>
+      <p>γ 控制降权的速度：<b>γ=0 时，Focal Loss 完全等价于普通交叉熵</b>；γ 越大越狠。<b>原文实验用的是 γ = 2、α = 0.25。</b></p>
+
+      <h3>★ 用具体数字感受一下（这一段不能跳）</h3>
+      <p>光说「权重被压低」是不够的，我们算一个真实数字。取 γ=2：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>一个容易样本，$p_t = 0.9$</h4><p>折扣券值 $= (1-0.9)^2 = 0.01$。也就是说，<b>它的损失变成了原来的百分之一</b>（这一笔账被压到 1%，而不是被删掉）。</p></div>
+        <div class="mini-card"><h4>一个更确定的样本，$p_t \approx 0.968$</h4><p>折扣券值 $\approx 0.001$，损失比普通交叉熵<b>低约 1000 倍</b>。<b>越容易，压得越狠。</b></p></div>
+        <div class="mini-card"><h4>一个难样本，$p_t \le 0.5$</h4><p>折扣券值最大也只压到 $(1-0.5)^2 = 0.25$，也就是<b>最多被压 4 倍</b>。原文原话是这部分损失 at most 只被 down-weight 4 倍。</p></div>
+        <div class="mini-card"><h4>两边的差距有多大</h4><p>容易样本被压到 <b>1/100 到 1/1000</b>，难样本最多只被压到 <b>1/4</b>。<b>这两组尺度差了两三个数量级</b>——这就是它能在不丢样本的前提下把天平掰回来的原因。</p></div>
+      </div>
+      <p>再说一遍这个对比的意义：<b>γ=2 时，一个 $p_t=0.9$ 的样本，它那笔损失只剩 1%</b>；而一个 $p_t=0.4$ 的难样本，它那笔损失保留了 $(1-0.4)^2 = 0.36$，也就是 36%。<b>容易样本从「一万个各贡献 1 分」变成「一万个各贡献 0.01 分」，而难样本几乎原样保留</b>——天平就这样被掰回来了。这不是「扔掉」什么，而是<b>把账本上的数字改小</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 594" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="594" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">折扣券曲线与它实际改变的东西</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">左：券值随 p_t 变化；右：同一批样本上，普通交叉熵与 Focal Loss 的差距</text>
+
+          <text x="255" y="74" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">左：折扣券的券值 (1 - p_t) 的 γ 次幂</text>
+          <line x1="80" y1="90" x2="80" y2="380" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="80" y1="380" x2="440" y2="380" stroke="#3a4a78" stroke-width="1"/>
+          <text x="74" y="94" text-anchor="end" fill="#9fb4ff" font-size="9">1.0</text>
+          <text x="74" y="243" text-anchor="end" fill="#9fb4ff" font-size="9">0.5</text>
+          <text x="74" y="384" text-anchor="end" fill="#9fb4ff" font-size="9">0</text>
+          <text x="80" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">0</text>
+          <text x="255" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">0.5</text>
+          <text x="430" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">1</text>
+          <polyline points="80.0,90.0 94.0,90.0 108.0,90.0 122.0,90.0 136.0,90.0 150.0,90.0 164.0,90.0 178.0,90.0 192.0,90.0 206.0,90.0 220.0,90.0 234.0,90.0 248.0,90.0 262.0,90.0 276.0,90.0 290.0,90.0 304.0,90.0 318.0,90.0 332.0,90.0 346.0,90.0 360.0,90.0 374.0,90.0 388.0,90.0 402.0,90.0 416.0,90.0 430.0,90.0" fill="none" stroke="#8a8f9e" stroke-width="2.5"/>
+          <polyline points="80.0,90.0 94.0,101.6 108.0,113.2 122.0,124.8 136.0,136.4 150.0,148.0 164.0,159.6 178.0,171.2 192.0,182.8 206.0,194.4 220.0,206.0 234.0,217.6 248.0,229.2 262.0,240.8 276.0,252.4 290.0,264.0 304.0,275.6 318.0,287.2 332.0,298.8 346.0,310.4 360.0,322.0 374.0,333.6 388.0,345.2 402.0,356.8 416.0,368.4 430.0,380.0" fill="none" stroke="#4ea8ff" stroke-width="2.5"/>
+          <polyline points="80.0,90.0 94.0,112.7 108.0,134.5 122.0,155.4 136.0,175.4 150.0,194.4 164.0,212.5 178.0,229.7 192.0,245.9 206.0,261.2 220.0,275.6 234.0,289.1 248.0,301.6 262.0,313.2 276.0,323.9 290.0,333.6 304.0,342.4 318.0,350.3 332.0,357.3 346.0,363.3 360.0,368.4 374.0,372.6 388.0,375.8 402.0,378.1 416.0,379.5 430.0,380.0" fill="none" stroke="#ff9f6b" stroke-width="3"/>
+          <polyline points="80.0,90.0 94.0,143.5 108.0,188.9 122.0,227.0 136.0,258.7 150.0,285.0 164.0,306.5 178.0,323.9 192.0,337.8 206.0,348.9 220.0,357.4 234.0,364.0 248.0,369.0 262.0,372.6 276.0,375.2 290.0,377.0 304.0,378.2 318.0,379.0 332.0,379.5 346.0,379.8 360.0,379.9 374.0,380.0 388.0,380.0 402.0,380.0 416.0,380.0 430.0,380.0" fill="none" stroke="#ff5d73" stroke-width="2.5"/>
+          <text x="224" y="94" fill="#8a8f9e" font-size="9">γ = 0（不折扣）</text>
+          <text x="224" y="210" fill="#4ea8ff" font-size="9">γ = 1</text>
+          <text x="224" y="279" fill="#ff9f6b" font-size="9">γ = 2（原文用的）</text>
+          <text x="224" y="366" fill="#ff5d73" font-size="9">γ = 5</text>
+          <circle cx="395" cy="377" r="5" fill="#ffd166"/>
+          <text x="255" y="420" text-anchor="middle" fill="#ffd166" font-size="10">p_t = 0.9 时，γ=2 的券只值 0.01</text>
+          <text x="255" y="440" text-anchor="middle" fill="#9fb4ff" font-size="10">曲线越靠下，说明对容易样本压得越狠</text>
+          <text x="255" y="458" text-anchor="middle" fill="#9fb4ff" font-size="10">γ 越大越狠，但不是越大越好（见第 5 节）</text>
+
+          <text x="695" y="74" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">右：同一批样本上的损失曲线</text>
+          <line x1="520" y1="90" x2="520" y2="380" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="520" y1="380" x2="880" y2="380" stroke="#3a4a78" stroke-width="1"/>
+          <text x="514" y="94" text-anchor="end" fill="#9fb4ff" font-size="9">3</text>
+          <text x="514" y="191" text-anchor="end" fill="#9fb4ff" font-size="9">2</text>
+          <text x="514" y="288" text-anchor="end" fill="#9fb4ff" font-size="9">1</text>
+          <text x="514" y="382" text-anchor="end" fill="#9fb4ff" font-size="9">0</text>
+          <text x="575" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">0.2</text>
+          <text x="650" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">0.4</text>
+          <text x="724" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">0.6</text>
+          <text x="798" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">0.8</text>
+          <text x="866" y="400" text-anchor="middle" fill="#9fb4ff" font-size="9">1</text>
+          <polyline points="520.0,90.4 534.7,147.2 549.5,182.8 564.2,208.7 578.9,229.1 593.7,246.0 608.4,260.3 623.2,272.8 637.9,283.9 652.6,293.8 667.4,302.8 682.1,311.0 696.8,318.6 711.6,325.7 726.3,332.2 741.1,338.4 755.8,344.1 770.5,349.6 785.3,354.7 800.0,359.6 814.7,364.3 829.5,368.7 844.2,373.0 858.9,377.1 870.0,380.0" fill="none" stroke="#4ea8ff" stroke-width="2.5"/>
+          <polyline points="520.0,118.6 534.7,187.2 549.5,230.7 564.2,262.0 578.9,285.8 593.7,304.6 608.4,319.7 623.2,331.9 637.9,341.9 652.6,350.0 667.4,356.7 682.1,362.1 696.8,366.4 711.6,370.0 726.3,372.7 741.1,374.9 755.8,376.6 770.5,377.8 785.3,378.7 800.0,379.3 814.7,379.6 829.5,379.9 844.2,380.0 858.9,380.0 870.0,380.0" fill="none" stroke="#ff9f6b" stroke-width="3"/>
+          <text x="590" y="222" fill="#4ea8ff" font-size="9.5">普通交叉熵</text>
+          <text x="590" y="298" fill="#ff9f6b" font-size="9.5">Focal Loss，γ = 2</text>
+          <line x1="833" y1="90" x2="833" y2="380" stroke="#ffd166" stroke-width="1.5" stroke-dasharray="6 4"/>
+          <text x="833" y="418" text-anchor="middle" fill="#ffd166" font-size="10">p_t = 0.9</text>
+          <text x="695" y="440" text-anchor="middle" fill="#9fb4ff" font-size="10">在这个竖线上：CE 是 0.105，FL 只有 0.001</text>
+          <text x="695" y="458" text-anchor="middle" fill="#ff9f6b" font-size="10">也就是 CE 比 FL 等于 100 比 1</text>
+
+          <rect x="40" y="478" width="820" height="82" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="502" text-anchor="middle" fill="#cdd6ff" font-size="11.5">左图说明「券怎么发」：p_t 越接近 1，券值越接近 0，γ 越大压得越狠</text>
+          <text x="450" y="524" text-anchor="middle" fill="#ff9f6b" font-size="11">右图说明「券改变了什么」：普通交叉熵即使在一眼就对的区间仍有非零的尾巴，Focal Loss 把它压平了</text>
+          <text x="450" y="548" text-anchor="middle" fill="#9fb4ff" font-size="10.5">两条曲线在 p_t 很小时几乎重合 —— 难样本的损失基本没被动过，这正是设计意图</text>
+          <text x="450" y="574" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：一张按「答对程度」打折的券，把容易样本从 1 分改成 0.01 分</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两幅曲线。左幅横轴是 $p_t$（从 0 到 1），纵轴是折扣券的券值 $(1-p_t)^\gamma$（从 0 到 1），画了 γ = 0、1、2、5 四条曲线，其中 γ=2 那条被加粗，并在 $p_t=0.9$ 处点了一个黄点。右幅横轴同样是 $p_t$，纵轴是单个样本的损失值，画了两条曲线：普通交叉熵（蓝）与 γ=2 的 Focal Loss（橙），并在 $p_t=0.9$ 处画了一条黄色竖虚线。<br>
+          <b>怎么看这张图：</b>① 先看左幅的<b>γ=0 那条水平线</b>——它一直在最上面，说明「不折扣」；② 再看 γ 越大曲线掉得越快——<b>γ=5 那条几乎贴着底走</b>，说明压得极狠；③ 转到右幅，把目光放在黄色竖线处：<b>蓝线还有 0.105 的高度，橙线已经贴到近乎零</b>，比值正好 100 比 1；④ 最后看两条曲线在左边（$p_t$ 小）几乎重合——<b>难样本的损失基本没被动过</b>，这才是设计者要的效果。<br>
+          <b>要记住的一句话：</b>$(1-p_t)^\gamma$ 不是「开关」，而是一张<b>连续变化的折扣券</b>——答得越对，折扣越狠。
+        </figcaption>
+      </figure>
+
+      <p><b>曲线的诚实说明：</b>上面两幅图的曲线点，都是用真实公式逐点算出来的（左幅 $(1-p_t)^\gamma$，右幅 $-\log p_t$ 与 $-(1-p_t)^2\log p_t$），不是凭手感画的。你可以自己代入 $p_t=0.9$ 验证：$-\log 0.9 = 0.1054$，而 $-(1-0.9)^2\log 0.9 = 0.001054$，正好是前者的百分之一。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. 公式与人话：每一步都在算什么</h2>
+      <p>现在可以正式看公式了。原文的推导是一条线，我们一步一步走，每一步都给一句人话。</p>
+
+      <h3>第一步：二值交叉熵</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm{CE}(p,y)=\begin{cases}-\log(p) & y=1\\ -\log(1-p) & \text{otherwise}\end{cases},\qquad p_t=\begin{cases}p & y=1\\ 1-p & \text{otherwise}\end{cases},\qquad \mathrm{CE}(p_t)=-\log(p_t)$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>$y$ 是真值类别，$p$ 是模型对 $y=1$ 这一类的估计概率。$p_t$ 是<b>模型对「正确那一类」的估计概率</b>——分对时接近 1，分错时接近 0。</p>
+      <p><b>它为什么这么算／问题在哪：</b>交叉熵只看「你对正确答案有多自信」，<b>不看你有多容易就答对了</b>。所以一个 $p_t=0.99$ 的背景样本和一个 $p_t=0.5$ 的难样本，都会被照常收账——这就是第 2 节那个天平倾斜的数学根源。原文原话：即使是容易分类的样本，它的损失也有 non-trivial magnitude。</p>
+
+      <h3>第二步：α 平衡交叉熵（第一层修补，但不够）</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm{CE}(p_t)=-\alpha_t\log(p_t)$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>给稀有类加砝码。$\alpha\in[0,1]$ 是类 1 的权重，$1-\alpha$ 给类 −1；$\alpha_t$ 的构造方式与 $p_t$ 完全平行。</p>
+      <p><b>它为什么不够：</b>它<b>只平衡正负，不区分难易</b>。一个 $p_t=0.99$ 的背景样本和一个 $p_t=0.55$ 的背景样本，在这个式子里拿到的权重<b>完全一样</b>。原文明确说：α 平衡 4 倍权重后精度虽有提升（AP 从 31.1 起算），但并没有解决「成群的容易负样本压垮梯度」这件事。</p>
+
+      <h3>第三步：Focal Loss（真正的药）</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm{FL}(p_t)=-(1-p_t)^{\gamma}\log(p_t)$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>把交叉熵的每一项，<b>乘一张随「答对程度」递减的折扣券</b>。$\gamma \ge 0$ 是可调的聚焦参数（focusing parameter），原文实验取 <b>γ = 2</b>；$(1-p_t)^{\gamma}$ 就是那张折扣券（调制因子）。</p>
+      <p><b>它为什么这么算：</b>因为它要暴露的毛病是「<b>容易样本数量太大</b>」。折扣券的妙处在于它<b>不是二值的开关</b>（要么留、要么丢），而是一条连续曲线——$p_t$ 越大折得越狠，而且是可微的，梯度能正常传。<b>如果做成硬阈值，就等于 OHEM 了。</b></p>
+      <p><b>数字账（γ=2）：</b>$p_t=0.9$ → 券值 0.01（损失剩 1%）；$p_t\approx0.968$ → 券值约 0.001（损失剩约 0.1%）；$p_t\le0.5$ → 券值最大 0.25（损失最多被压 4 倍）。<b>容易样本与难样本的权重差了两三个数量级。</b></p>
+
+      <h3>第四步：本文实际采用的版本（α 与 γ 一起用）</h3>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm{FL}(p_t)=-\alpha_t(1-p_t)^{\gamma}\log(p_t)$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>先给稀有类加砝码（$\alpha$），再给容易样本打折扣（$\gamma$）——<b>两件事叠在一起</b>。原文最好的一组是 <b>α = 0.25、γ = 2</b>。</p>
+      <p><b>它为什么这么算：</b>原文强调 γ 与 α <b>必须一起选</b>：<b>在一般情况下，γ 增大时 α 应当略微减小</b>（γ=2 时 α=0.25 最好）。这句原话值得抄下来。原文对它的解释是一笔很漂亮的「内部账目守恒」：<b>as easy negatives are downweighted, less emphasis needs to be placed on the positives</b>——容易负样本既然已经被压下去了，就不必再给正样本额外加压了。<b>天平两边的砝码必须同时调。</b></p>
+      <p><b>数字账（α 与 γ 的联动，原文实测）：</b>γ=0 时 α=0.75 最好；γ=2 时 α=0.25 最好。<b>γ 一升，最优 α 就往下走。</b>另外这个组合很敏感：γ=5 时 AP 从 34.0 掉到 32.2；而 α=0.10 时 AP 直接变成 <b>0.0</b>——训练当场崩掉。</p>
+      <p>还有一条容易被忽略但很关键的设计：<b>总 focal loss 要除以「被分配到真值框的 anchor 数」，而不是 anchor 总数</b>。原文的理由是：since the vast majority of anchors are easy negatives and receive negligible loss values under the focal loss——<b>绝大多数 anchor 在 focal loss 下几乎不贡献损失</b>，拿它们当分母只会把数值稀释掉。</p>
+
+      <h3>顺带对比一下：为什么不用 OHEM</h3>
+      <p>OHEM 的思路是「<b>只保留损失最大的那些样本</b>」，也就是<b>完全丢弃</b>容易样本。原文一句话把差别说清了：<b>unlike FL, OHEM completely discards easy examples</b>。而 Focal Loss <b>保留全部样本、只降权</b>。数字上的结果是：同为 ResNet-101-FPN / 600 px 的设置，FL（γ=2、α=.25）<b>34.0 AP</b>，对比 α 平衡 CE 最好 <b>31.1 AP</b>（<b>+2.9</b>）、对比 OHEM 最好 <b>32.8 AP</b>（<b>+3.2</b>）。</p>
+      <p><b>再强调一次作者的诚实：</b>原文自己说 <b>the precise form is not crucial</b>——<b>focal loss 的确切形式并不关键</b>，在线附录里还给了其他同样有效的实例化。<b>所以不要把它讲成「唯一正确解」，它是一个「足够好且简单」的解。</b></p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. 还有一处关键改动：它不属于损失函数</h2>
+      <p>本课如果只讲公式，会漏掉一个同等重要、但原文特意强调「这不是损失函数的改动」的东西——<b>类别先验初始化</b>。</p>
+      <p>事情是这样的：<b>用未经修改的交叉熵训练 RetinaNet，第一次就会当场发散</b>（原文原文：fails quickly, with the network diverging during training）。为什么？因为在训练刚开始时，网络对每个 anchor 都输出大约 0.5 的前景概率，而一张图里有 10 万个 anchor、真前景只有一两个——<b>于是海量背景 anchor 会在第一轮迭代里产生一个巨大且破坏性的损失值</b>，把训练一下子推飞。</p>
+      <p>解法是：<b>把分类子网最后一层的 bias 初始化成</b></p>
+      <div class="formula-box">
+        <div class="flow-formula">$$b=-\log\!\left(\frac{1-\pi}{\pi}\right),\qquad \pi=.01$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>$\pi$ 是训练开始时「每个 anchor 是前景」的先验概率，取 0.01。<b>代入一算：$b=-\log(0.99/0.01)=-\log 99 \approx -4.595$。</b>把这个负数装进 bias，网络一开始就倾向于说「这里没东西」。</p>
+      <p><b>它为什么这么算：</b>这样一来，第一轮迭代里那 10 万个背景 anchor 的损失就不会是巨大的数值，而是很小；训练就能平稳地起步。<b>原文特意加了一句提醒：this is a change in model initialization and not of the loss function</b>——这是初始化层面的改动，不是损失函数的改动。</p>
+      <p><b>为什么这件事值得单独讲：</b>因为它说明<b>这个「病」有两处伤口</b>——损失函数那一处用折扣券治，初始化那一处用先验偏置治，缺一个都训不起来。<b>很多复现失败就失败在只改了损失、忘了改 bias。</b></p>
+      <p>顺便把 RetinaNet 本体也交代一下（它刻意做得很平淡）：骨干是 <b>ResNet-FPN</b>，上面挂两条<b>不共享参数</b>的子网——分类子网 4 个 3×3 卷积 + 1 个 3×3 输出 KA 通道 + sigmoid；回归子网结构相同但输出 4A 个线性值；每层金字塔 <b>A = 9</b> 个 anchor。原文点明：虽然很多设计选择并不关键，但 <b>the use of the FPN backbone is</b>（用 FPN 骨干是关键的）——只用 ResNet 最后一层特征会得到很低的 AP。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Focal_Loss_for_Dense_Object_Detection/c59973d4cffeee0eafab953a3a399a043c346291c43535373bc3e1bfc09f9a2c.jpg" alt="The one-stage RetinaNet network architecture">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The one-stage RetinaNet network architecture uses a Feature Pyramid Network (FPN) backbone on top of a feedforward ResNet architecture (a) to generate a rich, multi-scale convolutional feature pyramid (b). To this backbone RetinaNet attaches two subnetworks, one for classifying anchor boxes (c) and one for regressing from anchor boxes to ground-truth object boxes (d). The netwo…（原文图注在此处截断）<br>
+          <b>怎么看这张图：</b>读三处就够：① (a) 到 (b) 是 <b>ResNet + FPN</b> 组成的多尺度特征金字塔；② (c) 是<b>分类子网</b>、输出每个 anchor 的「是物体吗」（用 sigmoid）；③ (d) 是<b>回归子网</b>、输出 anchor 到真值框的偏移。<b>请特别注意这两条子网是不共享参数的</b>，而且回归子网用的是 class-agnostic 的单套偏移（原文说这样参数更少、效果一样）。<br>
+          <b>要记住的一句话：</b>整个网络是「故意普通」的——原文的贡献在损失函数，不在结构。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Focal_Loss_for_Dense_Object_Detection/ce19e6f81282582994bd44ff3289616d646681d3478914132fadf202fd5c430c.jpg" alt="Focal loss adds a factor (1 - p_t)^gamma to the standard cross entropy criterion">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We propose a novel loss we term the Focal Loss that adds a factor (1 − p_t)^γ to the standard cross entropy criterion. Setting γ &gt; 0 reduces the relative loss for well-classified examples (p_t &gt; .5), putting more focus on hard, misclassified examples. As our experiments will demonstrate, the proposed focal loss enables training hi…（原文图注在此处截断）<br>
+          <b>怎么看这张图：</b>这是原文的「招牌图」，正是我们上面那幅右图的原始版本。横轴是 $p_t$、纵轴是损失，画了 γ = 0（就是普通交叉熵）以及 γ = 1、2、5 的几条曲线。<b>盯住 $p_t$ 大于 0.5 的右半边</b>——γ=0 那条还高高在上、尾巴很长；γ 越大，曲线压得越低。<b>左半边（$p_t$ 小于 0.5）几条曲线几乎重合</b>，说明难样本基本没被动。<br>
+          <b>要记住的一句话：</b>这张图用一句话概括就是——<b>「答对的，把账抹掉；答错的，照原样收」</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 它不完美在哪，以及它的被引用度（据实写）</h2>
+      <p>先说被引用度。这一条必须<b>据实写，不许为了讲课好听而夸大</b>。</p>
+      <div class="callout">
+        <h4>★ 语料库实测结论（重要）</h4>
+        <p>在 <i>md/</i> 全库里检索 Focal Loss，只命中 <b>3 个真实文档</b>：本文自身、<b>2021_Pyramid_Vision_Transformer</b>（仅在描述下游检测框架的部件时顺带提到）、以及唯一的实质引用 <b>2023_3D_Object_Detection_for_Autonomous_Driving: A Comprehensive Survey</b>（原话：In addition to the binary cross entropy loss, the <b>focal loss</b> has also been employed to enhance the localization ability）。</p>
+        <p><b>也就是说：本语料库 255 篇里，没有任何一篇 SLAM 论文正面引用 Focal Loss。</b>DynaSLAM、YOLO-SLAM、SG-SLAM、OVD-SLAM、DGM-VINS 这些用检测器的 SLAM 系统，引用的是 YOLO / YOLOv3 / YOLOv5 / Mask R-CNN 这些<b>产品</b>，而不是它们背后的损失设计。</p>
+        <p><b>所以正确的讲法是：它是一个被隐式使用的零件</b>——所有你在 SLAM 论文里看到的 YOLOv3 / v5 / v8 检测器，训练时都在用它这一族损失（BCE 或二值 focal 变体）；<b>但 SLAM 论文只引 YOLO，不引它的损失。</b>它是一个站在幕后的零件。<b>本课唯一能直引的跨领域证据，就是那篇 2023 年自动驾驶 3D 检测综述——不要编造更多「Focal Loss 影响 SLAM」的证据。</b></p>
+      </div>
+
+      <p>再说它自己的局限，逐条都是原文自述：</p>
+      <ol>
+        <li><b>「确切形式并不关键」。</b>作者自己说 the precise form is not crucial，附录里给了其他同样有效的实例化。<b>别把它讲成唯一正确解。</b></li>
+        <li><b>第一次训练会发散。</b>用未经修改的交叉熵训练 RetinaNet 会 fails quickly、当场发散，必须靠 π=.01 的先验初始化才救得回来。<b>也就是说，这个损失函数不能单独使用。</b></li>
+        <li><b>Hinge Loss 试过，失败。</b>在 $p_t$ 上用 hinge loss 的做法 <b>was unstable and we did not manage to obtain meaningful results</b>。<b>这是另一处「朴素方案训不起来」的证据。</b></li>
+        <li><b>速度不是本文目标。</b>原文自己说 our design is not optimized for speed；高帧率场景 will likely require special network design，并明说 beyond the scope of this work。<b>这一点对 SLAM 读者尤其重要</b>——它意味着 Focal Loss 并不承诺把你的检测器变快。</li>
+        <li><b>深度方向的边际递减。</b>ResNet-101 相对 50 的增益，不如「换 FPN 骨干」来得大；而且 not all frameworks automatically benefit from deeper or advanced networks。</li>
+        <li><b>只在 COCO 上做实验。</b>全部实验只在 COCO（trainval35k / minival / test-dev）上完成。<b>单一 benchmark。</b></li>
+      </ol>
+
+      <p>还有两个「内部张力」值得注意，它们能让你对它有更真实的判断：</p>
+      <ul>
+        <li><b>γ 的最优区间是「钟形」的，不是越大越好。</b>γ 从 0 到 2，AP 单调升到 <b>34.0</b>；到 <b>γ=5 反而降到 32.2</b>。原因不难理解：压得太狠，连一些「有点难但确实该学」的样本也被压没了。</li>
+        <li><b>α 与 γ 必须联动。</b>γ=0 时 α=0.75 最好，γ=2 时 α=0.25 最好。而且 α 很敏感——<b>α=0.10 时 AP = 0.0，训练直接崩</b>。</li>
+      </ul>
+      <p>最后把它放在本季那条暗线里看。本季我们一直在证明一件事：<b>这些「零件」不是万能的。</b></p>
+      <ul>
+        <li><b>0190 FCN</b> 承认会把船上的救生衣当成人；</li>
+        <li><b>0191 YOLO</b> 承认成堆的小物体必漏，而且定位误差是它的第一大错源；</li>
+        <li><b>0192 Mask R-CNN</b> 被 SLAM 论文抱怨边界不精、跑不到帧率（195 ms/图）；</li>
+        <li><b>本课 Focal Loss</b> 承认：朴素交叉熵训不起来、hinge loss 也训不起来、而且要配合初始化改动才有效。</li>
+      </ul>
+      <p>把这四条摆在一起，结论就很清楚了：<b>这些零件每一个都有明确的、被作者自己承认的边界。</b>而 SLAM 论文里那些「语义先验 + 几何约束」的双保险设计，<b>正是被这些缺陷逼出来的</b>——不是画蛇添足，而是不得不加。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Focal_Loss_for_Dense_Object_Detection/57e1732b306428a75a1aec7c9dcce86abf4ed4056dd79846aef921d973290af1.jpg" alt="Cumulative distribution functions of the normalized loss for positive and negative samples">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Cumulative distribution functions of the normalized loss for positive and negative samples for different values of γ for a converged model. The effect of changing γ on the distribution of the loss for positive examples is minor. For negatives, however, increasing γ heavily concentrates the loss on hard examples, focusing nearly all attention away from easy n…（原文图注在此处截断）<br>
+          <b>怎么看这张图：</b>这是全文最有分量的一张证据图。做法是：<b>固定一个已经用 γ=2 训好的模型</b>，分别统计正样本与负样本的「归一化损失的累积分布」。怎么看：<b>横轴是「按损失从大到小排好序的样本比例」、纵轴是「累积承担了多少比例的损失」</b>，曲线越靠左上说明「越少的人扛了越多的账」。<br>
+          ① <b>正样本那一半：γ 几乎不影响它</b>——大约 <b>20%</b> 最难的样本承担了约<b>一半</b>的正样本损失，γ 增大只是让它稍微更集中一点；② <b>负样本那一半：γ 极其敏感</b>——γ=0 时正负两条曲线几乎重合，γ 一升，曲线猛地往左上跑，意味着<b>绝大部分损失只来自极小一部分样本</b>。<br>
+          <b>要记住的一句话：</b>这张图就是「天平被掰回来」的定量证明——<b>不是把样本删了，而是让损失自动集中到少数难例上</b>。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Focal_Loss_for_Dense_Object_Detection/1c5ceda37b8f6e2e46d776376d958b670c41ac52c4fedca12acf4303ed51fa68.jpg" alt="Speed versus accuracy on COCO test-dev">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Speed (ms) versus accuracy (AP) on COCO test-dev. Enabled by the focal loss, our simple one-stage RetinaNet detector outperforms all previous one-stage and two-stage detectors, including the best reported Faster R-CNN system from [19]. We show variants of RetinaNet with ResNet-50-FPN (blue circles) and ResNet-101-FPN (orange diamonds) at five scales (400-800 pixels). Ignoring the lo…（原文图注在此处截断）<br>
+          <b>怎么看这张图：</b>横轴是速度（毫秒，越左越快）、纵轴是精度（AP，越上越准）。蓝色圆点是 ResNet-50-FPN、橙色菱形是 ResNet-101-FPN，各有五个图像尺度（400 到 800 像素）。<b>你要找的是那条「包络线」</b>——RetinaNet 的曲线压在所有既有单阶段与两阶段检测器之上。<br>
+          <b>★ 但请务必注意图注里的那句限定</b>：原文写的是 Ignoring the low-accuracy regime (AP 小于 25) 时它才形成 upper envelope；正文的表述是 forms an upper envelope over all existing methods, <b>discounting the low-accuracy regime</b>。<b>也就是说，「全面最优」这个说法要补上「忽略低精度区间」这个前提。</b><br>
+          <b>要记住的一句话：</b>这张图证明了「单阶段打不过两阶段」这个持续多年的结论被打破了——<b>而打破它的是一行损失函数，不是更深的网络</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 和前面课程怎么接：这个零件在前九季的位置</h2>
+      <p>本课的连接方式和前三课有点不同。FCN、YOLO、Mask R-CNN 都能在第八季里找到<b>直接点名</b>的落地方法；<b>而 Focal Loss 在 SLAM 语料里的存在方式是「隐式」的</b>。所以要讲清它的「接法」，得用三层来说。</p>
+
+      <h3>第一层：它是 0191 YOLO 那条主线的下一站</h3>
+      <p><b>0191 课</b>讲 YOLO 时，我们留了一个悬念：单阶段检测「快得多，但更难训」。本课把「难训」这个词拆开了——<b>难训的学名就是「训练时的极端前景-背景类别不平衡」</b>，而它的量化形态是「每张图 10 万个位置、正样本只有 1 到 2 个」。所以：</p>
+      <ul>
+        <li>YOLO 自己给出的第一层缓解手段是 <b>λ_noobj = 0.5</b>（在 0191 课里讲过），本质就是「把无物体那些格子的账压低一半」；</li>
+        <li>Focal Loss 把这件事故意做到极致：<b>不是压 0.5 倍，而是按「答对程度」连续地压，能压到 1/1000</b>。</li>
+      </ul>
+      <p><b>所以本课是 0191 的自然续章</b>：YOLO 定义了问题（一步到位），Focal Loss 给出了这个问题在损失层面的标准答案。</p>
+
+      <h3>第二层：它是 0192 Mask R-CNN 那条两阶段主线的「对手盘」</h3>
+      <p><b>0192 课</b>里我们讲过 RPN：它把「几乎无限个候选位置」砍到 1 到 2 千个。<b>当时我们只说它是「两阶段的第一道闸门」，没有说明它在训练时到底帮了什么忙。</b>本课把这件事补上了：这道闸门真正的作用，是<b>让第二阶段永远不必面对那 10 万个容易负样本</b>。也就是说，两阶段之所以「好训」，并不完全是因为结构更强，<b>而是因为它用采样把类别不平衡绕过去了</b>。</p>
+      <p>原文有一句话说得很透：第二阶段的 <b>1:3 正负比</b>「就像一个隐式的 α 平衡因子，通过采样实现」。<b>换句话说，两阶段早就在做一种「硬版本」的类别平衡</b>，只是它靠的是丢样本；Focal Loss 把它换成了一个连续可微的软版本。</p>
+
+      <h3>第三层：它在第八季的两个块里是怎么「隐性存在」的</h3>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>★ 第八季 0153–0159 动态环境块</h4><p>这一块里出现的检测器是 <b>YOLO / YOLOv3 / YOLOv5</b>（YOLO-SLAM 的 Darknet19-YOLOv3、OVD-SLAM 的 YOLOv5、SuMa 引的 YOLOv3）。<b>这些检测器在训练时用的就是 focal loss 这一族损失</b>。但请注意语气：<b>它们的论文里写的是「我们用 YOLO」，不会写「我们用 focal loss」</b>。所以本课的正确位置是——<b>它是那个零件背后的零件</b>。</p></div>
+        <div class="mini-card"><h4>★ 第八季 0160–0167 语义建图块</h4><p>这一块用的是语义分割网络，对应的是 <b>0190 FCN</b> 那一支。有意思的是：<b>FCN 那篇明确说标签里约 3/4 是背景，并认为不需要做类别平衡</b>；而在检测这边，背景占比高到 1000 比 1，就必须处理了。<b>同一个「背景太多」的问题，在两个任务上的严重程度差了三个数量级</b>——这正好解释了为什么 Focal Loss 出现在检测任务上。</p></div>
+        <div class="mini-card"><h4>★ 唯一的直接引用：2023 三维检测综述</h4><p>那篇综述（<b>0196 / 0197 会细讲</b>）在讲损失函数时说：除二值交叉熵之外，<b>focal loss 也被用来增强定位能力</b>。这是本语料库里唯一一处有实质技术语境的 Focal Loss 引用。<b>它说明 focal loss 已经进入 3D 检测</b>——但也仅此一处。</p></div>
+      </div>
+
+      <h3>第四层：本季那条暗线的收口</h3>
+      <p>到这里，第十季「检测与分割」这四节课就把一条完整的链条走完了：</p>
+      <ul>
+        <li><b>0190 FCN</b> 给出「逐像素预测」这个想法，并且承认「外观会被骗」（救生衣当人）；</li>
+        <li><b>0191 YOLO</b> 把它改成「一步到位的画框」，给出速度，也承认「框不知道像素、成堆小物体必漏」；</li>
+        <li><b>0192 Mask R-CNN</b> 把两者汇合起来，给出像素级的实例边界，代价是 <b>195 ms/图</b>，而且被抱怨边界不精；</li>
+        <li><b>0193 Focal Loss</b> 在幕后把这些单阶段检测器「能不能训起来」这件事解决掉，<b>但它自己也不完美</b>——要配合初始化、γ 有最优区间、α 敏感、只在一个 benchmark 上验证过。</li>
+      </ul>
+      <p>而第八季 <b>0153–0159</b> 的动态环境块告诉我们：<b>这些零件被塞进 SLAM 之后，都必须再配一层几何约束</b>——DynaSLAM 在多视图几何上做第二级筛选、YOLO-SLAM 用 depth-RANSAC、SG-SLAM 用多线程与关键帧分摊、MaskFusion 改用实例级掩码重建 object-aware map。</p>
+      <p><b>语义给先验，几何做裁判。</b>这是第八季留下的最重要的一条设计原则，而它之所以必要，正是因为在第十季这四节课里，我们看到了这些零件每一个都有明确的边界。<b>零件不完美，所以 SLAM 要加几何约束。</b></p>
+      <p>最后回指两条纪律。<b>第九季 0180</b> 提醒「看到轨迹误差先问真值多准」；本季补上平行的另一半：「<b>看到 AP 先问 IoU 阈值</b>」。本课的数字也适用这条纪律：RetinaNet-101-800 的 <b>39.1 AP</b> 是 COCO test-dev 的成绩，而它和「RetinaNet-101-600 的 122 ms/图」是两套配置。<b>引用时务必把配置写全。</b></p>
+      <p>还有一条更值得记住的：本课一遍遍出现「朴素方案训不起来」——朴素交叉熵发散、hinge loss 不稳定。这提醒我们：<b>读论文时看到「我们改进了损失函数」，要先问「原来的损失函数到底哪里不行」，而不是直接记住新公式。</b>本课的价值，就在那句诊断上。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某同学说：「Focal Loss 的作用是把容易的样本丢掉，只训练难样本。」这个说法哪里不对？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="它确实让训练聚焦在难例上，但「聚焦」是通过降权实现的，不是通过丢弃。" onclick="lessonKit.answer(this,'q0193a')">它对，只是在讲难例</button>
+          <button data-correct="yes" data-explanation="对——focal loss 保留全部样本，只按答对程度把容易样本的权压小；「完全丢弃」是 OHEM 的做法，原文特意把两者对立起来说。" onclick="lessonKit.answer(this,'q0193a')">它错，降权不等于丢弃</button>
+          <button data-correct="no" data-explanation="丢弃样本的是 OHEM，而且这种说法在「聚焦难例」这一点上是常识，不算错。" onclick="lessonKit.answer(this,'q0193a')">它错，OHEM 才降权</button>
+        </div>
+        <div class="quiz-feedback" id="q0193a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">8. 读完你应该能回答</h2>
+      <ol>
+        <li>两阶段检测靠哪两道闸门避开类别不平衡？单阶段为什么没有这道保护？</li>
+        <li>「10 万个位置、正样本只有 1 到 2 个」——这个比例是多少？它会造成哪两个症状？</li>
+        <li>$p_t$ 是什么？$(1-p_t)^\gamma$ 在 $p_t$ 接近 1 和接近 0 时分别等于多少？原文为什么说它是「调制因子」？</li>
+        <li><b>请给出具体数字</b>：γ=2 时，一个 $p_t=0.9$ 的样本权重变成原来的几分之几？一个 $p_t\le0.5$ 的难样本最多被压几倍？这两个数字差了多少个数量级？</li>
+        <li>原文用的 γ 和 α 各是多少？为什么说它们必须一起选？γ 是不是越大越好？</li>
+        <li>「类别先验初始化」改的是什么？为什么它不属于损失函数的改动？如果不做这一步会怎样？</li>
+        <li>Focal Loss 与 OHEM 的哲学差别是什么？数值上差多少 AP？</li>
+        <li>它在 SLAM 语料库里的被引用情况如何？为什么正确的讲法是「被隐式使用的零件」？</li>
+        <li>「γ=0 时 Focal Loss 等价于什么」？为什么原文说 focal loss 的「确切形式并不关键」？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>取 γ=2，分别算出 $p_t = 0.99$、$p_t = 0.9$、$p_t = 0.5$、$p_t = 0.2$ 四个样本的折扣券值与「损失被压成原来的几分之几」。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>折扣券值 $(1-p_t)^2$：<br>$p_t=0.99$ → $0.01^2 = <b>0.0001</b>$（损失剩万分之一）；<br>$p_t=0.9$ → $0.1^2 = <b>0.01</b>$（损失剩百分之一）；<br>$p_t=0.5$ → $0.5^2 = <b>0.25</b>$（损失剩四分之一）；<br>$p_t=0.2$ → $0.8^2 = <b>0.64</b>$（损失剩约三分之二）。<br>结论：越容易压得越狠；难样本（$p_t\le0.5$）最多只被压 4 倍。容易样本与难样本的权重可以差到万倍量级，这就是「天平被掰回来」的算术依据。</div></details>
+        </li>
+        <li>有人说「Focal Loss 只是一种 attention」。请判断这个说法是否站得住，并说明它和 OHEM 的区别。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>这个类比有一定道理——它确实是一条由样本自身状态（$p_t$）自动生成的软权重，但更准确的说法是「<b>按答对程度连续降权的损失重塑</b>」。它与 OHEM 的关键区别是：<b>OHEM 只保留损失最大的一批样本、完全丢弃容易样本（completely discards easy examples）；Focal Loss 保留全部样本、只把容易样本的权压到很小。</b>保留全部的好处是：所有样本的梯度形式上都还在，权重是连续可微的，不需要引入额外的采样启发式与阈值。数值上，同为 ResNet-101-FPN / 600 px，FL 34.0 AP 对 OHEM 最好 32.8 AP（+3.2）。</div></details>
+        </li>
+        <li>为什么说「只改损失函数、不改初始化」的复现会失败？请给出具体机制与那个数字。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>机制：训练刚开始时网络对每个 anchor 都输出约 0.5 的前景概率，而一张图里有约 10 万个 anchor、真前景只有一两个；大量背景 anchor 会在第一轮迭代产生一个巨大且破坏性的损失值，把训练推飞（原文：fails quickly, with the network diverging during training）。<br>解法：把分类子网最后一层的 bias 初始化为 $b=-\log((1-\pi)/\pi)$，取 $\pi=0.01$，即 $b=-\log 99 \approx <b>-4.595</b>$，让网络一开始就倾向说「这里没东西」。原文特意强调 this is a change in model initialization and <b>not</b> of the loss function——所以它不算损失函数的改动，但缺了它一样训不起来。</div></details>
+        </li>
+        <li>请如实回答：本语料库里有几篇 SLAM 论文正面引用了 Focal Loss？如果没有，那么正确的表述应该是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div><b>零篇。</b>全库检索只命中 3 个真实文档：本文自身、2021_Pyramid_Vision_Transformer（仅顺带提及）、以及 2023_3D_Object_Detection_for_Autonomous_Driving: A Comprehensive Survey（唯一有实质技术语境的一处，原话说除二值交叉熵之外 focal loss 也被用来增强定位能力）。<br>正确表述：「<b>它是一个被隐式使用的零件</b>——所有你在 SLAM 论文里看到的 YOLOv3 / v5 / v8 检测器，训练时都在用它这一族损失；但 SLAM 论文只引 YOLO，不引它的损失。」不要编造更多「Focal Loss 影响 SLAM」的证据。</div></details>
+        </li>
+        <li>为什么 γ 不是越大越好？给出原文的实测数据。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为压得太狠会把「有点难但确实该学」的样本也一起压掉。实测：γ 从 0 升到 2，AP 单调升到 <b>34.0</b>；到 <b>γ=5 反而降到 32.2</b>——所以最优区间是钟形的。另外 α 与 γ 必须联动：γ=0 时 α=0.75 最好、γ=2 时 α=0.25 最好（原文解释：容易负样本既然已被压下，就不必再给正样本额外加压）；α 还极敏感，<b>α=0.10 时 AP = 0.0，训练直接崩</b>。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0192-MaskRCNN-2017-实例分割与RoIAlign.html">← 0192 Mask R-CNN：实例分割与 RoIAlign</a>
+        <a class="next" href="0194-Swin与PVT-2021-把金字塔搬进Transformer.html">0194 Swin 与 PVT：把金字塔搬进 Transformer →</a>
+      </div>
+      <p class="foot-note">这一课没有一张检测结果图，只有一个公式——而它解决的问题，是你以后读的每个单阶段检测器都在受益的那个问题。⚖️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VGG 与 GoogLeNet（2015）：两条经典骨干 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0187</div>
+      <h1>VGG 与 GoogLeNet（2015）：两条经典骨干</h1>
+      <p class="subtitle">这节课的清单写的是「VGG」，但打开论文你会发现标题是 Going Deeper、主角是 Inception——一次清单失误，正好是本季最好的教学素材。🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：Inception 模块 / 1×1 降维 / 22 层 GoogLeNet / VGG 前置补丁</span>
+        <span>👥 作者：Christian Szegedy、Wei Liu、Yangqing Jia 等（Google 等）</span>
+        <span>📅 年份 · <i>Going Deeper with Convolutions</i>（正文未标发表处，语料内可印证为 CVPR 2015）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：清单说它是 VGG</a>
+        <a href="#b">前人卡在哪：加大规模的两笔账</a>
+        <a href="#c">核心机制：一个模块里三个尺度</a>
+        <a href="#d">公式与形状账：1×1 到底省了什么</a>
+        <a href="#e">关键数字：GoogLeNet 的成绩单</a>
+        <a href="#f">在前八季哪些课出现过</a>
+        <a href="#g">它不完美在哪</a>
+        <a href="#h">和前面课程怎么接</a>
+        <a href="#i">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Inception 模块为什么是「分叉再合流」，以及 1×1 降维在这里干什么；用具体数字算一遍「先降维再卷积」省了多少参数；背出 GoogLeNet 的五个关键数字；说清它在前八季的哪些课里被用到、以及它作为「分类特征提取器」天生缺什么。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 第三季 <b>0043–0045 ORB-SLAM</b> 与 <b>0048 DSO</b> 是「手工设计特征」的那条路，本课与 <b>0188</b>、<b>0189</b> 合起来是「学习式骨干」的另一条路。★ 第八季 <b>0159 SemanticFusion</b> 直接把 <b>VGG-16</b> 当分割主干（原文：「based on the VGG 16-layer network」），这是 VGG 在 SLAM 里最硬的一次落地。★ 第八季 <b>0165 YOLO-SLAM</b> 的 Table 1 是本课 VGG 数字的转引来源。★ 第七季 <b>0134–0140</b> 的混合主干就是「VGG-16 段 ＋ Swin-B 段」，VGG 段在本课、Swin 段在 <b>0194</b>。★ 本季 <b>0191 YOLO</b> 会告诉你：Inception 模块被后人拆掉了，只留下它的 1×1 降维。</p></div>
+      </div>
+
+      <h2>1. 开场：清单说这是 VGG，其实它是 GoogLeNet</h2>
+      <p>先处理一件尴尬事。<b>这一节课在课程清单上的主题写的是「VGG（2015）」，但打开论文，你会发现根本不是。</b>原文的一级标题是 <i>Going Deeper with Convolutions</i>，作者是 Christian Szegedy、Wei Liu、Yangqing Jia 等，摘要第一句就是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">We propose a deep convolutional neural network architecture codenamed <b>Inception</b> …</div>
+      </div>
+      <p><b>这句话在说什么：</b>这篇论文提出的东西代号叫 Inception。紧接着摘要里写明：提交 ILSVRC14 的那个具体版本叫做 <b>GoogLeNet，一个 22 层的深网络</b>。所以<b>这篇论文是 GoogLeNet / Inception，不是 VGG</b>。而更麻烦的是：<b>我们整个 255 篇的语料库里，根本没有 VGG 的一手论文</b>——全库只有 <b>2017 年的 SemanticFusion</b> 一篇真正引到它（具体是正文里一句「based on the VGG 16-layer network」）。</p>
+      <p>但这里还有一件更值得注意的事：<b>VGG 在 SLAM 语料里被引用的密度，远高于 GoogLeNet。</b>整个语料库有 <b>96 篇论文提到 VGG，其中 25 篇明确提到 VGG-16</b>；而 GoogLeNet / Inception 只有 <b>22 篇</b>。也就是说，读者翻 SLAM 论文时真正撞上的是 <b>VGG-16 backbone</b>，不是 GoogLeNet。所以我们这样处理这节课：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>主线讲 GoogLeNet</h4><p>它有一手正文在这个语料库里，所以下面所有数字都可以引用、可以指回原文具体位置。</p></div>
+        <div class="mini-card"><h4>开一个 VGG 前置补丁</h4><p>单独一段介绍 VGG 是谁，让你以后再看到 VGG-16 backbone 时不至于发懵。</p></div>
+        <div class="mini-card"><h4>VGG 数字全部标「转引」</h4><p>它的一手论文不在语料库，所以写「转引」是纪律问题，不是谦虚——写「VGG 论文里说」就是伪造。</p></div>
+      </div>
+      <div class="callout">
+        <h4>前置补丁：VGG 是谁</h4>
+        <p>VGG 由 Simonyan 与 Zisserman 发表于 2015 年 ICLR（发表处转引自 ResNet 篇参考文献 [40]）。做法极简：只用 3×3 小卷积一层层往下堆，堆到 16 或 19 层。它的数字全是转引——ResNet 篇给出 VGG-16 为 15.3 billion FLOPs、VGG-19 为 19.6 billion；2022 年 YOLO-SLAM 的 Table 1 给出 VGG-16 的 Top-1 70.5 / Top-5 90.0 / 权重 528 MB / 106 FPS。一句话：<b>VGG-16 精度最低、权重最重，但推理最快。</b></p>
+      </div>
+      <p><b>最后，把这处清单失误本身也当成一个教学点。</b>连课程清单都会把两个经典网络记混——一个 2014 年的 ILSVRC 冠军、一个只差 0.65 个百分点的亚军，名字一换就分不清了。<b>那么读者更不能凭名字猜内容。</b>本季的主题是「补名词」，而补名词的第一步不是背，是<b>打开论文看一眼它到底在讲什么</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 560" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="560" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">两条经典骨干：VGG 直着堆，GoogLeNet 分叉再合流</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">左边是读者最常撞见的 VGG-16，右边是本课有一手正文的 GoogLeNet</text>
+
+          <rect x="24" y="74" width="396" height="290" rx="12" fill="#16203a" stroke="#7f8fc7"/>
+          <text x="222" y="100" text-anchor="middle" fill="#7f8fc7" font-size="15" font-weight="700">VGG（全部数字为转引）</text>
+          <rect x="70" y="116" width="150" height="20" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="70" y="140" width="150" height="20" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="70" y="164" width="150" height="20" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="70" y="188" width="150" height="20" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="70" y="212" width="150" height="20" fill="#7f8fc7"/>
+          <text x="145" y="131" text-anchor="middle" fill="#cdd6ff" font-size="10">3×3 卷积</text>
+          <text x="145" y="155" text-anchor="middle" fill="#cdd6ff" font-size="10">3×3 卷积</text>
+          <text x="145" y="179" text-anchor="middle" fill="#cdd6ff" font-size="10">3×3 卷积</text>
+          <text x="145" y="203" text-anchor="middle" fill="#cdd6ff" font-size="10">3×3 卷积</text>
+          <text x="145" y="227" text-anchor="middle" fill="#0f1424" font-size="10">…堆到 16 / 19 层</text>
+          <text x="244" y="130" fill="#cdd6ff" font-size="11">只有一种零件：3×3</text>
+          <text x="244" y="152" fill="#cdd6ff" font-size="11">一路直着往下堆</text>
+          <text x="244" y="174" fill="#cdd6ff" font-size="11">结构最简单、最好懂</text>
+          <text x="244" y="200" fill="#ffd166" font-size="11">权重 528 MB（转引）</text>
+          <text x="244" y="222" fill="#ffd166" font-size="11">Top-1 70.5（转引）</text>
+          <text x="244" y="244" fill="#5cffb0" font-size="11">但最快：106 FPS（转引）</text>
+          <text x="222" y="284" text-anchor="middle" fill="#9fb4ff" font-size="11">转引自 2022 YOLO-SLAM 的 Table 1</text>
+          <text x="222" y="306" text-anchor="middle" fill="#9fb4ff" font-size="11">本语料库无 VGG 一手论文</text>
+          <text x="222" y="332" text-anchor="middle" fill="#cdd6ff" font-size="11">SLAM 论文里见到的是它</text>
+          <text x="222" y="352" text-anchor="middle" fill="#9fb4ff" font-size="11">96 篇提到 VGG / 25 篇提到 VGG-16</text>
+
+          <rect x="444" y="74" width="432" height="290" rx="12" fill="#16203a" stroke="#5cffb0"/>
+          <text x="660" y="100" text-anchor="middle" fill="#5cffb0" font-size="15" font-weight="700">GoogLeNet / Inception（有一手正文）</text>
+          <rect x="474" y="120" width="86" height="176" rx="4" fill="#0b1020" stroke="#3a4a78"/>
+          <text x="517" y="150" text-anchor="middle" fill="#9fb4ff" font-size="10">输入</text>
+          <text x="517" y="168" text-anchor="middle" fill="#9fb4ff" font-size="10">图像</text>
+          <rect x="576" y="120" width="66" height="38" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="576" y="168" width="66" height="38" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="576" y="216" width="66" height="38" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="576" y="258" width="66" height="38" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="609" y="144" text-anchor="middle" fill="#cdd6ff" font-size="10">1×1</text>
+          <text x="609" y="192" text-anchor="middle" fill="#cdd6ff" font-size="10">3×3</text>
+          <text x="609" y="240" text-anchor="middle" fill="#cdd6ff" font-size="10">5×5</text>
+          <text x="609" y="282" text-anchor="middle" fill="#cdd6ff" font-size="10">池化</text>
+          <rect x="654" y="122" width="40" height="172" rx="4" fill="#1b2440" stroke="#ffd166"/>
+          <text x="674" y="190" text-anchor="middle" fill="#ffd166" font-size="10">拼接</text>
+          <text x="674" y="208" text-anchor="middle" fill="#ffd166" font-size="10">通道</text>
+          <text x="714" y="146" fill="#cdd6ff" font-size="11">一个模块里四条路</text>
+          <text x="714" y="168" fill="#cdd6ff" font-size="11">四个尺度同时看同一张图</text>
+          <text x="714" y="190" fill="#cdd6ff" font-size="11">1×1 先降维再上贵的卷积</text>
+          <text x="714" y="212" fill="#cdd6ff" font-size="11">输出在通道维拼接</text>
+          <text x="714" y="238" fill="#5cffb0" font-size="11">参数比 AlexNet 少 12×</text>
+          <text x="714" y="260" fill="#5cffb0" font-size="11">22 层、top-5 错误 6.67%</text>
+          <text x="714" y="282" fill="#5cffb0" font-size="11">ILSVRC 2014 分类第一</text>
+          <text x="660" y="330" text-anchor="middle" fill="#9fb4ff" font-size="11">同一届比赛：VGG 第二（转引 7.32%）、GoogLeNet 第一（6.67%）</text>
+          <text x="660" y="352" text-anchor="middle" fill="#9fb4ff" font-size="11">本语料库被引 22 篇——远少于 VGG 的 96 篇</text>
+
+          <text x="450" y="392" text-anchor="middle" fill="#e8ecff" font-size="13" font-weight="700">本语料库被引量（篇）：谁才是读者真正会撞上的名字</text>
+          <text x="34" y="422" fill="#cdd6ff" font-size="11">提到 VGG</text>
+          <rect x="200" y="408" width="576" height="20" rx="3" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="790" y="423" fill="#ff9f6b" font-size="12" font-weight="700">96 篇</text>
+          <text x="34" y="450" fill="#cdd6ff" font-size="11">提到 VGG-16</text>
+          <rect x="200" y="436" width="150" height="20" rx="3" fill="#3a3320" stroke="#ffd166"/>
+          <text x="364" y="451" fill="#ffd166" font-size="12" font-weight="700">25 篇</text>
+          <text x="34" y="478" fill="#cdd6ff" font-size="11">提到 GoogLeNet / Inception</text>
+          <rect x="200" y="464" width="132" height="20" rx="3" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="346" y="479" fill="#5cffb0" font-size="12" font-weight="700">22 篇</text>
+
+          <text x="450" y="512" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">★ 所以：主线讲 GoogLeNet，VGG 只做前置补丁，且数字全部标「转引」</text>
+          <text x="450" y="536" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：名字像不等于内容像——连课程清单都会把这两个网络记混</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左栏是 VGG（画成一摞一模一样的 3×3 方块，一路直着堆），右栏是 GoogLeNet（画成一个分叉再合流的 Inception 模块）。下半部分的三根横条是本语料库里的被引量：96 篇提到 VGG、25 篇提到 VGG-16、22 篇提到 GoogLeNet / Inception。<br>
+          <b>怎么看这张图：</b>① 先看左栏的楼：<b>VGG 的结构简单到只有一种零件</b>，所以好懂；但它权重 528 MB、精度 Top-1 只有 70.5——这两个数字旁边都标了「转引」；② 再看右栏：GoogLeNet 一个模块里塞四条路，输出拼在通道维，参数却比 AlexNet 少 12 倍；③ 最后看下半部的三根条：<b>被引量最高的名字是 VGG，而不是这节课的主角 GoogLeNet</b>——这解释了为什么我们既要用 VGG 开补丁，又必须把主线放在 GoogLeNet 上。<br>
+          <b>要记住的一句话：</b>读者常撞见的名字（VGG）和本课有一手正文的名字（GoogLeNet）不是同一个，这两件事必须分开说。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>你在 SLAM 论文里读到「our network uses VGG-16 as the backbone」。下面哪种说法是诚实的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：VGG 的一手论文不在本语料库，所以任何关于 VGG 的数字都只能转引（例如来自 ResNet 篇或 YOLO-SLAM 的 Table 1）。标出转引来源，读者才能自己回查。"
+            onclick="lessonKit.answer(this,'q0187a')">标出这些数字的转引来源</button>
+          <button data-correct="no" data-explanation="不对：写「VGG 论文里说」等于声称你读过一手论文——而它在语料库里不存在。这正是本季明令禁止的伪造引用句式。"
+            onclick="lessonKit.answer(this,'q0187a')">直接写 VGG 论文里说过</button>
+        </div>
+        <div class="quiz-feedback" id="q0187a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 前人卡在哪：加大规模的两笔账</h2>
+      <p>要讲清 Inception 的价值，必须先讲清它之前的人是怎么做的、以及卡在哪。<b>从 LeNet-5 起，CNN 的标准结构就是：堆卷积（可选对比度归一化 + max-pooling）→ 一个或多个全连接层。</b>想变强怎么办？最直接的办法是<b>加大规模</b>——同时加深度（层数）和加宽度（每层的单元数）。原文承认这条路「既简单又安全」，但紧接着点了两个致命伤。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>第一笔账：参数爆炸 → 过拟合</h4>
+          <p>原文第 41 行：「Bigger size typically means a larger number of parameters, which makes the enlarged network more prone to overfitting」。<b>人话</b>：网络越大参数越多，数据不够就只会背答案。而按原文说法，带强标注的数据集「laborious and expensive to obtain」——贵得要命。</p>
+        </div>
+        <div class="mini-card">
+          <h4>第二笔账：计算量二次增长</h4>
+          <p>原文第 48 行：「if two convolutional layers are chained, any uniform increase in the number of their filters results in a quadratic increase of computation」。<b>人话</b>：两层卷积串起来，滤波器数一起翻倍，计算量翻四倍。算力预算总是有限的，所以「efficient distribution of computing resources is preferred to an indiscriminate increase of size」。</p>
+        </div>
+      </div>
+      <p>那能不能靠<b>稀疏</b>来省算力？原文讨论过这条路（用稀疏矩阵替换全连接层），但给出了一个非常工程化的否决理由：即使算术运算量减少 <b>100×</b>，lookup 与 cache miss 的开销也会占主导，所以「<b>switching to sparse matrices might not pay off</b>」。<b>这才是 Inception 真正的出发点</b>：既然稀疏在今天（2014 年）的硬件上不划算，那就造一个<b>用稠密算子堆出来、但结构上模仿稀疏</b>的模块。原文自己就是这么说的——Inception 一开始只是「a case study for assessing the hypothetical output of a sophisticated network topology construction algorithm」。</p>
+      <p>顺便，原文给这个模块的名字记了一笔有趣的账：网络名取的是 Lin 等人的论文名 <b>Network in network</b> 加一句网络梗 <b>「we need to go deeper」</b>；而「deep」在这里有<b>双重含义</b>——既指新增了 Inception 模块这一层级的组织，也指字面意义上网络更深了。「Inception」本身则是为 ILSVRC14 提交起的<b>代号</b>，不是方法学名称。</p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 核心机制：一个模块里同时看三个尺度</h2>
+      <p>Inception 模块的做法，一句话：<b>不再「一条直线堆到底」，而是设计一个「分叉再合流」的模块。</b>同一个模块内并排放 <b>1×1、3×3、5×5 卷积</b>和一条 <b>3×3 max pooling</b> 支路，四条支路的输出在<b>通道维拼在一起</b>，成为下一层的输入。</p>
+      <p><b>生活类比：</b>想象一个病人挂号，不是只找一位医生，而是同时挂了三个专科——眼科用 1×1 看单个像素的颜色，皮肤科用 3×3 看一小块纹理，影像科用 5×5 看更大的形状——最后<b>把三份诊断报告订成一本</b>，再交给下一位医生。注意关键词是「订成一册」（拼接），不是「加起来」（求和）：<b>它们是并列的信息，不是需要合并的意见。</b>这个区别很要紧，因为下一课 <b>0188</b> 的 ResNet 用的恰好是「加起来」。</p>
+      <p>关键的<b>第二招是降维</b>。原文说得很直接：「1×1 convolutions are used to compute reductions before the expensive 3×3 and 5×5 convolutions」——<b>在昂贵的 3×3 与 5×5 之前，先用 1×1 把通道压瘦</b>。这一招正是 Figure 2(b) 相对 Figure 2(a) 的全部区别。下面两张原图就是这对对照：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Going_deeper_with_convolutions/08a9bfc15fb20eb24bea8cd666c031dd498b16cbadd26a2ca2b9041a4a81042b.jpg" alt="Inception module, naive version">
+        <figcaption>
+          <b>原图注（Fig. 2(a)）：</b>「(a) Inception module, naï ve version」——Inception 模块的朴素版。<br>
+          <b>怎么看这张图：</b>盯住<b>左侧那一条竖着的输入</b>：它向右分出四条支路，分别是一个 1×1 卷积、一个 3×3 卷积、一个 5×5 卷积、以及一条 3×3 max pooling（池化后面还跟了一个 1×1）；四条支路的输出在右侧汇成一个方块，也就是「输出滤波器组被拼成一个输出向量」。<b>这版之所以叫朴素版</b>，是因为它<b>没有任何降维</b>：3×3 与 5×5 直接吃整条宽通道的输入，一旦输入通道数很大（比如几百），5×5 的代价会大得离谱——这正是原文说的「computational blow up within a few stages」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Going_deeper_with_convolutions/4c8d2646c96cae5493bcb693a4a23e47bebf7c86be8111d40f2b41e8c8c7e119.jpg" alt="Inception module with dimensionality reduction">
+        <figcaption>
+          <b>原图注（Fig. 2(b)）：</b>「(b) Inception module with dimensionality reduction」——带降维的 Inception 模块。<br>
+          <b>怎么看这张图：</b>把它和上一张<b>逐条支路地对着看</b>，你会发现结构几乎一样，唯一的差别是：<b>在 3×3 与 5×5 之前各多插了一个 1×1 卷积</b>，在池化之后也多插了一个 1×1 投影。这就是「dimensionality reduction」的全部内容。<b>请特别注意池化后面那个 1×1</b>：因为池化本身不改变通道数，如果不加这一层投影，池化支路会把它那一份通道原样带进拼接结果，导致输出通道数从一层到下一层不断膨胀——原文把这一点称为「an inevitable increase in the number of outputs from stage to stage」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 580" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="580" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">Inception 模块：同一张图，四条支路，最后订成一册</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">上半是模块本身（四路并行再拼接）；下半是一条支路的参数账（先降维到底省了什么）</text>
+
+          <rect x="28" y="84" width="92" height="252" rx="8" fill="#0b1020" stroke="#3a4a78"/>
+          <text x="74" y="110" text-anchor="middle" fill="#9fb4ff" font-size="11">输入</text>
+          <rect x="42" y="122" width="64" height="42" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="42" y="168" width="64" height="42" fill="#3a3320" stroke="#ffd166"/>
+          <rect x="42" y="214" width="64" height="42" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="74" y="278" text-anchor="middle" fill="#cdd6ff" font-size="11">28×28×256</text>
+          <text x="74" y="300" text-anchor="middle" fill="#9fb4ff" font-size="10">一张特征图</text>
+          <text x="74" y="320" text-anchor="middle" fill="#9fb4ff" font-size="10">不是一张照片</text>
+
+          <rect x="150" y="118" width="100" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="200" y="143" text-anchor="middle" fill="#cdd6ff" font-size="11">1×1 卷积</text>
+          <rect x="150" y="175" width="100" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <rect x="280" y="175" width="110" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="200" y="200" text-anchor="middle" fill="#cdd6ff" font-size="11">1×1 降维</text>
+          <text x="335" y="200" text-anchor="middle" fill="#cdd6ff" font-size="11">3×3 卷积</text>
+          <rect x="150" y="232" width="100" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <rect x="280" y="232" width="110" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="200" y="257" text-anchor="middle" fill="#cdd6ff" font-size="11">1×1 降维</text>
+          <text x="335" y="257" text-anchor="middle" fill="#cdd6ff" font-size="11">5×5 卷积</text>
+          <rect x="150" y="289" width="100" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <rect x="280" y="289" width="110" height="40" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="200" y="314" text-anchor="middle" fill="#cdd6ff" font-size="11">3×3 池化</text>
+          <text x="335" y="314" text-anchor="middle" fill="#cdd6ff" font-size="11">1×1 投影</text>
+
+          <line x1="120" y1="138" x2="148" y2="138" stroke="#7f8fc7"/>
+          <line x1="120" y1="195" x2="148" y2="195" stroke="#7f8fc7"/>
+          <line x1="120" y1="252" x2="148" y2="252" stroke="#7f8fc7"/>
+          <line x1="120" y1="309" x2="148" y2="309" stroke="#7f8fc7"/>
+          <line x1="250" y1="138" x2="592" y2="138" stroke="#5cffb0"/>
+          <line x1="390" y1="195" x2="592" y2="195" stroke="#5cffb0"/>
+          <line x1="390" y1="252" x2="592" y2="252" stroke="#5cffb0"/>
+          <line x1="390" y1="309" x2="592" y2="309" stroke="#5cffb0"/>
+
+          <rect x="596" y="120" width="74" height="206" rx="6" fill="#1b2440" stroke="#ffd166"/>
+          <text x="633" y="212" text-anchor="middle" fill="#ffd166" font-size="11">通道维</text>
+          <text x="633" y="232" text-anchor="middle" fill="#ffd166" font-size="11">拼接</text>
+          <text x="690" y="146" fill="#cdd6ff" font-size="11">四份报告订成一册</text>
+          <text x="690" y="168" fill="#cdd6ff" font-size="11">不是加起来，是并排放</text>
+          <text x="690" y="190" fill="#cdd6ff" font-size="11">输出给下一层继续用</text>
+          <text x="690" y="216" fill="#5cffb0" font-size="11">四个尺度同时被看到</text>
+          <text x="690" y="238" fill="#5cffb0" font-size="11">这是它比单尺度强的地方</text>
+          <text x="690" y="264" fill="#9fb4ff" font-size="11">1×1 在这里兼两份工：</text>
+          <text x="690" y="286" fill="#9fb4ff" font-size="11">降维 + 引入非线性</text>
+          <text x="690" y="312" fill="#9fb4ff" font-size="11">（原文说它们 dual-purpose）</text>
+
+          <text x="450" y="366" text-anchor="middle" fill="#e8ecff" font-size="14" font-weight="700">对照：为什么要在 5×5 之前先插一个 1×1</text>
+          <text x="60" y="398" fill="#ff9f6b" font-size="12" font-weight="700">朴素版</text>
+          <rect x="60" y="410" width="220" height="38" rx="4" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="170" y="434" text-anchor="middle" fill="#ff9f6b" font-size="11">直接上 5×5 卷积</text>
+          <text x="60" y="474" fill="#cdd6ff" font-size="11">参数量 25×64×128</text>
+          <text x="60" y="496" fill="#cdd6ff" font-size="11">= 204800</text>
+          <text x="60" y="520" fill="#9fb4ff" font-size="10">输入 64 通道、输出 128 通道</text>
+
+          <text x="400" y="398" fill="#5cffb0" font-size="12" font-weight="700">降维版</text>
+          <rect x="400" y="410" width="150" height="38" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="475" y="434" text-anchor="middle" fill="#5cffb0" font-size="11">1×1 压到 32 通道</text>
+          <rect x="590" y="410" width="170" height="38" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="675" y="434" text-anchor="middle" fill="#cdd6ff" font-size="11">再 5×5 到 128</text>
+          <text x="400" y="474" fill="#cdd6ff" font-size="11">参数量 1×64×32 + 25×32×128</text>
+          <text x="400" y="496" fill="#cdd6ff" font-size="11">= 104448，只有朴素版的 51%</text>
+          <text x="400" y="520" fill="#9fb4ff" font-size="10">通道数不变，中间被压瘦了</text>
+
+          <text x="450" y="552" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：1×1 降维不是「省钱的小技巧」，它是 Inception 能同时变宽又不变贵的前提</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上半部分把 Figure 2(b) 重画了一遍：左边一块输入特征图（28×28×256），向右分出四条支路——只有 1×1 的那条、1×1 降维接 3×3 的那条、1×1 降维接 5×5 的那条、3×3 池化接 1×1 投影的那条——四条支路汇进右侧那根竖着的「通道维拼接」条。下半部分是一条支路的参数账对照：直接上 5×5 和先降维再上 5×5，参数量差了一倍。<br>
+          <b>怎么看这张图：</b>① 先顺着绿色横线走一遍四条支路，注意<b>每一条都停在同一个竖条上，而不是两两相加</b>；② 再看下半部的两个方块：朴素版是一个胖方块，降维版是两个瘦方块——<b>「多了一层反而更省」这件事是反直觉的，但它就是靠中间那 32 个通道实现的</b>；③ 注意最下面那行小字：这两个算式是本课按卷积参数公式自己算的算例，<b>不是原文表格里的数字</b>。<br>
+          <b>要记住的一句话：</b>Inception 的精髓不是「多路并行」，而是「并行之前先各自瘦身」——没有 1×1 降维，多路并行会贵到不可用。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 公式与形状账：1×1 到底省了什么</h2>
+      <p>这里要提前说明一件事：<b>GoogLeNet 这篇论文全文没有一个编号公式</b>。它表达结构的方式是两张结构图（Figure 2、Figure 3）加一张逐层的算力表（Table 1）。原文对模块的描述是一句话：「output filter banks concatenated into a single output vector forming the input of the next stage」。所以本课的「公式」是<b>从卷积的定义直接写出来的参数账</b>，而不是原文里的式子——这一点必须写清楚，免得读者以为原文给了这些算式。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{一个卷积层的参数量} = k \times k \times C_{\text{in}} \times C_{\text{out}} + C_{\text{out}}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「一层卷积要学多少个权重」——每个输出通道对应一个小得多的卷积核（k×k），它要连上所有输入通道（C_in），所以乘法关系是 k×k×C_in×C_out，最后再加每个输出通道一个偏置；② 为什么这么算——因为卷积核是<b>共享</b>的，它在空间上滑过整张图，权重数量只跟核大小和通道数有关，跟图像多大无关，这正是卷积比全连接省的地方；③ <b>形状账（这是本课最有用的一段）</b>：假设输入 64 通道、想输出 128 通道、核是 5×5，直接算需要 5×5×64×128 = <b>204800</b> 个权重；如果先用 1×1 把 64 通道压到 32 通道，再 5×5 升到 128，则需要 1×1×64×32 = 2048，加上 5×5×32×128 = 102400，合计 <b>104448</b>——<b>只有直接算的 51%</b>，而输出形状完全一样（都是 128 通道）。<b>代价是中间只剩 32 个通道，信息被压过一道</b>，这就是这一招唯一的风险。</p>
+      <p>原文还给了这条账的<b>总体结论</b>（这句可以放心引用，因为它出在正文里）：所有旋钮都调好之后，「<b>networks that are 3−10× faster than similarly performing networks with non-Inception architecture</b>」——相比性能相当的非 Inception 网络，能快 3 到 10 倍。但要付出代价：「<b>this requires careful manual design at this point</b>」——需要小心翼翼地手工设计，这句话后面我们会回来算它的账。</p>
+      <p>另外，原文在 Table 1 里给了逐层的算力账（例如 7×7/2 那一层是约 2.7K 参数 / 34M 次运算），<b>但这份表格在本语料库里的 OCR 是被严重压平的（11 列数据挤在混排的表格里），单格数字不可靠</b>，所以本课只引用它最稳定的一处结论，不逐格抄数。<b>这也是本季的一条引用纪律：表格式数字引用前必须回查正文句子，回查不到就不写。</b></p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>有人问你：「Inception 里的 1×1 卷积，是不是就相当于一个常数乘法，没什么用？」</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：1×1 卷积在空间上没有邻域，但在通道维上是一次真正的全连接线性组合——而且原文明确说它「include the use of rectified linear activation making them dual-purpose」，即降维与非线性两用。它不是常数缩放。"
+            onclick="lessonKit.answer(this,'q0187b')">它是跨通道的加权，还带非线性</button>
+          <button data-correct="no" data-explanation="不对：如果它只是个没用的常数，原文就不会把它当成整篇架构的第二根支柱（Figure 2(a) 到 2(b) 的唯一差别就是它），更不会说它 dual-purpose。"
+            onclick="lessonKit.answer(this,'q0187b')">它就是个常数缩放没有用</button>
+        </div>
+        <div class="quiz-feedback" id="q0187b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 关键数字：GoogLeNet 的成绩单</h2>
+      <p>下面这些数字全部可以在原文里找到出处，最后一个位都照原文写。<b>记住它们不是为了背，而是为了在别处见到时能对上号。</b></p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">数字</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">含义</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">出处</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">22 层</td><td style="padding:.5rem;border:1px solid #3a4a78;">只数带参数的层；若把池化也算上是 27 层，总 building block 约 100 层</td><td style="padding:.5rem;border:1px solid #3a4a78;">摘要与 §6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">比 AlexNet 少 12×</td><td style="padding:.5rem;border:1px solid #3a4a78;">参数量比 Krizhevsky 等人的网络少 12 倍，而准确率显著更高</td><td style="padding:.5rem;border:1px solid #3a4a78;">§1</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">约 1.5 billion multiply-adds</td><td style="padding:.5rem;border:1px solid #3a4a78;">推理时的算力预算</td><td style="padding:.5rem;border:1px solid #3a4a78;">§1</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">top-5 错误 6.67%</td><td style="padding:.5rem;border:1px solid #3a4a78;">验证集与测试集一致，排名第一；相对 SuperVision(2012) 相对下降 56.5%，相对 Clarifai(2013) 约 40%</td><td style="padding:.5rem;border:1px solid #3a4a78;">§6 与 Table 2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">7.89%</td><td style="padding:.5rem;border:1px solid #3a4a78;">单模型、每图 144 个 crop 时的 top-5 错误；7 模型 ×144 crop 降到 6.67%（相对基准 −3.45%）</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 3</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">约 +0.6%</td><td style="padding:.5rem;border:1px solid #3a4a78;">用 average pooling 替代全连接层带来的 top-1 提升</td><td style="padding:.5rem;border:1px solid #3a4a78;">§6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">约 0.5% / 权重 0.3 / dropout 70%</td><td style="padding:.5rem;border:1px solid #3a4a78;">辅助分类器的贡献、它在总损失里的权重、以及它前面那层 dropout 的比例</td><td style="padding:.5rem;border:1px solid #3a4a78;">§5 与 §6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">检测 mAP 38.02% → 43.9%</td><td style="padding:.5rem;border:1px solid #3a4a78;">单模型到 6 模型 ensemble 的检测成绩，排名第一</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 4、Table 5</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">每 8 个 epoch ×0.96</td><td style="padding:.5rem;border:1px solid #3a4a78;">学习率调度（每 8 轮乘 0.96，即下降 4%）</td><td style="padding:.5rem;border:1px solid #3a4a78;">§6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">3−10× faster</td><td style="padding:.5rem;border:1px solid #3a4a78;">性能相当时相对非 Inception 网络的加速比</td><td style="padding:.5rem;border:1px solid #3a4a78;">§4</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">VGG 第二 / 7.32%（转引）</td><td style="padding:.5rem;border:1px solid #3a4a78;">同一届比赛里 VGG 的名次与 top-5 错误——<b>转引自本文 Table 2，不是 VGG 自己报的数</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">本文 Table 2</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Going_deeper_with_convolutions/bc79504d9f8a492ecd45fe0ef342032b2c30ca6d26b747bfe41a4093b8279250.jpg" alt="GoogLeNet network with all the bells and whistles">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>「GoogLeNet network with all the bells and whistles.」——配齐了各种花样的 GoogLeNet 全图。<br>
+          <b>怎么看这张图：</b>从下往上读。<b>底部</b>是一段传统卷积（不是 Inception）加上池化，这就是原文说的「for technical reasons ... it seemed beneficial to start using Inception modules only at higher layers」——低层保留传统卷积，原文自己承认这「not strictly necessary, simply reflecting some infrastructural inefficiencies in our current implementation」。<b>中段</b>是密集堆叠的 Inception 模块（3a/3b、4a–4e、5a/5b 这些编号就是它们）。<b>特别注意图中从 4a 与 4d 上方伸出去的两条小分支</b>——那是辅助分类器，只在训练时起作用，推理时<b>会被整个丢掉</b>。<b>最上方</b>不是全连接层，而是 average pooling 接到一个 1000 路的 softmax。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">GoogLeNet 的 22 层：从下往上，一栋楼</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">低层是普通卷积，中高层才是 Inception 模块；辅助分类器只挂在两个位置，推理时丢掉</text>
+
+          <text x="200" y="82" text-anchor="middle" fill="#9fb4ff" font-size="11">从下往上：先细后粗，最后不再用全连接</text>
+          <rect x="110" y="440" width="180" height="34" rx="4" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="200" y="462" text-anchor="middle" fill="#cdd6ff" font-size="11">stem：7×7 卷积 + 池化</text>
+          <rect x="110" y="400" width="180" height="34" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="200" y="422" text-anchor="middle" fill="#cdd6ff" font-size="11">3a / 3b：Inception</text>
+          <rect x="110" y="360" width="180" height="34" rx="4" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="200" y="382" text-anchor="middle" fill="#cdd6ff" font-size="11">池化：分辨率减半</text>
+          <rect x="110" y="320" width="180" height="34" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="200" y="342" text-anchor="middle" fill="#cdd6ff" font-size="11">4a–4e：Inception</text>
+          <rect x="110" y="280" width="180" height="34" rx="4" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="200" y="302" text-anchor="middle" fill="#cdd6ff" font-size="11">池化：分辨率减半</text>
+          <rect x="110" y="240" width="180" height="34" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="200" y="262" text-anchor="middle" fill="#cdd6ff" font-size="11">5a / 5b：Inception</text>
+          <rect x="110" y="200" width="180" height="34" rx="4" fill="#3a3320" stroke="#ffd166"/>
+          <text x="200" y="222" text-anchor="middle" fill="#cdd6ff" font-size="11">average pool 替代全连接</text>
+          <rect x="110" y="160" width="180" height="34" rx="4" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="200" y="182" text-anchor="middle" fill="#cdd6ff" font-size="11">softmax（1000 类）</text>
+          <text x="200" y="140" text-anchor="middle" fill="#e8ecff" font-size="12" font-weight="700">输出：分类结果</text>
+
+          <line x1="300" y1="177" x2="430" y2="177" stroke="#3a4a78"/>
+          <line x1="300" y1="257" x2="430" y2="257" stroke="#3a4a78"/>
+          <line x1="300" y1="337" x2="430" y2="337" stroke="#3a4a78"/>
+          <line x1="300" y1="417" x2="430" y2="417" stroke="#3a4a78"/>
+
+          <rect x="310" y="312" width="146" height="26" rx="4" fill="#1b2440" stroke="#ff9f6b"/>
+          <text x="383" y="330" text-anchor="middle" fill="#ff9f6b" font-size="10">辅助分类器（挂 4a 上方）</text>
+          <rect x="310" y="350" width="146" height="26" rx="4" fill="#1b2440" stroke="#ff9f6b"/>
+          <text x="383" y="368" text-anchor="middle" fill="#ff9f6b" font-size="10">辅助分类器（挂 4d 上方）</text>
+
+          <text x="400" y="130" fill="#cdd6ff" font-size="11">图注里说的 various bells and whistles</text>
+          <text x="400" y="154" fill="#cdd6ff" font-size="11">指的就是这两处辅助分类器</text>
+          <text x="400" y="292" fill="#9fb4ff" font-size="11">每个池化把分辨率减半一次</text>
+          <text x="400" y="316" fill="#9fb4ff" font-size="11">Inception 只用在高中层</text>
+
+          <text x="560" y="180" fill="#cdd6ff" font-size="11">22 层：只数带参数的层</text>
+          <text x="560" y="202" fill="#cdd6ff" font-size="11">算上池化是 27 层</text>
+          <text x="560" y="224" fill="#cdd6ff" font-size="11">building block 约 100 层</text>
+          <text x="560" y="252" fill="#5cffb0" font-size="11">参数比 AlexNet 少 12×</text>
+          <text x="560" y="274" fill="#5cffb0" font-size="11">推理约 1.5 billion multiply-adds</text>
+          <text x="560" y="300" fill="#ff9f6b" font-size="11">辅助分类器贡献约 0.5%</text>
+          <text x="560" y="322" fill="#ff9f6b" font-size="11">它在总损失里权重 0.3</text>
+          <text x="560" y="344" fill="#ff9f6b" font-size="11">它前面 dropout 比例 70%</text>
+          <text x="560" y="370" fill="#ffd166" font-size="11">average pool 替代全连接：约 +0.6%</text>
+          <text x="560" y="396" fill="#cdd6ff" font-size="11">分类 top-5 错误 6.67%（第一）</text>
+          <text x="560" y="418" fill="#cdd6ff" font-size="11">检测 mAP：单模型 38.02%</text>
+          <text x="560" y="440" fill="#cdd6ff" font-size="11">检测 mAP：6 模型 43.9%</text>
+          <text x="560" y="462" fill="#9fb4ff" font-size="11">学习率每 8 个 epoch 乘 0.96</text>
+
+          <text x="450" y="498" text-anchor="middle" fill="#9fb4ff" font-size="12">要记住：GoogLeNet 的高层没有全连接层——它用一次平均池化直接把特征图变成分类向量</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把 Figure 3 那栋「网络大楼」按楼层重画了一遍，从下往上依次是：stem（7×7 卷积加池化）→ 3a/3b → 池化 → 4a–4e → 池化 → 5a/5b → average pool → softmax。右侧伸出的两个橙框是挂在 4a 与 4d 上方的辅助分类器；更右侧一列列出本课要记住的数字。<br>
+          <b>怎么看这张图：</b>① 从下往上看颜色：<b>灰色是普通卷积/池化，绿色才是 Inception 模块</b>——原文明确说低层保留传统卷积是出于实现的低效，不是设计必需；② 看那两个橙色辅助分类器：<b>它们只在训练时提供额外的梯度，推理时整个丢掉</b>，贡献约 0.5%，只需要一个就能达到同等效果；③ 看最上面两层：<b>没有全连接层</b>，一次平均池化直接给出分类向量，这一处换来约 0.6% 的 top-1 提升。<br>
+          <b>要记住的一句话：</b>22 层这个数字指的是<b>带参数的层</b>——同样一张图，算池化是 27 层，算 building block 是约 100 层，报数字时必须说清口径。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 它在前八季的哪些课、哪些方法里出现过</h2>
+      <p>这是本季每节课的硬要求：<b>必须回答「这个零件在前八季的哪些课、哪些方法里出现过」。</b>先说一个可能让你意外的结论：<b>GoogLeNet 本体的直接引用很少，而 VGG 的引用密度高得多。</b>下面分两条给出原句。</p>
+      <h3>（A）GoogLeNet / Inception 这条线</h3>
+      <ul>
+        <li><b>第八季 0165 YOLO-SLAM 的前身、本季 0191 的主角 YOLO（2016）</b>——它<b>明确把 Inception 模块拆掉了</b>。原文原话：「Our network architecture is inspired by the GoogLeNet model for image classification [33] ... <b>Instead of the inception modules used by GoogLeNet, we simply use 1×1 reduction layers followed by 3×3 convolutional layers</b>」。<b>这是本案最有价值的一条</b>：后人对 Inception 的取舍，恰恰证明「1×1 降维」才是被继承最多的那个零件，而多路并行那部分被丢掉了。</li>
+        <li><b>第七季与回环检测</b>——2021 年的 DeepSLAM 里，回环检测网络（Loop-Net）用的是 Inception 变体：原文说「The Inception ResNet V2 architecture [43] is adopted here. The Loop-Net maps images into feature vectors for <b>loop closure detection</b>」。<b>这是本季接回「学习式回环检测」的最强接口</b>。</li>
+        <li><b>2024 年的 DeepSLAM 综述</b>也提到有人比较过 PCANet、AlexNet、CaffeNet 与 <b>GoogLeNet</b> 四种深度学习架构在回环检测上的表现。</li>
+      </ul>
+      <h3>（B）VGG 这条线（全部为转引）</h3>
+      <ul>
+        <li><b>第八季 0159 SemanticFusion</b>——语义建图的代表方法之一，它把 VGG-16 当分割主干：「Their architecture is itself <b>based on the VGG 16-layer network [21]</b>, but with the addition of max unpooling and deconvolutional layers which are trained to output a dense pixel-wise semantic probability map.」<b>注意这句里的后半段</b>：VGG 只负责编码，要出逐像素结果还得加反池化与反卷积——这就是 <b>0190 FCN</b> 要讲的接力。</li>
+        <li><b>学习式里程计</b>——2018 年的 UnDeepVO 的位姿估计器是「a <b>VGG-based</b> [19] CNN architecture」，输入两张连续单目图、输出 6 自由度变换；2021 年 DeepSLAM 的 Tracking-Net 则是「constructed from a CNN part of the <b>VGGNet</b> [39] plus an RNN」。</li>
+        <li><b>第八季 0165 YOLO-SLAM 的 Table 1</b>——这是本课 VGG 数字的转引来源：<b>VGG-16：Top-1 70.5 / Top-5 90.0 / 权重 528 MB / 106 FPS</b>；同表 ResNet-101 是 77.1 / 93.7 / 160 MB / 53 FPS；Darknet-53 是 77.2 / 93.8 / 159 MB / 78 FPS。<b>VGG-16 精度最低、权重最重，却是三者中最快的</b>——因为它结构最简单。</li>
+        <li><b>第七季 0134–0140 地点识别的混合主干</b>——2023 年的一篇地点识别论文一边用「Conv1–Conv3 layers of <b>VGG-16</b> to extract the CNN feature pyramid」，一边把 <b>Swin-B</b> 接在它后面组成「hybrid CNN-Transformer」。<b>这是本课与 0194 同框的唯一一处真实论文</b>。</li>
+        <li><b>一个反向的证据</b>——2023 年的关键点检测论文 SiLK 用 VGG 级别的窄骨干，结论是相比现代大骨干「<b>no empirical performance gain despite far greater parameter counts</b>」：参数多得多，却没有性能收益。这说明 VGG 级别的窄骨干在关键点这种任务上已经够用。</li>
+      </ul>
+      <p><b>一句话总结这两条线</b>：GoogLeNet 贡献给后世的不是「多路并行」，而是 <b>1×1 降维</b>这个零件；VGG 贡献给 SLAM 的则是「一个简单、好懂、拿来就能当 backbone 的编码器」。<b>而读者在论文里真正会撞见的，是后者。</b></p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 它不完美在哪：所以 SLAM 要加几何约束</h2>
+      <p>本季的第二个硬要求：<b>每个零件都要讲它的毛病。</b>GoogLeNet 的毛病很特别——<b>它的作者自己就先说了</b>，而且说得比后人更狠。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>毛病一：整个架构靠手工调</h4>
+          <p>原文承认滤波器尺寸限定在 {1×1, 3×3, 5×5} 是「<b>based more on convenience rather than necessity</b>」（出于便利而非必然）；承认只在高层用 Inception 模块、低层保留传统卷积，是「<b>not strictly necessary, simply reflecting some infrastructural inefficiencies</b>」；也承认这套设计「<b>requires careful manual design at this point</b>」。<b>人话</b>：这不是一个能自动长出来的架构，是一层层试出来的配方。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病二：作者自己不确定成功该归功于谁</h4>
+          <p>原文第 56 行原话：「although the Inception architecture has become a success for computer vision, <b>it is still questionable whether this can be attributed to the guiding principles</b> that have lead to its construction.」<b>人话</b>：结果好，但未必是那套设计原则带来的好——可能只是碰巧调对了。这种诚实很少见，但读课时必须照实转述。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病三：更宽更深的版本增益「仅有一点」</h4>
+          <p>论文做过一个更宽更深的 Inception 版本，结果「improve the results only marginally」，于是<b>没写进正文</b>；7 个 ensemble 模型里有 6 个用的是 Table 1 那个配置。也就是说，这套模块的可扩展性是有天花板的。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病四：检测任务里连框回归都没做</h4>
+          <p>原文第 147 行：「contrary to R-CNN, <b>we did not use bounding box regression due to lack of time</b>」。<b>人话</b>：检测那一半的工作其实是半成品。这直接说明：<b>它不是一个检测器，它只是一个分类器加一根检测的脚手架。</b></p>
+        </div>
+      </div>
+      <p><b>现在把这些毛病接回 SLAM。</b>关键要看清楚：GoogLeNet 是一个<b>分类网络</b>——它的输出是「这张图属于 1000 类里的哪一类」。它输出的东西里有类别、有置信度，<b>但没有任何几何量</b>：没有像素级的边界、没有深度、没有尺度、没有几何一致性。</p>
+      <p>所以当 SLAM 论文把它（或它的同类）当骨干用时，必然要多做几件事：</p>
+      <ul>
+        <li><b>要拿几何，就得改结构。</b>2017 年的 CNN-SLAM 就是把一个残差网络<b>拆开</b>——前半段当编码器，后半段整个换成上采样，才输出一张深度图。分类网络的天然输出里没有深度，这个深度是硬接上去的。</li>
+        <li><b>要拿掩码，就得加分割头。</b>第八季 0159 的 SemanticFusion 在 VGG-16 后面接的是 max unpooling 与反卷积层——这就是 <b>0190 FCN</b> 那一课的内容。</li>
+        <li><b>要拿框，就得加检测头。</b>而 Inception 本身在检测任务上连框回归都没做（毛病四），后世才补出 <b>0191 YOLO</b> 这类专门的检测头。</li>
+      </ul>
+      <p><b>即使这些都补齐了，还差最后一层保险。</b>因为一个学习式零件给出的语义或深度，本质上都是<b>统计预测</b>：可能认错、可能在边界上糊。SLAM 的做法是<b>永远不让语义单独决定几何</b>——语义告诉地图「这里大概是个人」，但「它在哪、有没有动」必须由多视图几何与位姿优化交叉验证。<b>这就是第八季动态块与语义建图块反复出现的「语义 + 几何双保险」，也是本季每一节课最终都要落回的那句话。</b></p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>为什么 SLAM 论文用到 ResNet / VGG 这类骨干时，几乎总要在它后面再加点东西（上采样、分割头、检测头）？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：骨干网络的天然输出只是「这一整张图属于哪一类」的抽象特征，没有像素级位置、没有深度、没有几何量。SLAM 需要的是带空间结构的输出，所以必须接结构改造（上采样、分割头、检测头）。"
+            onclick="lessonKit.answer(this,'q0187c')">因为骨干只给类别，不给几何</button>
+          <button data-correct="no" data-explanation="不对：算力确实是工程约束，但它不是「必须加东西」的根本原因。根本原因是输出内容不对——分类网络的输出里根本没有几何量，加得再多也算不出来。"
+            onclick="lessonKit.answer(this,'q0187c')">因为骨干算力开销太大了</button>
+        </div>
+        <div class="quiz-feedback" id="q0187c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 和前面课程怎么接</h2>
+      <p>按规则点名课号。<b>本课的定位是「学习式骨干这条路的起点」</b>，所以它接的是两条不同的线。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>接第三季 0043–0045 / 0048</h4><p>ORB-SLAM 与 DSO 是<b>手工设计的几何前端</b>：特征、描述子、光度误差都是人定的。本课与 0188、0189 讲的是<b>另一条路</b>——让网络自己学特征。两条路的对照点在于：一个是「人告诉它看什么」，一个是「它自己决定看什么」。</p></div>
+        <div class="mini-card"><h4>接第三季 0073–0079（第四季）</h4><p>LOAM 系列处理的是点云几何，与骨干网络这条线几乎不重叠。<b>本季真正的激光一侧在 0195 与 0196–0197</b>，本课不涉及。</p></div>
+        <div class="mini-card"><h4>接第八季 0159 SemanticFusion</h4><p>它用 VGG-16 当分割主干，是把「学习式骨干」直接焊进语义建图流水线的第一站。<b>它当时出的毛病</b>是：VGG 只能出高层的粗特征，要得到逐像素概率图必须再补反池化与反卷积——这一缺口由 0190 FCN 补上。</p></div>
+        <div class="mini-card"><h4>接第八季 0165 YOLO-SLAM</h4><p>它的 Table 1 是本课 VGG 数字的转引来源，也是「主干选型要权衡精度 / 体积 / 速度」这条工程思路的实例：VGG-16 精度最低却最快，Darknet-53 居中，ResNet-101 最准但最慢（53 FPS）。</p></div>
+        <div class="mini-card"><h4>接第七季 0134–0140</h4><p>地点识别那一块用的混合主干是「<b>VGG-16 金字塔 + Swin-B 并联</b>」——<b>CNN 段就是本课讲的 VGG，Transformer 段是 0194 要讲的 Swin</b>。这是全季唯一一处两者同框的真实论文。</p></div>
+        <div class="mini-card"><h4>接本季 0191 YOLO</h4><p>YOLO 明确拆掉 Inception 模块、只保留 1×1 降维加 3×3。<b>读完本课再看 0191，你会明白它继承了什么、丢了什么。</b></p></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>这节课的清单写「VGG」，为什么主线讲的却是 GoogLeNet？语料库里有没有 VGG 的一手论文？</li>
+        <li>VGG 与 GoogLeNet 在本语料库里的被引量分别是多少？为什么这个差距影响我们的写法？</li>
+        <li>Inception 模块的四条支路各是什么？它们的输出是「相加」还是「拼接」？</li>
+        <li>1×1 卷积在 Inception 里干几件事？为什么说它「dual-purpose」？</li>
+        <li>输入 64 通道、输出 128 通道、5×5 卷积：先降到 32 通道再卷积，参数量省了多少？</li>
+        <li>GoogLeNet 有几个数字必须记住？「22 层」这个说法有什么口径陷阱？</li>
+        <li>YOLO 对 Inception 做了什么取舍？这说明了什么？</li>
+        <li>VGG-16 与 GoogLeNet 分别在哪几节课里出现过？为什么读者更常撞见 VGG？</li>
+        <li>为什么一个分类网络不能直接给 SLAM 用？要补哪几样东西？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>某论文说「我们的骨干是 VGG-16，权重 528 MB」。你如何在不读 VGG 原文的情况下核实这个数字，并说明它的可信度？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>去本语料库里找引用 VGG 的论文，核对来源。这个数字来自 2022 年 YOLO-SLAM 的 Table 1（同表还有 VGG-16 的 Top-1 70.5、Top-5 90.0、106 FPS，以及 ResNet-101 的 77.1 / 93.7 / 160 MB / 53 FPS）。可信度判断：它是另一篇论文整理出的对比表，属于二手数据；但因为同一张表里三个骨干预训练模型一起列出、量纲一致，内部自洽度高，作为「VGG-16 又重又简单又快」的定性证据是够用的——<b>本课所有 VGG 数字都属于这一类：只能转引，且必须标出转引来源。</b></div></details>
+        </li>
+        <li>用本课的形状账算一算：输入 256 通道、输出 512 通道、用 3×3 卷积。直接卷积与「先降到 64 通道再卷积」的参数量分别是多少？省了百分之几？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>直接卷积：3×3×256×512 = 1179648。先降维：1×1×256×64 = 16384，再加 3×3×64×512 = 294912，合计 311296。<b>省下 (1179648 − 311296) ÷ 1179648 ≈ 73.6%，只剩约 26.4%。</b>注意输出形状完全一样（都是 512 通道），代价是中间被压到 64 通道——这就是 Inception 里 1×1 降维的全部逻辑。<b>提醒：这是按卷积参数公式算的算例，不是原文表格数字。</b></div></details>
+        </li>
+        <li>原文承认「it is still questionable whether this can be attributed to the guiding principles」。这句话对读论文有什么方法论意义？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>它提醒我们：<b>结果好 ≠ 理由对</b>。作者自己承认，Inception 效果虽好，但未必是那套「稀疏结构近似」的指导原则带来的。读论文时的推论纪律应该是：把「作者报告的实验事实」与「作者给出的解释」分开；前者可以引用，后者只能当作一种解释。这与本季开头在导览课里提的「诚实分区」是同一条纪律——本课把这个纪律落在了具体的一句话上。</div></details>
+        </li>
+        <li>如果让你给 0188（ResNet）做铺垫，你会用本课的哪个数字来制造对比？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>用 VGG 的 FLOPs：ResNet 篇转引给出 VGG-19 为 19.6 billion FLOPs、VGG-16 为 15.3 billion，而 34 层的残差网络只有 3.6 billion——「深了 8 倍却便宜得多」。这条对比的妙处在于：GoogLeNet 与 VGG 都在用「堆」的办法变强（一个堆模块、一个堆层），而 ResNet 要解决的问题恰恰是「堆到一定程度就堆不动了」。所以本课最后留下的悬念是：<b>如果继续加深不管用，怎么办？</b>那就是下一课。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0186-导览-第十季开场-论文里那些没人解释的名词.html">← 上一课：导览 · 论文里那些没人解释的名词</a>
+        <a class="next" href="0188-ResNet-2016-残差连接.html">下一课：ResNet（2016）残差连接 →</a>
+      </div>
+      <p class="foot-note">这节课顺手处理了本季最重要的一处清单失误。<b>连课程清单都会把两个经典网络记混，你更不能凭名字猜内容</b>——这句话请带到后面每一节课去 🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

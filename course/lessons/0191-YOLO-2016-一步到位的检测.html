@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YOLO（2016）：一步到位的检测 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0191</div>
+      <h1>YOLO（2016）：一步到位的检测</h1>
+      <p class="subtitle">把「先提一堆候选框、再一个个判」整条流水线扔掉，只留一个网络——这一步为什么能快几十倍？🚗 这一课讲清那个 7×7 的网格，也讲清 SLAM 圈里出现频率最高的这个检测零件，它的毛病正好被 SLAM 论文反复引用。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：单阶段实时检测的开山作</span>
+        <span>👥 作者：J. Redmon、S. Divvala、R. Girshick、A. Farhadi</span>
+        <span>📅 年份 · <i>You Only Look Once: Unified, Real-Time Object Detection</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先补四个概念</a>
+        <a href="#b">两阶段 vs 一步到位</a>
+        <a href="#c">★ 网格：每格负责谁</a>
+        <a href="#d">损失函数（含 OCR 订正）</a>
+        <a href="#e">关键数字</a>
+        <a href="#f">它不完美在哪</a>
+        <a href="#g">和前面课程怎么接</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：① 说清<b>两阶段</b>与<b>单阶段</b>检测路线在流水线上的差别，以及各自为什么慢 / 为什么难训；② 讲出 YOLO 的<b>网格规则</b>——「哪个格子负责哪个物体」；③ 复述 45 FPS / 63.4 mAP 与 Fast YOLO 155 FPS；④ 指出 YOLO 自述的三大缺陷，并说明 SLAM 论文为什么抱怨它的框；⑤ 分清<b>45 FPS 的 63.4 mAP</b> 与 <b>VOC2007 上 person 单类的 59.2 AP</b> 这两个数不能直接比。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ <b>上一课 0190 FCN</b> 讲「涂色」，本课讲「画框」——YOLO 只借用了 FCN 的一个前置认知：<b>一次卷积就能处理整张图</b>。★ <b>第八季 0153–0159 动态环境块</b>是本课最重要的落地点：那一块里几乎每个方法都在用 YOLO 当「动态物体先验框」，<b>2016_YOLO 是 SLAM 圈出现频率最高的检测零件</b>。★ 本课末尾会点一句：<b>你以后看到的 YOLOv3 / v5 / v8 检测器，训练时用的损失属于一九三课 Focal Loss 那一族</b>，但 SLAM 论文只引 YOLO、不引它的损失。★ 概念上，本课就地补齐 <b>IoU、候选框、mAP、anchor</b> 四个词——缺一个就读不懂一九二与一九三。</p></div>
+      </div>
+
+      <h2>1. 先补四个概念：IoU、候选框、anchor、mAP</h2>
+      <p>这四篇检测/分割论文里，有四个词被反复使用却几乎从不解释。它们不是 YOLO 发明的，但 YOLO 全篇都在用。我们先花五分钟把它们补上——<b>不补这四个，后面的公式和数字都会变成噪音。</b></p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>IoU：两个框有多重合</h4><p><b>交集面积 ÷ 并集面积</b>，取值 0 到 1。两个框完全重合是 1，完全不沾边是 0。<b>它是「框画得准不准」的通用尺子</b>：YOLO 的置信度定义要用它，Mask R-CNN 判正负样本要用它，Focal Loss 分配 anchor 也要用它。生活类比：两张便利贴贴在同一只猫上，重叠的部分越大，说明两张贴得越一致。</p></div>
+        <div class="mini-card"><h4>候选框 proposal：可能是物体的区域</h4><p>先不管它是什么，只先圈出「这里大概有东西」的一堆框。<b>R-CNN 那一代用 Selective Search 生成约 2000 个；后来 Faster R-CNN 改用 RPN 学出来 1 到 2 千个</b>。两阶段检测的全部精髓就是「用候选框当第一道闸门」。</p></div>
+        <div class="mini-card"><h4>anchor：预先设好的参考框</h4><p>在特征图的每个位置上，<b>预先摆好几个不同大小、不同长宽比的「空框」</b>，让网络去判断「这个框里有没有东西、要往哪儿挪」。这就是「anchor（锚框）」。Focal Loss 那篇里每张图有 <b>10 万</b>个 anchor 位置，而两阶段的候选只有 1 到 2 千——<b>这个数量差就是一九三课全部问题的根源</b>。</p></div>
+        <div class="mini-card"><h4>mAP：检测精度的总分</h4><p>先把每个类画成一条「精确率-召回率」曲线，曲线下的面积就是 <b>AP</b>；把所有类的 AP 平均起来就是 <b>mAP</b>。关键是 <b>AP 还要在多个 IoU 阈值下平均</b>——所以有 <b>AP50</b>（IoU 判据 0.5，松）和 <b>AP75</b>（0.75，严）之分。<b>看到 mAP 先问「IoU 阈值是多少」</b>，这是第九季 0180 那条纪律在检测这边的版本。</p></div>
+      </div>
+
+      <p>再补一个「不用解释但必须记住」的事实：<b>YOLO 把检测重新定义为回归问题</b>——直接从图像像素回归出空间上分离的框和对应的类概率。原文摘要的第一句就是这个意思。它不是「改进了一个分类器」，而是<b>换了一个问题定义</b>。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 两阶段 vs 一步到位：扔掉整条流水线</h2>
+      <p>先看 YOLO 之前的人怎么做。当时的检测界主流是<b>「改造分类器去做检测」</b>：拿一个分类器，在图上各种位置、各种尺度上反复跑。具体两条路：</p>
+      <ul>
+        <li><b>DPM 用滑窗：</b>在整图上按均匀间隔的位置跑分类器。慢，而且每个尺度都要重跑一遍。</li>
+        <li><b>R-CNN 用候选框：</b>原文对这条流水线的拆解非常具体，值得原样记住——<b>Selective Search 生成候选框 → 卷积网络提特征 → SVM 打分 → 线性模型调框 → NMS 去重</b>。每一段都得<b>单独调参</b>，整个系统跑一张图要 <b>40 秒以上</b>。</li>
+      </ul>
+      <p>这条流水线的毛病不只是慢，还有两个更本质的：</p>
+      <ol>
+        <li><b>Pipeline 太长、不能联合优化。</b>你在最后发现框偏了，没办法把误差一路传回去改前面的特征。每一段都是各管各的。</li>
+        <li><b>看不到上下文。</b>R-CNN 系方法只看一个个小区域，原文说得很直白：Fast R-CNN <b>mistakes background patches in an image for objects because it can't see the larger context</b>——只看一小块，就容易把背景里一块像东西的纹理误当物体。</li>
+      </ol>
+      <p>YOLO 的解法极其粗暴也好懂：<b>把整条流水线扔掉，只留一个网络。</b>输入一张图，跑一次卷积网络，直接吐出所有框和类别。<b>只有一步，所以可以端到端按检测性能优化</b>。原文的原话是整条流程「是一个单一网络」，可以直接 end-to-end 优化。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 454" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="454" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">两阶段 vs 单阶段：一条断成五截，一条一笔到底</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">上一路是先找一堆可能、再一个个判；下一路是一次就把话说全</text>
+
+          <text x="50" y="86" fill="#ff9f6b" font-size="12.5" font-weight="700">① 两阶段：先提候选框，再逐个分类</text>
+          <text x="700" y="86" fill="#ff5d73" font-size="10.5">慢，但准</text>
+          <rect x="50" y="98" width="110" height="56" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="105" y="120" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">输入图</text>
+          <text x="105" y="138" text-anchor="middle" fill="#9fb4ff" font-size="9">任意尺寸</text>
+          <rect x="190" y="98" width="110" height="56" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="245" y="120" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">候选框生成</text>
+          <text x="245" y="138" text-anchor="middle" fill="#9fb4ff" font-size="9">约 2000 个</text>
+          <rect x="330" y="98" width="110" height="56" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="385" y="120" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">逐框分类</text>
+          <text x="385" y="138" text-anchor="middle" fill="#9fb4ff" font-size="9">SVM 或全连接</text>
+          <rect x="470" y="98" width="110" height="56" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="525" y="120" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">逐框调框</text>
+          <text x="525" y="138" text-anchor="middle" fill="#9fb4ff" font-size="9">线性回归挪位置</text>
+          <rect x="610" y="98" width="110" height="56" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="665" y="120" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">NMS 去重</text>
+          <text x="665" y="138" text-anchor="middle" fill="#9fb4ff" font-size="9">压掉重复框</text>
+          <rect x="750" y="98" width="110" height="56" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <text x="805" y="120" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">结果</text>
+          <text x="805" y="138" text-anchor="middle" fill="#9fb4ff" font-size="9">框 + 类别</text>
+          <line x1="160" y1="126" x2="190" y2="126" stroke="#ff9f6b" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="300" y1="126" x2="330" y2="126" stroke="#ff9f6b" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="440" y1="126" x2="470" y2="126" stroke="#ff9f6b" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="580" y1="126" x2="610" y2="126" stroke="#ff9f6b" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="720" y1="126" x2="750" y2="126" stroke="#ff9f6b" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="175" y="176" text-anchor="middle" fill="#ff5d73" font-size="9">各段单独训练</text>
+          <text x="385" y="176" text-anchor="middle" fill="#ff5d73" font-size="9">各段单独调参</text>
+          <text x="665" y="176" text-anchor="middle" fill="#ff5d73" font-size="9">无法联合优化</text>
+          <text x="50" y="200" fill="#9fb4ff" font-size="10">整条流水线跑一张图要 40 秒以上；而且它只看小区域，看不到更大的上下文，容易把背景纹理误当物体</text>
+
+          <text x="50" y="240" fill="#5cffb0" font-size="12.5" font-weight="700">② 单阶段（YOLO）：一次前向，直接出结果</text>
+          <text x="740" y="240" fill="#5cffb0" font-size="10.5">快得多，但更难训</text>
+          <rect x="50" y="252" width="170" height="56" rx="6" fill="#16203a" stroke="#5cffb0"/>
+          <text x="135" y="274" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">输入图（缩到 448）</text>
+          <text x="135" y="292" text-anchor="middle" fill="#9fb4ff" font-size="9">整张图一次进去</text>
+          <rect x="330" y="252" width="240" height="56" rx="6" fill="#16203a" stroke="#5cffb0"/>
+          <text x="450" y="274" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">一个卷积网络</text>
+          <text x="450" y="292" text-anchor="middle" fill="#9fb4ff" font-size="9">24 个卷积层 + 2 个全连接层</text>
+          <rect x="680" y="252" width="180" height="56" rx="6" fill="#16203a" stroke="#5cffb0"/>
+          <text x="770" y="274" text-anchor="middle" fill="#cdd6ff" font-size="10.5" font-weight="700">结果</text>
+          <text x="770" y="292" text-anchor="middle" fill="#9fb4ff" font-size="9">7×7×30 张量，一步到位</text>
+          <line x1="220" y1="280" x2="330" y2="280" stroke="#5cffb0" stroke-width="2.5"/>
+          <polygon points="330,280 318,274 318,286" fill="#5cffb0"/>
+          <line x1="570" y1="280" x2="680" y2="280" stroke="#5cffb0" stroke-width="2.5"/>
+          <polygon points="680,280 668,274 668,286" fill="#5cffb0"/>
+          <text x="275" y="330" text-anchor="middle" fill="#5cffb0" font-size="10">一笔到底</text>
+          <text x="625" y="330" text-anchor="middle" fill="#5cffb0" font-size="10">没有后续步骤</text>
+          <text x="50" y="330" fill="#9fb4ff" font-size="10">整网联合训练，可以按检测指标端到端优化</text>
+
+          <rect x="50" y="352" width="800" height="60" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="376" text-anchor="middle" fill="#cdd6ff" font-size="11.5">两阶段用「候选框」这道闸门把绝大多数容易的负样本挡在外面，所以好训；单阶段没有这道闸门，要在稠密的位置上直接分类，所以难训</text>
+          <text x="450" y="398" text-anchor="middle" fill="#ff9f6b" font-size="11">下一路这个「难训」，就是一九三课 Focal Loss 要治的那个病</text>
+          <text x="450" y="430" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：两阶段是「先找一堆可能，再一个个判」；YOLO 是「一次就把话说全」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上下两条流水线并排。上面那条是两阶段：输入图 → 候选框生成（约 2000 个）→ 逐框分类 → 逐框调框 → NMS 去重 → 结果，五段之间全是<b>断裂的虚线</b>，并标着「各段单独训练」「各段单独调参」「无法联合优化」。下面那条是 YOLO：输入图 → 一个卷积网络 → 结果，两条<b>粗实线</b>一笔到底。<br>
+          <b>怎么看这张图：</b>① 数一数上面有几个方框、下面有几个——<b>上面五段、下面一段</b>，这就是「扔掉流水线」的字面意思；② 看箭头的线型：虚线代表「两段之间是断的、梯度传不过去」，实线代表「整网一起学」；③ 最后看两个标签：上面写「慢，但准」，下面写「快得多，但更难训」——<b>下面那个「难训」不是随口说的，它就是下一课 Focal Loss 的全部动机</b>。<br>
+          <b>要记住的一句话：</b>YOLO 的贡献不是把某一步做得更快，而是<b>把五段变成一段</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ 网格：每个格子只负责中心落在它里面的物体</h2>
+      <p>扔掉流水线之后，一个必须回答的问题冒出来了：<b>没有候选框了，那「谁去预测哪个物体」这件事，由谁决定？</b></p>
+      <p>YOLO 的答案是这一课的核心，原文只有一句话，但它是整个方法的地基：</p>
+      <div class="callout">
+        <h4>原文的关键一句</h4>
+        <p><b>If the center of an object falls into a grid cell, that grid cell is responsible for detecting that object.</b></p>
+        <p>人话翻译：<b>把图切成 S×S 的格子。一个物体的中心落在哪个格子里，那个格子就负责检测这个物体。</b>注意依据的是<b>中心</b>，不是「面积重叠最多」，也不是「谁挨得近」——就是中心。</p>
+      </div>
+      <p>具体到 VOC 数据集上，原文用的是 <b>S = 7、B = 2、C = 20</b>：图切成 7×7 共 49 格；每格预测 <b>2 个框</b>；每格还预测 <b>20 个条件类概率</b>。每个框输出 5 个数：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{每个框} = \big(x,\; y,\; w,\; h,\; \text{confidence}\big)$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>$(x,y)$ 是框中心<b>相对该格边界的偏移</b>（归一化到 0 到 1 之间）；$(w,h)$ 是框的宽高<b>相对整张图</b>归一化（也落在 0 到 1 之间）；<b>confidence（置信度）</b>定义为一个乘积：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$C = \Pr(\text{Object})\times \mathrm{IOU}_{\text{pred}}^{\text{truth}}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>置信度 =「这里真的有东西吗」乘以「我框得准吗」。格子里没物体时它应该是 0；有物体时，希望它正好等于预测框与真值框的 IoU。</p>
+      <p><b>它为什么这么算：</b>用一个数同时表达「有没有」和「框得准不准」这两件事。如果只写「有没有」，那框画歪了也拿满分；如果只写 IoU，那空格子也可能因为乱猜出一个恰好重合的框而得高分。<b>乘起来，两个条件必须同时满足。</b></p>
+      <p><b>数字账：</b>每格输出 $B\cdot 5 + C = 2\times 5 + 20 = 30$ 个数，整个网络一次前向吐出的是 <b>7×7×30</b> 的张量。一算就知道：<b>每图共 98 个框</b>（7×7×2），而两阶段路线要处理约 2000 个候选框——<b>少了二十倍</b>。</p>
+      <p>还有一个细节很关键：<b>每个格子只预测一组类概率，与 B 无关</b>。也就是说，同一格里两个框共享同一套 20 个类概率。原文的网格设计还有一个副产品——它<b>天然抑制重复检测</b>：因为格子之间是分工的，不太会出现「同一个物体被十几个框同时报出来」，所以 NMS 在这里只是锦上添花（原文说 NMS 只 adds 2-3% in mAP），不像 R-CNN / DPM 那样是命脉。</p>
+      <p>谁做「负责」的那个框？原文的规则是：<b>每格里当前 IoU 最高的那个预测器负责</b>。这促成了预测器之间的<b>专门化</b>——各自会慢慢擅长不同的尺寸、长宽比和类别，从而把召回率提上去。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">一条街被切成 7×7 格：每个物体只由一个格子负责</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">判断依据只有一个：物体的中心落在哪个格子里</text>
+
+          <rect x="40" y="86" width="560" height="110" fill="#16203a"/>
+          <rect x="40" y="86" width="560" height="90" fill="#1b2a4a"/>
+          <rect x="40" y="96" width="90" height="140" fill="#223052"/>
+          <rect x="150" y="106" width="70" height="120" fill="#2a3a66"/>
+          <rect x="470" y="100" width="130" height="130" fill="#223052"/>
+          <rect x="40" y="236" width="560" height="200" fill="#262e40"/>
+          <rect x="40" y="226" width="560" height="10" fill="#3a4a78"/>
+          <line x1="60" y1="336" x2="580" y2="336" stroke="#ffd166" stroke-width="3" stroke-dasharray="22 18"/>
+          <rect x="200" y="236" width="80" height="50" fill="#5cffb0" opacity="0.22"/>
+          <rect x="280" y="336" width="80" height="50" fill="#4ea8ff" opacity="0.22"/>
+          <rect x="520" y="136" width="80" height="50" fill="#ffd166" opacity="0.22"/>
+          <circle cx="240" cy="252" r="7" fill="#ffb0c0"/>
+          <line x1="240" y1="259" x2="240" y2="282" stroke="#ffb0c0" stroke-width="3"/>
+          <line x1="228" y1="268" x2="252" y2="268" stroke="#ffb0c0" stroke-width="3"/>
+          <line x1="240" y1="282" x2="232" y2="296" stroke="#ffb0c0" stroke-width="3"/>
+          <line x1="240" y1="282" x2="248" y2="296" stroke="#ffb0c0" stroke-width="3"/>
+          <rect x="222" y="240" width="36" height="62" fill="none" stroke="#5cffb0" stroke-width="2"/>
+          <rect x="306" y="332" width="46" height="18" rx="4" fill="#7fc4ff"/>
+          <rect x="286" y="348" width="90" height="26" rx="5" fill="#4ea8ff"/>
+          <circle cx="306" cy="376" r="7" fill="#0f1424"/>
+          <circle cx="356" cy="376" r="7" fill="#0f1424"/>
+          <rect x="282" y="326" width="96" height="54" fill="none" stroke="#4ea8ff" stroke-width="2"/>
+          <rect x="557" y="150" width="6" height="90" fill="#8a8f9e"/>
+          <rect x="548" y="118" width="24" height="44" rx="4" fill="#223052" stroke="#8a8f9e" stroke-width="1.5"/>
+          <circle cx="560" cy="130" r="5" fill="#ff5d73"/>
+          <circle cx="560" cy="144" r="5" fill="#ffd166"/>
+          <circle cx="560" cy="158" r="5" fill="#5cffb0"/>
+          <rect x="540" y="112" width="40" height="60" fill="none" stroke="#ffd166" stroke-width="2"/>
+          <line x1="40" y1="136" x2="600" y2="136" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="40" y1="186" x2="600" y2="186" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="40" y1="236" x2="600" y2="236" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="40" y1="286" x2="600" y2="286" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="40" y1="336" x2="600" y2="336" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="40" y1="386" x2="600" y2="386" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="120" y1="86" x2="120" y2="436" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="200" y1="86" x2="200" y2="436" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="280" y1="86" x2="280" y2="436" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="360" y1="86" x2="360" y2="436" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="440" y1="86" x2="440" y2="436" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <line x1="520" y1="86" x2="520" y2="436" stroke="#ffffff" stroke-width="1" opacity="0.35"/>
+          <rect x="40" y="86" width="560" height="350" fill="none" stroke="#3a4a78" stroke-width="2"/>
+          <text x="204" y="232" fill="#5cffb0" font-size="9" font-weight="700">person · obj=1</text>
+          <text x="284" y="322" fill="#4ea8ff" font-size="9" font-weight="700">car · obj=1</text>
+          <text x="524" y="108" fill="#ffd166" font-size="9" font-weight="700">light · obj=1</text>
+          <text x="80" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">1</text>
+          <text x="160" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">2</text>
+          <text x="240" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">3</text>
+          <text x="320" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">4</text>
+          <text x="400" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">5</text>
+          <text x="480" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">6</text>
+          <text x="560" y="80" text-anchor="middle" fill="#9fb4ff" font-size="9">7</text>
+          <text x="30" y="115" text-anchor="middle" fill="#9fb4ff" font-size="9">1</text>
+          <text x="30" y="165" text-anchor="middle" fill="#9fb4ff" font-size="9">2</text>
+          <text x="30" y="215" text-anchor="middle" fill="#9fb4ff" font-size="9">3</text>
+          <text x="30" y="265" text-anchor="middle" fill="#9fb4ff" font-size="9">4</text>
+          <text x="30" y="315" text-anchor="middle" fill="#9fb4ff" font-size="9">5</text>
+          <text x="30" y="365" text-anchor="middle" fill="#9fb4ff" font-size="9">6</text>
+          <text x="30" y="415" text-anchor="middle" fill="#9fb4ff" font-size="9">7</text>
+          <text x="320" y="454" text-anchor="middle" fill="#ffd166" font-size="10.5">高亮的三个格子就是「负责格」——行人、车、红绿灯各一个</text>
+          <text x="320" y="474" text-anchor="middle" fill="#9fb4ff" font-size="10">7×7 = 49 个格子，只有 3 个是负责格</text>
+          <text x="320" y="492" text-anchor="middle" fill="#9fb4ff" font-size="10">其余 46 格要学的答案是 obj=0，置信度往 0 压</text>
+
+          <line x1="606" y1="260" x2="616" y2="260" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="620,260 608,254 608,266" fill="#ffd166"/>
+
+          <rect x="622" y="86" width="238" height="350" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="741" y="110" text-anchor="middle" fill="#ffd166" font-size="11.5" font-weight="700">一次前向 = 一个张量</text>
+          <line x1="660" y1="132" x2="828" y2="132" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="156" x2="828" y2="156" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="180" x2="828" y2="180" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="204" x2="828" y2="204" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="228" x2="828" y2="228" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="252" x2="828" y2="252" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="276" x2="828" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="660" y1="132" x2="660" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="684" y1="132" x2="684" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="708" y1="132" x2="708" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="732" y1="132" x2="732" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="756" y1="132" x2="756" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="780" y1="132" x2="780" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <line x1="804" y1="132" x2="804" y2="276" stroke="#3a4a78" stroke-width="1"/>
+          <rect x="660" y="132" width="168" height="144" fill="none" stroke="#3a4a78" stroke-width="1.5"/>
+          <rect x="708" y="156" width="24" height="24" fill="#5cffb0" opacity="0.4"/>
+          <rect x="732" y="204" width="24" height="24" fill="#4ea8ff" opacity="0.4"/>
+          <rect x="804" y="156" width="24" height="24" fill="#ffd166" opacity="0.4"/>
+          <text x="741" y="296" text-anchor="middle" fill="#cdd6ff" font-size="10">7 × 7 × 30</text>
+          <text x="741" y="316" text-anchor="middle" fill="#9fb4ff" font-size="9.5">每格 30 个数 = 2 框 × 5 + 20 类</text>
+          <text x="741" y="336" text-anchor="middle" fill="#9fb4ff" font-size="9.5">每图共 98 个框</text>
+          <text x="741" y="356" text-anchor="middle" fill="#9fb4ff" font-size="9.5">候选框法要处理约 2000 个</text>
+          <text x="741" y="378" text-anchor="middle" fill="#5cffb0" font-size="9.5">没有后续步骤</text>
+          <text x="741" y="398" text-anchor="middle" fill="#5cffb0" font-size="9.5">没有额外的分类器</text>
+          <text x="741" y="418" text-anchor="middle" fill="#5cffb0" font-size="9.5">NMS 只是锦上添花</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一条普通街景（有行人、有车、有红绿灯），上面叠了一层 7×7 的白色网格，行、列都编了号。三个高亮格子是「负责格」——行人中心落在第 3 列第 4 行那格、车中心落在第 4 列第 6 行那格、红绿灯中心落在第 7 列第 2 行那格；每个负责格里画了一个框套住该物体，并用小标签写着 obj=1。右边画出「一次前向得到的那一个张量」：一个 7×7 的网格，每格厚度方向是 30 个数。<br>
+          <b>怎么看这张图：</b>① 先找那三个<b>高亮格</b>——注意它们的高亮位置是按<b>物体的中心</b>选的，不是按面积重叠最多的那一格；② 再看框与格子的关系——框可以跨出格子（车就横跨了两列），<b>但「负责」这件事只由中心决定</b>；③ 右边那 49 个格子中只有 3 个在学「obj=1」，其余 46 个都在学「obj=0」——<b>请把这个「46 比 3」记住，一九三课的 Focal Loss 就是被这个比例逼出来的</b>。<br>
+          <b>要记住的一句话：</b>网格把「谁管哪个物体」这件事变成了一条不需要学的固定规则——规则越硬，训练越简单，但也越容易漏掉挤在一起的物体。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. 损失函数：原文式 (3) 已损坏，本课用重建版</h2>
+      <p>YOLO 的损失是把好几笔账分开计、分别加权。这是本课最需要小心的地方，所以先把一句提醒放在最前面。</p>
+
+      <div class="callout">
+        <h4>⚠️ 必须先说明：原文式 (3) 在语料库里已经损坏</h4>
+        <p>我们拿到的 <i>md</i> 版本里，第 2.2 节的这段损失公式被 OCR 严重破坏：求和的上下限被写成了 <b>i=0 to ∞</b>、出现了 <b>B² 与 B³</b>、权重里冒出一个<b>原文并不存在的 λ_such</b>，指示函数也被替换成了<b>毫无意义的符号</b>。<b>本文档不得直接引用，照抄就是传播错误。</b></p>
+        <p>下面这一版是<b>按正文的文字描述重建的</b>——权重 λ_coord = 5、λ_noobj = 0.5、宽高开根号、两个指示函数，这些都能在正文文字里逐一核对到。<b>请以一个「重建版」的心态读它</b>，并记住这件事本身：<b>这就是为什么本课程坚持所有数字都回原文核对。</b></p>
+      </div>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$
+          \begin{aligned}
+          L=\;& \lambda_{\mathrm{coord}}\sum_{i=0}^{S^2}\sum_{j=0}^{B}\mathbb{1}_{ij}^{\mathrm{obj}}\Big[(x_i-\hat{x}_i)^2+(y_i-\hat{y}_i)^2\Big]\\
+          +\,& \lambda_{\mathrm{coord}}\sum_{i=0}^{S^2}\sum_{j=0}^{B}\mathbb{1}_{ij}^{\mathrm{obj}}\Big[(\sqrt{w_i}-\sqrt{\hat{w}_i})^2+(\sqrt{h_i}-\sqrt{\hat{h}_i})^2\Big]\\
+          +\,& \sum_{i=0}^{S^2}\sum_{j=0}^{B}\mathbb{1}_{ij}^{\mathrm{obj}}(C_i-\hat{C}_i)^2\\
+          +\,& \lambda_{\mathrm{noobj}}\sum_{i=0}^{S^2}\sum_{j=0}^{B}\mathbb{1}_{ij}^{\mathrm{noobj}}(C_i-\hat{C}_i)^2\\
+          +\,& \sum_{i=0}^{S^2}\mathbb{1}_{i}^{\mathrm{obj}}\sum_{c\in\text{classes}}\big(p_i(c)-\hat{p}_i(c)\big)^2
+          \end{aligned}
+          $$
+        </div>
+      </div>
+      <p><b>这句话在说什么：</b>把「框位置偏了」「框大小偏了」「有物体的格子置信度不对」「没物体的格子置信度不够低」「类别判错」这五笔账<b>分开计、分别加权，再加起来</b>。符号表如下：$S$ 是网格边长（VOC 用 7），$B$ 是每格预测的框数（2）；$\mathbb{1}_{i}^{\mathrm{obj}}$ 表示格子 $i$ 里出现了物体；$\mathbb{1}_{ij}^{\mathrm{obj}}$ 表示格子 $i$ 的第 $j$ 个预测器「负责」该真值框；$\mathbb{1}_{ij}^{\mathrm{noobj}}$ 是它的反面。带帽子的 $\hat{x}$ 是预测值，不带的是真值。</p>
+      <p><b>它为什么这么算：</b>原文自己给平方和误差列了两条极具体的「不完美」理由：<b>(a)</b> 它把定位误差和分类误差<b>等权</b>地看，这显然不合理；<b>(b)</b> 每张图里<b>大量格子没有物体</b>，这些格子的置信度会被往 0 推，原文原话是 often overpowering the gradient from cells that do contain objects——<b>它们会压过那些真有物体的格子传来的梯度，导致训练早期就发散</b>。这第 (b) 条正是 λ_noobj = 0.5 的直接理由：<b>把没物体的那笔账压低一半</b>。</p>
+      <p><b>数字账（以 VOC 为例，$S=7$、$B=2$）：</b>有物体的格子只有 3 个左右，而没物体的格子有 46 个、每格 2 个预测器，也就是约 <b>92 笔「无物体」置信度账</b>，对比约 <b>3 笔「有物体」账</b>。如果两者权重一样，梯度的绝对主力就是那 92 笔——<b>这正是 λ_noobj = 0.5 要压的东西，也正是一九三课要把这件事做到极致的地方</b>。</p>
+      <p>关于宽高那一项还有一个巧思：<b>宽高先开根号</b>。原文的理由是，小框偏一点点和大框偏同样多，在大框上「无所谓」，在小框上「很致命」，直接算平方和会让大框的误差吃掉全部注意力。开根号之后，<b>小框的小偏差和大框的小偏差受到的重视程度就接近了</b>。</p>
+
+      <p>推理时怎么用这些输出？原文式 (1) 是这么把两项乘起来的：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\Pr(\text{Class}_i\mid\text{Object})\ast\Pr(\text{Object})\ast\mathrm{IOU}_{\text{pred}}^{\text{truth}}=\Pr(\text{Class}_i)\ast\mathrm{IOU}_{\text{pred}}^{\text{truth}}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>「这个框是什么类」乘以「这里真的有东西吗、框得准吗」，得到一个分数——<b>既管类别、也管定位质量</b>。所以一个框可能类别猜对了，但因为框画歪了、IoU 低，最后得分仍然很低。<b>数字上：如果类别概率是 0.9、置信度是 0.4，那这个框的最终分数只有 0.36</b>，会被排在很后面。</p>
+
+      <p>最后是激活函数（原文式 (2)），也一并给出：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\phi(x)=\begin{cases}x, & x>0\\ 0.1x, & \text{otherwise}\end{cases}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>这就是 leaky ReLU——负半轴不归零，而是保留 1/10 的斜率。<b>它为什么这么算：</b>普通 ReLU 在负半轴恒为 0，一旦某个神经元的输入长期为负，它的梯度就永远是 0，这个神经元就「死掉」了；留一条小缝，它还有机会被救回来。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. 关键数字：45 FPS / 63.4 mAP，以及一堆对手</h2>
+      <p>YOLO 的数字是它最有说服力的部分。先把主角列出来，再列它当时的对手，最后特意提醒一个<b>容易被误读的地方</b>。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>YOLO（主角）</h4><p>VOC 2007 上 <b>45 FPS / 63.4 mAP</b>。原文称可以「以不到 25 毫秒的延迟处理流式视频」。</p></div>
+        <div class="mini-card"><h4>Fast YOLO（更快的版本）</h4><p><b>155 FPS / 52.7 mAP</b>，只有 9 个卷积层。原文的说法是：mAP 是其他实时检测器的<b>两倍</b>。</p></div>
+        <div class="mini-card"><h4>YOLO VGG-16（更准的版本）</h4><p><b>21 FPS / 66.4 mAP</b>。用一个更大的骨干换精度，速度掉一半多。</p></div>
+        <div class="mini-card"><h4>对手：Fast R-CNN</h4><p><b>0.5 fps / 70.0 mAP</b>。精度更高，速度却差了两个数量级。</p></div>
+        <div class="mini-card"><h4>对手：Faster R-CNN</h4><p>VGG-16 版 <b>7 fps / 73.2 mAP</b>；ZF 版 <b>18 fps / 62.1 mAP</b>。</p></div>
+        <div class="mini-card"><h4>对手：DPM</h4><p>30Hz 版 <b>30 fps / 26.1 mAP</b>；100Hz 版 <b>100 fps / 16.0 mAP</b>——快是快，精度低得离谱。</p></div>
+      </div>
+
+      <p>把这张表读一遍就明白 YOLO 的定位了：<b>它不是当时最准的，但它是第一个把「准」和「快」同时拉到一个可用区间的。</b>而更有意思的是下面这两个数字。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>它错得「和两阶段不一样」</h4><p>Fast R-CNN 的 top 检测里有 <b>13.6%</b> 是背景假阳性（不含任何物体的框），而 YOLO 只有它的<b>约三分之一</b>。原文解释：YOLO 看得到全图，所以背景误检率显著更低。</p></div>
+        <div class="mini-card"><h4>所以它们能互补</h4><p>Fast R-CNN 单独是 71.8，与 YOLO 组合后是 <b>75.0（+3.2）</b>；而它与其他 Fast R-CNN 变体组合只涨 0.3 到 0.6。<b>增益来自「错得不一样」，不是普通 ensemble。</b></p></div>
+      </div>
+
+      <p><b>★ 一个必须提醒的易误读点：</b>原文 §4.5 的 Figure 5 表里，YOLO 的 VOC 2007 AP 写的是 <b>59.2</b>。这个数字是 <b>person 单类</b>的 AP，而 <b>Table 1 里的 63.4 是 20 类的 mAP</b>。<b>两者口径不同，不能直接比较</b>——这也是为什么我们前面要花力气先讲清 mAP / AP 的区别。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_You_Only_Look_Once__Unified__Real-Time_Object_Detection/011c6ee62fefbdf23c872abfdbbd13eb30798918fb1e6467eca31847d627e906.jpg" alt="The YOLO Detection System">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The YOLO Detection System. Processing images with YOLO is simple and straightforward. Our system (1) resizes the input image to 448×448, (2) runs a single convolutional network on the image, and (3) thresholds the resulting detections by the model's confidence.<br>
+          <b>怎么看这张图：</b>这张图就是「一步到位」的字面展示，请<b>数一数中间有几个方框</b>——没有候选框生成、没有逐框分类、没有逐框调框，只有「缩放到 448×448 → 跑一次卷积网络 → 按置信度卡阈值」三步。与上一张自绘图里两阶段那条「断成五截」的流水线对着看，差别一目了然。<br>
+          <b>要记住的一句话：</b>同一张图、同一个网络，前向一次就把框和类别一起交出来——这就是「You Only Look Once」这句名字的全部含义。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_You_Only_Look_Once__Unified__Real-Time_Object_Detection/4d752b599f7a58c3257fe2e65e49e5798fdd88f613a3021982ad2f6327160e7f.jpg" alt="The Model grid and tensor">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>The Model. Our system models detection as a regression problem. It divides the image into an S×S grid and for each grid cell predicts B bounding boxes, confidence for those boxes, and C class probabilities. These predictions are encoded as an S×S×(B*5+C) tensor.<br>
+          <b>怎么看这张图：</b>它把上面那张自绘图里的两个部分画在了一起——左边是叠了网格的照片与负责格，右边是那个 S×S×(B×5+C) 的张量。<b>盯着右边看厚度方向</b>：每一个格子在深度上塞着一串数，那就是「2 个框 × 5 个数 + 20 个类概率」。<br>
+          <b>要记住的一句话：</b>检测这件事在这里被写成了一个「从图回归到张量」的问题——没有候选、没有分类器，只有一个张量。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_You_Only_Look_Once__Unified__Real-Time_Object_Detection/71fb22360d5e66202bb8425f86893544e823cef5bea05018f6361abb407314cb.jpg" alt="The YOLO Architecture">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The Architecture. Our detection network has 24 convolutional layers followed by 2 fully connected layers. Alternating 1×1 convolutional layers reduce the features space from preceding layers. We pretrain the convolutional layers on the ImageNet classification task at half the resolution (224×224 input image) and then double the resolution for detection.<br>
+          <b>怎么看这张图：</b>读三个地方就够了：① <b>24 个卷积层 + 2 个全连接层</b>，这是「一个网络」的规模；② 那些 <b>1×1 卷积层</b>，作用是给特征降维，替代 GoogLeNet 的 inception 结构；③ 图注里那个分辨率的做法——<b>先在 224×224 上做分类预训练，检测时翻倍到 448×448</b>，理由是检测需要更细的视觉信息。<br>
+          <b>要记住的一句话：</b>YOLO 的骨干刻意做得平淡——它的创新在「把检测写成回归」，不在网络结构。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 它不完美在哪：小物体成堆会漏，定位是第一大错源</h2>
+      <p>原文的自我检讨非常具体，恰好也是 SLAM 论文最常引用它的原因。</p>
+      <ol>
+        <li><b>空间约束太硬，成堆的小物体必漏。</b>原话：YOLO imposes strong spatial constraints … each grid cell only predicts two boxes and can only have one class. This spatial constraint limits the number of nearby objects.<b>每格只能有两个框、且只能有一个类别</b>——所以「一群鸟」这种挤在一起、又都归到同一格的情况，它是注定要漏的。</li>
+        <li><b>对不常见的长宽比和形态泛化差。</b>原话：it struggles to generalize to objects in new or unusual aspect ratios or configurations。</li>
+        <li><b>用了相对「粗」的特征来预测框。</b>原话：uses relatively coarse features for predicting bounding boxes——因为经过多次下采样，特征图上的一个点已经代表原图一大片了。</li>
+        <li><b>★ 最主要的问题是定位不准。</b>原文原话：our loss function treats errors the same in small bounding boxes versus large bounding boxes … <b>Our main source of error is incorrect localizations.</b>而它的自评是：YOLO still lags behind state-of-the-art detection systems in accuracy … it struggles to precisely localize some objects, especially small ones。</li>
+      </ol>
+      <p>为什么最后一条对 SLAM 特别要命？因为 SLAM 用检测器不是为了「知道图里有个人」，而是为了<b>把这个人身上的像素/特征点剔掉</b>。而 YOLO 给的是<b>一个矩形框</b>——框里必然混着背景。SLAM 论文里把这件事说得很明白，我们在下一节展开。</p>
+      <p>还有一处 OCR 问题要如实标注：<b>原文 Table 3（VOC 2012 排行榜）在抽取时列与值已经错位</b>——表头里出现了「bike 82.9」「bottle 62.7」这类「数值挤进表头」的现象，该行还被截断。<b>所以本课不引用任何 VOC2012 的分项数字。</b>另外第 2.2 节损失公式的损坏已在上一节说明，此处不再重复。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_You_Only_Look_Once__Unified__Real-Time_Object_Detection/740fead5ae898df632fde6aff993e4f158268713e8224c97954979ade5c76414.jpg" alt="Error Analysis: Fast R-CNN vs YOLO">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Error Analysis: Fast R-CNN vs. YOLO. These charts show the percentage of localization and background errors in the top N detections for various categories (N = # objects in that category).<br>
+          <b>怎么看这张图：</b>这张图是 YOLO 全部「错在哪」的一手证据，怎么看：横轴是该类别的检测数量 N，纵轴是<b>错误占比</b>，蓝色/橙色分别代表两种错误——<b>Localization（定位错）</b>与 <b>Background（把背景当成物体）</b>。请对比两条曲线的形状：YOLO 的<b>定位错误占比明显更高</b>，而它把背景误当物体的比例<b>明显更低</b>。原文给了具体数值：Fast R-CNN 的 top 检测里 13.6% 是背景假阳性，而 YOLO 约为其三分之一。<br>
+          <b>要记住的一句话：</b>YOLO 和两阶段不是「谁全面更好」，而是<b>错的方向不一样</b>——这正是它们组合起来能涨 3.2 个点的原因。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">同一只猫、两只猫、一群鸟：检测能看到什么、看不到什么</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12">网格规则给了检测极快的速度，也在「挤在一起的东西」上定了它的上限</text>
+          <text x="450" y="70" text-anchor="middle" fill="#ffd166" font-size="11">检测能看到数量、位置、类别；看不到具体是哪些像素</text>
+
+          <rect x="40" y="74" width="240" height="226" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="160" y="98" text-anchor="middle" fill="#5cffb0" font-size="12.5" font-weight="700">① 一只猫：正常发挥</text>
+          <text x="160" y="116" text-anchor="middle" fill="#9fb4ff" font-size="10">中心落一格，一格负责</text>
+          <ellipse cx="160" cy="196" rx="44" ry="28" fill="#8a8f9e"/>
+          <circle cx="126" cy="166" r="18" fill="#8a8f9e"/>
+          <polygon points="113,156 119,138 131,150" fill="#8a8f9e"/>
+          <polygon points="139,150 148,138 143,156" fill="#8a8f9e"/>
+          <rect x="104" y="140" width="112" height="90" fill="none" stroke="#5cffb0" stroke-width="2"/>
+          <text x="104" y="134" fill="#5cffb0" font-size="9">cat 0.94</text>
+          <text x="160" y="252" text-anchor="middle" fill="#cdd6ff" font-size="10">框贴得紧，类别也对</text>
+          <text x="160" y="270" text-anchor="middle" fill="#9fb4ff" font-size="10">这是它最擅长的场景</text>
+          <text x="160" y="288" text-anchor="middle" fill="#9fb4ff" font-size="10">原文里这是最顺的情形</text>
+
+          <rect x="330" y="74" width="240" height="226" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="450" y="98" text-anchor="middle" fill="#ff9f6b" font-size="12.5" font-weight="700">② 两只挨着的猫：知道有两只</text>
+          <text x="450" y="116" text-anchor="middle" fill="#9fb4ff" font-size="10">每格只能报一组类概率</text>
+          <ellipse cx="422" cy="196" rx="40" ry="26" fill="#8a8f9e"/>
+          <circle cx="392" cy="168" r="16" fill="#8a8f9e"/>
+          <polygon points="380,158 386,142 396,154" fill="#8a8f9e"/>
+          <polygon points="404,154 412,142 408,158" fill="#8a8f9e"/>
+          <ellipse cx="484" cy="196" rx="40" ry="26" fill="#8a8f9e"/>
+          <circle cx="514" cy="168" r="16" fill="#8a8f9e"/>
+          <polygon points="502,154 508,142 518,158" fill="#8a8f9e"/>
+          <polygon points="522,158 528,142 534,154" fill="#8a8f9e"/>
+          <rect x="376" y="142" width="104" height="88" fill="none" stroke="#ff9f6b" stroke-width="2"/>
+          <rect x="438" y="142" width="104" height="88" fill="none" stroke="#ff9f6b" stroke-width="2"/>
+          <text x="376" y="136" fill="#ff9f6b" font-size="9">cat 0.88</text>
+          <text x="440" y="136" fill="#ff9f6b" font-size="9">cat 0.86</text>
+          <text x="450" y="252" text-anchor="middle" fill="#ff9f6b" font-size="10">两个框大面积重叠</text>
+          <text x="450" y="270" text-anchor="middle" fill="#cdd6ff" font-size="10">知道有两只，但不知像素边界</text>
+          <text x="450" y="288" text-anchor="middle" fill="#9fb4ff" font-size="10">要边界，得等一九二课的掩码</text>
+
+          <rect x="620" y="74" width="240" height="226" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="740" y="98" text-anchor="middle" fill="#ff5d73" font-size="12.5" font-weight="700">③ 一群鸟：这里会漏</text>
+          <text x="740" y="116" text-anchor="middle" fill="#9fb4ff" font-size="10">一格只能报一个类、两个框</text>
+          <circle cx="700" cy="166" r="11" fill="#8a8f9e"/>
+          <circle cx="726" cy="154" r="11" fill="#8a8f9e"/>
+          <circle cx="752" cy="168" r="11" fill="#8a8f9e"/>
+          <circle cx="714" cy="190" r="11" fill="#8a8f9e"/>
+          <circle cx="744" cy="194" r="11" fill="#8a8f9e"/>
+          <circle cx="778" cy="184" r="11" fill="#8a8f9e"/>
+          <ellipse cx="740" cy="182" rx="62" ry="42" fill="none" stroke="#ff5d73" stroke-width="2"/>
+          <text x="676" y="146" fill="#ff5d73" font-size="9">bird 0.62</text>
+          <text x="740" y="240" text-anchor="middle" fill="#ff5d73" font-size="10">一份类概率，报不出 6 只</text>
+          <text x="740" y="258" text-anchor="middle" fill="#cdd6ff" font-size="10">6 只鸟，最后只交出 1 个框</text>
+          <text x="740" y="276" text-anchor="middle" fill="#9fb4ff" font-size="10">空间约束把数量卡死了</text>
+          <text x="740" y="294" text-anchor="middle" fill="#9fb4ff" font-size="10">原文自述：成堆小物体必漏</text>
+
+          <text x="160" y="318" text-anchor="middle" fill="#cdd6ff" font-size="10.5">① 一只猫，一个框</text>
+          <text x="160" y="336" text-anchor="middle" fill="#9fb4ff" font-size="10">数量和位置都对</text>
+          <text x="160" y="354" text-anchor="middle" fill="#9fb4ff" font-size="10">这是它的舒适区</text>
+          <text x="450" y="318" text-anchor="middle" fill="#cdd6ff" font-size="10.5">② 两只挨着，两个框</text>
+          <text x="450" y="336" text-anchor="middle" fill="#9fb4ff" font-size="10">知道数量，不知像素</text>
+          <text x="450" y="354" text-anchor="middle" fill="#9fb4ff" font-size="10">这正是检测的边界</text>
+          <text x="740" y="318" text-anchor="middle" fill="#cdd6ff" font-size="10.5">③ 一群小物体，漏检</text>
+          <text x="740" y="336" text-anchor="middle" fill="#9fb4ff" font-size="10">空间约束定死了上限</text>
+          <text x="740" y="354" text-anchor="middle" fill="#9fb4ff" font-size="10">在 SLAM 里就是漏剔</text>
+
+          <rect x="40" y="370" width="820" height="84" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="392" text-anchor="middle" fill="#cdd6ff" font-size="11.5">检测输出永远是「一个矩形框」：框里有物体，也必然混着背景像素</text>
+          <text x="450" y="410" text-anchor="middle" fill="#ff9f6b" font-size="11">所以 SLAM 拿它去剔动态点时，会连框里的静态特征点一起剔掉——SG-SLAM 正是这么批评的</text>
+          <text x="450" y="428" text-anchor="middle" fill="#9fb4ff" font-size="11">这不是实现问题，而是「检测」这个任务本身给不出像素级边界</text>
+          <text x="450" y="446" text-anchor="middle" fill="#9fb4ff" font-size="11">换个角度：这正是 SLAM 论文一边用 YOLO、一边还要加几何约束的原因</text>
+          <text x="450" y="482" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：检测知道「有几只、大概在哪」，但从定义上就不知道「具体是哪些像素」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三格连环画。① 一只猫，一个框贴得紧，正常发挥；② 两只挨着的猫，检测返回两个框、两个 cat 标签，<b>但两个框大面积重叠、边界说不清</b>；③ 六只挤在一起的鸟，检测最后只交出 1 个框——因为网格规则规定每格只有两个框、且只能有一个类别。<br>
+          <b>怎么看这张图：</b>① 比较第 1 格与第 2 格——<b>同一套方法，物体一挨近就开始说不清了</b>；② 再看第 3 格——这不是「精度不够」，而是<b>空间约束把数量上限卡死了</b>，原文自述的 limits the number of nearby objects 说的就是它；③ 最后看底部那行：框里必然混着背景，这就是 SLAM 论文抱怨「YOLO 的框会把静态点也剔掉」的根源。想解决「哪些像素」，只能等一九二课的掩码分支。<br>
+          <b>要记住的一句话：</b>检测给的是「框」，不是「像素」——这两个词的差别，就是 SLAM 里「误剔静态点」这个毛病的来源。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 和前面课程怎么接：这个零件在前八季出现过的地方</h2>
+      <p><b>第八季 0153–0159 动态环境块</b>是本课最重要的落地点。那一整块的问题意识是一样的：<b>SLAM 假设场景是静止的，但现实里有人有车，只要有人走过，特征匹配就会把动态物体的特征点当成静态地标，把轨迹带歪。</b>于是大家几乎都在同一个位置上放了一个检测器——<b>先把「可能动的物体」框出来，再把框里的特征点剔掉</b>。而它们放的那个检测器，绝大多数就是 YOLO。</p>
+      <p>逐条看语料库里的实证（都是原文可查的）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>2022_YOLO-SLAM —— 最典型的落地</h4><p>原文：设计并构建了一个轻量的 <b>Darknet19-YOLOv3</b> 检测网络，接入 SLAM 系统，用来产生定位动态物体所需的语义信息。它把 YOLOv3 的骨干<b>从 Darknet-53 换成 Darknet-19</b>，理由是表里的实测速度：Darknet-53 只有 78 FPS，Darknet-19 有 <b>171 FPS</b>（权重从 159 MB 降到 <b>80 MB</b>，Top-1 从 77.2 降到 74.1）。<b>检测结果作为先验框，再交给 depth-RANSAC 做几何筛选</b>——注意这个「先语义、后几何」的两级结构。</p></div>
+        <div class="mini-card"><h4>2023_OVD-SLAM —— 给出了最珍贵的耗时数字</h4><p>原文：方法充分利用 RGB-D 相机的深度信息以及 <b>YOLOv5 的先验信息</b>。它给出了 YOLO 的实测耗时 <b>7.1 ms</b>，整系统 Tracking 33.4 ms（对比 ORB-SLAM3 的 19.8 ms）。<b>这是「检测器在 SLAM 里到底占多少预算」的现成答案</b>——和一九二课 Mask R-CNN 的 195 ms 一比，你就知道 SLAM 圈为什么更爱用检测而不是分割了。</p></div>
+        <div class="mini-card"><h4>2023_SG-SLAM —— 说出了这个零件最要害的毛病</h4><p>原文先复述前人的做法：Zhang 等用 YOLO 获取动态物体的语义信息，再根据语义信息剔除动态特征点；接着直接指出问题——<b>the way YOLO extracts semantic information by bounding box will cause a part of static feature points to be wrongly regarded as outliers and eliminated</b>（YOLO 用边界框来提取语义信息的方式，会导致一部分静态特征点被误当成外点剔除）。它自己的选型理由也值得记：<b>用目标检测网络而不是语义分割网络</b>、加上多线程与关键帧建图，正是为了克服实时性短板。</p></div>
+        <div class="mini-card"><h4>2023_DGM-VINS / 2019_SuMa / 2020_Kimera</h4><p>DGM-VINS 的参考文献里直接列了 YOLO-SLAM；SuMa 的参考文献里是 YOLOv3；Kimera 也是把检测/语义融进实时建图库的早期代表。<b>它们共同说明：YOLO 是 SLAM 圈出现频率最高的检测零件，没有之一。</b></p></div>
+      </div>
+
+      <p>还有一条<b>反向证据</b>很值得写进课里：YOLO-SLAM 的参考文献里引的是 <b>YOLO / YOLO9000 / YOLOv3</b> 三个版本，而它在实验里比较的对象是 ORB-SLAM2、DS-SLAM、RDS-SLAM。<b>这说明 SLAM 圈引用 YOLO 时，普遍只引到「方法名」这一层，并不引 2016 那篇论文里的结构细节</b>——而这恰恰是本季存在的理由：<b>你读的那些论文，默认你早就知道这些词。</b></p>
+
+      <p>再往上一层看。第八季的动态块与语义块有一个<b>共同的痛点</b>：<b>语义前端太慢</b>。一九二课会给出一个刺眼的数字——Mask R-CNN 约 195 ms 一张图，也就是约 5 fps，而 SLAM 要实时。于是你会看到各种「降本」招数：换更轻的骨干（YOLO-SLAM 的 Darknet-19）、放后台线程、隔几帧跑一次、或者干脆只用检测不用分割（SG-SLAM 的选择）。</p>
+      <p><b>这条「精度 vs 实时性」的张力，是第十季全季的暗线。</b>而 YOLO 之所以能成为最高频的零件，正是因为它站在了这条线上的一个甜点上。但它的甜是<b>用「只知道框、不知道像素」换来的</b>——这就是为什么第八季的方法必须再加一层几何约束：<b>零件不完美，所以 SLAM 要加几何约束。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某 SLAM 系统用 YOLO 框出「人」，然后把框内所有特征点全部剔除。这个做法为什么会出错？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对——框里必然混着静态背景（地面、墙面、窗框），一刀切会连静态点一起剔掉，SG-SLAM 正是这么批评的。" onclick="lessonKit.answer(this,'q0191a')">框里混着静态背景点</button>
+          <button data-correct="no" data-explanation="YOLO 的类别判定在这一类场景里通常没问题，问题不在类别，而在「框」这个形状本身。" onclick="lessonKit.answer(this,'q0191a')">YOLO 分不清人和车</button>
+          <button data-correct="no" data-explanation="速度慢确实是检测/分割前端的通病，但这里的错误来自「框」的粒度，不是耗时。" onclick="lessonKit.answer(this,'q0191a')">检测这一步实在太慢</button>
+        </div>
+        <div class="quiz-feedback" id="q0191a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">8. 读完你应该能回答</h2>
+      <ol>
+        <li>两阶段与单阶段检测的流水线各是什么样？为什么两阶段「好训」而单阶段「难训」？</li>
+        <li>YOLO 的网格规则是什么？「哪个格子负责哪个物体」的判断依据是什么？为什么每格里两个框共享一组类概率？</li>
+        <li>VOC 设置下 S、B、C 各是多少？每格输出多少个数？整个张量是什么形状？每图一共多少个框？</li>
+        <li>YOLO 的置信度是怎么定义的？为什么要把「有没有物体」和「IoU」乘起来？</li>
+        <li>λ_noobj = 0.5 这一项是为了解决什么问题？宽高为什么要先开根号？</li>
+        <li>YOLO 自述的最主要错误是什么？它在背景误检上比 Fast R-CNN 好多少？这两件事为什么能让它们组合起来涨 3.2 个点？</li>
+        <li>为什么 SLAM 论文用 YOLO 的框去剔动态特征点会误伤静态点？这个「误伤」在 SG-SLAM 里被怎么描述？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>一张 448×448 的图，S=7、B=2、C=20。请算出：一共多少个格子、每格输出多少个数、整个输出张量的形状、每图一共多少个候选框。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>格子数 7×7 = <b>49</b>；每格输出 B×5 + C = 2×5 + 20 = <b>30</b> 个数；张量形状 <b>7×7×30</b>；每图共 49×2 = <b>98</b> 个框。对比：Selective Search 一类的候选框法每图要约 2000 个。</div></details>
+        </li>
+        <li>「YOLO 在 VOC 2007 上 AP 是 59.2」与「YOLO 在 VOC 2007 上 mAP 是 63.4」——这两句话哪里有问题？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>59.2 是原文 §4.5 Figure 5 表里 <b>person 单类</b>的 AP；63.4 是 Table 1 里 <b>20 类平均</b>的 mAP。两者类别范围不同，不能直接比较，也不能说「哪个更高」。所以引用时必须把「哪一类 / 多少类平均 / IoU 阈值多少」说清——这与第九季 0180 那条「看到轨迹误差先问真值多准」是同一类纪律。</div></details>
+        </li>
+        <li>YOLO 承认「每格只能报两个框、且只能有一个类别」。请举出一个会因此漏检的真实场景，并说明这类漏检对 SLAM 意味着什么。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>场景：一群挤在一起的鸟、一排并肩走的人、货架上贴着的一排相同商品——多个小物体的中心都落在同一格附近，而该格最多只能交出两个框、一组类概率，于是漏检。对 SLAM 的含义：漏检意味着有动态物体没被剔掉，它的特征点仍会参与位姿估计，污染轨迹。<b>所以 SLAM 不能只靠语义前端一道闸门，必须再加几何一致性检查</b>（如 DynaSLAM 的多视图几何、YOLO-SLAM 的 depth-RANSAC）。</div></details>
+        </li>
+        <li>为什么本课要把 YOLO 的损失函数标成「重建版」？这样做和不加说明地照抄，差别在哪？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为语料库里的 md 版本该式已被 OCR 破坏：求和上下限写成 i=0 to ∞、出现 B² 与 B³、权重里出现原文并不存在的 λ_such、指示函数被替换成无意义符号。照抄等于把这些错误当成原文传出去。重建的依据是正文文字（λ_coord = 5、λ_noobj = 0.5、宽高开根号、两个指示函数），并显式告知读者这是重建版。<b>这就像一九三课要提醒「Table 2 行列错位」、一九二课要提醒「Table 2c 的空白列容易被读反」一样——诚实地标注不确定性，是本课程的一条硬纪律。</b></div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0190-FCN-2015-全卷积与逐像素.html">← 0190 FCN：全卷积与逐像素预测</a>
+        <a class="next" href="0192-MaskRCNN-2017-实例分割与RoIAlign.html">0192 Mask R-CNN：实例分割与 RoIAlign →</a>
+      </div>
+      <p class="foot-note">这一个零件，你在第八季的动态环境块里至少见过五次。现在你知道它的上限在哪了。🚗</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

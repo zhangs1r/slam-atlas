@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResNet（2016）：残差连接 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0188</div>
+      <h1>ResNet（2016）：残差连接</h1>
+      <p class="subtitle">「网络越深越差」这件事，居然不是过拟合——56 层的训练误差比 20 层还高。ResNet 用一条抄近道的箭头就把它解决了，而这条箭头后来跑遍了整个深度学习。🪜</p>
+      <div class="hero-meta">
+        <span>🎯 主题：退化现象 / 恒等短路 / y = F(x) + x / 瓶颈结构 / 152 层</span>
+        <span>👥 作者：Kaiming He、Xiangyu Zhang、Shaoqing Ren、Jian Sun（Microsoft Research）</span>
+        <span>📅 年份 · <i>Deep Residual Learning for Image Recognition</i>（正文未标发表处，语料内可印证为 CVPR 2016）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">一句话定位：让层学「差」</a>
+        <a href="#b">前人卡在哪：加深为什么不管用</a>
+        <a href="#c">核心机制：一条抄近道的箭头</a>
+        <a href="#d">公式与形状账：y = F(x) + x</a>
+        <a href="#e">关键数字：ResNet 的成绩单</a>
+        <a href="#f">在前八季哪些课出现过</a>
+        <a href="#g">它不完美在哪</a>
+        <a href="#h">和前面课程怎么接</a>
+        <a href="#i">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「退化」这个反直觉现象，并指出它<b>不是</b>梯度消失；用一句话讲透残差连接为什么有效；写出 y = F(x) + x 并解释每个符号；算一遍瓶颈结构的参数账；说清 ResNet-50 在 CNN-SLAM 与 TartanVO 里被当积木拆用的两种方式。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 上一课 <b>0187</b> 里 VGG 与 GoogLeNet 都在「堆」——一个堆层、一个堆模块；本课讲的是<b>堆到一定程度就堆不动了，怎么办</b>。★ 第三季 <b>0043–0045 ORB-SLAM</b> 与 <b>0048 DSO</b> 是手工设计的几何前端，本课与 <b>0189</b> 是学习式骨干这条路的第二站。★ 本课最硬的两处落地都在第三季与第七季的语境里：<b>CNN-SLAM</b>（把 ResNet-50 拆成编码器）与 <b>TartanVO</b>（用 ResNet-50 当位姿网络）。★ 下一课 <b>0189</b> 会给残差连接做一次「拆掉它」的对照实验，本课的结论会被它拿去复用。</p></div>
+      </div>
+
+      <h2>1. 一句话定位：让层学「差」，而不是学「答案」</h2>
+      <p>先给结论，一句话：<b>ResNet 只改了一件事——给网络加一条「恒等短路」（identity shortcut），把「直接学目标映射 H(x)」改成「学残差 F(x) = H(x) − x」。</b>就这一条改动，让网络可以从 34 层一路堆到 152 层，并且<b>越深越好</b>。</p>
+      <p>为什么这么改有用？先用一个生活类比。假设你要预测某个人今年的体重。<b>直接猜一个绝对数字（比如 70 公斤）很难</b>——你得知道他的身高、饮食、运动量。但如果改成猜「<b>比去年多了多少</b>」，事情立刻简单了：答案通常在 0 附近，最多 ±3。而如果根本没变化，答案就是 0——<b>「什么都不做」是一个极容易命中的答案</b>。</p>
+      <p>ResNet 干的就是这件事：<b>它不让层去拟合「最终答案」，而是让层去拟合「答案与输入的差」。</b>当「什么都不做」（也就是恒等映射）才是最优解时，网络只需要把这几层的权重推向 0 就行——原文的说法是「the solvers may simply <b>drive the weights of the multiple nonlinear layers toward zero</b>」，这比让一堆非线性层去辛辛苦苦凑出一个恒等映射容易得多。</p>
+      <p>这一句话就是全课的核心。下面我们分三步把它讲透：<b>前人卡在哪（§2）→ 它改了什么（§3）→ 怎么算（§4）</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 560" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="560" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">残差连接：一条抄近道的箭头，绕过两层</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">上面是结构（两条路最后相加）；下面是生活类比（猜「变化量」比猜「绝对值」容易）</text>
+
+          <rect x="50" y="176" width="76" height="44" rx="6" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="88" y="204" text-anchor="middle" fill="#cdd6ff" font-size="12">输入 x</text>
+          <rect x="176" y="176" width="150" height="44" rx="6" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="251" y="204" text-anchor="middle" fill="#cdd6ff" font-size="12">3×3 卷积 + ReLU</text>
+          <rect x="356" y="176" width="150" height="44" rx="6" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="431" y="204" text-anchor="middle" fill="#cdd6ff" font-size="12">3×3 卷积 + BN</text>
+          <circle cx="560" cy="198" r="24" fill="#1d3a2a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="560" y="205" text-anchor="middle" fill="#5cffb0" font-size="20">⊕</text>
+          <rect x="616" y="176" width="90" height="44" rx="6" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="661" y="204" text-anchor="middle" fill="#cdd6ff" font-size="12">ReLU</text>
+          <rect x="736" y="176" width="110" height="44" rx="6" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="791" y="204" text-anchor="middle" fill="#cdd6ff" font-size="12">输出 y</text>
+
+          <line x1="126" y1="198" x2="174" y2="198" stroke="#7f8fc7"/>
+          <line x1="326" y1="198" x2="354" y2="198" stroke="#7f8fc7"/>
+          <path d="M431 176 L431 150 L560 150 L560 172" fill="none" stroke="#5cffb0" stroke-width="2"/>
+          <path d="M88 176 L88 118 L560 118 L560 150" fill="none" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="506" y1="198" x2="534" y2="198" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="584" y1="198" x2="614" y2="198" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="706" y1="198" x2="734" y2="198" stroke="#7f8fc7"/>
+          <text x="324" y="110" text-anchor="middle" fill="#5cffb0" font-size="12">identity shortcut x：无参数、无计算量</text>
+          <text x="324" y="140" text-anchor="middle" fill="#9fb4ff" font-size="11">这条路上的数据一个运算符都不加，原样送过去</text>
+          <text x="251" y="246" text-anchor="middle" fill="#ffd166" font-size="12">这一串算出来的是 F(x)</text>
+          <text x="431" y="272" text-anchor="middle" fill="#ffd166" font-size="11">F(x) 是「残差」：答案与输入之间的差</text>
+          <text x="560" y="246" text-anchor="middle" fill="#5cffb0" font-size="12">逐通道相加</text>
+          <text x="791" y="246" text-anchor="middle" fill="#cdd6ff" font-size="11">y = F(x) + x</text>
+          <text x="700" y="118" fill="#cdd6ff" font-size="11">如果这些层「没得学」</text>
+          <text x="700" y="140" fill="#cdd6ff" font-size="11">就把权重推成 0</text>
+          <text x="700" y="162" fill="#cdd6ff" font-size="11">于是 F(x)=0，y=x</text>
+          <text x="700" y="290" fill="#5cffb0" font-size="11">恒等映射：很容易</text>
+
+          <text x="450" y="322" text-anchor="middle" fill="#e8ecff" font-size="14" font-weight="700">生活类比：预测今年体重，你会怎么猜？</text>
+          <rect x="60" y="352" width="130" height="44" rx="6" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="125" y="380" text-anchor="middle" fill="#cdd6ff" font-size="12">去年 68 kg</text>
+          <rect x="240" y="352" width="130" height="44" rx="6" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="305" y="380" text-anchor="middle" fill="#cdd6ff" font-size="12">今年 70 kg</text>
+          <line x1="190" y1="374" x2="238" y2="374" stroke="#7f8fc7"/>
+          <text x="214" y="366" text-anchor="middle" fill="#ffd166" font-size="12">+2</text>
+          <text x="125" y="416" text-anchor="middle" fill="#9fb4ff" font-size="11">已知的输入 x</text>
+          <text x="305" y="416" text-anchor="middle" fill="#9fb4ff" font-size="11">要的答案 H(x)</text>
+          <text x="410" y="372" fill="#ff9f6b" font-size="12">直接让网络猜 70：难，要凭空空想一个数</text>
+          <text x="410" y="398" fill="#5cffb0" font-size="12">改成猜「比去年多多少」：只要给 +2，容易</text>
+          <text x="410" y="424" fill="#5cffb0" font-size="12">如果体重完全没变，答案就是 0——</text>
+          <text x="410" y="450" fill="#cdd6ff" font-size="12">把权重推成 0，比硬凑一个恒等映射容易太多</text>
+          <text x="410" y="480" fill="#9fb4ff" font-size="11">这就是「学残差」相比「学答案」的全部优势</text>
+
+          <text x="450" y="522" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">要记住：ResNet 不是让网络更聪明，而是把「要学的东西」换成了一个更容易学的量</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上图是残差块的真实结构：输入 x 向右经过「3×3 卷积 + ReLU」和「3×3 卷积 + BN」得到 F(x)，同时另有一条绿色弧线从输入直接绕到输出端，两条路在一个 ⊕ 圆圈里相加，再过一个 ReLU 得到 y。下图是同一件事的生活版：已知去年 68 kg，直接猜今年的 70 kg 很难；改成猜「涨了多少」（答案是 +2）就容易得多，而如果毫无变化，答案就是 0。<br>
+          <b>怎么看这张图：</b>① 先顺着绿色弧线走一遍：<b>这条路上没有任何运算符，也没有任何参数</b>——原文特别强调「Identity shortcut connections add neither extra parameter nor computational complexity」；② 再看 ⊕ 圆圈：它是<b>逐通道相加</b>，不是拼接——这与上一课 GoogLeNet 的「通道维拼接」恰好相反；③ 最后看右侧那三行小字：<b>当这些层「没得学」时，只需把权重推成 0，输出就直接等于输入</b>，这就是「深了也不会更差」的全部理由。<br>
+          <b>要记住的一句话：</b>残差连接不是给网络加能力，而是给网络留了一条「什么都不做」的退路。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面哪句话最准确地说出了残差连接的作用？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：残差连接给深层网络留了一条退路——当恒等映射是最优解时，把新增层的权重推向 0 即可，于是深层模型的训练误差理论上不该高于浅层模型。这正是原文的「构造性论证 + 优化难度骤降」两步。"
+            onclick="lessonKit.answer(this,'q0188a')">它给网络留了一条退路</button>
+          <button data-correct="no" data-explanation="不对：残差连接既不加参数也不加计算量（原文原话），所以它不是「增加网络容量」。它的作用是改变「要学的东西」，让优化变简单。"
+            onclick="lessonKit.answer(this,'q0188a')">它给网络增加了容量</button>
+        </div>
+        <div class="quiz-feedback" id="q0188a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 它之前的人怎么做、卡在哪：加深为什么不管用了</h2>
+      <p>上一课我们看到，2014 年之后的主流思路是「堆」：VGG 把 3×3 小卷积一层层往下堆，GoogLeNet 把 Inception 模块一层层往下堆。这条路有大量证据支持——原文开头就说，ImageNet 上的领先结果全部是「very deep」模型，深度从 16 层到 30 层不等。于是问题自然变成：<b>那就继续往上堆啊，堆到 100 层、200 层不行吗？</b></p>
+      <h3>第一步：先排除一个老嫌疑犯——梯度</h3>
+      <p>历史上，加深的第一道坎是<b>梯度消失 / 梯度爆炸</b>（vanishing / exploding gradients）：梯度在反向传播时一层层衰减或放大，网络从一开始就训不动。但原文明确说，<b>这个问题「到 2015 年已经基本被解决了」</b>：原文用的词是「has been <b>largely addressed</b> by normalized initialization and intermediate normalization layers」——也就是<b>好的初始化 + 中间的归一化层（BN，Batch Normalization）</b>，它们让几十层的网络能正常收敛。</p>
+      <div class="callout"><h4>这一条极其重要，别记错</h4><p><b>ResNet 要解决的问题不是梯度消失。</b>梯度问题已经被 BN 与初始化基本解决了。ResNet 面对的是一个<b>更新的、更诡异的问题</b>——退化。</p></div>
+      <h3>第二步：真正的敌人——退化（degradation）</h3>
+      <p>原文的原话是：「with the network depth increasing, accuracy gets saturated ... and then <b>degrades rapidly</b>」——精度先饱和，然后<b>急速下降</b>。而真正反直觉的是它的判据：</p>
+      <div class="formula-box">
+        <div class="flow-formula">Unexpectedly, <b>such degradation is not caused by overfitting</b>, and adding more layers to a suitably deep model leads to <b>higher training error</b>.</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个句子在说「退化不是过拟合」——<b>过拟合的症状是训练误差低、测试误差高</b>；而退化是<b>连训练误差都变高了</b>；② 为什么这一点致命——如果只是过拟合，加数据、加正则就能救；但训练集本身都学不好，说明问题出在<b>优化</b>上，数据再多也没用；③ <b>具体数字</b>：原文 Figure 1 给出 CIFAR-10 上 <b>56 层 plain 网络的训练误差比 20 层更高</b>；Figure 4 给出 ImageNet 上 <b>34 层 plain 网络的训练误差全程高于 18 层</b>。也就是说：网络变深了，它连「把训练集记住」这件事都做得更差了。</p>
+      <p>下面这张原图就是那个判据本身。请特别注意：<b>它画的是「训练误差」，不是测试误差</b>——这正是「不是过拟合」的证据。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Deep_Residual_Learning_for_Image_Recognition/96b4150d1291b5bbfd353623a5c7e18eda40075ee32d3ef57615fb2db3325385.jpg" alt="Training error on CIFAR-10 with 20-layer and 56-layer plain networks">
+        <figcaption>
+          <b>原图注（Fig. 1，左图）：</b>「Figure 1. Training error (left) and test error (right) on CIFAR-10 with 20-layer and 56-layer “plain” networks. The deeper network has higher training error, and thus test error.」——CIFAR-10 上 20 层与 56 层 plain 网络的训练误差（左）与测试误差（右）。<b>按原文顺序推断，这是 Fig. 1 的左侧子图。</b><br>
+          <b>怎么看这张图：</b>横轴是训练轮数，纵轴是误差，两条曲线分别对应 20 层与 56 层。<b>只需要盯住一件事：代表 56 层的那条线，从头到尾都在 20 层的上方。</b>这就是退化——不是「训练很久之后才开始过拟合」，而是<b>从训练一开始，更深的网络就更差</b>。<b>如果这是过拟合，你会看到训练误差更低而测试误差更高</b>；这里两者同时更高，所以只能归因于优化困难。<br>
+          <b>为什么叫「plain」（朴素）</b>：plain 网络就是「什么都不加、只是把层堆起来」的网络，它在结构上与本课的主角只差那条短路线。
+        </figcaption>
+      </figure>
+
+      <h3>第三步：作者是怎么论证「深层不该更差」的</h3>
+      <p>原文有一个非常漂亮的论证，值得单独讲。它说：<b>考虑一个浅层网络，再考虑一个在它后面又加了几层的深层网络。这个深层网络天然存在一个解——新增的那几层学成恒等映射，其余层直接照抄那个浅层网络。</b>所以「the solution space of the 18-layer plain network is a <b>subspace</b> of that of the 34-layer one」——<b>18 层的解空间是 34 层解空间的一个子集</b>。</p>
+      <p>结论就很硬了：<b>既然深层网络的解空间更大、而且包含了浅层的最优解，那么它的训练误差理论上不可能更高。</b>可实验偏偏显示更高——所以唯一的解释是：<b>现有的求解器（SGD）找不到那个解。</b></p>
+      <p>这三步走完，问题的形状就清楚了：<b>不是梯度的问题（已被 BN 解决），不是容量的问题（深层容量更大），也不是过拟合（训练误差都高），而是「优化难」的问题。</b>ResNet 的整个设计，就是冲着「让那个恒等解变得容易找」去的。</p>
+      <p>原文在相关工作里还把这件事的<b>思想源头</b>拉到了很远的领域——multigrid 偏微分方程求解与 hierarchical basis 预处理，并总结成一句极凝练的话：<b>「a good reformulation or preconditioning can simplify the optimization」</b>（一个好的重述或预处理可以简化优化）。<b>残差连接就是一种「重述」。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="540" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">退化：ImageNet 验证集 top-1 错误率（越低越好）</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">四根柱子都是原文 Table 2 的真实数字；前两根是 plain，后两根是加了残差连接的版本</text>
+
+          <line x1="80" y1="460" x2="620" y2="460" stroke="#7f8fc7"/>
+          <text x="60" y="464" text-anchor="end" fill="#9fb4ff" font-size="11">24</text>
+          <line x1="80" y1="390" x2="620" y2="390" stroke="#24304f"/>
+          <text x="60" y="394" text-anchor="end" fill="#9fb4ff" font-size="11">25</text>
+          <line x1="80" y1="320" x2="620" y2="320" stroke="#24304f"/>
+          <text x="60" y="324" text-anchor="end" fill="#9fb4ff" font-size="11">26</text>
+          <line x1="80" y1="250" x2="620" y2="250" stroke="#24304f"/>
+          <text x="60" y="254" text-anchor="end" fill="#9fb4ff" font-size="11">27</text>
+          <line x1="80" y1="180" x2="620" y2="180" stroke="#24304f"/>
+          <text x="60" y="184" text-anchor="end" fill="#9fb4ff" font-size="11">28</text>
+          <line x1="80" y1="110" x2="620" y2="110" stroke="#24304f"/>
+          <text x="60" y="114" text-anchor="end" fill="#9fb4ff" font-size="11">29</text>
+          <text x="30" y="290" fill="#9fb4ff" font-size="11">错误率</text>
+
+          <rect x="110" y="184" width="86" height="276" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="153" y="174" text-anchor="middle" fill="#ff9f6b" font-size="13" font-weight="700">27.94</text>
+          <text x="153" y="484" text-anchor="middle" fill="#cdd6ff" font-size="11">plain-18</text>
+          <rect x="240" y="188" width="86" height="272" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="283" y="178" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">27.88</text>
+          <text x="283" y="484" text-anchor="middle" fill="#cdd6ff" font-size="11">ResNet-18</text>
+          <rect x="370" y="142" width="86" height="318" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="413" y="132" text-anchor="middle" fill="#ff9f6b" font-size="13" font-weight="700">28.54</text>
+          <text x="413" y="484" text-anchor="middle" fill="#cdd6ff" font-size="11">plain-34</text>
+          <rect x="500" y="388" width="86" height="72" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="543" y="378" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">25.03</text>
+          <text x="543" y="484" text-anchor="middle" fill="#cdd6ff" font-size="11">ResNet-34</text>
+
+          <text x="153" y="512" text-anchor="middle" fill="#ff9f6b" font-size="11">深了反而更差</text>
+          <text x="413" y="512" text-anchor="middle" fill="#ff9f6b" font-size="11">退化：28.54 更差</text>
+          <text x="543" y="512" text-anchor="middle" fill="#5cffb0" font-size="11">残差：25.03 更好</text>
+
+          <text x="660" y="128" fill="#e8ecff" font-size="12" font-weight="700">怎么读这四根柱子</text>
+          <text x="660" y="154" fill="#cdd6ff" font-size="11">① plain：18 层 27.94，34 层 28.54</text>
+          <text x="660" y="176" fill="#cdd6ff" font-size="11">   层数翻倍，错误率反而升了 0.60</text>
+          <text x="660" y="202" fill="#cdd6ff" font-size="11">② ResNet：18 层 27.88，34 层 25.03</text>
+          <text x="660" y="224" fill="#cdd6ff" font-size="11">   层数翻倍，错误率降了 2.85</text>
+          <text x="660" y="250" fill="#cdd6ff" font-size="11">③ 18 层时两者几乎打平（27.88 / 27.94）</text>
+          <text x="660" y="272" fill="#cdd6ff" font-size="11">   也就是说：浅的时候残差没帮上忙</text>
+          <text x="660" y="298" fill="#ffd166" font-size="11">④ 同深度对比：34 层 ResNet 比 34 层</text>
+          <text x="660" y="320" fill="#ffd166" font-size="11">   plain 好 3.51 个点（25.03 vs 28.54）</text>
+          <text x="660" y="350" fill="#9fb4ff" font-size="11">原文自己的说法：34 层 ResNet 比 18 层</text>
+          <text x="660" y="372" fill="#9fb4ff" font-size="11">ResNet 好 2.8%，比同深度 plain 降 3.5%</text>
+          <text x="660" y="402" fill="#ffd1d8" font-size="11">★ 注意：这些是验证集 top-1 错误率，</text>
+          <text x="660" y="424" fill="#ffd1d8" font-size="11">不是训练误差。训练误差的证据在 Fig. 1</text>
+          <text x="660" y="448" fill="#9fb4ff" font-size="11">这里没有画训练曲线：它比的是最终结果，</text>
+          <text x="660" y="470" fill="#9fb4ff" font-size="11">只回答「谁更好」，不回答「怎么变好的」</text>
+
+          <text x="450" y="536" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：退化的判据是「训练误差也变高」；残差的价值要到足够深的时候才显现</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>四根柱子是原文 Table 2 的真实数字，都是 ImageNet 验证集 top-1 错误率（越低越好）：plain-18 = 27.94、ResNet-18 = 27.88、plain-34 = 28.54、ResNet-34 = 25.03。左侧两根橙柱是「只堆层、不加短路」的 plain 网络，右侧两根绿柱是加了残差连接的版本。<br>
+          <b>怎么看这张图：</b>① 先横向比左边两根橙柱：<b>层数从 18 加到 34，错误率反而从 27.94 升到 28.54</b>——这就是退化；② 再比右边两根绿柱：<b>同样从 18 加到 34，错误率从 27.88 降到 25.03</b>——残差把趋势掰了回来；③ 最后注意一个常被忽略的细节：<b>18 层时两者几乎打平（27.88 vs 27.94）</b>，说明残差的收益只在「足够深」之后才出现，浅网络上加不加它差不多。<br>
+          <b>要记住的一句话：</b>残差连接不是让每一层都变强，而是让「加深」这件事重新变得有收益。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 核心机制：一条抄近道的箭头</h2>
+      <p>知道了问题，解法就一句话：<b>加一条恒等短路（identity shortcut）。</b></p>
+      <p>原来的目标是让几层去拟合目标映射 <b>H(x)</b>。现在改成：让这几层去拟合<b>残差映射</b> <b>F(x) := H(x) − x</b>，于是原来的映射被重写成 <b>F(x) + x</b>。原文对这一步的动机说得非常直白：</p>
+      <div class="formula-box">
+        <div class="flow-formula">We hypothesize that it is <b>easier to optimize the residual mapping</b> than to optimize the original, unreferenced mapping.</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个句子在说「学差值比学绝对值容易」——和我们上面那个体重的类比是同一件事；② 为什么——因为当恒等映射才是最优解时，残差形式只需要把权重推向 0（原文：drive the weights of the multiple nonlinear layers toward zero），而原始形式需要让一堆非线性层<b>精确地</b>凑出恒等映射，这几乎不可能；③ <b>具体到数</b>：假设某一层的理想输出就是输入（恒等），那么残差形式的目标是让 F(x) 的输出接近 <b>0</b>，也就是损失函数的目标值从「一个几千维的任意向量」变成「全零向量」——<b>目标从「随便一个点」变成「原点」，这是优化难度上的本质差别。</b></p>
+      <p>还有一件必须强调的事：<b>这条短路是「免费」的。</b>原文原话：「<b>Identity shortcut connections add neither extra parameter nor computational complexity</b>」——不加参数、不加计算量。这也是为什么它能被那么广泛地复用：你几乎可以在任何网络里插一条，不会变慢、不会变大。整个网络仍然可以用 SGD 端到端训练，而且「can be easily implemented using common libraries without modifying the solvers」。</p>
+      <p>几个实现细节，都来自原文：</p>
+      <ul>
+        <li><b>相加是逐通道的。</b>原文说这个加法「performed on two feature maps, <b>channel by channel</b>」——注意这里和上一课 GoogLeNet 的「通道维拼接」完全不同：<b>拼接会让通道数变多，相加不会。</b>这个区别是区分 Inception 与 ResNet 的唯一门槛。</li>
+        <li><b>非线性在加法之后。</b>原文写作 σ(y)，也就是「加完再 ReLU」。这个位置反了效果就不同。</li>
+        <li><b>BN 的位置不在公式里。</b>Eqn.(1)(2) 里没有写 ReLU 与 BN，BN 的位置在正文 §3.4 的文字里：「right after each convolution and before activation」——每个卷积之后、激活之前。</li>
+        <li><b>维度不匹配时用投影。</b>如果输入输出通道数变了（原文里通常是每换一个 stage 通道数翻倍），就要用 W_s 做线性投影，一般用 1×1 卷积实现。</li>
+      </ul>
+      <p>下面这张原图就是那个块的本来样子。它是全课最该记住的一张图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Deep_Residual_Learning_for_Image_Recognition/0847628af3157a34c4e52da20c514f0ca6fe862dfdcd827ee71c2c0ff3854808.jpg" alt="Residual learning: a building block">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>「Figure 2. Residual learning: a building block.」——残差学习：一个构建块。<br>
+          <b>怎么看这张图：</b>盯住两点。<b>第一，右侧那条弯的线</b>——它标着 identity，从输入 x 直接连到输出端，绕过了中间那两层（weight layer），这条线就是残差连接的全部。<b>第二，两个箭头的汇合处</b>——中间两个 weight layer 的输出与那条弯线汇到一个点，标着 F(x) + x。注意这张图里<b>没有画 ReLU 与 BN 的位置</b>，它们是正文用文字交代的（BN 紧跟每个卷积、ReLU 紧跟 BN、block 输出处的 ReLU 在相加之后）。<br>
+          <b>和上一课对照着看：</b>上一课 GoogLeNet 的 Figure 2 是「分叉再合流、输出拼接」；这张图是「两条路相加」。<b>两张图放在一起，就把 CNN 里两种最基础的「多路径」讲完了。</b>
+        </figcaption>
+      </figure>
+
+      <p>最后补一个很能说明问题的实验证据。原文 Figure 7 比较了各层响应的标准差，结论是：<b>ResNet 每一层的响应标准差普遍小于它对应的 plain 网络</b>，原文的表述是「When there are more layers, an individual layer of ResNets tends to <b>modify the signal less</b>.」——层数越多，单层对信号的改动越小。<b>这正好印证了「残差接近 0、整个网络接近恒等」这个假设</b>：网络确实学会了「少动手」。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 公式与形状账：y = F(x) + x 到底在算什么</h2>
+      <p>原文给了两个式子。第一个是同维度的标准形式，第二个是维度不匹配时的形式。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{y} = \mathcal{F}(\mathbf{x}, \{W_i\}) + \mathbf{x} \tag{1}$$</div>
+        <div class="flow-formula">$$\mathbf{y} = \mathcal{F}(\mathbf{x}, \{W_i\}) + W_s\,\mathbf{x} \tag{2}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这两个式子在算「一个残差块的输出」——把「堆叠层的输出 F」和「输入本身 x」加在一起；② 为什么这么算——因为要让网络在「什么都不用做」的时候能轻松输出 x（F 置零即可），从而保证深层网络的训练误差不会比浅层更差；③ 逐符号说明：<b>x</b> 是这个块的输入特征图，<b>y</b> 是输出，<b>F(x, {W_i})</b> 是那几层堆叠要学的残差映射（{W_i} 是它们的权重），<b>+x</b> 由短路实现，<b>W_s</b> 只在输入输出维度不一致时才用（原文：「W_s is <b>only used when matching dimensions</b>」），一般用 1×1 卷积实现；④ <b>别忘了</b>：Eqn.(1)(2) 里都没写 ReLU 与 BN，BN 的位置在正文文字里。</p>
+      <p>原文还给了 F 的最简形态：以两层为例，F = W₂σ(W₁x)，其中 σ 是 ReLU，<b>而且偏置项被省略了</b>——原文的说法是「the biases are omitted for simplifying notations」。这只是为了写法干净，不代表实际实现里没有偏置。</p>
+      <h3>形状账一：两个 3×3 的基本块</h3>
+      <p>先看最基础的形态。假设我们处在某个 stage 里，特征图是 <b>56×56×64</b>（高 56、宽 56、64 个通道）：</p>
+      <ul>
+        <li>第一个 3×3 卷积：输入 64 通道、输出 64 通道 → 参数量 3×3×64×64 = <b>36864</b>；空间尺寸不变，仍是 56×56×64。</li>
+        <li>第二个 3×3 卷积：同样 3×3×64×64 = <b>36864</b>；输出仍是 56×56×64。</li>
+        <li><b>短路这条路的参数量：0</b>。它的输入是 56×56×64，输出也是 56×56×64，形状完全一致，所以直接相加即可。</li>
+      </ul>
+      <p>于是这个块一共学 <b>73728</b> 个权重，形状从 56×56×64 进、56×56×64 出。<b>如果短路要换成投影呢？</b>那就得多学一个 1×1×64×64 = 4096 的矩阵——虽然不多，但这正说明：<b>形状一致时短路才是真正免费的。</b></p>
+      <h3>形状账二：瓶颈（bottleneck）结构为什么更省</h3>
+      <p>ResNet-50/101/152 用的不是上面那个两层块，而是一个三层块：<b>1×1 → 3×3 → 1×1</b>。<b>原文说它的由来是算力，不是精度</b>——原话是「<b>Because of concerns on the training time that we can afford</b>, we modify the building block as a bottleneck design」。<b>人话：这样改是为了能在可承受的时间里训完，不是因为这样更准。</b>它的账是这样的（以 ResNet-50 的一个块为例）：</p>
+      <ul>
+        <li>1×1 卷积把通道从 256 压到 64：参数量 1×1×256×64 = <b>16384</b>；空间尺寸不变。</li>
+        <li>3×3 卷积在 64 通道上做：参数量 3×3×64×64 = <b>36864</b>；空间尺寸不变。</li>
+        <li>1×1 卷积把通道从 64 升回 256：参数量 1×1×64×256 = <b>16384</b>。</li>
+        <li>合计 <b>69632</b>，约 <b>70k</b>——而块的整体形状仍然是 <b>256 通道进、256 通道出</b>。</li>
+      </ul>
+      <p><b>对比一下：如果不用瓶颈，直接在 256 通道上放两个 3×3，参数量是 2×3×3×256×256 = 1179648，约 1.18M</b>——是瓶颈结构的约 <b>17 倍</b>。<b>这就是「先变窄、算完再变宽」的全部价值。</b>（顺带说明：这三个数 16384 / 36864 / 16384 与本课算出的 70k，和 ResNeXt 那篇论文用来做复杂度对齐的算式完全一致，下一课 0189 会直接复用这个数。）</p>
+      <p>还有一条原文单独强调过的账：<b>在瓶颈结构里，如果那条恒等短路被换成投影，代价会翻倍</b>——因为短路要接在<b>两个高维端</b>（256 与 256）上。原文原话是「the time complexity and model size are <b>doubled</b>」。<b>这也解释了为什么作者宁可接受「用补零 + 恒等」或「只在必要时才投影」，也不愿到处加投影。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 500" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="500" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">瓶颈结构：一条 256 车道的路，中间收窄成 64 车道</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">先把通道压瘦，在最瘦的地方做那个贵的 3×3，再升回去——块的两端形状不变</text>
+
+          <rect x="50" y="130" width="210" height="70" rx="6" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="155" y="172" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">256 通道</text>
+          <rect x="320" y="130" width="76" height="70" rx="6" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="358" y="162" text-anchor="middle" fill="#5cffb0" font-size="12">64</text>
+          <text x="358" y="182" text-anchor="middle" fill="#5cffb0" font-size="11">通道</text>
+          <rect x="456" y="130" width="210" height="70" rx="6" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="561" y="172" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">256 通道</text>
+
+          <line x1="260" y1="165" x2="318" y2="165" stroke="#7f8fc7"/>
+          <line x1="396" y1="165" x2="454" y2="165" stroke="#7f8fc7"/>
+          <text x="155" y="118" text-anchor="middle" fill="#9fb4ff" font-size="11">1×1 卷积：把通道压到 64</text>
+          <text x="358" y="118" text-anchor="middle" fill="#9fb4ff" font-size="11">3×3 卷积</text>
+          <text x="561" y="118" text-anchor="middle" fill="#9fb4ff" font-size="11">1×1 卷积：升回 256</text>
+          <text x="155" y="226" text-anchor="middle" fill="#cdd6ff" font-size="11">1×1×256×64</text>
+          <text x="358" y="226" text-anchor="middle" fill="#cdd6ff" font-size="11">3×3×64×64</text>
+          <text x="561" y="226" text-anchor="middle" fill="#cdd6ff" font-size="11">1×1×64×256</text>
+          <text x="155" y="246" text-anchor="middle" fill="#ffd166" font-size="12">= 16384</text>
+          <text x="358" y="246" text-anchor="middle" fill="#ffd166" font-size="12">= 36864</text>
+          <text x="561" y="246" text-anchor="middle" fill="#ffd166" font-size="12">= 16384</text>
+          <text x="358" y="268" text-anchor="middle" fill="#5cffb0" font-size="11">中间变窄的那一段，就是瓶颈</text>
+
+          <path d="M155 130 L155 96 L561 96 L561 128" fill="none" stroke="#5cffb0" stroke-width="2"/>
+          <text x="358" y="88" text-anchor="middle" fill="#5cffb0" font-size="12">恒等短路：形状两端都是 256，所以直接相加，参数量 0</text>
+
+          <rect x="40" y="286" width="400" height="150" rx="10" fill="#16203a" stroke="#5cffb0"/>
+          <text x="240" y="312" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">瓶颈结构：合计约 70k</text>
+          <text x="60" y="340" fill="#cdd6ff" font-size="11">16384 + 36864 + 16384 = 69632</text>
+          <text x="60" y="364" fill="#cdd6ff" font-size="11">块的两端形状不变：256 通道进、256 通道出</text>
+          <text x="60" y="388" fill="#5cffb0" font-size="11">最贵的 3×3 只在 64 通道上做——这是省钱的关键</text>
+          <text x="60" y="412" fill="#9fb4ff" font-size="11">原文说这改动的动机是训练时间，不是精度</text>
+          <text x="60" y="430" fill="#9fb4ff" font-size="11">（Because of concerns on the training time）</text>
+
+          <rect x="460" y="286" width="400" height="150" rx="10" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="660" y="312" text-anchor="middle" fill="#ff9f6b" font-size="13" font-weight="700">不用瓶颈：直接放两个 3×3</text>
+          <text x="480" y="340" fill="#cdd6ff" font-size="11">2 × (3×3×256×256) = 1179648</text>
+          <text x="480" y="364" fill="#ff9f6b" font-size="11">约 1.18M，是瓶颈结构的约 17 倍</text>
+          <text x="480" y="388" fill="#cdd6ff" font-size="11">块的两端形状完全一样（256 进 256 出）</text>
+          <text x="480" y="412" fill="#9fb4ff" font-size="11">所以「先压瘦再算」纯粹是省参数的技巧</text>
+          <text x="480" y="430" fill="#9fb4ff" font-size="11">输出通道数一点没变</text>
+
+          <text x="450" y="478" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：瓶颈结构不改变块的输入输出形状，只把最贵的那一层放到最窄的地方去做</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面一条流水线画的是 ResNet-50 的一个瓶颈块：256 通道 → 1×1 卷积压到 64 通道 → 3×3 卷积 → 1×1 卷积升回 256 通道；上方那条弧线是恒等短路。每个方块下面写着它的参数量。下半部分左右对照：左边是瓶颈结构的参数总计约 70k，右边是不用瓶颈、直接在 256 通道上做两个 3×3 的约 1.18M。<br>
+          <b>怎么看这张图：</b>① 先看中间那个绿色的窄方块：<b>最贵的 3×3 卷积只在 64 通道上做</b>——这就是省钱的全部秘密；② 再看两端：<b>进也是 256 通道、出也是 256 通道</b>，所以形状没变、短路可以直接相加；③ 最后看下方左右两个框：<b>同样形状、参数量差 17 倍</b>——这说明「先压瘦」是一个纯粹的工程技巧，它不改变网络的表达能力上限，只改变你要为之付多少钱。<br>
+          <b>要记住的一句话：</b>瓶颈结构是「把贵算子放在窄通道上做」——记住这个思路，下一课 ResNeXt 会在它上面再切一刀。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2016_Deep_Residual_Learning_for_Image_Recognition/b1aeef5c04872ede7eb75f2cbd00d8261ec5d5bde105e7c9506f11056f181ac4.jpg" alt="A deeper residual function for ImageNet: building block and bottleneck">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>「Figure 5. A deeper residual function for ImageNet. Left: a building block (on 56×56 feature maps) as in Fig. 3 for ResNet-34. Right: a “bottleneck” building block for ResNet-50/101/152.」——ImageNet 上更深的残差函数。左：用于 ResNet-34 的构建块（在 56×56 特征图上）；右：用于 ResNet-50/101/152 的瓶颈构建块。<br>
+          <b>怎么看这张图：</b>左右两种块<b>都带那条绕过整块的短路</b>，差别只在中段。<b>左边</b>是两个 3×3、通道数不变（图上标 64-d），短路用实线——因为输入输出形状一致。<b>右边</b>是右侧那个「宽—窄—宽」的漏斗（图上标 256-d、64、256-d），<b>这也是为什么 ResNet-50 的块数是 3 层而不是 2 层</b>。另外注意左边标注里的 56×56：<b>原文说的是「on 56×56 feature maps」</b>，也就是本课形状账里用的那个尺寸。<br>
+          <b>顺带一个判读纪律：</b>这张图所在的 Figure 5 附近还有一处易被误读的原文——Fig. 4 的图注写「the residual networks have <b>no extra parameter</b> compared to their plain counterparts」，那句话只适用于 18/34 层那一组对比（因为它们用的是无参的补零方案）；而 ResNet-50/101/152 用的是含投影的方案，<b>是有额外参数的</b>。引用时必须限定范围。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 关键数字：ResNet 的成绩单</h2>
+      <p>下面这些数字都来自原文，最后一个位照抄。<b>特别留意 FLOPs 那一组</b>——它是「更深反而更便宜」这句话的全部依据。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">数字</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">含义</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">出处</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">152 层</td><td style="padding:.5rem;border:1px solid #3a4a78;">当时 ImageNet 上最深的网络，比 VGG 深 8×，复杂度反而更低</td><td style="padding:.5rem;border:1px solid #3a4a78;">摘要与 §4.2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">3.57%</td><td style="padding:.5rem;border:1px solid #3a4a78;">ensemble 在测试集上的 top-5 错误，拿下 ILSVRC 2015 分类第一</td><td style="padding:.5rem;border:1px solid #3a4a78;">摘要与 §4.2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">4.49%</td><td style="padding:.5rem;border:1px solid #3a4a78;">单模型 152 层在验证集上的 top-5 错误，<b>优于所有已有 ensemble 结果</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">§4.2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">27.94 / 27.88 / 28.54 / 25.03</td><td style="padding:.5rem;border:1px solid #3a4a78;">ImageNet 验证集 top-1 错误：plain-18 / ResNet-18 / plain-34 / ResNet-34；34 层 ResNet 比 18 层好 2.8%，比同深度 plain 降 3.5%</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">25.03 / 24.52 / 24.19 / 22.85 / 21.75 / 21.43</td><td style="padding:.5rem;border:1px solid #3a4a78;">top-1 错误：ResNet-34 的 A / B / C 三种短路方案，以及 ResNet-50 / 101 / 152</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 3</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">3.6B / 3.8B / 11.3B FLOPs</td><td style="padding:.5rem;border:1px solid #3a4a78;">34 层 baseline / ResNet-50 / ResNet-152 的运算量（billion multiply-adds）</td><td style="padding:.5rem;border:1px solid #3a4a78;">§4.1、§4.2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">18%（转引）</td><td style="padding:.5rem;border:1px solid #3a4a78;">34 层 baseline 只有 VGG-19（19.6B FLOPs）的 18%；VGG-16 是 15.3B。<b>这两个 VGG 数字是转引</b>，出处就在本文正文</td><td style="padding:.5rem;border:1px solid #3a4a78;">§4.1、§4.2</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">8.75 / 7.51 / 7.17 / 6.97 / 6.43 / 7.93</td><td style="padding:.5rem;border:1px solid #3a4a78;">CIFAR-10 错误率：ResNet-20 / 32 / 44 / 56 / 110 层，以及 1202 层</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">1.7M / 19.4M</td><td style="padding:.5rem;border:1px solid #3a4a78;">ResNet-110 与 1202 层的参数量</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">+6.0 mAP@[.5,.95]</td><td style="padding:.5rem;border:1px solid #3a4a78;">COCO 检测上换用残差主干带来的提升，即 <b>28% 相对提升</b>；增益只来自表征本身</td><td style="padding:.5rem;border:1px solid #3a4a78;">§4.3</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">73.2 → 76.4 / 41.5,21.2 → 48.4,27.2</td><td style="padding:.5rem;border:1px solid #3a4a78;">VOC07 mAP（VGG-16 → ResNet-101）；COCO 的 mAP@.5 / mAP@[.5,.95]（VGG-16 → ResNet-101）。<b>VGG 侧数字为转引</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 7、Table 8</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">256 / 0.1 / 0.0001 / 0.9</td><td style="padding:.5rem;border:1px solid #3a4a78;">训练超参：minibatch 256、初始学习率 0.1（平台期除以 10）、weight decay 0.0001、momentum 0.9，<b>不用 dropout</b>；最长训练 60×10⁴ 次迭代</td><td style="padding:.5rem;border:1px solid #3a4a78;">§3.4</td></tr>
+        </tbody>
+      </table>
+      <p>还有两组训练/测试的细节值得记住，因为它们直接影响结果的可比性：<b>训练时输入图像的短边在 [256, 480] 之间随机采样</b>（尺度增强）；<b>测试时用全卷积形式并对多个尺度取平均，短边取 {224, 256, 384, 480, 640}</b>。也就是说，论文里报的那个数字，是「多尺度平均」之后的结果——<b>看到别人报 ResNet 精度时，先问测试协议是什么。</b></p>
+      <p>另外，原文在 CIFAR-10 上还报了一个很值得琢磨的现象：<b>1202 层的网络训练误差低于 0.1%，但测试误差 7.93%，反而比 110 层的 6.43% 差</b>。作者把这一例归因于<b>过拟合</b>，并明确说这仍是「open problems on such aggressively deep models」，留待将来研究。<b>注意这个归因的口径</b>：退化（训练误差变高）不是过拟合，但 1202 层这一例（训练误差极低、测试误差变差）确实是过拟合——<b>两个现象不能混为一谈。</b></p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 它在前八季的哪些课、哪些方法里出现过</h2>
+      <p>这一节是本季的硬要求。结论先给：<b>在这五篇骨架论文里，ResNet 是本语料库中被引用密度最高的一个，而且用法几乎全是「当主干 / 当位姿网络」这种工程角色。</b>也就是说，读者最常撞见的不是「ResNet 论文」，而是「ResNet-50 backbone」这句话。下面是逐条原句。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① CNN-SLAM（2017）：把 ResNet-50 拆开当前半段</h4>
+          <p>这是 SLAM 里最典型的一处。原文说：深度预测架构「based on the extension of the <b>Residual Network (ResNet) architecture [9] to a Fully Convolutional network</b>」，其中「<b>the first part of the architecture is based on ResNet-50 [9] and initialized with pre-trained weights on ImageNet</b>」，而「<b>The second part ... replaces the last pooling and fully connected layers originally presented in ResNet-50 with a sequence of residual up-sampling blocks</b>」，最后输出一张单通道的深度图。<b>这就是「骨干被当积木拆用」的范本</b>：前半段照抄，后半段整个换掉。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② TartanVO（2021）：ResNet-50 直接当位姿网络</h4>
+          <p>原文：「We utilize the pre-trained PWC-Net [40] as the matching network, and <b>a modified ResNet50 [41] as the pose network</b>. We <b>remove the batch normalization layers</b> from the ResNet, and <b>add two output heads for the translation and rotation</b>, respectively.」推理时间 40 ms（NVIDIA GTX 1080）。<b>注意它改了两处</b>：去掉 BN、加两个输出头——这就是「把分类骨干改造成位姿回归器」的标准动作。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ LoFTR（2021）：ResNet-18 当特征主干</h4>
+          <p>「The local feature CNN uses <b>a modified version of ResNet-18 [12] as the backbone</b>.」整个模型端到端训练、随机初始化，640×480 的图像对在 RTX 2080Ti 上跑 <b>116 ms</b>。<b>这是「小号残差网络当特征提取器」的典型</b>，也说明了为什么 ResNet 家族要提供 18 / 34 / 50 / 101 / 152 这一串不同档位。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ DytanVO 与 BEVPlace</h4>
+          <p>DytanVO 的位姿网络「with <b>ResNet50 [33] as the backbone</b>」；BEVPlace 做 LiDAR 地点识别时「implemented two NetVLAD networks with <b>ResNet34 and ResNet18 as backbones</b>」。<b>注意 BEVPlace 这一条</b>：点云先投成 BEV 图，再交给残差网络——<b>残差网络不挑输入是图像还是「压扁的点云」。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>⑤ PanopticFusion（2019）：两个残差主干并排</h4>
+          <p>它同时用了两个：「<b>We employed ResNet-50 for the backbone of PSPNet</b>」（语义分支，用 ADE20K 预训练权重）与「<b>We leveraged ResNet-101-FPN for the Mask R-CNN's backbone</b>」（实例分支，用 MS COCO 预训练权重）。<b>一个系统里并排放两个不同规格的残差主干</b>——这正是「骨干是可替换零件」的最强证据。</p>
+        </div>
+        <div class="mini-card">
+          <h4>⑥ Mask R-CNN（2017）：连命名规则都是它定的</h4>
+          <p>原文：「We denote the backbone architecture using the nomenclature <b>network-depth-features</b>. We evaluate <b>ResNet [15] and ResNeXt [35] networks of depth 50 or 101 layers</b>. This backbone with ResNet-50, for example, is denoted by <b>ResNet-50-C4</b>.」<b>「骨干-深度-特征层级」这个命名法一直用到今天</b>，而它同时把 ResNet 与 ResNeXt 并列成可选件——这正是下一课 0189 的引子。</p>
+        </div>
+      </div>
+      <p>还有一个用法很特别：<b>它被当成「教师」</b>。2022 年一篇论文把「a ResNet-18 classifier trained on ImageNet」的知识蒸馏到一个稠密描述子网络里。也就是说残差网络在这个语料库里既当学生、当主干、也当老师。</p>
+      <p><b>归纳一句</b>：读者在 SLAM 论文里见到 ResNet 的场合，绝大多数不是「它提出了什么新结构」，而是「<b>我把骨干换成了 ResNet-XX</b>」或者「<b>我用 ResNet-XX 当位姿/特征网络</b>」。<b>而这句话里最关键的信息其实不是 ResNet，是「XX」那个数字</b>——18 / 34 / 50 / 101 决定了速度与精度的档位，也决定了它能不能塞进 33 ms 的预算里。</p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 它不完美在哪：所以 SLAM 要加几何约束</h2>
+      <p>本季的第二个硬要求：每个零件都要讲它的毛病。<b>ResNet 的毛病里，最值得讲的一条是「作者自己也没搞清楚」。</b></p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>毛病一：退化的真正原因没查清</h4>
+          <p>原文第 137 行原话：「We argue that this optimization difficulty is <b>unlikely to be caused by vanishing gradients</b> ... We conjecture that the deep plain nets may have exponentially low convergence rates ... <b>The reason for such optimization difficulties will be studied in the future.</b>」<b>人话</b>：他们只是提出了一个猜想（收敛率指数级偏低），并明确说原因留待将来研究。<b>残差连接是一个有效的解法，但它当时并没有被给出完整的理论解释。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病二：深过头就反转</h4>
+          <p>110 层 CIFAR-10 错误 6.43%，<b>1202 层反而 7.93%</b>——训练误差低到 0.1% 以下，测试误差却更差。作者归因于过拟合，并承认仍是「open problems on such aggressively deep models」。<b>所以「越深越好」是有上限的</b>，不是无限的。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病三：那个投影短路其实并不必需</h4>
+          <p>原文比较了三种短路方案（A 补零恒等 / B 投影 / C 全投影），结论是 <b>C 只是「marginally better」</b>，而且这点增益来自额外参数，于是<b>为了省内存干脆不用 C</b>。原文还坦言：<b>「投影 shortcut 对解决退化并非必需」</b>。换句话说，整套方法的核心就是那条<b>零参数</b>的恒等短路。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病四：CIFAR 上的结论有自我限定</h4>
+          <p>原文说 CIFAR 实验「we use no maxout/dropout and just simply impose regularization via deep and thin architectures <b>by design, without distracting from the focus on the difficulties of optimization</b>」——<b>他们是故意不做最强正则的</b>，为的是不干扰对优化问题的观察。所以 CIFAR 那组数字<b>不代表这套结构能打到的上限</b>，别拿它当性能排名。</p>
+        </div>
+      </div>
+      <p><b>现在把这些毛病接回 SLAM。</b>有三条链路非常直接。</p>
+      <ul>
+        <li><b>第一，它是为分类设计的，「位置」这件事并不是它的强项。</b>ResNet 的 stage 一步一步把空间尺寸降下去（典型的输出 stride 是 32），也就是<b>特征图上一个像素对应原图的 32×32 区域</b>。这对「这张图是什么」够用，对「物体的边界在哪」就太粗了。<b>所以 SLAM 用它当骨干时，边界精度天生是短板</b>——这正好呼应第八季 MaskFusion 抱怨 Mask R-CNN「边界不精」，那条抱怨的物理根源就在这里。</li>
+        <li><b>第二，它的输出是特征，不是几何。</b>CNN-SLAM 之所以要把 ResNet-50 的后半段整个换成上采样，就是为了<b>把「分类特征」重新变回「逐像素的深度」</b>；TartanVO 之所以要拆掉 BN、加两个输出头，就是为了把「分类器」改造成「位姿回归器」。<b>这些改造不是优化，是必需的翻译。</b></li>
+        <li><b>第三，即使改造成功，它给出的仍然是统计预测。</b>网络预测的深度或位姿，没有几何一致性保证——它可能在纹理弱的地方糊掉、可能尺度漂移、可能被动态物体带偏。<b>所以 SLAM 必须把几何约束加回来</b>：多视图的对极几何、光束法平差（BA）、点云配准（ICP）。<b>ResNet 提供的是「先验」，几何提供的是「硬约束」，两者缺一不可。</b></li>
+      </ul>
+      <p>更具体一点：TartanVO 的位姿网络推理要 <b>40 ms</b>——已经吃掉了一整帧的预算（30 Hz 是 33 ms，见导览课那张时间预算尺）。<b>在一个必须实时的系统里，一个 40 ms 的零件意味着别的部分几乎没有余量。</b>这是所有「把学习式方法塞进 SLAM」的论文都要面对的真实摩擦。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>「ResNet 是为了解决梯度消失才提出来的。」这句话错在哪？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：原文明确说梯度问题「has been largely addressed by normalized initialization and intermediate normalization layers」——也就是好的初始化加 BN 已经基本解决了。ResNet 要对付的是退化：层数增加后连训练误差都变高的那个现象。"
+            onclick="lessonKit.answer(this,'q0188b')">梯度早已被 BN 和初始化解决</button>
+          <button data-correct="no" data-explanation="不对：ResNet 是 2016 年的工作，梯度问题在它之前就已经被归一化层与初始化基本处理掉了；把它说成「为了梯度」会掩盖退化这个真正的问题，也解释不了为什么深层网络的训练误差会变高。"
+            onclick="lessonKit.answer(this,'q0188b')">它在 BN 出现之前就被提出了</button>
+        </div>
+        <div class="quiz-feedback" id="q0188b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 和前面课程怎么接</h2>
+      <p>按规则点名课号。<b>本课接的是三条线。</b></p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>接 0187（上一课）</h4><p>VGG 靠「堆层」变强、GoogLeNet 靠「堆模块」变强，两条路都在加东西；<b>本课问的是：堆到一定程度堆不动了怎么办？</b>答案不是加，是<b>留一条退路</b>。对照点还有一处：GoogLeNet 的多路输出是「拼接」，ResNet 是「相加」——<b>这是 CNN 里两种最基础的多路径设计，本课把它们分清了。</b></p></div>
+        <div class="mini-card"><h4>接第三季 0043–0045 与 0048</h4><p>ORB-SLAM 用 ORB 特征、DSO 用光度误差，都是手工设计的几何前端。<b>本课的学习式骨干是第二条路</b>：特征由网络学出来。两条路的对照点在于「谁来定义什么是好特征」——人，还是数据。</p></div>
+        <div class="mini-card"><h4>接第三季/第七季的 CNN-SLAM 与 TartanVO 语境</h4><p>CNN-SLAM 把 ResNet-50 拆成编码器、后半段换上采样出深度图；TartanVO 用「a modified ResNet50 as the pose network」。<b>这两条是本课最硬的落地证据</b>——它们证明「骨干是被当积木拆用的」。</p></div>
+        <div class="mini-card"><h4>接第八季 0153–0159 动态环境块</h4><p>那一块抱怨 Mask R-CNN「边界不精、跑不到帧率」。<b>本课给出了这条抱怨的物理根源</b>：残差网络为了分类把空间分辨率一路降到 stride 32，边界精度天生吃亏；而 40 ms / 116 ms 这类耗时说明帧率也不是它的强项。<b>所以第八季才要发明「语义当慢变量、几何当快变量」。</b></p></div>
+        <div class="mini-card"><h4>接第八季 0160–0167 语义建图块</h4><p>语义先验进地图的那条流水线，主干正是这一类残差网络（例如 PanopticFusion 同时用 ResNet-50 与 ResNet-101-FPN）。<b>它当时出的毛病</b>是：只有语义没有几何，边界与尺度都不可靠——所以地图必须靠几何约束兜底。</p></div>
+        <div class="mini-card"><h4>接本季 0189（下一课）</h4><p>ResNeXt 会把残差块<b>拆掉短路</b>做对照实验：ResNet-50 去掉残差从 23.9 掉到 31.2（+7.3），ResNeXt-50 去掉从 22.2 掉到 26.1（+3.9）。<b>结论是「残差帮优化，聚合变换才是更强的表示」</b>——也就是说，本课这条短路从此变成了所有后续网络的公共零件。</p></div>
+      </div>
+      <p>最后一句提醒：<b>残差连接不是 ResNet 的专属发明，它已经变成了通用零件。</b>下一课的 ResNeXt 直接继承它；本季 0194 的 Swin 与 PVT，每个 block 里也都有两条残差连接。读者应当把它理解为「可训练深网络的前提条件」，而不是某一篇论文的技巧。</p>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>「退化」是什么现象？它的判据为什么能排除过拟合？</li>
+        <li>ResNet 要解决的问题是梯度消失吗？原文是怎么说梯度问题的？</li>
+        <li>「18 层的解空间是 34 层的子集」这个论证，为什么能推出「深层不该更差」？</li>
+        <li>写出 y = F(x) + x 并解释每一项；W_s 什么时候才用？</li>
+        <li>残差连接为什么是「免费」的？它加了多少参数和计算量？</li>
+        <li>ResNet 的短路是「相加」，GoogLeNet 的多路是「拼接」——这个区别带来什么后果？</li>
+        <li>瓶颈结构的三层是什么？参数量为什么是约 70k 而不是约 1.18M？</li>
+        <li>为什么说瓶颈结构的由来是算力而不是精度？</li>
+        <li>CNN-SLAM 与 TartanVO 分别怎么用 ResNet-50？各自改了哪一部分？</li>
+        <li>残差网络「边界不精」的根源是什么？它和第八季的抱怨怎么对上？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用本课的形状账算一算：ResNet-50 里通道数从 512 升到 1024 的那个 stage，瓶颈块的参数量是多少？如果换成两个直接在 1024 通道上的 3×3，又是多少？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>瓶颈块（1×1 → 3×3 → 1×1，中间 256 通道）：1×1×512×256 = 131072；3×3×256×256 = 589824；1×1×256×1024 = 262144；合计 <b>983040</b>，约 0.98M。直接两个 3×3 在 1024 通道上：2×3×3×1024×1024 = <b>18874368</b>，约 18.9M——是瓶颈块的约 19 倍。<b>结论不变</b>：先压瘦再算，块的两端形状不动，但参数量差一个数量级。<b>提醒：这是按卷积参数公式算的算例，不是原文表格数字。</b></div></details>
+        </li>
+        <li>为什么原文说「Identity shortcut connections add neither extra parameter nor computational complexity」，但 Figure 4 的图注又说「no extra parameter」这件事需要限定范围？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为「零参数」这个说法只对<b>方案 A（补零恒等）</b>成立，而 ResNet-50/101/152 用的是<b>方案 B（投影）</b>，投影是用 1×1 卷积实现的，<b>是有参数的</b>。Figure 4 的对比只涉及 18 层与 34 层那一组（它们用方案 A），所以那句话在那个范围内成立。原文自己在 §3.3 给了三种方案（A 补零 / B 投影 / C 全投影）并做了实验：C 只是「marginally better」，增益来自额外参数，因此为省内存不用 C。<b>教训</b>：引用「无额外参数」时必须限定到 18/34 层那一组，否则会读错。</div></details>
+        </li>
+        <li>如果一篇 SLAM 论文说「我们用 ResNet-50 做特征提取，效果很好」，你会追问哪三个问题？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>① <b>用到了哪一段？</b>ResNet-50 有四个 stage，输出 stride 分别是 4/8/16/32——用 stride 32 的特征，边界精度会很粗（Mask R-CNN 用的是 C4，也就是 stride 16 那一级）；② <b>改了哪里？</b>TartanVO 拆了 BN 并加双头，CNN-SLAM 把后半段换成上采样——不改的话它输出的还是分类特征，不是几何；③ <b>多少毫秒？</b>在 30 Hz（33 ms/帧）的预算下，一个零件占多少是硬约束（TartanVO 是 40 ms、LoFTR 是 116 ms）。<b>三个问题分别对应「空间分辨率 / 输出内容 / 时间预算」，正是本课讲的那三条短板。</b></div></details>
+        </li>
+        <li>请解释：「1202 层测试误差更差」与「56 层训练误差更高」是两件不同的事。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>前者（1202 层，CIFAR-10，测试误差 7.93% 差于 110 层的 6.43%，而训练误差低于 0.1%）是<b>典型的过拟合</b>：训练集学得极好、泛化变差。后者（56 层 plain 网络的<b>训练误差</b>高于 20 层）是<b>退化</b>：连训练集都学不好，所以不可能用「泛化差」解释，只能归因于优化困难。原文对两者的处理也不同：退化用残差连接解决；1202 层那一例被明确留作开放问题，作者建议「combining with stronger regularization may improve results」。<b>混用这两个概念，就会把 ResNet 的贡献说错。</b></div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0187-VGG与GoogLeNet-2015-两条经典骨干.html">← 上一课：VGG 与 GoogLeNet（2015）两条经典骨干</a>
+        <a class="next" href="0189-ResNeXt-2017-不加深也能变强.html">下一课：ResNeXt（2017）不加深也能变强 →</a>
+      </div>
+      <p class="foot-note">残差连接只有一条线，却让「加深」重新变得有收益，还一路变成了所有深层网络的公共零件。<b>记住那句最凝练的话：一个好的重述，可以简化优化。</b>下一课我们去看看，如果不再加深，还能怎么变强 🪜</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

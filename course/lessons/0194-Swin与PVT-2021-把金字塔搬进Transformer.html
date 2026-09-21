@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Swin 与 PVT（2021）：把金字塔搬进 Transformer — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0194</div>
+      <h1>Swin 与 PVT（2021）：把金字塔搬进 Transformer</h1>
+      <p class="subtitle">两篇同年同目标的论文，一个把注意力关进窗户再让窗户错位，一个不关窗户只把 K/V 压小——它们回答了同一个问题：Transformer 怎么才能像 CNN 一样出多尺度特征 🪟</p>
+      <div class="hero-meta">
+        <span>🎯 主题：视觉主干网络（被 SLAM 论文当特征提取器的那一层）</span>
+        <span>👥 作者：Liu Ze 等（Swin）／ Wang Wenhai 等（PVT）</span>
+        <span>📅 2021 · <i>Swin Transformer: Hierarchical Vision Transformer using Shifted Windows</i>；<i>Pyramid Vision Transformer: A Versatile Backbone for Dense Prediction without Convolutions</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">0. 前置补丁：ViT 与自注意力</a>
+        <a href="#b">1. Swin：把注意力关进窗户</a>
+        <a href="#c">2. PVT v1：把 K/V 压小</a>
+        <a href="#d">3. 同目标、反路径</a>
+        <a href="#e">4. 一处必须纠正的清单</a>
+        <a href="#f">5. 它不完美在哪</a>
+        <a href="#g">6. 读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清 ViT 的柱状结构为什么不适合检测/分割，以及自注意力的二次复杂度从哪一项来；② 用一句话说清 Swin 的移位窗口在干什么、为什么它既线性又能跨窗；③ 用一句话说清 PVT v1 的 <code>SR(x)</code> 在压什么、压的代价是什么；④ 认出这两篇是「同目标、反路径」的一对；⑤ 知道清单里写「PVTv2」是错的。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>第七季的地点识别块 <a href="0139-混合架构与统一检索.html">0139</a> 里，<code>Hybrid CNN-Transformer</code> 的做法是「VGG-16 金字塔 + Swin-B 同图并联」——那就是本课讲的 Swin 在 SLAM 侧最硬的一次落地。CNN 那一段（VGG-16）在 <a href="0187-VGG与GoogLeNet-2015-两条经典骨干.html">0187</a> 讲过，残差那一段在 <a href="0188-ResNet-2016-残差连接.html">0188</a> 讲过。另外，第三季 <a href="0043-ORB-SLAM2015-一套特征服务所有任务.html">0043</a> 的 ORB 特征是「手工设计的几何前端」，本课这两个网络是「学出来的特征提取器」——两条路的对照从 <a href="0187-VGG与GoogLeNet-2015-两条经典骨干.html">0187</a> 一路延到这里。</p>
+        </div>
+      </div>
+
+      <h2 id="pre">前置补丁：ViT 与 Q/K/V 自注意力（不补这个，后面的词全是天书）</h2>
+
+      <p>在讲 Swin 和 PVT 之前，必须先把它们要打倒的那个对手讲清楚——那就是 <b>ViT（Vision Transformer，2020）</b>。ViT 的想法极其干脆：图像不是不能当句子读吗？那就<b>把它切成小块当词</b>。</p>
+
+      <p>具体做法是：把一张 $224\times 224$ 的图切成 $16\times 16$ 的小方块（叫 <b>patch</b>），一共 $14\times 14 = 196$ 块。每一块拉直成一个向量，再乘一个线性层映射到固定维度，于是得到 196 个 <b>token</b>（可以理解成 196 个「视觉单词」）。这些 token 加上<b>位置编码</b>（告诉网络「你是第几行第几列的词」），然后送进一个标准的 Transformer 编码器。整个网络里，<b>从头到尾都是这 196 个 token，分辨率一次都没变</b>。</p>
+
+      <p>这就是 ViT 的<b>柱状结构（columnar）</b>：一根粗细不变的柱子，从头通到尾。它的输出是<b>单一尺度</b>的特征图，而且分辨率很低——$224$ 的图只剩 $14\times 14$。</p>
+
+      <h3>自注意力到底在算什么</h3>
+
+      <p>Transformer 的发动机叫<b>自注意力（self-attention）</b>。它把每个 token 变成三个角色：</p>
+
+      <ul>
+        <li><b>Q（Query，查询）</b>：我这个 token 想找什么；</li>
+        <li><b>K（Key，键）</b>：我这个 token 能提供什么线索；</li>
+        <li><b>V（Value，值）</b>：如果别人来找我，我交给它什么内容。</li>
+      </ul>
+
+      <p>然后拿每个 Q 去和<b>所有</b>的 K 比对一遍，算出「我该在谁身上花多少注意力」，再按这个权重把所有 V 加权求和。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$\mathrm{Attention}(Q,K,V) = \mathrm{Softmax}\!\left(\frac{QK^{T}}{\sqrt{d}}\right)V$$
+        </div>
+      </div>
+
+      <p><b>这句话在说什么：</b>$QK^{T}$ 是一个「谁该看谁」的打分表，形状是 $(\text{token 数})\times(\text{token 数})$；除以 $\sqrt{d}$（$d$ 是每个头的维度）是为了把分数压回合理范围；Softmax 把每一行变成一组加起来等于 1 的权重；最后乘 $V$，得到「按权重混好的新特征」。</p>
+
+      <p><b>它为什么这么算：</b>这是「全局建模」——每个 token 都能直接看到所有 token，不像卷积只能看邻域。这既是它的优点，也是它的灾难。</p>
+
+      <p><b>形状账：</b>一张 $224\times 224$ 的图，patch 取 $16\times 16$，token 数 $hw = 14\times 14 = 196$。那张 $QK^{T}$ 的打分表就是 $196\times 196$。如果为了检测/分割要提分辨率，把 patch 换成 $4\times 4$，token 数立刻变成 $56\times 56 = 3136$，打分表变成 $3136\times 3136$ ——<b>参数量没变，但注意力矩阵大了 256 倍</b>。PVT v1 的原文里就记着这件事：直接把细 patch 喂给 ViT，<b>32G 显存的卡会直接爆</b>（Table 6 的 <code>ViT-Small/4</code> 一行写着 Out of Memory）。</p>
+
+      <p>所以本节两个主角的<b>共同起点</b>是同一句话：<b>ViT 的输出是「单尺度、低分辨率」的，而且注意力是「二次复杂度」的；而检测和分割要的恰恰是「多尺度 + 高分辨率」。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1622"/>
+          <text x="200" y="34" text-anchor="middle" font-size="18" font-weight="700" fill="#e8eef7">ViT：柱状结构</text>
+          <text x="660" y="34" text-anchor="middle" font-size="18" font-weight="700" fill="#e8eef7">金字塔（Swin / PVT v1）</text>
+
+          <rect x="120" y="54" width="160" height="56" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <text x="200" y="88" text-anchor="middle" font-size="15" fill="#cfe0f7">同一分辨率</text>
+          <rect x="120" y="120" width="160" height="56" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <text x="200" y="154" text-anchor="middle" font-size="15" fill="#cfe0f7">同一分辨率</text>
+          <rect x="120" y="186" width="160" height="56" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <text x="200" y="220" text-anchor="middle" font-size="15" fill="#cfe0f7">同一分辨率</text>
+          <rect x="120" y="252" width="160" height="56" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <text x="200" y="286" text-anchor="middle" font-size="15" fill="#cfe0f7">同一分辨率</text>
+          <text x="200" y="340" text-anchor="middle" font-size="14" fill="#f2a65a">输出：单尺度、H/16</text>
+          <text x="200" y="366" text-anchor="middle" font-size="14" fill="#f2a65a">细 patch 想提分辨率 → 显存爆</text>
+
+          <rect x="470" y="54" width="220" height="46" fill="#233046" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="580" y="83" text-anchor="middle" font-size="15" fill="#cfe0f7">H/4 · C</text>
+          <rect x="500" y="118" width="160" height="46" fill="#233046" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="580" y="147" text-anchor="middle" font-size="15" fill="#cfe0f7">H/8 · 2C</text>
+          <rect x="530" y="182" width="110" height="46" fill="#233046" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="585" y="211" text-anchor="middle" font-size="15" fill="#cfe0f7">H/16 · 4C</text>
+          <rect x="560" y="246" width="72" height="46" fill="#233046" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="596" y="275" text-anchor="middle" font-size="15" fill="#cfe0f7">H/32</text>
+
+          <text x="740" y="90" font-size="13" fill="#8fb4d9">图越大</text>
+          <text x="740" y="155" font-size="13" fill="#8fb4d9">通道越多</text>
+          <text x="740" y="220" font-size="13" fill="#8fb4d9">语义越强</text>
+          <text x="676" y="330" text-anchor="middle" font-size="14" fill="#5ad1a8">浅层给分辨率，深层给语义</text>
+          <text x="676" y="356" text-anchor="middle" font-size="14" fill="#5ad1a8">同一份特征，能喂给 FPN 与检测头</text>
+
+          <text x="450" y="410" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">检测与分割要的正是「多尺度 + 高分辨率」——所以要把金字塔搬进来</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是 ViT 的柱状主干（全程同一个分辨率），右边是 Swin / PVT v1 的金字塔主干（越深图越小、通道越多）。<br>
+          <b>怎么看这张图：</b>① 盯住左边的四层方块——它们的宽度完全一样，这就是「柱状」，意味着网络<b>只有一种尺度</b>可给；② 再盯住右边，四个方块逐级变窄，标着 H/4、H/8、H/16、H/32，这就是 CNN 用了十年的金字塔；③ 注意最下面那行红字：想把 ViT 的分辨率提上去，唯一办法是把 patch 切细，而 patch 一细、token 数就平方级上涨。<br>
+          <b>要记住的一句话：</b>本课两个主角解决的<b>不是同一个问题</b>，而是同一个问题的两半——一半是「尺度」，一半是「代价」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>把 $224\times 224$ 的图的 patch 从 $16\times 16$ 换成 $4\times 4$，注意力打分表的大小大约变成原来的多少倍？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="4 倍是「边长」的变化（16 除以 4 等于 4），但注意力矩阵的面积是按边长平方长的：token 数从 196 涨到 3136，矩阵就是 3136×3136，是 196×196 的 256 倍。" onclick="lessonKit.answer(this,'q0194a')">边长变大所以是四倍</button>
+          <button data-correct="yes" data-explanation="对。token 数 hw 从 196 涨到 3136（涨 16 倍），而注意力矩阵是 (hw)×(hw)，所以整体涨 16 的平方等于 256 倍。这就是「二次复杂度」这四个字的全部含义。" onclick="lessonKit.answer(this,'q0194a')">token 平方所以是二百五十六倍</button>
+        </div>
+        <div class="quiz-feedback" id="q0194a"></div>
+      </div>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">1. Swin：把注意力关进窗户里，再让窗户错位</h2>
+
+      <p><b>Swin Transformer</b> 的完整标题是 <i>Swin Transformer: Hierarchical Vision Transformer using Shifted Windows</i>（移位窗口的层次化视觉 Transformer）。名字里两个词就是它的两招，我们一个一个来。</p>
+
+      <h3>第一招：层次化（Hierarchical）——像 CNN 一样分四级</h3>
+
+      <p>Swin 把网络分成 4 个 stage。stage 之间不靠卷积降采样，而是靠一个叫 <b>Patch Merging</b> 的层：把相邻的 $2\times 2$ 个 patch <b>在通道方向拼起来</b>，再做一次线性映射。效果是 token 数减少 4 倍（分辨率减半）、通道数翻倍。原文明确说了这个设计的目标：让最终的特征图分辨率变成 H/4、H/8、H/16、H/32，<b>与 VGG 和 ResNet 这类典型卷积网络完全一致</b>——这样下游的 FPN、检测头、分割头就都能原样接上去。</p>
+
+      <h3>第二招：移位窗口（Shifted Windows）——先把注意力关小，再让窗户错位</h3>
+
+      <p>这一招才是 Swin 的灵魂。它的逻辑是这样的：</p>
+
+      <p><b>① 先把注意力关进窗户里。</b>不划算让每个 token 看全图，那就把特征图切成一个个 $M\times M$（默认 $M = 7$）的不重叠小窗，<b>自注意力只在窗内算</b>。这一步叫 <b>W-MSA</b>（Window Multi-head Self-Attention，窗口多头自注意力）。</p>
+
+      <p><b>② 但窗与窗之间就断了联系。</b>只在自己那扇窗里算，意味着左上角的窗永远看不到右下角的窗。这显然不行。</p>
+
+      <p><b>③ 于是下一层把窗户整体挪半格。</b>在相邻两个 block 之间，把窗口划分整体平移 $(\lfloor M/2\rfloor, \lfloor M/2\rfloor)$ 个像素。原来在两个不同窗口里的邻居，现在落进同一个新窗口了——<b>跨窗信息就这样接上了</b>。这一步叫 <b>SW-MSA</b>（Shifted Window MSA）。</p>
+
+      <p>于是整个网络是「一层常规、一层移位」交替往前走的。原文的公式（3）就是把这个节奏写出来：$\hat{\mathbf{z}}^{l}$ 走 W-MSA，$\hat{\mathbf{z}}^{l+1}$ 走 SW-MSA，中间各自夹一个 MLP 和两条残差连接。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$\Omega(\mathrm{MSA}) = 4hwC^{2} + 2(hw)^{2}C$$
+          $$\Omega(\mathrm{W}\text{-}\mathrm{MSA}) = 4hwC^{2} + 2M^{2}hwC$$
+        </div>
+      </div>
+
+      <p><b>这句话在说什么：</b>这两个式子都是「算一次注意力要花多少计算量」的估算。$h,w$ 是特征图的高和宽（以 patch 计，所以 $hw$ 就是 token 总数），$C$ 是通道数，$M$ 是窗口边长（默认 7）。式子里 $4hwC^2$ 这一项是「把 token 投影成 Q/K/V 并做输出投影」的开销，两种注意力都一样；<b>真正的差别全在第二项</b>。</p>
+
+      <p><b>它为什么这么算：</b>标准注意力里，那个「谁该看谁」的打分矩阵是 $(hw)\times(hw)$ 的，所以第二项是 $2(hw)^2 C$——<b>对 token 数是二次的</b>，图一大就爆炸。而窗口注意力里，每个 token 只需要和自己窗内那 $M^2$ 个 token 比对，所以那一项变成 $2M^2hwC$——<b>只要 $M$ 固定，它对 $hw$ 就是线性的</b>。原文的结论一句话：前者对 patch 数 $hw$ 是二次的，后者在 $M$ 固定（默认 7）时是线性的。</p>
+
+      <p><b>形状账（具体数字走一遍）：</b>拿 Swin-T 的 stage 1 举例。输入 $224\times 224\times 3$，patch 是 $4\times 4$，所以特征图是 $56\times 56$，通道 $C = 96$。此时 $hw = 56\times 56 = 3136$。</p>
+
+      <ul>
+        <li>标准注意力的第二项：$2\times 3136^{2}\times 96 \approx 1.89\times 10^{9}$；</li>
+        <li>窗口注意力的第二项：$2\times 7^{2}\times 3136\times 96 \approx 2.95\times 10^{7}$；</li>
+        <li>比值 $\dfrac{3136}{49} = 64$。<b>正好是一层特征图里的 token 数除以一个窗口的 token 数</b>——也就是说，窗口注意力把最吃资源的那一项直接砍到了六十四分之一。</li>
+      </ul>
+
+      <p>而且这一招还有一个原文专门点出的工程好处：<b>同一个窗口里的所有 query 共享同一套 key</b>，这让显存访问变得规整（原文原话是 <i>facilitates memory access in hardware</i>）；相比之下，早年的滑动窗口注意力方案「不同的 query 像素要不同的 key 集合」，<b>实际延迟反而比卷积网络大得多</b>。所以移位窗口最初其实是一个<b>省内存访问</b>的工程选择，不只是理论动机。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Swin_Transformer__Hierarchical_Vision_Transformer_using_/aa8960ed20ff40fbc6cb7a5152531e6326dc4099df70bec9e063b304e20e8b7b.jpg" alt="Swin Transformer hierarchical feature maps vs columnar">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>(a) The proposed Swin Transformer builds hierarchical feature maps by merging image patches (shown in gray) in deeper layers and has linear computation complexity to input image size due to computation of self-attention only within each local window (shown in red). It can thus serve as a general-purpose backbone for both image classification and dense recognition tasks. (b) In contrast, ...（(b) 描述的是此前 ViT 那类「单尺度柱状结构」的对照）<br>
+          <b>怎么看这张图：</b>(a) 里灰色的方块是 patch，注意它<b>越往深处越大</b>——那是 Patch Merging 在把 2×2 的 patch 合并成一个；红框就是局部窗口，注意力只在红框里发生。(b) 是反面对照：单一分辨率、没有层次。看这张图只要抓住一件事：<b>红框（窗口）和灰块（合并）分别对应前面讲的第二招和第一招。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1622"/>
+          <text x="198" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">第 l 层：常规划分 W-MSA</text>
+          <text x="660" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">第 l+1 层：整体移位半窗 SW-MSA</text>
+
+          <rect x="62" y="60" width="272" height="272" fill="#1b2433" stroke="#3a4a63" stroke-width="1"/>
+          <line x1="96" y1="60" x2="96" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="130" y1="60" x2="130" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="164" y1="60" x2="164" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="232" y1="60" x2="232" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="266" y1="60" x2="266" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="300" y1="60" x2="300" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="62" y1="94" x2="334" y2="94" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="62" y1="128" x2="334" y2="128" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="62" y1="162" x2="334" y2="162" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="62" y1="230" x2="334" y2="230" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="62" y1="264" x2="334" y2="264" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="62" y1="298" x2="334" y2="298" stroke="#2c3a51" stroke-width="1"/>
+
+          <rect x="62" y="60" width="136" height="136" fill="none" stroke="#4f9dff" stroke-width="4"/>
+          <rect x="198" y="60" width="136" height="136" fill="none" stroke="#4f9dff" stroke-width="4"/>
+          <rect x="62" y="196" width="136" height="136" fill="none" stroke="#4f9dff" stroke-width="4"/>
+          <rect x="198" y="196" width="136" height="136" fill="none" stroke="#4f9dff" stroke-width="4"/>
+
+          <text x="130" y="135" text-anchor="middle" font-size="14" fill="#9fc4ef">窗内算</text>
+          <text x="266" y="135" text-anchor="middle" font-size="14" fill="#9fc4ef">窗内算</text>
+          <text x="130" y="271" text-anchor="middle" font-size="14" fill="#9fc4ef">窗内算</text>
+          <text x="266" y="271" text-anchor="middle" font-size="14" fill="#9fc4ef">窗内算</text>
+          <text x="198" y="368" text-anchor="middle" font-size="14" fill="#f2a65a">窗与窗之间互不通信</text>
+
+          <rect x="556" y="60" width="272" height="272" fill="#1b2433" stroke="#3a4a63" stroke-width="1"/>
+          <line x1="590" y1="60" x2="590" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="658" y1="60" x2="658" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="692" y1="60" x2="692" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="726" y1="60" x2="726" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="794" y1="60" x2="794" y2="332" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="556" y1="94" x2="828" y2="94" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="556" y1="162" x2="828" y2="162" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="556" y1="196" x2="828" y2="196" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="556" y1="230" x2="828" y2="230" stroke="#2c3a51" stroke-width="1"/>
+          <line x1="556" y1="298" x2="828" y2="298" stroke="#2c3a51" stroke-width="1"/>
+
+          <rect x="556" y="60" width="68" height="68" fill="rgba(90,209,168,0.28)"/>
+          <rect x="760" y="60" width="68" height="68" fill="rgba(90,209,168,0.28)"/>
+          <rect x="556" y="264" width="68" height="68" fill="rgba(90,209,168,0.28)"/>
+          <rect x="760" y="264" width="68" height="68" fill="rgba(90,209,168,0.28)"/>
+
+          <line x1="624" y1="60" x2="624" y2="332" stroke="#5ad1a8" stroke-width="3" stroke-dasharray="8 5"/>
+          <line x1="760" y1="60" x2="760" y2="332" stroke="#5ad1a8" stroke-width="3" stroke-dasharray="8 5"/>
+          <line x1="556" y1="128" x2="828" y2="128" stroke="#5ad1a8" stroke-width="3" stroke-dasharray="8 5"/>
+          <line x1="556" y1="264" x2="828" y2="264" stroke="#5ad1a8" stroke-width="3" stroke-dasharray="8 5"/>
+
+          <text x="692" y="190" text-anchor="middle" font-size="14" fill="#d6f6e8">原来的跨界邻居</text>
+          <text x="692" y="212" text-anchor="middle" font-size="14" fill="#d6f6e8">现在落进同一个窗</text>
+          <text x="692" y="368" text-anchor="middle" font-size="14" fill="#5ad1a8">跨窗信息由此接上</text>
+
+          <text x="450" y="410" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">一层常规、一层移位，交替往前——这就是 Swin 的全部节奏</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两个 8×8 的特征图。左图把注意力关在四个 4×4 的蓝框里（实际默认是 7×7，这里画 4 是为了看清）；右图把窗口边界整体挪了两个格子（画成绿色虚线），于是原来看不到彼此的邻居被圈进了同一个窗。<br>
+          <b>怎么看这张图：</b>① 先看左图四个蓝框——框内连线，框与框之间完全不通信；② 再看右图那两条绿色虚线——它们没有和左边对齐，而是错开了；③ 盯住中央那一片：它跨过了左图两个蓝框的交界，<b>交界两侧的 token 现在能互相看见了</b>；④ 四角那些浅绿的 2×2 小块是移位带来的「边角碎块」，原文用循环移位加掩码把它们高效处理掉，所以窗口总数并没有变多。<br>
+          <b>要记住的一句话：</b>「线性成本」和「跨窗连接」本来是矛盾的，Swin 用一次整体错位同时拿到了两个。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Swin_Transformer__Hierarchical_Vision_Transformer_using_/99e0475b5942aad292dc6924cca70298f15ce8908cc5d218ceb694f5d78bd015.jpg" alt="Swin shifted window illustration">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>An illustration of the shifted window approach for computing self-attention in the proposed Swin Transformer architecture. In layer l (left), a regular window partitioning scheme is adopted, and self-attention is computed within each window. In the next layer l + 1 (right), the window partitioning is shifted, resulting in new windows. The self-attention computation in the new windows cro...（后续描述的是新窗口跨越了旧窗口边界）<br>
+          <b>怎么看这张图：</b>这张就是原论文版的「移位窗口」示意图，和我上面那张自绘图的逻辑完全一样，只是它画的是真实的 $M=7$ 尺度。左边是第 $l$ 层的常规划分，右边是第 $l+1$ 层的移位划分。建议对着看：<b>先在我那张图上理解道理，再用这张图确认尺度。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Swin_Transformer__Hierarchical_Vision_Transformer_using_/56d2761a28de25897ecde219a4469bbfe42bc70d0f78d8ae123299c6cd4fe5d7.jpg" alt="Swin Transformer architecture and two successive blocks">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>(a) The architecture of a Swin Transformer (Swin-T); (b) two successive Swin Transformer Blocks (notation presented with Eq. (3)). W-MSA and SW-MSA are multi-head self attention modules with regular and shifted windowing configurations, respectively.<br>
+          <b>怎么看这张图：</b>(b) 子图要重点看：它画的是<b>连续两个 block</b>，第一个里是 W-MSA、第二个里是 SW-MSA——这正是公式（3）那四行式的图像版本，也印证了「一层常规、一层移位」的交替节奏。每一路都是「LayerNorm → 注意力 → 残差加回」，再「LayerNorm → MLP → 残差加回」。<b>层数配置也值得记：Swin-T 的四个 stage 是 {2, 2, 6, 2} 个 block。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">2. PVT v1：不关窗户，而是把 K/V 压小</h2>
+
+      <p>同年（2021）的另一篇是 <b>PVT</b>，完整标题是 <i>Pyramid Vision Transformer: A Versatile Backbone for Dense Prediction without Convolutions</i>。<b>请注意标题最后那五个词——「without Convolutions」（免卷积）是标题的一部分</b>，这一点后面第 4 节要专门讲，因为课程清单在这里出过一处错。</p>
+
+      <p>PVT 的目标和 Swin 一模一样：把金字塔搬进 Transformer，做出一个能替代 CNN 主干的、面向稠密预测的通用主干。原文说 PVT 是<b>第一个面向各种像素级稠密预测任务的纯 Transformer 主干</b>。但它走的是另一条路。</p>
+
+      <h3>第一招：金字塔——用 patch 的尺寸替代卷积的 stride</h3>
+
+      <p>PVT 也是 4 个 stage，stage 之间用 <b>patch embedding</b> 层：对上一级特征图做<b>不重叠的切块</b>，展平后做线性投影。关键设计是<b>切块的尺寸逐级增大</b>，于是 stride 依次是 4、8、16、32，token 数逐级下降，通道数逐级上升，得到特征金字塔 $\{F_1, F_2, F_3, F_4\}$，可以直接喂给 FPN、RetinaNet、Mask R-CNN、Semantic FPN 甚至 DETR。</p>
+
+      <p>原文有一句话说得很清楚，堪称 PVT 的工程翻译：不像 CNN 主干用「不同的卷积 stride」来得到多尺度特征图，PVT 用的是<b>逐级收缩的 patch embedding</b>——<b>用 patch 尺寸替代卷积 stride</b>，这就是它「免卷积」招牌的核心动作。</p>
+
+      <h3>第二招：SRA——把 K/V 在空间上先压一刀</h3>
+
+      <p>光有金字塔还不够。浅层那些 stage 的特征图仍然很大（stage 1 是 H/4 × W/4），自注意力还是吃不消。PVT 的第二招是 <b>SRA（spatial-reduction attention，空间缩减注意力）</b>：<b>在手上前，先把 K 和 V 在空间上降采样</b>。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$\mathrm{SR}(\mathbf{x}) = \mathrm{Norm}\!\left(\mathrm{Reshape}(\mathbf{x}, R_i)\,W^{S}\right)$$
+          $$\mathrm{head}_j = \mathrm{Attention}\!\left(QW_j^{Q},\ \mathrm{SR}(K)W_j^{K},\ \mathrm{SR}(V)W_j^{V}\right)$$
+        </div>
+      </div>
+
+      <p><b>这句话在说什么：</b>第一个式子定义了一个叫 $\mathrm{SR}$ 的操作，它把输入序列 $\mathbf{x}$ 的空间维度<b>缩小</b>。第二个式子是关键——注意 $Q$ 外面<b>没有</b>套 $\mathrm{SR}$，而 $K$ 和 $V$ 外面<b>套了</b>。这正是「只压缩 K/V 的空间尺寸、不动 Q」的写法。</p>
+
+      <p><b>它为什么这么算：</b>注意力那个吃资源的打分矩阵是 $(\text{Q 的长度})\times(\text{K 的长度})$。我们不想动 Q（要保留每个位置自己的查询），那就把 K 的长度压小——<b>打分矩阵的面积就跟着按比例缩小了</b>。原文的量化说法是：这样做的计算与显存开销比标准多头注意力<b>低 $R_i^2$ 倍</b>。</p>
+
+      <p><b>形状账（具体数字走一遍）：</b>设 stage $i$ 的输入序列 $\mathbf{x}$ 形状是 $(H_iW_i)\times C_i$，缩减比 $R_i = 8$。那么：</p>
+
+      <ul>
+        <li>$\mathrm{Reshape}(\mathbf{x}, R_i)$ 把它重排成 $\dfrac{H_iW_i}{R_i^{2}}\times (R_i^{2}C_i)$ —— <b>token 数变成原来的 $1/R_i^2$（这里是 1/64），每个 token 的维度被撑成 $R_i^2$ 倍（这里是 64 倍）</b>；</li>
+        <li>$W^{S}\in\mathbb{R}^{(R_i^{2}C_i)\times C_i}$ 是一个线性层，作用是把被撑大的那一维<b>压回 $C_i$</b>；</li>
+        <li>最后 $\mathrm{Norm}$ 是 LayerNorm。输出形状是 $\dfrac{H_iW_i}{R_i^{2}}\times C_i$。</li>
+        <li>于是打分矩阵从 $H_iW_i\times H_iW_i$ 缩到 $H_iW_i\times \dfrac{H_iW_i}{R_i^{2}}$ ——<b>面积直接少了 64 倍</b>。</li>
+      </ul>
+
+      <p>这就是为什么 PVT 敢把 token 数很大的浅层 stage 拿来做<b>全局</b>注意力：<b>它的注意力从来不切窗，而是把 K/V 先缩小，再让每个 Q 去看缩小后的全局 K/V。</b></p>
+
+      <p>原文把这个卖点说得很直白：相比传统 CNN 主干那种「随网络深度增加而增大的局部感受野」，<b>PVT 始终产出一个全局感受野</b>。请注意这句话与 Swin 的叙事几乎相反——Swin 卖的是「局部窗口 + 线性复杂度」，PVT 卖的是「全局感受野」。这就是本课最值得对照的一对。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Pyramid_Vision_Transformer__A_Versatile_Backbone_for_Den/b75601fcfa0e69b55384fe5eeb9fda3ca64cbeef7c7167788f56366e53438c0f.jpg" alt="Comparison of CNN, ViT and PVT architectures">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Comparisons of different architectures, where “Conv” and “TF-E” stand for “convolution” and “Transformer encoder”, respectively. (a) Many CNN backbones use a pyramid structure for dense prediction tasks such as object detection (DET), instance and semantic segmentation (SEG). (b) The recently proposed Vision Transformer (ViT) [12] is a “columnar” structure specifically designed for image...（(c) 为 PVT 的金字塔 Transformer 结构）<br>
+          <b>怎么看这张图：</b>这张图一张就能顶前面那段铺垫。(a) 是 CNN 的金字塔，(b) 是 ViT 的柱状——<b>它的输出只有一种尺度</b>，所以正文才会说 ViT 对检测/分割不友好；(c) 是 PVT：既有金字塔的形状，内部又是 Transformer 编码器。<b>注意“Conv”和“TF-E”两个缩写</b>：CNN 那支靠卷积做降采样，PVT 那支靠 patch embedding。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Pyramid_Vision_Transformer__A_Versatile_Backbone_for_Den/511816bc6b0b6ede7b8d010161b67577b0e841f96bb553dca2f41c18655e3a2b.jpg" alt="Overall architecture of Pyramid Vision Transformer">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Overall architecture of Pyramid Vision Transformer (PVT). The entire model is divided into four stages, each of which is comprised of a patch embedding layer and a L-layer Transformer encoder. Following a pyramid structure, the output resolution of the four stages progressively shrinks from high (4-stride) to low (32-stride).<br>
+          <b>怎么看这张图：</b>对着图数四个 stage，每个 stage 都是「patch embedding 层 + $L$ 层 Transformer encoder」的组合。重点看左上到右下这四级的分辨率标注：<b>从 4-stride 一路缩到 32-stride</b>——浅层图大（给分辨率），深层图小（给语义）。和 Swin 那张 Fig. 3 并排看，会发现两篇的骨架形状几乎一样，差别全在「注意力怎么算」这一层。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1622"/>
+          <text x="185" y="36" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">标准多头注意力 MHA</text>
+          <text x="650" y="36" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">空间缩减注意力 SRA</text>
+
+          <rect x="70" y="66" width="220" height="40" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <text x="180" y="92" text-anchor="middle" font-size="15" fill="#cfe0f7">Q</text>
+          <rect x="70" y="126" width="220" height="40" fill="#2c3a51" stroke="#4f9dff" stroke-width="2"/>
+          <text x="180" y="152" text-anchor="middle" font-size="15" fill="#cfe0f7">K</text>
+          <rect x="70" y="186" width="220" height="40" fill="#2c3a51" stroke="#4f9dff" stroke-width="2"/>
+          <text x="180" y="212" text-anchor="middle" font-size="15" fill="#cfe0f7">V</text>
+          <text x="180" y="270" text-anchor="middle" font-size="14" fill="#f2a65a">三条一样长</text>
+          <text x="180" y="294" text-anchor="middle" font-size="14" fill="#f2a65a">打分表 (hw) 乘 (hw)</text>
+
+          <rect x="480" y="66" width="220" height="40" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <text x="590" y="92" text-anchor="middle" font-size="15" fill="#cfe0f7">Q</text>
+          <rect x="480" y="126" width="220" height="40" fill="none" stroke="#5a6b84" stroke-width="1" stroke-dasharray="6 5"/>
+          <rect x="480" y="126" width="55" height="40" fill="#2c5a49" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="507" y="152" text-anchor="middle" font-size="14" fill="#d6f6e8">K</text>
+          <rect x="480" y="186" width="220" height="40" fill="none" stroke="#5a6b84" stroke-width="1" stroke-dasharray="6 5"/>
+          <rect x="480" y="186" width="55" height="40" fill="#2c5a49" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="507" y="212" text-anchor="middle" font-size="14" fill="#d6f6e8">V</text>
+          <text x="700" y="130" font-size="13" fill="#8fb4d9">原来这么长</text>
+          <text x="700" y="190" font-size="13" fill="#8fb4d9">原来这么长</text>
+          <text x="590" y="270" text-anchor="middle" font-size="14" fill="#5ad1a8">K、V 被 SR 压到 1/R 平方</text>
+          <text x="590" y="294" text-anchor="middle" font-size="14" fill="#5ad1a8">打分表面积跟着少 64 倍</text>
+
+          <text x="450" y="348" text-anchor="middle" font-size="14" fill="#dbe7f6">Q 不动，只压 K 和 V —— 于是注意力仍然看全局，但看的是「缩小后的全局」</text>
+          <text x="450" y="376" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">Swin 切窗口，PVT 压尺度：同目标，反路径</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是标准多头注意力，Q、K、V 三条一样长；右格是 PVT 的 SRA，Q 保持原长，K 和 V 被压成了短短一截（虚线框标出它们原来的长度）。<br>
+          <b>怎么看这张图：</b>① 先盯住右边那条虚线框——它代表 SR 之前的 K/V 有多长；② 再看里面那根短短的实心条，那就是 SR 之后剩下的；③ 注意 <b>Q 那条完全没有被压</b>，这是 SRA 最关键的一笔；④ 打分表的行数是 Q 的长度、列数是 K 的长度，列被压短了，面积自然跟着缩。⑤ 和上面 Swin 那张图对照着看：Swin 是把「打分表切成小块分别算」，PVT 是「把打分表的列变短」。<br>
+          <b>要记住的一句话：</b>两条路都在给注意力「降本」，但一个是<b>局部化</b>，一个是<b>稀疏化</b>——这是本季信息密度最高的一个对照点。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Pyramid_Vision_Transformer__A_Versatile_Backbone_for_Den/c6d199dfa375f02fa1a31099e4df2f85504a40c6276b8418a078e1fecfc834a5.jpg" alt="Multi-head attention vs spatial reduction attention">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Multi-head attention (MHA) vs. spatialreduction attention (SRA). With the spatial-reduction operation, the computational/memory cost of our SRA is much lower than that of MHA.<br>
+          <b>怎么看这张图：</b>这张是原论文版的 MHA 与 SRA 对照，和我上面那张自绘图讲的是同一件事，但它是按真实的张量形状画的。看的时候盯住两点：<b>① K、V 那两条在进 Attention 之前被 SR 缩过了；② Q 没有。</b>原文用这张图来说明「计算与显存开销低得多」，具体低多少，正文给的量是 $R_i^2$ 倍。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">3. 同目标、反路径：把两篇并排看</h2>
+
+      <p>现在把两篇放进同一张表。它们同年、同目标（给稠密预测做通用主干）、同手段（4-stage 金字塔），但<b>解决「注意力太贵」这个核心矛盾时，选了两条相反的路径</b>。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.95rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.5rem;border:1px solid #cfd9e6;text-align:left;">对比维度</th>
+            <th style="padding:.5rem;border:1px solid #cfd9e6;text-align:left;">Swin Transformer</th>
+            <th style="padding:.5rem;border:1px solid #cfd9e6;text-align:left;">PVT v1</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">降本的办法</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>局部化</b>：把注意力关进 $M\times M$ 窗口</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>稀疏化</b>：把 K/V 的空间尺寸压到 $1/R_i^2$</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">跨窗/全局怎么补</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">下一层把窗口整体移位半格</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">不需要补：本来就一直是全局</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">金字塔怎么造</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">Patch Merging（2×2 拼接 + 线性层）</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">Patch Embedding（不重叠切块 + 线性投影，块逐级变大）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">关键公式</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">$\Omega(\mathrm{W\text{-}MSA}) = 4hwC^{2} + 2M^{2}hwC$</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">$\mathrm{SR}(\mathbf{x}) = \mathrm{Norm}(\mathrm{Reshape}(\mathbf{x}, R_i)W^{S})$</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">自我定性</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">线性复杂度 + 更好的速度/精度权衡</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">始终产出全局感受野</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">COCO 检测（RetinaNet 1×）</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">Swin-T 相对 ResNet-50 一致 +3.4~4.2 box AP（四个检测框架）</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">PVT-Small <b>40.4 AP</b> vs ResNet-50 <b>36.3 AP</b>（<b>+4.1</b>）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">最硬的一次落地</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">地点识别论文用它当混合主干的一半（见下文）</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">在本语料库里<b>找不到任何 SLAM 论文实体引用</b></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>关于最后一行，必须说清楚一件事：<b>PVT v1 在我能查到的 SLAM 语料库里，没有任何一篇论文真的引用或使用过它。</b>检索 <code>PVT</code>、<code>Pyramid Vision Transformer</code> 的命中项，除了它自己和索引文件之外全部是假阳性——比如 <code>3DPVT</code> 会议名、某一篇作者简介里的公司名 <code>Swing</code>。唯一真正提到 PVT 系列的地方，是它自己在正文里预告续作（那句原话是：我们最近提出了一个方案 PVTv2）。</p>
+
+      <p>所以 PVT v1 在本季的「接回前八季」只能走<b>一条推断链</b>，而且必须标明这是推断：<b>PVT v1 → 被 Swin 篇列为同期工作并做比较（Swin 的参考文献 [60] 就是 PVT）→ Swin 被地点识别论文用作主干 → 地点识别在 SLAM 里属于回环检测那一环。</b>这条链环环都有出处，但「链条本身」是我们的分析，不是任何一篇论文的结论。</p>
+
+      <p>而 Swin 的落地就硬得多。第七季 <a href="0139-混合架构与统一检索.html">0139</a> 讲的 <code>Hybrid CNN-Transformer</code>，把 <b>VGG-16 的空间金字塔</b>与 <b>Swin Transformer</b> 同图并联成一个混合主干做视觉地点识别：原文明确说 Swin 有「四阶段层次化结构」，每个 stage 由 $l_1, l_2, l_3, l_4$ 个 block 组成，通过 patch merging 得到特征金字塔 $\{\mathbf{T}_1,\mathbf{T}_2,\mathbf{T}_3,\mathbf{T}_4\}$；它的 Swin-B 四个 stage 的 block 数是 <b>2、2、18、2</b>。更妙的是那篇论文的 Figure 3 直接把 Swin 的 W-MSA / SW-MSA 复刻了一遍，并做了 <b>VGG16（CNN）/ SWIN-B（Transformer）/ HYBRID</b> 三方对照——<b>这一篇就是「CNN 段与 Transformer 段同框」的最佳单图素材</b>。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面哪一句最准确地说出了 Swin 与 PVT v1 的区别？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。Swin 把打分表切成互不重叠的窗口（局部化），靠移位把跨窗信息补回来；PVT 不切窗口，而是把 K/V 的空间长度压小（稀疏化），所以它的注意力仍然是全局的，只是看的是一份缩小过的全局 K/V。" onclick="lessonKit.answer(this,'q0194b')">一个切窗口一个压尺度</button>
+          <button data-correct="no" data-explanation="不对。两篇都在做金字塔，而且都拿来喂检测头——这不是它们的分歧点。分歧点在「注意力太贵怎么办」：Swin 选局部化，PVT 选稀疏化。" onclick="lessonKit.answer(this,'q0194b')">一个做金字塔一个没做</button>
+        </div>
+        <div class="quiz-feedback" id="q0194b"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">4. 一处必须纠正的清单：这里讲的是 PVT v1，不是 PVTv2</h2>
+
+      <p>这是本季第三处「课程清单与论文正文不符」，也是本课必须先说清楚的一件事。</p>
+
+      <div class="callout">
+        <h4>纠正：清单写「PVTv2（2021）」，正文其实是 PVT v1</h4>
+        <p>课程清单把这一篇标成 <b>PVTv2</b>，但打开正文，一级标题是 <i>Pyramid Vision Transformer: A Versatile Backbone for Dense Prediction <b>without Convolutions</b></i> ——<b>清单漏掉了结尾的「without Convolutions」五个词</b>，于是把 v1 当成了 v2。</p>
+      </div>
+
+      <p>更关键的是：<b>PVTv2 是本文同作者的后续工作，它根本不在本项目的语料库里。</b>证据是 PVT v1 自己的正文里写着「我们最近提出了一个方案 PVTv2」，并在参考文献里给出了 PVTv2 的条目（arXiv 2106.13797）。也就是说，</p>
+
+      <ul>
+        <li><b>PVTv2 的三个核心卖点——线性 SRA、卷积前馈、重叠 patch embedding——在本课里一个字都不能出现。</b>它们属于另一篇语料库里没有的论文，写进来就是无据捏造。</li>
+        <li>本课讲的每一句、每一个数字，都来自 v1 自己的正文。</li>
+      </ul>
+
+      <h3>而且 PVT v1 身上有一处必须如实写出来的「标题张力」</h3>
+
+      <p>这件事很值得学，因为它教的是<b>怎么读一个名字</b>。</p>
+
+      <p>PVT v1 的标题和摘要高调宣称 <b>without Convolutions</b>，贡献点第一条还自称「第一个纯 Transformer 主干」。但正文里其实有松动：它在相关工作里把 Inception 系列的多路卷积核、ResNeXt 的分组卷积列为「有效性已被验证」的先例；而更要紧的是——<b>它的续作 PVTv2 恰恰是靠把卷积要素加回来（卷积前馈、重叠 patch embedding 等）取得提升的</b>。</p>
+
+      <p>这不矛盾，而是说明一件很重要的事：<b>「免卷积」不是终局，而是一次路线上的尝试。</b>原文自己也没把话说死——它在讨论里承认「针对 CNN 设计的那些模块（SE、SK、空洞卷积、剪枝、NAS）本工作都没有考虑」，还承认「基于 Transformer 的视觉模型仍然处在发展的早期阶段」。</p>
+
+      <p><b>这里给读者一个可迁移的判断习惯：</b>看到一篇论文标题里写着「without X」或者「X-free」，不要立刻把它当成定论，而要去看<b>它的后续工作是继续沿着这条线走，还是把 X 续回来了</b>。续作把东西加回来，往往比标题更有信息量。</p>
+
+      <p>顺带说一句与本季主题相扣的话：<b>连课程清单都会把 PVT v1 和 PVTv2 记混</b>，正说明「凭名字猜内容」这件事有多危险——这恰好是本季「补名词」主题最好的一个注脚。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">5. 它不完美在哪：零件的缺陷，为什么会变成 SLAM 的约束</h2>
+
+      <p>本季有一条贯穿全季的要求：每个零件都要讲「它不完美在哪」。Swin 和 PVT v1 的毛病不一样，但都能连到 SLAM 的设计上。</p>
+
+      <h3>① Swin 的毛病：速度不是因为算法慢，而是因为内核没优化</h3>
+
+      <p>原文很诚实地写了：虽然表格里 Swin 的吞吐看着不差，但它的实现用的是「PyTorch 内置算子，而这些算子并不都经过良好优化」，而对手 ResNe(X)t 是「由高度优化的 cuDNN 函数搭起来的」；作者直言「彻底的算子级内核优化超出本文范围」。另外与 DeiT 的比较也不完全公平——DeiT 只有单一分辨率特征图、根本没法直接做检测，作者是<b>人为给它加了反卷积层造出层次特征</b>才搭上比较的。</p>
+
+      <h3>② Swin 实现的另一个「不便宜的地方」：移位要额外处理</h3>
+
+      <p>移位会把窗口数从 $\lceil h/M\rceil \times \lceil w/M\rceil$ 变成 $(\lceil h/M\rceil+1)\times(\lceil w/M\rceil+1)$。最朴素的补零做法在窗口数少的时候会带来 <b>2.25 倍的额外计算</b>（从 $2\times 2$ 变 $3\times 3$）。作者用「循环移位到左上 + 掩码」解决，使批窗口数保持不变，这个实现相对朴素补零在 Swin-T/S/B 上分别再快 <b>13% / 18% / 18%</b>。</p>
+
+      <h3>③ PVT v1 的毛病：分类上没赢，输入一大就变慢</h3>
+
+      <p>原文自己承认得很干脆：金字塔结构<b>对稠密预测有好处，但对图像分类几乎没带来提升</b>（PVT-Large 的分类 top-1 err 是 18.3，与 ViT/DeiT-Base/16 的 18.3 打平）。而且它承认当输入尺度变大时，PVT 的 GFLOPs 增长速度比 ResNet 快，<b>只在输入不超过 $640\times 640$ 时两者相当</b>——原文的结论原话是「我们的 PVT 更适合中等分辨率输入」。在 COCO 常用的 800 短边设定下，PVT-Small 的 RetinaNet 甚至比 ResNet-50 <b>更慢</b>，要降到 640 短边才反超（51.7 ms vs 55.9 ms）。</p>
+
+      <h3>④ 这条线索怎么接到 SLAM：一个零件只有「够快」才可能进实时系统</h3>
+
+      <p>本季的暗线是「<b>精度 vs 实时性</b>」。第八季 <a href="0155-不删而是跟踪-动态物体变成路标.html">0155</a> 与 <a href="0156-别把停着的车删掉-语义动态与当前真在动.html">0156</a> 那一块讲的动态环境处理，痛点是语义前端太慢——<code>Mask R-CNN</code> 单张图 195 ms（约 5 fps），而 SLAM 要实时。骨干网络正是这条代价链的第一环：<b>主干慢，后面所有环节都慢。</b></p>
+
+      <p>于是现实里 SLAM 系统的选择常常很务实：不用最贵的骨干，而是选一个<b>速度/精度权衡合适</b>的。Swin 的作者自己就把贡献定位成「取得最好的速度-精度权衡」，而不是绝对精度第一——这句话值得记住，因为 SLAM 里要的往往正是这个。</p>
+
+      <p>另外还有一层：<b>这两个零件在语料库里的存在感极不对称。</b>Swin 有真正的主干级落地（地点识别），PVT v1 一次实体引用都没有。这不是评价谁更优秀，而是一个读论文时要养成的习惯：<b>看到「某方法用了某某主干」时，先去确认这个「某某」在不在你要用的那条技术线上。</b></p>
+
+      <p>最后连回第九季：这些检测/分割的零件在评测里用 IoU、AP、mAP 衡量，而 <a href="0180-TUM-RGBD-2012-ATE与RPE的出处.html">0180</a> 的 ATE/RPE 量的是轨迹——<b>两套尺子</b>。看到本课这些数字（58.7 box AP、40.4 AP）时，先问一句「这是哪个指标、IoU 阈值是多少」。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">读完你应该能回答</h2>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>1. ViT 为什么不适合检测/分割？</h4>
+          <p>因为它是柱状结构，输出<b>单一尺度、低分辨率</b>的特征图；而检测/分割要的是多尺度 + 高分辨率。想提分辨率就得把 patch 切细，token 数平方级上涨，注意力矩阵直接爆显存。</p>
+        </div>
+        <div class="mini-card">
+          <h4>2. 自注意力的二次复杂度从哪一项来？</h4>
+          <p>从 $\Omega(\mathrm{MSA}) = 4hwC^{2} + 2(hw)^{2}C$ 的第二项来——打分矩阵是 $(hw)\times(hw)$ 的。<b>第一项 $4hwC^2$ 是线性的，第二项才是瓶颈。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>3. 移位窗口在干什么？</h4>
+          <p>把自注意力关进 $M\times M$ 窗口（默认 $M=7$）拿到线性成本；再在下一层把窗口整体挪 $(\lfloor M/2\rfloor,\lfloor M/2\rfloor)$ 个像素，让原来的跨窗邻居落进同一个窗，把跨窗连接补回来。</p>
+        </div>
+        <div class="mini-card">
+          <h4>4. PVT 的 SR(x) 在压什么？</h4>
+          <p>压 K 和 V 的<b>空间长度</b>（token 数变成 $1/R_i^2$，每 token 维度撑成 $R_i^2$ 倍，再由 $W^S$ 压回 $C_i$）。<b>Q 不压</b>，所以注意力仍然是全局的，只是看的是缩小后的全局 K/V。</p>
+        </div>
+        <div class="mini-card">
+          <h4>5. 为什么说这两篇是「同目标、反路径」？</h4>
+          <p>同目标：都是 2021 年、都为稠密预测做 4-stage 金字塔主干。反路径：Swin 是<b>局部化</b>（切窗 + 移位），PVT 是<b>稀疏化</b>（压 K/V 尺度）——一个卖线性复杂度，一个卖全局感受野。</p>
+        </div>
+        <div class="mini-card">
+          <h4>6. 清单错在哪？</h4>
+          <p>清单标「PVTv2」，正文其实是 <b>PVT v1</b>（标题漏了结尾的 without Convolutions）。PVTv2 不在语料库里，它的线性 SRA、卷积前馈、重叠 patch embedding 都不能写。而且要如实写出标题张力：v1 拿「免卷积」当招牌，续作 v2 又把卷积加回来了。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用你自己的话解释：为什么「窗口注意力」的第二项 $2M^{2}hwC$ 在 $M$ 固定时对图像尺寸是线性的，而在标准注意力里那一项是二次的？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>标准注意力里，每个 token 都要和<b>全部</b> token 比对，所以参与比对的组合数是 $(hw)\times(hw)$，对 token 数 $hw$ 是二次的。窗口注意力里，每个 token 只和自己所在窗内的 $M^2$ 个 token 比对，所以组合数是 $hw \times M^2$。因为 $M$ 是固定常数（默认 7），$M^2 = 49$ 也是常数，于是整个式子的增长只由 $hw$ 决定——<b>是线性的</b>。换句更直白的话：图变大时，token 变多，但每个 token 的「朋友」数量不变。</div>
+          </details>
+        </li>
+        <li>走一遍形状账：某 stage 的特征图是 $64\times 64$、通道 128，窗口 $M=7$。窗口注意力的第二项 $2M^{2}hwC$ 与标准注意力的第二项 $2(hw)^2C$ 相比，大约是几分之一？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>$hw = 64\times 64 = 4096$，$C = 128$。<br>
+            标准注意力第二项 $=2\times 4096^{2}\times 128$；窗口注意力第二项 $=2\times 49\times 4096\times 128$。<br>
+            两者之比 $=\dfrac{49}{4096}\approx \dfrac{1}{83.6}$，也就是<b>大约八十四分之一</b>。<br>
+            注意这个比值其实就是 $\dfrac{M^{2}}{hw}$——<b>特征图里的 token 越多、窗口相对越小，省得越多。</b>这也正是 Swin 在最浅层（token 最多）收益最大、在深层收益收敛的原因。</div>
+          </details>
+        </li>
+        <li>PVT 的 $\mathrm{SR}(\mathbf{x})$ 如果把 Q 也一起压了，会有什么后果？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>SRA 的结构是 $\mathrm{Attention}(QW^{Q},\ \mathrm{SR}(K)W^{K},\ \mathrm{SR}(V)W^{V})$——<b>Q 保持原长，只有 K、V 被压</b>。如果连 Q 也压，输出序列的长度就会跟着缩短，<b>每个位置自己的查询就没了</b>，输出的特征图分辨率会掉一档，浅层「给分辨率」这件事就做不成了。注意打分矩阵的行数等于 Q 的长度、列数等于 K 的长度：<b>只压列不压行，才能既省算力又保住输出分辨率。</b></div>
+          </details>
+        </li>
+        <li>Swin 的作者说自己「追求的是速度-精度权衡而不是绝对精度」，这句话在 SLAM 语境下为什么特别重要？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>因为 SLAM 是实时系统。第八季动态环境块里 <code>Mask R-CNN</code> 单图 195 ms（约 5 fps）就已经被抱怨「跑不到帧率」，一个骨干如果只追精度不要速度，后面整条流水线都没法实时。<b>所以在 SLAM 里选骨干，第一步往往不是比谁 AP 高，而是先划一条延迟预算线。</b>原文里还有一处很具体的速度-精度对立可以引：PointPillars 只用 16 ms（约 60 Hz），但它的精度普遍不如体素方法——这条对照下一课（0196）会展开。</div>
+          </details>
+        </li>
+        <li>「免卷积」这个招牌，为什么不能直接当成定论来记？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>因为 PVT v1 的续作 PVTv2（不在本语料库）恰恰是靠把卷积要素加回来取得提升的。<b>一篇论文的标题说的是它当时的路线选择，不是这条路线最终的结论。</b>判断一个「without X」是不是终局，要看后续工作：如果续作把 X 又加回来，说明那个 X 里有当时没被替代的价值。这个习惯对读 SLAM 论文同样适用——很多「不用 IMU」「不用回环」的方案，续作都会补回去。</div>
+          </details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0193-FocalLoss-2017-九成都是背景.html">← Focal Loss（2017）：九成都是背景怎么办</a>
+        <a class="next" href="0195-LiDAR硬件-2017-点云怎么来的.html">LiDAR 硬件（2017）：点云是怎么从硬件里出来的 →</a>
+      </div>
+      <p class="foot-note">到这里，本季的「骨架家族」（GoogLeNet、ResNet、ResNeXt、Swin、PVT）就讲完了。下一节我们离开网络，去看看那串三维坐标在硬件里到底是怎么被量出来的 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

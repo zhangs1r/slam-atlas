@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResNeXt（2017）：不加深也能变强 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0189</div>
+      <h1>ResNeXt（2017）：不加深也能变强</h1>
+      <p class="subtitle">深度和宽度的边际收益都快用完了。于是有人把一次大卷积切成 32 份互不通信的小卷积并联——同样的算力，误差多降了一个点。这个新维度叫「基数」。🍞</p>
+      <div class="hero-meta">
+        <span>🎯 主题：基数 cardinality / 分组卷积 / 聚合变换 / 复杂度保持 / 32×4d</span>
+        <span>👥 作者：Saining Xie、Ross Girshick、Piotr Dollár、Zhuowen Tu、Kaiming He</span>
+        <span>📅 年份 · <i>Aggregated Residual Transformations for Deep Neural Networks</i>（正文未标发表处，语料内可印证为 CVPR 2017）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">一句话定位：切 32 份并联</a>
+        <a href="#b">前人卡在哪：两条路各有毛病</a>
+        <a href="#c">核心机制：基数这个新维度</a>
+        <a href="#d">公式与形状账：一份钱怎么花</a>
+        <a href="#e">关键数字：2 倍算力该投哪儿</a>
+        <a href="#f">在前八季哪些课出现过</a>
+        <a href="#g">它不完美在哪</a>
+        <a href="#h">和前面课程怎么接</a>
+        <a href="#i">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「基数」是什么、为什么它算一个独立的新维度；用大白话讲透「32 组互不通信的分组卷积」；独立算一遍 Eqn.(4)，确认 C=32、d=4 时参数约 70k；背出那张 2 倍算力对照表（加深 +0.3 / 加宽 +0.7 / 加基数 +1.3）；并说清为什么 ResNeXt101-64x4d 会成为「强主干的默认靶子」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 上一课 <b>0188 ResNet</b> 留下了两个可复用的东西：残差连接，以及那个约 70k 参数的瓶颈块——<b>本课就在它上面再切一刀</b>。★ 上上课 <b>0187 GoogLeNet</b> 的 Inception 是「每个分支各设计一套」，本课要讲清它与 Inception 的关系（沿用它、但把「手工设计」换成「同一套拓扑」）。★ 第八季 <b>0160–0167 对象级建图</b>那一块，Mask R-CNN 的骨干就换成了 ResNeXt-101-FPN（mask AP 从 35.4 涨到 36.7）。★ 本季 <b>0194 Swin 与 PVT</b> 会一起把 ResNeXt101-64x4d 当成靶子来打——你会看到它被超越两次。</p></div>
+      </div>
+
+      <h2>1. 一句话定位：与其继续加深加宽，不如把一次大卷积切成 32 份</h2>
+      <p>一句话：<b>ResNeXt 在不增加复杂度的前提下，通过「分组卷积 / 聚合变换」把「基数」（cardinality，也就是变换的个数）立成了独立于深度、宽度的第三个维度。</b>原文摘要原话是：</p>
+      <div class="formula-box">
+        <div class="flow-formula">This strategy exposes a new dimension, which we call <b>“cardinality” (the size of the set of transformations)</b>, as an essential factor in addition to the dimensions of depth and width.</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个句子在说「除了深度和宽度，还有第三个能调大的旋钮」——它的名字叫基数，含义是「一次操作里并排跑了几路变换」；② 为什么它值得单独命名——因为当深度和宽度都开始边际收益递减时，另开一个维度能带来更大的收益（下一节用数字证明）；③ <b>具体到数</b>：ResNeXt 的默认配置是 <b>C = 32、d = 4</b>，也就是把中间那层 3×3 卷积<b>切成 32 组，每组只吃 4 个通道、也只吐 4 个通道</b>，组与组之间没有任何连接。</p>
+      <p>先给一个生活类比。假设你有一个面包房，预算只够雇 <b>32 个人做 4 小时</b>。<b>方案一</b>是雇一个大厨做 128 小时——他能做出很精致的面包，但只有一种口味。<b>方案二</b>是雇 32 个师傅各做 4 小时，每人负责一种口味，<b>但他们互相不能交流、不能借用对方的配方</b>——最后你拿到的是 32 种不同口味的面包。ResNeXt 做的就是这个选择。</p>
+      <p>这里有一个必须讲清楚的关键词：<b>互不通信</b>。分组卷积（grouped convolution）的意思是：把输入通道切成若干组，每组只跟自己这一组做卷积，<b>组与组之间没有任何连接</b>。所以它不是「把一次大卷积算得快一点」，而是<b>让网络同时学 32 种彼此互补的、而不是冗余的变换</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 560" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="560" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">一次大卷积 vs 32 份互不通信的小卷积</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">两者的参数量与 FLOPs 几乎相同，唯一区别是「通道之间允不允许通信」</text>
+
+          <text x="60" y="90" fill="#7f8fc7" font-size="14" font-weight="700">ResNet 的做法：一次大卷积</text>
+          <text x="230" y="104" text-anchor="middle" fill="#9fb4ff" font-size="10">输入通道（示意 8 条，实际 128）</text>
+          <rect x="60" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="96" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="132" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="168" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="204" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="240" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="276" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="312" y="110" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <line x1="230" y1="136" x2="230" y2="148" stroke="#7f8fc7"/>
+          <rect x="60" y="150" width="340" height="50" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="230" y="180" text-anchor="middle" fill="#cdd6ff" font-size="12">3×3 卷积，128 组滤波器</text>
+          <line x1="230" y1="200" x2="230" y2="212" stroke="#7f8fc7"/>
+          <rect x="60" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="96" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="132" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="168" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="204" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="240" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="276" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="312" y="214" width="34" height="26" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="230" y="260" text-anchor="middle" fill="#9fb4ff" font-size="10">输出 128 通道</text>
+          <text x="230" y="286" text-anchor="middle" fill="#cdd6ff" font-size="11">每个输出通道都连着全部 128 个输入通道</text>
+          <text x="230" y="308" text-anchor="middle" fill="#ffd166" font-size="11">参数量 3×3×128×128</text>
+
+          <text x="500" y="90" fill="#5cffb0" font-size="14" font-weight="700">ResNeXt 的做法：分组卷积 C=32</text>
+          <text x="670" y="104" text-anchor="middle" fill="#9fb4ff" font-size="10">输入通道（示意 8 条，实际 128）</text>
+          <rect x="500" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="544" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="588" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="632" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="676" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="720" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="764" y="110" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="808" y="110" width="32" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <line x1="670" y1="136" x2="670" y2="148" stroke="#5cffb0"/>
+          <rect x="500" y="150" width="340" height="50" rx="4" fill="#1b2440" stroke="#5cffb0"/>
+          <line x1="541" y1="152" x2="541" y2="198" stroke="#5cffb0"/>
+          <line x1="583" y1="152" x2="583" y2="198" stroke="#5cffb0"/>
+          <line x1="625" y1="152" x2="625" y2="198" stroke="#5cffb0"/>
+          <line x1="667" y1="152" x2="667" y2="198" stroke="#5cffb0"/>
+          <line x1="709" y1="152" x2="709" y2="198" stroke="#5cffb0"/>
+          <line x1="751" y1="152" x2="751" y2="198" stroke="#5cffb0"/>
+          <line x1="793" y1="152" x2="793" y2="198" stroke="#5cffb0"/>
+          <text x="520" y="145" fill="#5cffb0" font-size="10">组 1</text>
+          <text x="790" y="145" fill="#5cffb0" font-size="10">组 32</text>
+          <text x="520" y="212" fill="#5cffb0" font-size="10">组 1</text>
+          <text x="788" y="212" fill="#5cffb0" font-size="10">组 32</text>
+          <line x1="670" y1="200" x2="670" y2="212" stroke="#5cffb0"/>
+          <rect x="500" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="544" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="588" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="632" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="676" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="720" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="764" y="214" width="40" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="808" y="214" width="32" height="26" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="670" y="260" text-anchor="middle" fill="#9fb4ff" font-size="10">输出 128 通道（32 组 × 4 通道）</text>
+          <text x="670" y="286" text-anchor="middle" fill="#cdd6ff" font-size="11">每一组只跟本组的 4 个通道说话，别的组看不到</text>
+          <text x="670" y="308" text-anchor="middle" fill="#5cffb0" font-size="11">参数量 32×(3×3×4×4) —— 总数仍约 3×3×128×128</text>
+
+          <text x="60" y="344" fill="#cdd6ff" font-size="11">同一份预算：参数量几乎相同</text>
+          <text x="60" y="366" fill="#cdd6ff" font-size="11">同一份预算：FLOPs 也几乎相同</text>
+          <text x="60" y="388" fill="#cdd6ff" font-size="11">区别只在「通道之间允不允许通信」</text>
+          <text x="60" y="410" fill="#ffd166" font-size="11">ResNet 允许 → 见到的是 1 种全宽的变换</text>
+          <text x="60" y="432" fill="#ffd166" font-size="11">ResNeXt 不允许 → 见到的是 32 种窄的变换</text>
+          <text x="470" y="344" fill="#5cffb0" font-size="11">原论文的说法：一次卷积被换成了 32 个</text>
+          <text x="470" y="366" fill="#5cffb0" font-size="11">「同构」的变换，它们的输出相加</text>
+          <text x="470" y="388" fill="#5cffb0" font-size="11">同构 = 所有分支共用同一套拓扑</text>
+          <text x="470" y="410" fill="#cdd6ff" font-size="11">好处：分支数可以随意放大，不必逐支设计</text>
+          <text x="470" y="432" fill="#cdd6ff" font-size="11">这就是它比 Inception 好迁移的地方</text>
+
+          <text x="450" y="462" text-anchor="middle" fill="#ffd1d8" font-size="12" font-weight="700">注意：这不是 ensemble——32 条路是联合训练的，不是 32 个独立模型投票</text>
+          <text x="450" y="486" text-anchor="middle" fill="#9fb4ff" font-size="12">原文特意澄清：把本方法看成 ensembling 是「imprecise」的</text>
+          <text x="450" y="514" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：与其把一层做得更宽，不如把它拆成 32 个互不通信的小层</text>
+          <text x="450" y="538" text-anchor="middle" fill="#9fb4ff" font-size="11">对照原图：Figure 1 把 ResNet 块与 ResNeXt 块并排画在一起，可以直接看</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两栏是同一件事的两种做法。左栏「一次大卷积」：8 条示意输入通道（实际 128）全部连到中间那个 3×3 卷积里，再变回 8 条输出——所有通道互相通信。右栏「分组卷积」：同样的输入输出，但中间那个卷积被 7 道纵向隔墙切成了 32 组（图中示意出组 1 与组 32），每组只吃 4 个通道、只吐 4 个通道。<br>
+          <b>怎么看这张图：</b>① 先看两栏方块下面的参数量标注：<b>两者几乎相同</b>——所以这不是「省参数」的技巧；② 再看右栏那些绿色的隔墙：<b>它们是这张图的重点</b>——隔墙意味着信息不能跨组流动，于是 32 条路学出来的东西必须彼此不同才有意义；③ 最后看底部那行红字：<b>它不是 ensemble</b>，32 条路是同时训练的、共享同一个损失，而不是 32 个独立模型做投票——原文专门澄清过这一点。<br>
+          <b>要记住的一句话：</b>同一份参数预算，ResNet 买到的是一种「更宽的变换」，ResNeXt 买到的是 32 种「互相看不见的变换」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>ResNeXt 的 32 组卷积，为什么必须「互不通信」？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：如果组与组之间有连接，它们就会互相「抄」对方学到的东西，32 条路会退化成一条更宽的路——基数这个维度就失去了意义。互不通信是让 32 路学出互补表示的前提，原文说这换来的正是「更强的表示」。"
+            onclick="lessonKit.answer(this,'q0189a')">互不通信才能学出互补变换</button>
+          <button data-correct="no" data-explanation="不对：算得快确实是分组卷积的工程附带好处，但论文的主张不在速度上——它明确说分组卷积不是本文发明的、而且此前「little evidence on exploiting grouped convolutions to improve accuracy」。它的主张是精度。"
+            onclick="lessonKit.answer(this,'q0189a')">互不通信只是为了算得快</button>
+        </div>
+        <div class="quiz-feedback" id="q0189a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 前人卡在哪：两条路各有毛病</h2>
+      <p>ResNeXt 的出发点非常清楚：<b>当时最强的两条路，一条太死板、一条太手工。</b>原文一开始就把它们摆在一起对比。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>路线一：VGG / ResNet 式的「重复同形状的块」</h4>
+          <p>好处是<b>超参数少、好迁移</b>。原文说这条规则「reduces the free choices of hyperparameters」，而且它「may reduce the risk of over-adapting the hyperparameters to a specific dataset」。坏处是：<b>它只把「深度」这一个维度暴露出来</b>（原话：depth is exposed as an essential dimension）。想更强？只能更深。</p>
+        </div>
+        <div class="mini-card">
+          <h4>路线二：Inception 式的「split-transform-merge」</h4>
+          <p>它的做法是先把输入用 1×1 拆成若干低维嵌入，再用一批<b>各自定制</b>的滤波器（3×3、5×5 等）变换，最后拼接。精度好，但原文点出它的痛处：「<b>the filter numbers and sizes are tailored for each individual transformation, and the modules are customized stage-by-stage</b>」——每一支都要单独设计，换数据集就要重新设计。「It is in general unclear how to adapt the Inception architectures to new datasets/tasks」。</p>
+        </div>
+      </div>
+      <p><b>一句话总结这两条路</b>：<b>VGG / ResNet 简单但不灵活，Inception 强但太手工。</b></p>
+      <h3>还有一层背景：深度与宽度的收益正在递减</h3>
+      <p>这是理解 ResNeXt 为什么值得单独成节的关键。上一课我们看到，ResNet 把深度从 34 一路推到 152，收益很可观。但这条曲线不会一直那么陡。<b>原文自己给了一个非常直接的断言</b>：「increasing cardinality is a more effective way of gaining accuracy than going deeper or wider, <b>especially when depth and width starts to give diminishing returns for existing models</b>」——它明确承认，深度和宽度对现有模型已经开始边际收益递减了。</p>
+      <p>所以 ResNeXt 的问题意识不是「再找个更深的网络」，而是：<b>手里有一份固定的算力预算，除了加深和加宽，还有没有第三条路？</b>答案是有的——把它花在「路数」上。</p>
+      <p>顺带说一句历史：<b>分组卷积不是这篇论文发明的</b>。它最早出现在 AlexNet 里，当时的动机非常工程化——<b>把模型拆到两块 GPU 上跑</b>。而原文很诚实地承认：「To the best of our knowledge, there has been <b>little evidence on exploiting grouped convolutions to improve accuracy</b>」——此前几乎没有人证明过分组卷积能提精度。<b>ResNeXt 的主张就是这个：分组卷积第一次被证明是提精度的手段，而不只是工程妥协。</b></p>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 核心机制：基数这个新维度</h2>
+      <p>ResNeXt 的做法可以拆成两句话。</p>
+      <p><b>第一句：把 Inception 的「每个分支各设计一套」改成「所有分支共用同一套拓扑」。</b>原文的说法是：「we pursuit a simple realization of this idea — the transformations to be aggregated are <b>all of the same topology</b>. This design allows us to <b>extend to any large number of transformations without specialized designs</b>.」</p>
+      <p><b>人话</b>：Inception 是请了 4 位不同的专家（3×3 的、5×5 的、1×1 的、池化的），得一个个去设计；ResNeXt 是请 32 位<b>同专业</b>的专家，你只要说「再来一位」就行，不用重新设计岗位。<b>于是「分支数」这个量第一次变成了一个可以随意拧的旋钮</b>——这就是基数的由来。</p>
+      <p><b>第二句：落地形态就是把 ResNet 瓶颈块中间那层 3×3 换成 32 组的分组卷积。</b>每组输入输出各 4 通道，也就是论文里到处出现的 <b>32×4d</b> 这个记号。</p>
+      <p>论文还证明了这个模块有<b>三种严格等价的写法</b>（Figure 3）：</p>
+      <div class="grid-3">
+        <div class="mini-card"><h4>(a) 聚合残差变换</h4><p>最原始的形式：32 条并列的支路，每条做一次同构变换，输出<b>相加</b>。这是 Figure 1 右图那个样子。</p></div>
+        <div class="mini-card"><h4>(b) 早拼接</h4><p>把 (a) 里那些 1×1 降维层合并成一次更宽的 1×1，然后再拆回去做分组卷积——形式上与 Inception-ResNet 有点像。</p></div>
+        <div class="mini-card"><h4>(c) 分组卷积</h4><p>最简洁的写法：一个宽 1×1 层 + 一个 32 组的分组卷积 + 一个宽 1×1 层。论文最终就用这一种实现。</p></div>
+      </div>
+      <p>这里有一句很值得学的原文：<b>三种写法不是纸面推导就算完的——「We have trained all three forms and obtained the same results.」</b>（三种都训过，结果一致），选 (c) 只是因为「more succinct and faster」。<b>这是「等价性必须用实验确认，不能只靠推导」的一条好范例。</b>下面这张原图就是这三兄弟。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Aggregated_Residual_Transformations_for_Deep_Neural_Netw/75549347dae00c81af25608db2ee429a38e5f6167f52ba98937ad7f360a9dcd2.jpg" alt="Equivalent building blocks of ResNeXt">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>「Figure 3. Equivalent building blocks of ResNeXt. (a): Aggregated residual transformations, the same as Fig. 1 right. (b): A block equivalent to (a), implemented as early concatenation. (c): A block equivalent to (a,b), implemented as grouped convolutions. Notations in bold text highlight the reformulation changes. A layer is denoted as (# input channels, filter size, # output channels).」<br>
+          <b>怎么看这张图：</b>三张子图是同一个模块的三种写法，<b>论文说它们严格等价、并且都训过</b>。读法是看每个方块上的三元组记号「(# 输入通道, 滤波器尺寸, # 输出通道)」：<b>(a)</b> 是 32 条并列支路，每条都是 1×1 → 3×3 → 1×1 的窄瓶颈，分支数就是基数；<b>(b)</b> 把那些 1×1 合并成一次更宽的 1×1，后面用拼接拆回去；<b>(c)</b> 最简洁——一次 1×1（图上标注 128）→ 一次 32 组的分组卷积（每组 4 通道）→ 一次 1×1。图上加粗的记号标出的正是「这次重写改了哪里」。<br>
+          <b>要记住的一件事：</b>论文最终选 (c) 只因为它最短最快，<b>不是因为 (a)(b) 效果差</b>。
+        </figcaption>
+      </figure>
+
+      <p>还有一处需要特别澄清，否则很容易误读：<b>它和 Inception 的关系是「继承」而不是「雷同」。</b>原文自己做了区分——(b) 那个形式「appears similar to the Inception-ResNet module in that it concatenates multiple paths; but our module differs from all existing Inception modules in that <b>all our paths share the same topology</b>」。<b>人话</b>：Inception 是「多路但每路不一样」，ResNeXt 是「多路而且每路一模一样」。<b>正因为每路一模一样，路数才能被单独抽出来当一个变量研究。</b></p>
+      <p>另外，作者也特意把它与 Network-in-Network 区分开：NiN「turns out to <b>increase the dimension of depth</b>」，而本文的「Network-in-Neuron」是<b>沿着一个新维度展开</b>——这是作者亲自给出的「本方法不是加深」的定性。</p>
+      <p>最后一个容易被忽略的细节：<b>cardinality 这个词是借来的。</b>它的参考文献是 <b>G. Cantor, 1884</b>——也就是集合论的「基数」。一个数学名词被挪来命名网络里的一个旋钮，这件事很少被提及，但它准确表达了作者的意思：<b>基数描述的是「集合里有多少个元素」，也就是这里「有多少个变换」。</b></p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 公式与形状账：一份钱怎么花</h2>
+      <p>原文给了四个式子。我们从最朴素的那个开始——它其实是「一个神经元」的定义。</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$\sum_{i=1}^{D} w_i x_i \tag{1}$$</div>
+        <div class="flow-formula">$$\mathcal{F}(\mathbf{x}) = \sum_{i=1}^{C} \mathcal{T}_i(\mathbf{x}) \tag{2}$$</div>
+        <div class="flow-formula">$$\mathbf{y} = \mathbf{x} + \sum_{i=1}^{C} \mathcal{T}_i(\mathbf{x}) \tag{3}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 式 (1) 是<b>一个普通神经元</b>：把 D 维输入 x 的每一维乘一个权重 w、再加起来。原文把它拆成三步：<b>Splitting</b>（把 x 切成低维嵌入，这里是最简单的一维子空间 x_i）、<b>Transforming</b>（变换，这里只是缩放 w_i x_i）、<b>Aggregating</b>（把所有结果求和）。② 式 (2) 是<b>本文的核心改动</b>：把式 (1) 里那个「缩放」换成一个任意函数 T_i(x)，然后<b>把 C 个这样的变换加起来</b>。这里的 C 就是基数。原文强调：「C is in a position similar to D in Eqn.(1), but <b>C need not equal D and can be an arbitrary number</b>」——基数不必等于通道数，可以随便设。③ 式 (3) 就是在式 (2) 外面套上 ResNet 的残差形式：聚合的结果再走一次短路相加。原文只写了一句「where y is the output.」，<b>没有展开 ReLU/BN 的位置</b>——它们在 §4 的文字里：BN 紧跟每个卷积、ReLU 紧跟 BN，<b>而块输出处的 ReLU 放在与短路相加之后</b>。</p>
+      <p>然后是那张真正决定「省不省」的式子：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$C\cdot\left(256\cdot d + 3\cdot 3\cdot d\cdot d + d\cdot 256\right) \tag{4}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算<b>一个 ResNeXt 块的参数量</b>——括号里的三项依次是「1×1 降维」「3×3 分组卷积」「1×1 升维」各自的参数量，最后乘上组数 C；② 为什么写成这样——因为每个组都是同一套结构，算一组再乘 C 就行，这正是「所有分支同构」带来的好处；③ 逐符号：<b>C</b> 是基数（组数），<b>d</b> 是瓶颈宽度（也就是每一组的通道数），三个 256 是块两端的通道数（输入 256、输出 256）。</p>
+      <h3>形状账：一组一组算给你看</h3>
+      <p>取论文的默认配置 <b>C = 32、d = 4</b>，把 ResNeXt-50 的块和 ResNet-50 的块摆在一起算：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">那一层</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">ResNet-50 的块（1×64d）</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">ResNeXt-50 的块（32×4d）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">1×1 降维（256 → 瓶颈宽）</td><td style="padding:.5rem;border:1px solid #3a4a78;">1×1×256×64 = <b>16384</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">1×1×256×128 = <b>32768</b></td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">3×3 卷积</td><td style="padding:.5rem;border:1px solid #3a4a78;">3×3×64×64 = <b>36864</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">32×(3×3×4×4) = <b>4608</b></td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">1×1 升维（瓶颈宽 → 256）</td><td style="padding:.5rem;border:1px solid #3a4a78;">1×1×64×256 = <b>16384</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">1×1×128×256 = <b>32768</b></td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;"><b>合计</b></td><td style="padding:.5rem;border:1px solid #3a4a78;"><b>69632 ≈ 70k</b></td><td style="padding:.5rem;border:1px solid #3a4a78;"><b>70144 ≈ 70k</b></td></tr>
+        </tbody>
+      </table>
+      <p><b>这张表里有三件事必须点出来，否则你就白算了。</b></p>
+      <ul>
+        <li><b>第一，总数确实相等。</b>69632 对 70144，差 0.7%，这就是论文说的「复杂度保持」。原文还诚实地补了一句：「the complexity <b>can only be preserved approximately</b>, but the difference ... is minor and <b>does not bias our results</b>」——只能近似保持。</li>
+        <li><b>第二，中间那一层的总宽度其实变宽了。</b>ResNet 中间是 64 通道，ResNeXt 中间是 32×4 = <b>128 通道</b>。<b>注意：不是变窄，是变宽了，但被切成了 32 条互不通信的路。</b>这是最容易读错的一点。</li>
+        <li><b>第三，钱是从哪儿挪到哪儿的。</b>那个最贵的 3×3 卷积，参数量从 36864 掉到 4608——<b>降到 1/8</b>；而两头两个 1×1 各自翻了一倍（16384 → 32768）。<b>一降一涨，总数几乎不变。</b>换句话说：<b>ResNeXt 把预算从「空间上的大卷积」挪到了「通道上的多路并行」。</b></li>
+      </ul>
+      <p>顺便把 FLOPs 也走一遍。原文说这个模板的 FLOPs 是「# params × 56 × 56 for conv2」——也就是参数量乘上特征图的面积（56×56 = 3136）。于是 70144 × 3136 ≈ <b>2.2 亿</b>，也就是原文说的 <b>约 0.22 billion</b>。<b>记这个数的好处是：以后看到「FLOPs 约 0.22 billion」，你知道它对应的就是 56×56 特征图上的一个瓶颈块。</b></p>
+      <p>最后，原文还用 Table 2 给了 (C, d) 的一整套配对，说明「同一份预算，怎么在组数和组宽之间挪」：<b>C = 1 / 2 / 4 / 8 / 32 分别对应 d = 64 / 40 / 24 / 14 / 4</b>，对应的分组卷积总宽度是 64 / 80 / 96 / 112 / 128。注意一个规律：<b>组数每翻一倍，每组就被压得更窄，但总宽度反而在涨</b>——这正是下面那张图要讲的权衡。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">同一份 70k 参数，三种花法：组数越多，每组越窄</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">三行的参数量都约 70k、FLOPs 都约 0.22 billion；差别只在「切成几组、每组多宽」</text>
+
+          <text x="60" y="96" fill="#7f8fc7" font-size="12" font-weight="700">C = 1，d = 64</text>
+          <rect x="200" y="78" width="230" height="26" rx="3" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="315" y="96" text-anchor="middle" fill="#cdd6ff" font-size="11">1 组 × 64 通道</text>
+          <text x="448" y="96" fill="#ff9f6b" font-size="11">这就是 ResNet 瓶颈块</text>
+          <text x="620" y="96" fill="#ff9f6b" font-size="11">top-1 错误 23.9</text>
+
+          <text x="60" y="152" fill="#7f8fc7" font-size="12" font-weight="700">C = 8，d = 14</text>
+          <rect x="200" y="134" width="230" height="26" rx="3" fill="#1b2440" stroke="#7f8fc7"/>
+          <line x1="228" y1="136" x2="228" y2="158" stroke="#5cffb0"/>
+          <line x1="257" y1="136" x2="257" y2="158" stroke="#5cffb0"/>
+          <line x1="286" y1="136" x2="286" y2="158" stroke="#5cffb0"/>
+          <line x1="315" y1="136" x2="315" y2="158" stroke="#5cffb0"/>
+          <line x1="343" y1="136" x2="343" y2="158" stroke="#5cffb0"/>
+          <line x1="372" y1="136" x2="372" y2="158" stroke="#5cffb0"/>
+          <line x1="401" y1="136" x2="401" y2="158" stroke="#5cffb0"/>
+          <text x="315" y="152" text-anchor="middle" fill="#cdd6ff" font-size="11">8 组 × 14 通道（总宽 112）</text>
+          <text x="448" y="152" fill="#ffd166" font-size="11">组数第一次起作用</text>
+          <text x="620" y="152" fill="#ffd166" font-size="11">top-1 错误 22.3</text>
+
+          <text x="60" y="208" fill="#5cffb0" font-size="12" font-weight="700">C = 32，d = 4</text>
+          <rect x="200" y="190" width="230" height="26" rx="3" fill="#1d3a2a" stroke="#5cffb0"/>
+          <line x1="207" y1="192" x2="207" y2="214" stroke="#5cffb0"/>
+          <line x1="214" y1="192" x2="214" y2="214" stroke="#5cffb0"/>
+          <line x1="221" y1="192" x2="221" y2="214" stroke="#5cffb0"/>
+          <line x1="228" y1="192" x2="228" y2="214" stroke="#5cffb0"/>
+          <line x1="235" y1="192" x2="235" y2="214" stroke="#5cffb0"/>
+          <line x1="242" y1="192" x2="242" y2="214" stroke="#5cffb0"/>
+          <line x1="249" y1="192" x2="249" y2="214" stroke="#5cffb0"/>
+          <line x1="256" y1="192" x2="256" y2="214" stroke="#5cffb0"/>
+          <line x1="263" y1="192" x2="263" y2="214" stroke="#5cffb0"/>
+          <line x1="270" y1="192" x2="270" y2="214" stroke="#5cffb0"/>
+          <line x1="277" y1="192" x2="277" y2="214" stroke="#5cffb0"/>
+          <line x1="284" y1="192" x2="284" y2="214" stroke="#5cffb0"/>
+          <line x1="291" y1="192" x2="291" y2="214" stroke="#5cffb0"/>
+          <line x1="298" y1="192" x2="298" y2="214" stroke="#5cffb0"/>
+          <line x1="305" y1="192" x2="305" y2="214" stroke="#5cffb0"/>
+          <line x1="312" y1="192" x2="312" y2="214" stroke="#5cffb0"/>
+          <line x1="319" y1="192" x2="319" y2="214" stroke="#5cffb0"/>
+          <line x1="326" y1="192" x2="326" y2="214" stroke="#5cffb0"/>
+          <line x1="333" y1="192" x2="333" y2="214" stroke="#5cffb0"/>
+          <line x1="340" y1="192" x2="340" y2="214" stroke="#5cffb0"/>
+          <line x1="347" y1="192" x2="347" y2="214" stroke="#5cffb0"/>
+          <line x1="354" y1="192" x2="354" y2="214" stroke="#5cffb0"/>
+          <line x1="361" y1="192" x2="361" y2="214" stroke="#5cffb0"/>
+          <line x1="368" y1="192" x2="368" y2="214" stroke="#5cffb0"/>
+          <line x1="375" y1="192" x2="375" y2="214" stroke="#5cffb0"/>
+          <line x1="382" y1="192" x2="382" y2="214" stroke="#5cffb0"/>
+          <line x1="389" y1="192" x2="389" y2="214" stroke="#5cffb0"/>
+          <line x1="396" y1="192" x2="396" y2="214" stroke="#5cffb0"/>
+          <line x1="403" y1="192" x2="403" y2="214" stroke="#5cffb0"/>
+          <line x1="410" y1="192" x2="410" y2="214" stroke="#5cffb0"/>
+          <line x1="417" y1="192" x2="417" y2="214" stroke="#5cffb0"/>
+          <text x="315" y="208" text-anchor="middle" fill="#cdd6ff" font-size="11">32 组 × 4 通道（总宽 128）</text>
+          <text x="448" y="208" fill="#5cffb0" font-size="11">论文的默认配置</text>
+          <text x="620" y="208" fill="#5cffb0" font-size="11">top-1 错误 22.2</text>
+
+          <text x="450" y="252" text-anchor="middle" fill="#e8ecff" font-size="13" font-weight="700">(C, d) 的配套表：同一份预算，组数和组宽可以互相换</text>
+          <text x="120" y="284" fill="#9fb4ff" font-size="11">C 组数</text>
+          <text x="230" y="284" fill="#9fb4ff" font-size="11">1</text>
+          <text x="310" y="284" fill="#9fb4ff" font-size="11">2</text>
+          <text x="390" y="284" fill="#9fb4ff" font-size="11">4</text>
+          <text x="470" y="284" fill="#9fb4ff" font-size="11">8</text>
+          <text x="550" y="284" fill="#9fb4ff" font-size="11">32</text>
+          <text x="120" y="308" fill="#9fb4ff" font-size="11">d 每组宽</text>
+          <text x="230" y="308" fill="#cdd6ff" font-size="11">64</text>
+          <text x="310" y="308" fill="#cdd6ff" font-size="11">40</text>
+          <text x="390" y="308" fill="#cdd6ff" font-size="11">24</text>
+          <text x="470" y="308" fill="#cdd6ff" font-size="11">14</text>
+          <text x="550" y="308" fill="#cdd6ff" font-size="11">4</text>
+          <text x="120" y="332" fill="#9fb4ff" font-size="11">总宽度</text>
+          <text x="230" y="332" fill="#ffd166" font-size="11">64</text>
+          <text x="310" y="332" fill="#ffd166" font-size="11">80</text>
+          <text x="390" y="332" fill="#ffd166" font-size="11">96</text>
+          <text x="470" y="332" fill="#ffd166" font-size="11">112</text>
+          <text x="550" y="332" fill="#ffd166" font-size="11">128</text>
+          <text x="120" y="356" fill="#9fb4ff" font-size="11">top-1 错误</text>
+          <text x="230" y="356" fill="#ff9f6b" font-size="11">23.9</text>
+          <text x="310" y="356" fill="#ffd166" font-size="11">23.0</text>
+          <text x="390" y="356" fill="#ffd166" font-size="11">22.6</text>
+          <text x="470" y="356" fill="#ffd166" font-size="11">22.3</text>
+          <text x="550" y="356" fill="#5cffb0" font-size="11">22.2</text>
+
+          <text x="700" y="284" fill="#cdd6ff" font-size="11">注意规律：组数越少，每组越宽；</text>
+          <text x="700" y="306" fill="#cdd6ff" font-size="11">组数越多，总宽度反而越大。</text>
+          <text x="700" y="330" fill="#ff9f6b" font-size="11">但组数越多，每组被压得越窄，</text>
+          <text x="700" y="352" fill="#ff9f6b" font-size="11">收益会开始饱和（论文设 d ≥ 4）。</text>
+
+          <text x="450" y="392" text-anchor="middle" fill="#ffd1d8" font-size="12" font-weight="700">★ 三行的参数量都约 70k、FLOPs 都约 0.22 billion——完全是同一份预算</text>
+          <text x="450" y="416" text-anchor="middle" fill="#cdd6ff" font-size="12">所以 23.9 → 22.2 这 1.7 个百分点，只能归功于「把这笔钱切成更多路」</text>
+          <text x="450" y="444" text-anchor="middle" fill="#9fb4ff" font-size="12">这是全季最干净的一次「控制变量」实验：钱不变、结构不变，只改变路的条数</text>
+          <text x="450" y="472" text-anchor="middle" fill="#9fb4ff" font-size="12">旁证：原文说 32×4d 的 ResNeXt 训练误差也远低于 ResNet 对照</text>
+          <text x="450" y="498" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：这不是正则化的功劳，是「更强的表示」——原文就是这么说的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三行代表同一份预算（参数量都约 70k、FLOPs 都约 0.22 billion）的三种花法：C=1、d=64（就是 ResNet 的瓶颈块）；C=8、d=14；C=32、d=4（论文的默认配置）。每行画一个被隔墙切开的方块，隔墙数就是组数。下半部分是原文 Table 2 的配套表：组数 C 取 1/2/4/8/32 时，每组宽度 d 是 64/40/24/14/4，总宽度是 64/80/96/112/128，对应的 top-1 错误从 23.9 一路降到 22.2。<br>
+          <b>怎么看这张图：</b>① 先看三行右边的 top-1 错误：<b>23.9 → 22.3 → 22.2</b>，钱一分没多花；② 再看半张表的最后一列：<b>组数从 1 加到 32，每组从 64 通道被压到 4 通道，而总宽度反而从 64 涨到 128</b>——这个细节最容易被忽略；③ 注意右下角那条限制：<b>组数越多、每组越窄，收益会饱和，所以论文自我约束每组宽度不得小于 4d</b>。<br>
+          <b>要记住的一句话：</b>这是一个干净的控制变量实验——预算、结构、训练方法全不变，只改「路的条数」，误差就掉了 1.7 个点。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Aggregated_Residual_Transformations_for_Deep_Neural_Netw/25a0a7ed6942a5eeca2392bc03a5a862d6a6581c8b2526b5f30d6f6f41c4563c.jpg" alt="A block of ResNet vs a block of ResNeXt with cardinality 32">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>「Figure 1. Left: A block of ResNet [14]. Right: A block of ResNeXt with cardinality = 32, with roughly the same complexity. A layer is shown as (# in channels, filter size, # out channels).」<br>
+          <b>怎么看这张图：</b>这是全课最该盯着看的一张图。左块是 ResNet 的瓶颈块，中间那一层标着 (64, 3×3, 64)——<b>一个整体</b>；右块是 ResNeXt 的块，中间那一层被画成了<b>并列的多条窄路</b>，每条路上写着 (4, 3×3, 4)，一共 32 条。<b>注意图注里那句「with roughly the same complexity」</b>——两张图的参数量是刻意对齐的。<br>
+          <b>怎么对照本课的形状账：</b>左块的中间层是 3×3×64×64 = 36864；右块中间层是 32×(3×3×4×4) = 4608。<b>看图时你会以为右边「更多、更碎」，但算下来它的中间层反而便宜了 8 倍</b>——省下的钱被两端那两个 1×1 用掉了。<br>
+          <b>要记住的一句话：</b>这张图就是「不加深也能变强」这七个字的全部内容——同样的钱，右边买到了 32 条互不通信的路。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Aggregated_Residual_Transformations_for_Deep_Neural_Netw/ab52720eacf2cdd523fab1eb3a622b773bbe2d28e06da948fb075e6ce5439b8f.jpg" alt="Test error vs model size on CIFAR-10">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>「Figure 7. Test error vs. model size on CIFAR-10. The results are computed with 10 runs, shown with standard error bars. The labels show the settings of the templates.」——CIFAR-10 上测试误差与模型规模的关系；每个结果跑 10 次、带标准误的误差棒；标签标出模板的配置。<br>
+          <b>怎么看这张图：</b>横轴是模型规模，纵轴是测试误差，<b>点越靠左下越好</b>。图上每个点旁边标注的就是模板配置（形如 16×64d、32×4d 这样的记号）。<b>要盯住的是「同一规模下不同配置的垂直差距」</b>：规模相同时，基数更大的配置落在下方。这就说明「规模」不是唯一的解释变量——<b>同样大的模型，怎么切分那笔预算，结果会不一样</b>。误差棒的存在也很重要：它说明这些差距不是单次运行的偶然，而是 10 次运行后的稳定结论。<br>
+          <b>一个引用提醒：</b>本图讨论的是 CIFAR-10 上的小模型实验，与前面 ImageNet 上的结论互补而不可混用——<b>报数字时必须带上数据集与测试协议</b>，这是本季反复强调的规矩。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 关键数字：2 倍算力该投哪儿</h2>
+      <p>这是本课最该记住的一组数字。原文的做法是：<b>把算力预算从 1 倍加到 2 倍（15 billion FLOPs），然后比较三种「怎么花」的结果</b>——加深、加宽、还是加基数。基线是 ResNet-101 的 top-1 错误 <b>22.0%</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">2 倍算力投到哪儿：加深 +0.3、加宽 +0.7、加基数 +1.3</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">横条长度 = 相比基线（ResNet-101，top-1 错误 22.0）降低的百分点；越长越好</text>
+
+          <line x1="300" y1="86" x2="300" y2="400" stroke="#3a4a78"/>
+          <text x="300" y="80" text-anchor="middle" fill="#9fb4ff" font-size="11">0</text>
+          <line x1="400" y1="86" x2="400" y2="400" stroke="#24304f"/>
+          <text x="400" y="80" text-anchor="middle" fill="#9fb4ff" font-size="11">0.5</text>
+          <line x1="500" y1="86" x2="500" y2="400" stroke="#24304f"/>
+          <text x="500" y="80" text-anchor="middle" fill="#9fb4ff" font-size="11">1.0</text>
+          <line x1="600" y1="86" x2="600" y2="400" stroke="#24304f"/>
+          <text x="600" y="80" text-anchor="middle" fill="#9fb4ff" font-size="11">1.5</text>
+          <text x="700" y="80" text-anchor="middle" fill="#9fb4ff" font-size="11">2.0</text>
+
+          <text x="60" y="118" fill="#cdd6ff" font-size="12" font-weight="700">① 加深：200 层</text>
+          <rect x="300" y="100" width="60" height="28" rx="3" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="372" y="120" fill="#ff9f6b" font-size="12">只降 0.3 → 21.7</text>
+          <text x="60" y="142" fill="#9fb4ff" font-size="11">多花的钱换来的收益已经很小</text>
+          <text x="60" y="166" fill="#7f8fc7" font-size="11">（也就是把 ResNet-101 加到 200 层）</text>
+
+          <text x="60" y="192" fill="#cdd6ff" font-size="12" font-weight="700">② 加宽：100d</text>
+          <rect x="300" y="174" width="140" height="28" rx="3" fill="#3a3320" stroke="#ffd166"/>
+          <text x="452" y="194" fill="#ffd166" font-size="12">降 0.7 → 21.3</text>
+          <text x="60" y="216" fill="#9fb4ff" font-size="11">比加深好一些，但仍然有限</text>
+          <text x="60" y="240" fill="#7f8fc7" font-size="11">（把瓶颈宽从 64 加到 100）</text>
+
+          <text x="60" y="266" fill="#cdd6ff" font-size="12" font-weight="700">③ 加基数：2×64d</text>
+          <rect x="300" y="248" width="260" height="28" rx="3" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="572" y="268" fill="#5cffb0" font-size="12">降 1.3 → 20.7</text>
+          <text x="60" y="290" fill="#9fb4ff" font-size="11">同样的钱，收益是加深的四倍多</text>
+
+          <text x="60" y="340" fill="#5cffb0" font-size="12" font-weight="700">④ 继续加基数：64×4d</text>
+          <rect x="300" y="322" width="320" height="28" rx="3" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="632" y="342" fill="#5cffb0" font-size="12">降到 20.4（top-5 5.3）</text>
+          <text x="60" y="364" fill="#9fb4ff" font-size="11">top-5 错误：2×64d 是 5.5，64×4d 是 5.3</text>
+          <text x="60" y="388" fill="#7f8fc7" font-size="11">（在 32×4d 基础上再把 C 翻一倍）</text>
+          <text x="700" y="104" fill="#9fb4ff" font-size="11">横轴：相比基线降了几个点</text>
+          <text x="700" y="130" fill="#cdd6ff" font-size="11">条子越长，越划算</text>
+
+          <text x="450" y="404" text-anchor="middle" fill="#ffd1d8" font-size="12" font-weight="700">★ 三条路花的是同一笔钱（都是基线 2 倍的 FLOPs）</text>
+          <text x="450" y="428" text-anchor="middle" fill="#cdd6ff" font-size="12">加深只降 0.3，加宽只降 0.7，加基数降 1.3——差距不是一点点</text>
+          <text x="450" y="454" text-anchor="middle" fill="#9fb4ff" font-size="12">旁证：32×4d ResNeXt-101（21.2%）比 ResNet-200（21.7%）和更宽的 ResNet-101（21.3%）都好</text>
+          <text x="450" y="476" text-anchor="middle" fill="#9fb4ff" font-size="12">而它的复杂度只有那两者的 50%——注意，是「更便宜还更强」</text>
+          <text x="450" y="502" text-anchor="middle" fill="#cdd6ff" font-size="12">要记住：当深度和宽度开始收益递减时，换一个维度比继续在旧维度上加码划算</text>
+          <text x="60" y="314" fill="#7f8fc7" font-size="11">（把基数 C 从 1 翻到 2，宽度不动）</text>
+          <text x="700" y="156" fill="#cdd6ff" font-size="11">同一笔钱四种花法</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>四条横条，长度代表「相比基线能降低多少 top-1 错误」，而它们花的是同一笔钱（都是 ResNet-101 基线的 2 倍 FLOPs，即约 15 billion）。加深到 200 层只降 0.3（到 21.7）；加宽到 100d 降 0.7（到 21.3）；加基数（2×64d）降 1.3（到 20.7）；继续加基数（64×4d）降到 20.4。<br>
+          <b>怎么看这张图：</b>① 先确认横轴左边那条竖线是 0——<b>所有条子都是从同一个起点出发的</b>，因为花的钱一样；② 比对前两条与第三条：<b>0.3 与 0.7 加起来还不到 1.3</b>，说明在旧维度上加码的收益已经很薄了；③ 再看最底下那两行：<b>32×4d ResNeXt-101（21.2%）比 ResNet-200 与更宽的 ResNet-101 都好，复杂度却只有它们的一半</b>——这是「另开一个维度」最有力的一次证明。<br>
+          <b>要记住的一句话：</b>深度和宽度不是唯一的旋钮；当一个方向开始收益递减时，值得去找一个真正正交的新维度。
+        </figcaption>
+      </figure>
+
+      <p>把这一课的其余关键数字也列出来，最后一个位照抄原文：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">数字</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">含义</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">出处</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">23.9 → 22.2</td><td style="padding:.5rem;border:1px solid #3a4a78;">ResNet-50（1×64d）到 ResNeXt-50（32×4d）的 top-1 错误，即 <b>低 1.7 个点</b>；中间的 2×40d / 4×24d / 8×14d 分别是 23.0 / 22.6 / 22.3</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 3</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">22.0 → 21.2</td><td style="padding:.5rem;border:1px solid #3a4a78;">ResNet-101 到 ResNeXt-101（32×4d）的 top-1 错误，即 <b>低 0.8 个点</b>；中间档是 21.7 / 21.4 / 21.3</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 3</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">+0.3 / +0.7 / +1.3</td><td style="padding:.5rem;border:1px solid #3a4a78;">2 倍复杂度下：加深 200 层、加宽到 100d、加基数（2×64d）各自降低的 top-1 错误；64×4d 更进一步到 20.4，top-5 分别为 5.5 与 5.3</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 4</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">50% 复杂度</td><td style="padding:.5rem;border:1px solid #3a4a78;">32×4d ResNeXt-101（21.2%）优于 ResNet-200（21.7%）与更宽的 ResNet-101（21.3%），而复杂度只有它们的 50%</td><td style="padding:.5rem;border:1px solid #3a4a78;">§5.1</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">约 4.1B / 约 25M；约 7.8B / 约 44M</td><td style="padding:.5rem;border:1px solid #3a4a78;">ResNet / ResNeXt-50 与 101 在复杂度保持下的 FLOPs 与参数量</td><td style="padding:.5rem;border:1px solid #3a4a78;">Figure 5 图注</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">约 70k / 约 0.22 billion</td><td style="padding:.5rem;border:1px solid #3a4a78;">conv2 模板的参数量与 FLOPs（FLOPs 按参数量 × 56 × 56 估算）</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 2 与 §3.4</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">45.5 → 42.3 / 42.4 → 40.1</td><td style="padding:.5rem;border:1px solid #3a4a78;">ImageNet-5K（5000 类、约 680 万张图，约为 1K 集的 5 倍）上：ResNeXt-50 把 5K-way top-1 错误降 3.2，ResNeXt-101 降 2.3</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 6</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">3.58% / 17.31%（68.1M）</td><td style="padding:.5rem;border:1px solid #3a4a78;">CIFAR-10 / CIFAR-100 上 ResNeXt-29(16×64d) 的错误率；同量级的 ResNeXt-29(8×64d) 参数量 34.4M，成绩 3.65% / 17.77%，<b>优于 Wide ResNet（36.5M，4.17% / 20.50%）</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 7</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">49.7 / 27.5 对 47.6 / 26.5</td><td style="padding:.5rem;border:1px solid #3a4a78;">COCO 检测（basic Faster R-CNN）：ResNeXt-50 的 AP@0.5 / AP 对 ResNet-50，即 <b>+2.1 / +1.0</b>；ResNeXt-101 是 51.9 / 30.0，对 ResNet-101 的 51.1 / 29.8</td><td style="padding:.5rem;border:1px solid #3a4a78;">Table 8</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0.95s 对 0.70s</td><td style="padding:.5rem;border:1px solid #3a4a78;">8 张 NVIDIA M40 上每 mini-batch 的耗时：32×4d ResNeXt-101 对同 FLOPs 的 ResNet-101；2 倍复杂度的 64×4d 版是 1.7s，8 卡共训 10 天</td><td style="padding:.5rem;border:1px solid #3a4a78;">§5.5</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">23.9 → 31.2 对 22.2 → 26.1</td><td style="padding:.5rem;border:1px solid #3a4a78;">拆掉短路的对照实验：ResNet-50 从 23.9 掉到 31.2（<b>+7.3</b>），ResNeXt-50 从 22.2 掉到 26.1（<b>+3.9</b>）——<b>即使去掉残差，聚合变换仍然更强</b></td><td style="padding:.5rem;border:1px solid #3a4a78;">§5.1</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">17.7% / 3.7%；ensemble 3.03%</td><td style="padding:.5rem;border:1px solid #3a4a78;">ILSVRC 2016 上单模型多尺度 dense testing 的 top-1 / top-5，以及 ensemble 的 top-5（与冠军 2.99% 已经很近）</td><td style="padding:.5rem;border:1px solid #3a4a78;">§5.6</td></tr>
+        </tbody>
+      </table>
+      <p>最后说明一下本课改动的两处 OCR 疑点，以免读者回去查原文时对不上：<b>① Table 1 的图注里出现了两个花体字母被转义成公式的样子</b>，其实那是脚注标记被 OCR 搞坏了，正确读法是「C=32 表示 32 组分组卷积」，<b>不要把它当成公式引用</b>；<b>② 正文里写「When C = 32 and d = 4, Eqn.(4) 70k」时漏掉了约等号</b>，实际应为约等于 70k（本课第 §4 节已经算出 70144，可以印证）。</p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 它在前八季的哪些课、哪些方法里出现过</h2>
+      <p>本季的硬要求：必须回答「这个零件在前八季的哪些课、哪些方法里出现过」。ResNeXt 的答案很有特点：<b>它在本语料库里的角色几乎全是「更强的可选主干」或者「被超越的靶子」</b>——很少是主角，但无处不在。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 第八季 0160–0167：Mask R-CNN 直接采用它当骨干</h4>
+          <p>这是最直接的一次采用。Mask R-CNN 原文说：「We evaluate <b>ResNet [15] and ResNeXt [35] networks of depth 50 or 101 layers</b>.」效果呢？原文 Table 2 给出：ResNet-101-FPN 的 mask AP 是 <b>35.4</b>，换成 <b>ResNeXt-101-FPN 变成 36.7</b>；正文总结「<b>ResNeXt improves on ResNet</b>」，并把 ResNeXt-101 列为 <b>+1.6 AP^bb</b> 的增益来源之一。<b>这是本课接回第八季对象级建图的最硬接口。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>② 单目深度基础模型的默认主干</h4>
+          <p>2024 年 Metric3D v2 的主干选型表里，早期几代单目深度模型用的都是 ResNeXt：<b>DiverseDepth 用 ResNeXt50（25M）、MiDaS 用 ResNeXt101（88M）、Leres 也用 ResNeXt101</b>。<b>这是「ResNeXt 曾经是稠密预测的默认主干」的硬证据</b>——注意「稠密预测」正是分割、深度这类任务的总称。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 本季 0194 的 PVT：把它当靶子之一</h4>
+          <p>PVT 论文报告：「The best AP^m obtained by PVT-Large is <b>40.7</b>, which is <b>1.0 points higher than ResNeXt101-64x4d (40.7 vs. 39.7)</b>, with <b>20% fewer parameters</b>.」另一张表里，RetinaNet 3×+MS 设定下 PVT-Large 是 43.4、ResNeXt101-64x4d 是 41.8。<b>注意 ResNeXt101-64x4d 的参数量是 95.5M——这是一个「重型基线」。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 本季 0194 的 Swin：也把它当靶子</h4>
+          <p>Swin 论文报告：「Swin Transformer achieves a high detection accuracy of <b>51.9 box AP and 45.0 mask AP</b>, which are significant gains of <b>+3.6 box AP and +3.3 mask AP over ResNeXt101-64x4d</b>, which has similar model size, FLOPs and latency.」同一张表里 X101-32 是 48.1 / 41.6，X101-64 是 48.3 / 41.7。<b>也就是说，2021 年两大 Transformer 主干都拿它当必须超过的那条线。</b></p>
+        </div>
+      </div>
+      <p><b>归纳一下</b>：ResNeXt 在 SLAM 语料里的角色是「<b>2017–2023 年间稠密预测强主干的默认对标对象</b>」。<b>凡是「我把主干换掉或升级了」的论文，几乎都会拿 ResNeXt101-64x4d（95.5M 参数那一档）当靶子。</b>这句话对读者很有用：以后看到某篇 2021 年之后的论文说「我们的主干更强」，你几乎可以先猜它比的是 ResNeXt 或 ResNet——然后去表里找那一行。</p>
+      <p>顺便说一句原文自己给出的一个接口：论文最后提到，ResNeXt 已被 <b>Mask R-CNN</b> 采用并在 COCO 上取得当时的最好成绩。<b>这条把骨架（本课）与检测头（0192）直接串了起来。</b></p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 它不完美在哪：所以 SLAM 要加几何约束</h2>
+      <p>本季第二个硬要求：讲毛病。ResNeXt 的毛病里，<b>最值得学的是它对「等价性」适用范围的自述</b>——那是一段非常克制的自我限定。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>毛病一：三种等价写法只在「同构」前提下成立</h4>
+          <p>原文第 105 行原话：「although we present reformulations that exhibit concatenation or grouped convolutions, <b>such reformulations are not always applicable for the general form of Eqn.(3)</b>, e.g., if the transformation T_i takes arbitrary forms and are <b>heterogenous</b>.」<b>人话</b>：如果各路变换不一样（像 Inception 那样），那就没法简化成分组卷积了。<b>所以这套漂亮的等价性，是拿「所有分支必须一模一样」换来的。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病二：只在「深度 3」的块上有意义</h4>
+          <p>原文第 103 行承认：这些改写「produce nontrivial topologies <b>only when the block has depth 3</b>」；如果块只有两层（ResNet 的 basic block），改写会退化成一个「<b>trivially wide, dense module</b>」——也就是平凡的宽稠密模块，没有任何巧妙之处。<b>人话</b>：这个方法<b>必须搭在瓶颈结构上</b>，不是随便哪个块都能切。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病三：加基数会饱和</h4>
+          <p>原文第 147 行承认：「increasing cardinality at the price of reducing width starts to show <b>saturating accuracy when the bottleneck width is small</b>」——组数越多、每组越窄，收益就会饱和。<b>所以论文自我约束：瓶颈宽度不得小于 4d</b>。也就是说，基数这个旋钮不是能无限拧的。</p>
+        </div>
+        <div class="mini-card">
+          <h4>毛病四：复杂度只能近似保持，而且实现不快</h4>
+          <p>原文承认复杂度「can only be preserved <b>approximately</b>」；更实在的是速度：在这个语料里的实现「<b>was brute-force and not parallelization-friendly</b>」，8 张 M40 上 32×4d ResNeXt-101 每 batch <b>0.95s</b>，而 FLOPs 相近的 ResNet-101 是 <b>0.70s</b>——<b>多花了约 36% 的时间</b>。作者只能说这是「a reasonable overhead」并寄望 CUDA 层面的优化。</p>
+        </div>
+      </div>
+      <p><b>现在把这些毛病接回 SLAM。</b>有三条链路。</p>
+      <ul>
+        <li><b>第一，它更强，但不会更快。</b>0.95s 对 0.70s 那个正面对比已经说明了问题：<b>换更强的主干，精度和延迟是一起涨的</b>。而在 SLAM 里，延迟是硬约束（30 Hz 就是 33 ms/帧，见导览课那张预算尺）。<b>所以「换个更强的主干」在 SLAM 里从来不是一个免费的改进</b>，它必须和别的部分争预算。</li>
+        <li><b>第二，它提升的是「AP」，不是「几何」。</b>Mask R-CNN 换用 ResNeXt-101-FPN 后 mask AP 从 35.4 到 36.7——注意，<b>提升的是一个统计指标，而不是「边界有多准」这个几何量</b>。而 SLAM 恰恰最在意后者：一个掩码偏了 5 个像素，映射到三维空间可能就是几厘米的误差。这也是第八季 MaskFusion 抱怨 Mask R-CNN「边界不精」的那条线。</li>
+        <li><b>第三，它仍然只是一个视觉主干。</b>它输出的还是图像特征，没有尺度、没有深度、没有几何一致性。PanopticFusion 之所以要同时挂两个主干（ResNet-50 做语义、ResNet-101-FPN 做实例），正是因为单一的语义或实例输出都不足以支撑一个 SLAM 系统。<b>几何约束——对极几何、BA、ICP——必须由 SLAM 自己提供。</b></li>
+      </ul>
+      <p>把这条线再往前推一步：<b>本课其实给「零件不完美」提供了一个很好的一般范式。</b>ResNeXt 是一篇非常诚实的论文——它明确告诉你：<b>我的等价性有前提（同构）、我的方法有适用范围（深度 3 的块）、我的旋钮有饱和点（d ≥ 4d）、我的复杂度只是近似保持、我的实现没优化过。</b>读完这段话，你再看任何一篇论文说「我们的方法普遍适用」，都会多问一句：<b>它的适用范围写在哪？</b></p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某篇 SLAM 论文说「我们把骨干从 ResNet-101 换成 ResNeXt101-64x4d，mask AP 提升了 1 个点」。你最先该追问什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：ResNeXt 的提升是「统计指标」层面的，而不是几何精度。SLAM 真正依赖的是掩码边界的几何准确度，一个均值提升 1 点的指标提升，可能伴随的是边界更糊或更抖。追问边界精度（以及它到底用了 stride 16 还是 32 的特征），才是 SLAM 视角该关心的事。"
+            onclick="lessonKit.answer(this,'q0189b')">掩码边界的几何准不准</button>
+          <button data-correct="no" data-explanation="不对：参数量确实是 ResNeXt101-64x4d 的痛点（95.5M，是个重型基线），但在 SLAM 里它通常不直接决定成败——真正决定成败的是边界几何精度与延迟预算。只盯参数量，会漏掉这两条更要命的约束。"
+            onclick="lessonKit.answer(this,'q0189b')">这个骨干的参数量多大</button>
+        </div>
+        <div class="quiz-feedback" id="q0189b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. 和前面课程怎么接</h2>
+      <p>按规则点名课号。<b>本课是骨架三节的收尾，所以它同时向三个方向接。</b></p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>接 0188 ResNet（上一课）</h4><p>本课直接建立在 ResNet 的两个遗产上：<b>残差连接</b>（式 (3) 就是套在残差形式上）与<b>那个约 70k 参数的瓶颈块</b>（本课在它中间切了 32 刀）。<b>而且本课用一组对照实验反向证明了 0188 的结论</b>：拆掉短路后 ResNet-50 掉 7.3 点、ResNeXt-50 掉 3.9 点——原文据此总结「残差连接帮优化，聚合变换才是更强的表示」。</p></div>
+        <div class="mini-card"><h4>接 0187 GoogLeNet（上上课）</h4><p>Inception 是「多路并行 + 每路各设计一套」，本课是「多路并行 + 每路一模一样」。<b>区别正是本课的价值所在</b>：一旦每路同构，「路数」就能被单独抽出来当一个变量研究——这是 Inception 做不到的。原文自己也承认 (b) 形式与 Inception-ResNet 相似，但强调「all our paths share the same topology」。</p></div>
+        <div class="mini-card"><h4>接第八季 0160–0167 对象级建图</h4><p>Mask R-CNN 把 ResNeXt-101-FPN 当可选骨干，mask AP 从 35.4 涨到 36.7。<b>它当时出的毛病</b>是：这个提升是统计指标层面的，边界几何精度并没有被解决——所以对象级地图仍然需要几何约束去校准物体的位置与尺度（回链 0161–0164 的体素对象级与对象尺度）。</p></div>
+        <div class="mini-card"><h4>接第八季 0153–0159 动态环境块</h4><p>那一块用 Mask R-CNN 剔除动态物体，代价是 195 ms/图；本课告诉你换成 ResNeXt 骨干还能再准一点——<b>但那条 0.95s 对 0.70s 的账提醒你，这份「更准」是要用延迟换的</b>。帧率这条暗线在这里又一次出现。</p></div>
+        <div class="mini-card"><h4>接本季 0194 Swin 与 PVT</h4><p>2021 年的两大 Transformer 主干都把 ResNeXt101-64x4d 写进了对照表：PVT-Large 比它高 1.0 AP^m 且参数少 20%，Swin 比它高 3.6 box AP / 3.3 mask AP。<b>读完本课再读 0194，你会明白那两篇在跟谁比。</b></p></div>
+        <div class="mini-card"><h4>接第一季 0001–0016 与第九季 0180</h4><p>本课出现的 AP / mAP 是检测侧的尺子，与第九季 0180 讲的 ATE / RPE 是两套完全不同的量具。<b>第九季教你「看到轨迹误差先问真值多准」，本课教你「看到 mAP 先问 IoU 阈值是多少」</b>——AP50 与 AP75 能差出一大截，而它与方法的优劣无关。</p></div>
+      </div>
+      <p>最后把骨架三节串成一句话，作为这一块的收束：<b>GoogLeNet 说「一层里多开几路，但每路要单独设计」（1×1 降维是它留给后世的零件）；ResNet 说「别学答案，学差值」（那条短路从此成了公共零件）；ResNeXt 说「多路可以，但每路得一模一样，这样路数才能变成一个旋钮」。</b>三节课讲的其实是同一件事的三个阶段：<b>怎么在算力预算不变的前提下，让网络更强。</b></p>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 读完你应该能回答</h2>
+      <ul>
+        <li>「基数」（cardinality）是什么？为什么它算一个独立于深度、宽度的新维度？</li>
+        <li>ResNeXt 与 Inception 都用了「多路并行」，两者的关键差别是什么？</li>
+        <li>分组卷积为什么必须「互不通信」？它最早出现在哪篇论文、当时的动机是什么？</li>
+        <li>写出 Eqn.(4) 并解释每一项；取 C=32、d=4 时算出多少？</li>
+        <li>ResNeXt-50 与 ResNet-50 的块，中间那层的通道数分别是多少？为什么说 ResNeXt 其实变宽了？</li>
+        <li>那笔钱从哪儿挪到了哪儿？（提示：3×3 那层降了多少、两头 1×1 涨了多少）</li>
+        <li>2 倍算力下，加深 / 加宽 / 加基数分别降多少？这个对比为什么有说服力？</li>
+        <li>为什么说 32×4d ResNeXt-101 是「更便宜还更强」？</li>
+        <li>它的三种等价写法在什么前提下才成立？为什么深度 2 的块上不成立？</li>
+        <li>ResNeXt101-64x4d 为什么被称为「强主干的默认靶子」？哪两篇论文分别超过了它多少？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>自己算一遍：如果 C = 16、d = 8，Eqn.(4) 给出的参数量是多少？与 C=32、d=4 相比谁更省？为什么论文还是选了 32×4d？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>代入 Eqn.(4)：C×(256d + 9d² + 256d) = 16×(256×8 + 9×64 + 256×8) = 16×(2048 + 576 + 2048) = 16×4672 = <b>74752</b>，约 74.8k。与 32×4d 的 70144 接近，<b>32×4d 略省一点</b>（约少 6%）。但更关键的是：<b>论文的取舍标准不是「哪个更省」，而是「哪个更准」</b>——原文承认「with complexity preserved, increasing cardinality at the price of reducing width starts to show saturating accuracy when the bottleneck width is small」，所以他们把宽度约束在 d ≥ 4d 并选择了 C=32。也就是说他们在「准」的前提下取最大的 C（在自己设的下限 d=4 处）。</div></details>
+        </li>
+        <li>为什么原文要特意澄清「把本方法看作 ensembling 是 imprecise 的」？这两者本质差别在哪？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>ensemble 是<b>多个独立训练的模型</b>各出结果、再投票或平均；而 ResNeXt 的 32 条路是<b>同一个模块里、共享同一个损失、联合训练</b>的——它们从训练一开始就互相协调。原文原话是「we argue that it is imprecise to view our method as ensembling」。差别在两点：① 训练方式（联合 vs 独立）；② 代价（ensemble 要训 N 个完整模型，本方法只训一个）。<b>为什么这件事重要</b>：如果它是 ensemble，那么「同等算力下更强」这个结论就不成立了，因为 ensemble 的算力是成倍增长的。</div></details>
+        </li>
+        <li>用「零件不完美 → 所以 SLAM 要加几何约束」这个句式，为 ResNeXt 写一句话。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>参考写法：「ResNeXt 用同样的算力把检测/分割的精度又推高了一点（Mask R-CNN 的 mask AP 35.4 → 36.7），<b>但它提升的是统计意义上的平均指标，既没有改善掩码边界的几何准确度、也没有变快（0.95s 对 0.70s）</b>；所以 SLAM 不能把语义或实例掩码直接当几何使用，必须用对极几何、光束法平差与点云配准去交叉验证物体的位置、尺度与运动状态。」<b>注意句式里的三要素</b>：零件提供了什么（更强的语义/实例先验）、它缺什么（几何精度与速度）、所以 SLAM 补什么（几何约束）。这正是本季反复要练的那条链条。</div></details>
+        </li>
+        <li>假设有人向你推销「用 ResNeXt101-64x4d 替换我们 SLAM 系统里的 ResNet-18 骨干」。请列出你会提出的三个反对或追问理由。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>① <b>时间预算：</b>ResNet-18 与 ResNeXt101-64x4d 的参数量差着几十倍（前者约千万量级，后者 95.5M 是重型基线），延迟会涨一个量级——而 SLAM 只有 33 ms/帧的预算（回链导览课的时间预算尺与 TartanVO 的 40 ms）；② <b>收益归因：</b>换主干带来的 AP 提升是统计指标，未必改善 SLAM 真正依赖的边界几何精度（回链第八季 MaskFusion 对「边界不精」的抱怨）；③ <b>可替代性：</b>如果目标是更强的特征，0194 讲的 Swin / PVT 在同一张对照表上比 ResNeXt101-64x4d 更强且更省（Swin 高 3.6 box AP / 3.3 mask AP，PVT-Large 高 1.0 AP^m 且参数少 20%）——那么为什么还要选 2017 年的那一款？</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0188-ResNet-2016-残差连接.html">← 上一课：ResNet（2016）残差连接</a>
+        <a class="next" href="0190-FCN-2015-全卷积与逐像素.html">下一课：FCN（2015）全卷积与逐像素预测 →</a>
+      </div>
+      <p class="foot-note">骨架三节到此收束：GoogLeNet 换来了 1×1 降维，ResNet 换来了那条短路，ResNeXt 换来了「基数」这个新旋钮。<b>它们讲的其实是同一句话——在算力不变的前提下，让网络更强。</b>下一站我们换到检测与分割，去看「画框」和「涂色」是怎么做的 🍞</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

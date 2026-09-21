@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第十季开场：论文里那些没人解释的名词 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0186</div>
+      <h1>第十季开场：论文里那些没人解释的名词</h1>
+      <p class="subtitle">前八季你一定跳过了一堆词——backbone、mAP、IoU、RoIAlign、focal loss。这不是你的问题，是论文从来不解释。这一季不写新方法，专门还这笔账。🗺️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：承认欠账 / 回链现场 / 零件地图 / 精度与实时性的暗线 / 全季课表</span>
+        <span>👥 作者：第十季导览（11 篇通用零件，无一篇是 SLAM 论文）</span>
+        <span>📅 年份 · 阶段 J · 基础零件（0186–0198 开场）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：那些被跳过的词</a>
+        <a href="#b">欠账现场：它堵在哪儿</a>
+        <a href="#c">零件地图：四大家族</a>
+        <a href="#d">暗线：精度 vs 实时性</a>
+        <a href="#e">全季课表</a>
+        <a href="#f">收官课要回答什么</a>
+        <a href="#g">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说出第十季为什么与前面九季都不同；认出自己在前八季里跳过的那批词；把本季 11 篇按四个家族归位；说清「精度与实时性」这条贯穿全季的暗线；并知道收官课要回答的那个问题是什么。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本季不给第八季 <b>0153–0178</b> 补新方法，只补它们在用的零件：<b>0153–0159</b> 动态环境块（Mask R-CNN / YOLO）、<b>0160–0167</b> 语义与对象级建图块（语义分割）、<b>0168–0174</b> 多机协同。★ <b>0034</b> 起讲几何前端、<b>0043–0045 ORB-SLAM</b> 与 <b>0073–0079 LOAM</b> 是「手工设计的路」，本季 <b>0187–0189</b> 讲「学习式的路」。★ 学习式方法的骨干在第七季到处都是：<b>0134–0140</b> 地点识别用的 <b>VGG-16 + Swin-B</b> 混合主干就是本季 <b>0187</b> 与 <b>0194</b> 的交点。★ 第九季 <b>0180</b> 的 ATE 与本季的 IoU / mAP 是两套尺子，<b>0189</b> 起会反复对照。</p></div>
+      </div>
+
+      <h2>1. 开场：你是不是也跳过了一堆词？</h2>
+      <p>先说实话。<b>前十季我们读了两百多篇 SLAM 论文，其中绝大多数你都跳过了一些词。</b>不是你没认真读——是作者根本没打算解释。下面这些话，你几乎一定见过，而且几乎一定跳过了：</p>
+      <ul>
+        <li>「我们用 <b>ResNet-18 当 backbone</b> 提取特征。」——backbone 是什么？为什么是 18？</li>
+        <li>「<b>Mask R-CNN</b> 用来分割动态物体。」——R-CNN 是什么？前面的 Mask 加的是什么？</li>
+        <li>「检测精度达到 <b>mAP 42.5</b>。」——mAP 是平均了什么？IoU 阈值取多少？</li>
+        <li>「我们用 <b>focal loss</b> 缓解正负样本不平衡。」——为什么会有不平衡？换掉它会怎样？</li>
+        <li>「<b>RoIAlign</b> 相比 RoIPool 提升了掩码精度。」——这两个词差在哪？</li>
+      </ul>
+      <p><b>关键在于：这些词没有一个是 SLAM 概念。</b>它们是计算机视觉与深度学习里的通用零件，SLAM 论文只是把它们拿来用。但正因为是通用零件，作者默认读者已经会了，于是正文里一个字都不解释——<b>你就这么跳过了一年。</b></p>
+      <p>这一季就是来还这笔账的。<b>本季 11 篇论文里没有一篇是 SLAM 论文</b>，全是 CV / DL 的通用零件（骨干网络、检测头、分割头、硬件）。它们不产生任何 SLAM 方法，但前八季的论文里到处在引用它们。所以我们把这一季的性质讲清楚：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>不是续接季</h4><p>不讲「一条技术演进的下一站」。本季没有一条 SLAM 主线，只有一堆零件。</p></div>
+        <div class="mini-card"><h4>不是支线季</h4><p>不讲「横切在哪、拆掉了什么假设」。零件不拆假设，零件只是被人拿来用。</p></div>
+        <div class="mini-card"><h4>是补名词季</h4><p>先承认「这些词你早就在论文里见过、但没人解释过」，再一个一个补上。</p></div>
+        <div class="mini-card"><h4>还债的两条纪律</h4><p>① 每个零件都要说清「在前八季哪节课、哪个方法里出现过」；② 每个零件都要讲它的毛病。</p></div>
+      </div>
+      <p>先看一张总图。<b>这张图是全季的地图</b>：一台 SLAM 机器人从传感器到最终位姿，走的四段路，每一段分别用到本季的哪些零件。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 580" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="580" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">一台 SLAM 机器人的流水线：每一段用的是什么零件</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">从最左边的传感器到最右边的位姿，四段路、四批零件——这就是全季地图</text>
+
+          <rect x="24" y="76" width="192" height="352" rx="12" fill="#16203a" stroke="#5cffb0"/>
+          <text x="120" y="102" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">① 输入：传感器</text>
+          <rect x="52" y="118" width="136" height="76" rx="6" fill="#0b1020" stroke="#3a4a78"/>
+          <rect x="70" y="146" width="62" height="30" rx="4" fill="#24304f" stroke="#7f8fc7"/>
+          <circle cx="101" cy="161" r="9" fill="#0b1020" stroke="#5cffb0"/>
+          <circle cx="101" cy="161" r="3.5" fill="#5cffb0"/>
+          <rect x="146" y="126" width="26" height="34" rx="4" fill="#24304f" stroke="#ffd166"/>
+          <rect x="149" y="130" width="20" height="7" rx="3" fill="#ffd166"/>
+          <circle cx="62" cy="196" r="7" fill="#11192e" stroke="#7f8fc7"/>
+          <circle cx="178" cy="196" r="7" fill="#11192e" stroke="#7f8fc7"/>
+          <text x="101" y="136" text-anchor="middle" fill="#9fb4ff" font-size="10">相机</text>
+          <text x="159" y="174" text-anchor="middle" fill="#ffd166" font-size="10">激光</text>
+          <text x="120" y="228" text-anchor="middle" fill="#cdd6ff" font-size="12">相机 → RGB 图像</text>
+          <text x="120" y="250" text-anchor="middle" fill="#cdd6ff" font-size="12">激光雷达 → 点云</text>
+          <text x="120" y="272" text-anchor="middle" fill="#cdd6ff" font-size="12">IMU / 轮速计 → 运动</text>
+          <text x="120" y="302" text-anchor="middle" fill="#9fb4ff" font-size="12">本季只讲激光这一件</text>
+          <text x="120" y="330" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">零件课：0195</text>
+          <text x="120" y="352" text-anchor="middle" fill="#cdd6ff" font-size="11">LiDAR 硬件：点云从哪来</text>
+          <text x="120" y="374" text-anchor="middle" fill="#cdd6ff" font-size="11">测距 = 测时间</text>
+          <text x="120" y="396" text-anchor="middle" fill="#cdd6ff" font-size="11">每个点自带独立时刻戳</text>
+
+          <text x="226" y="256" text-anchor="middle" fill="#5cffb0" font-size="18">➜</text>
+          <rect x="236" y="76" width="192" height="352" rx="12" fill="#16203a" stroke="#5cffb0"/>
+          <text x="332" y="102" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">② 感知：认出来</text>
+          <text x="250" y="130" fill="#e8ecff" font-size="12" font-weight="700">骨架 backbone</text>
+          <text x="262" y="152" fill="#cdd6ff" font-size="11">0187 GoogLeNet</text>
+          <text x="262" y="172" fill="#cdd6ff" font-size="11">0188 ResNet</text>
+          <text x="262" y="192" fill="#cdd6ff" font-size="11">0189 ResNeXt</text>
+          <text x="262" y="212" fill="#cdd6ff" font-size="11">0194 Swin / PVT</text>
+          <text x="250" y="240" fill="#e8ecff" font-size="12" font-weight="700">检测头</text>
+          <text x="262" y="262" fill="#cdd6ff" font-size="11">0191 YOLO</text>
+          <text x="250" y="290" fill="#e8ecff" font-size="12" font-weight="700">分割头</text>
+          <text x="262" y="312" fill="#cdd6ff" font-size="11">0190 FCN</text>
+          <text x="262" y="332" fill="#cdd6ff" font-size="11">0192 Mask R-CNN</text>
+          <text x="250" y="360" fill="#e8ecff" font-size="12" font-weight="700">训练用</text>
+          <text x="262" y="382" fill="#cdd6ff" font-size="11">0193 Focal Loss</text>
+          <text x="332" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">掩码与框从这里出来</text>
+
+          <text x="438" y="256" text-anchor="middle" fill="#5cffb0" font-size="18">➜</text>
+          <rect x="448" y="76" width="192" height="352" rx="12" fill="#16203a" stroke="#5cffb0"/>
+          <text x="544" y="102" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">③ 建图：存下来</text>
+          <rect x="470" y="118" width="148" height="60" rx="6" fill="#0b1020" stroke="#3a4a78"/>
+          <rect x="484" y="132" width="20" height="20" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="508" y="132" width="20" height="20" fill="#3a3320" stroke="#ffd166"/>
+          <rect x="532" y="132" width="20" height="20" fill="#3a2418" stroke="#ff9f6b"/>
+          <rect x="556" y="132" width="20" height="20" fill="#1b2440" stroke="#7f8fc7"/>
+          <rect x="580" y="132" width="20" height="20" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="484" y="156" width="44" height="14" fill="#24304f" stroke="#7f8fc7"/>
+          <rect x="532" y="156" width="68" height="14" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="544" y="198" text-anchor="middle" fill="#cdd6ff" font-size="12">几何层：点云 / 体素 / TSDF</text>
+          <text x="544" y="220" text-anchor="middle" fill="#cdd6ff" font-size="12">语义层：给地图贴类别</text>
+          <text x="544" y="242" text-anchor="middle" fill="#cdd6ff" font-size="12">对象层：把物体编上号</text>
+          <text x="544" y="270" text-anchor="middle" fill="#9fb4ff" font-size="11">回链第八季 0159–0167</text>
+          <text x="544" y="298" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">零件课：0196 / 0197</text>
+          <text x="544" y="320" text-anchor="middle" fill="#cdd6ff" font-size="11">3D 检测：点 / 体素 / BEV</text>
+          <text x="544" y="342" text-anchor="middle" fill="#cdd6ff" font-size="11">同一个「地图怎么存」的问题</text>
+          <text x="544" y="374" text-anchor="middle" fill="#9fb4ff" font-size="11">点云里的框，长什么样</text>
+          <text x="544" y="396" text-anchor="middle" fill="#9fb4ff" font-size="11">（0 次提到 SLAM）</text>
+
+          <text x="650" y="256" text-anchor="middle" fill="#5cffb0" font-size="18">➜</text>
+          <rect x="660" y="76" width="216" height="352" rx="12" fill="#16203a" stroke="#5cffb0"/>
+          <text x="768" y="102" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">④ 定位与回环</text>
+          <path d="M690 200 L740 140 L810 150 L845 210 L800 250 L720 245 Z" fill="none" stroke="#ffd166" stroke-width="2"/>
+          <circle cx="690" cy="200" r="4" fill="#5cffb0"/>
+          <circle cx="845" cy="210" r="4" fill="#5cffb0"/>
+          <path d="M690 176 Q760 132 838 186" fill="none" stroke="#ff9f6b" stroke-dasharray="5 4"/>
+          <text x="768" y="132" text-anchor="middle" fill="#ff9f6b" font-size="10">回环</text>
+          <text x="768" y="276" text-anchor="middle" fill="#cdd6ff" font-size="12">位姿估计：VO / VIO / BA</text>
+          <text x="768" y="298" text-anchor="middle" fill="#cdd6ff" font-size="12">回环检测：全局描述子</text>
+          <text x="768" y="320" text-anchor="middle" fill="#cdd6ff" font-size="12">重定位、地图复用</text>
+          <text x="768" y="346" text-anchor="middle" fill="#9fb4ff" font-size="11">骨架网络的第二份工作</text>
+          <text x="768" y="368" text-anchor="middle" fill="#9fb4ff" font-size="11">ResNet-50 直接当位姿网络</text>
+          <text x="768" y="394" text-anchor="middle" fill="#9fb4ff" font-size="11">回链第一季 0002 地图表示</text>
+
+          <text x="450" y="458" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">要记住：论文里每一句「我们用 X 当骨干」，X 都在这张图的第二段里</text>
+          <text x="450" y="484" text-anchor="middle" fill="#cdd6ff" font-size="12">本季 11 篇没有一篇是 SLAM 论文——它们全是这张图上被人随手调用的零件</text>
+          <text x="450" y="508" text-anchor="middle" fill="#cdd6ff" font-size="12">零件的毛病会顺着箭头往右传：语义认错了，地图就错，位姿就漂</text>
+          <text x="450" y="534" text-anchor="middle" fill="#9fb4ff" font-size="12">所以第八季才要给语义配一个「几何双保险」——这条线本季会讲透</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条从左到右的四段流水线。第①段是传感器（画了一台小车，上面有相机和激光雷达）；第②段是感知，里面塞满了本季讲的零件：骨架（0187–0189、0194）、检测头（0191）、分割头（0190、0192）与训练用的损失（0193）；第③段是建图（几何层 / 语义层 / 对象层）；第④段是定位与回环，画了一条闭环轨迹。<br>
+          <b>怎么看这张图：</b>① 先看第①段的小车：<b>SLAM 的原料只有图像、点云和运动信息三样</b>，本季只讲激光雷达那一件（0195）；② 再看第②段，它是本季的主战场——<b>四节骨架课、四节检测分割课，全部挤在这一格里</b>；③ 最后注意底部那行红字：论文从不解释的，正是第②段里的词。<br>
+          <b>要记住的一句话：</b>这一张图就是本季的目录——你看不懂论文的哪一句，它多半落在第②段。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>你在第八季 0159–0162 里读到「MaskFusion 用实例级掩码建对象地图」，卡住的是哪个词？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：卡住的是「实例级掩码」这个零件——掩码怎么来的、为什么会有「实例级」和「语义级」之分，正是本季 0192 Mask R-CNN 要补的。它属于第②段感知。"
+            onclick="lessonKit.answer(this,'q0186a')">实例级掩码怎么来</button>
+          <button data-correct="no" data-explanation="不对：「对象地图」是 SLAM 侧的概念，第八季 0161–0164 已经讲透了；本季补的是 JS 侧零件，也就是掩码本身怎么算出来的。"
+            onclick="lessonKit.answer(this,'q0186a')">对象地图怎么建</button>
+        </div>
+        <div class="quiz-feedback" id="q0186a"></div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 欠账现场：这些词到底堵在哪儿</h2>
+      <p>空口说「你跳过了一些词」不够。我们把这笔账落到<b>具体课号与具体句子</b>上——下面这些地方，就是前八季里你最容易卡住的现场。回头翻那几节课，你会发现句子读不通的原因，全在本季要补的那几个词上。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">欠账现场（课号）</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">当年卡住你的那句话</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">本季去哪一节还</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0153–0159 动态环境块</td><td style="padding:.6rem;border:1px solid #3a4a78;">DynaSLAM 用 Mask R-CNN 分割 19 类「潜在动态」物体；MaskFusion 直言它「跑不到帧率、边界不精」</td><td style="padding:.6rem;border:1px solid #3a4a78;">0192 Mask R-CNN（含 RoIAlign）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0153–0159 动态环境块</td><td style="padding:.6rem;border:1px solid #3a4a78;">YOLO 系方法一句「one-stage 检测」带过，你不知道它和两阶段差在哪</td><td style="padding:.6rem;border:1px solid #3a4a78;">0191 YOLO ＋ 0193 Focal Loss</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0160–0167 语义建图块</td><td style="padding:.6rem;border:1px solid #3a4a78;">「逐像素语义概率图」是怎么来的？为什么是先下采样再上采样？</td><td style="padding:.6rem;border:1px solid #3a4a78;">0190 FCN（全卷积与逐像素）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0160–0167 语义建图块</td><td style="padding:.6rem;border:1px solid #3a4a78;">SemanticFusion 说它「based on the VGG 16-layer network」，VGG 是什么？</td><td style="padding:.6rem;border:1px solid #3a4a78;">0187（前置补丁：VGG 是谁）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0043–0045 与 0073–0079</td><td style="padding:.6rem;border:1px solid #3a4a78;">ORB-SLAM 用 ORB 特征、LOAM 用角点与平面点——那是「手工设计」的一条路</td><td style="padding:.6rem;border:1px solid #3a4a78;">0187–0189 三条学习式骨干</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0134–0140 地点识别</td><td style="padding:.6rem;border:1px solid #3a4a78;">「VGG-16 金字塔 + Swin-B 同图并联成混合主干」——两个名字都不认识</td><td style="padding:.6rem;border:1px solid #3a4a78;">0187（CNN 段）＋ 0194（Transformer 段）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0165 YOLO-SLAM 与 0188 的落地点</td><td style="padding:.6rem;border:1px solid #3a4a78;">「把 ResNet-50 当前半段编码器」「用 ResNet-50 当位姿网络」——为什么偏偏是它？</td><td style="padding:.6rem;border:1px solid #3a4a78;">0188 ResNet（含形状账）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0160–0162 对象级建图</td><td style="padding:.6rem;border:1px solid #3a4a78;">「Mask R-CNN 的 backbone 换成 ResNeXt-101-FPN 后 mask AP 更高」——AP 是什么、基数是什么</td><td style="padding:.6rem;border:1px solid #3a4a78;">0189 ResNeXt ＋ 0192</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0180 TUM 与 0184 Wild-Places</td><td style="padding:.6rem;border:1px solid #3a4a78;">第九季教你问「真值多准」，但检测那一侧的 mAP 你还在盲信</td><td style="padding:.6rem;border:1px solid #3a4a78;">0198 速查手册（IoU 阈值）</td></tr>
+        </tbody>
+      </table>
+      <p>注意最后一行：<b>第九季教会你「看到轨迹误差先问真值多准」，本季要教会你「看到 mAP 先问 IoU 阈值是多少」</b>。AP50 与 AP75 能差出一大截，而这差别和方法的优劣毫无关系——它只是尺子换了。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>同一篇论文报「检测 mAP 42.5」，你第一步该问什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：先问 IoU 阈值。AP50 与 AP75 是两个完全不同的数，不写阈值就没有意义；这正是第九季「先问真值多准」在检测侧的对应物，0198 会给出完整判据。"
+            onclick="lessonKit.answer(this,'q0186b')">IoU 阈值取多少</button>
+          <button data-correct="no" data-explanation="不对：主干选型确实影响精度，但它不是「读懂这个数」的前提；先确定尺子（IoU 阈值）才知道 42.5 是哪一把尺子量出来的。"
+            onclick="lessonKit.answer(this,'q0186b')">骨干用了哪一款</button>
+        </div>
+        <div class="quiz-feedback" id="q0186b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 零件地图：四个家族</h2>
+      <p>本季 11 篇零件，按<b>它们在流水线上干的活</b>分成四个家族。分家族不是为了好看，而是因为<b>同一家族里的零件是要横向比较的</b>——比如三节骨架课，讲的都是「怎么把网络做深做强」，你必须放在一起看才知道谁解决了谁的问题。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>家族一 · 骨架（5 篇 / 3 节）</h4>
+          <p>网络的躯干，负责「把图像变成特征」。<b>0187</b> GoogLeNet、<b>0188</b> ResNet、<b>0189</b> ResNeXt、<b>0194</b> Swin 与 PVT。一句话概括它们的十年：<b>怎么在算力不涨的前提下，把网络做深做强。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>家族二 · 检测头（2 篇 / 2 节）</h4>
+          <p>负责「把物体框出来」。<b>0191</b> YOLO（一步到位）、<b>0193</b> Focal Loss（一步到位为什么难训）。第八季动态块里剔除动态物体的第一步，就是这一家族干的活。</p>
+        </div>
+        <div class="mini-card">
+          <h4>家族三 · 分割头（2 篇 / 2 节）</h4>
+          <p>负责「把像素涂上类别」。<b>0190</b> FCN（逐像素预测的开山之作）、<b>0192</b> Mask R-CNN（从涂色到给每个个体编号）。第八季语义建图块的燃料。</p>
+        </div>
+        <div class="mini-card">
+          <h4>家族四 · 两端的外围（2 篇 / 2 节）</h4>
+          <p>一头一尾：<b>0195</b> LiDAR 硬件（点云是怎么从硬件里出来的）、<b>0196 / 0197</b> 3D 检测综述（点云里的框长什么样）。它们不参与「图像 → 特征」，但决定了你有没有数据、以及数据最终要被谁吃。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">零件仓库：四个家族各占一个货架</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">同一货架上的零件要横向比；不同货架之间只靠流水线相连</text>
+
+          <rect x="24" y="74" width="204" height="330" rx="12" fill="#16203a" stroke="#5cffb0"/>
+          <text x="126" y="100" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">家族一 · 骨架</text>
+          <rect x="60" y="116" width="132" height="24" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="60" y="142" width="132" height="24" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="60" y="168" width="132" height="24" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="60" y="194" width="132" height="24" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="126" y="133" text-anchor="middle" fill="#cdd6ff" font-size="11">特征提取的躯干</text>
+          <text x="126" y="159" text-anchor="middle" fill="#cdd6ff" font-size="11">图像进、特征出</text>
+          <text x="126" y="185" text-anchor="middle" fill="#cdd6ff" font-size="11">前八季到处在调用</text>
+          <text x="126" y="211" text-anchor="middle" fill="#cdd6ff" font-size="11">却从没人解释</text>
+          <text x="126" y="242" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0187 GoogLeNet</text>
+          <text x="126" y="262" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0188 ResNet</text>
+          <text x="126" y="282" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0189 ResNeXt</text>
+          <text x="126" y="302" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0194 Swin / PVT</text>
+          <text x="126" y="332" text-anchor="middle" fill="#9fb4ff" font-size="10">共 5 篇 / 3 节课</text>
+          <text x="126" y="356" text-anchor="middle" fill="#ffd166" font-size="10">这条线最长、最该先读</text>
+          <text x="126" y="382" text-anchor="middle" fill="#9fb4ff" font-size="10">十年就答一个问：</text>
+          <text x="126" y="396" text-anchor="middle" fill="#9fb4ff" font-size="10">算力不涨怎么做强</text>
+
+          <rect x="244" y="74" width="204" height="330" rx="12" fill="#16203a" stroke="#ffd166"/>
+          <text x="346" y="100" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">家族二 · 检测头</text>
+          <rect x="270" y="116" width="152" height="82" rx="5" fill="#0b1020" stroke="#3a4a78"/>
+          <rect x="300" y="128" width="44" height="56" fill="#24304f" stroke="#ffd166"/>
+          <rect x="356" y="146" width="46" height="30" fill="#24304f" stroke="#ffd166"/>
+          <text x="346" y="216" text-anchor="middle" fill="#cdd6ff" font-size="11">图像进 → 框出来</text>
+          <text x="346" y="238" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0191 YOLO</text>
+          <text x="346" y="258" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0193 Focal Loss</text>
+          <text x="346" y="288" text-anchor="middle" fill="#9fb4ff" font-size="10">共 2 篇 / 2 节课</text>
+          <text x="346" y="314" text-anchor="middle" fill="#cdd6ff" font-size="10">第八季 0153–0159</text>
+          <text x="346" y="332" text-anchor="middle" fill="#cdd6ff" font-size="10">剔动态物体的第一步</text>
+          <text x="346" y="360" text-anchor="middle" fill="#ff9f6b" font-size="10">痛点是「小物体成堆会漏」</text>
+          <text x="346" y="384" text-anchor="middle" fill="#9fb4ff" font-size="10">所以 SLAM 要加几何约束</text>
+
+          <rect x="464" y="74" width="204" height="330" rx="12" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="566" y="100" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">家族三 · 分割头</text>
+          <rect x="490" y="116" width="152" height="82" rx="5" fill="#0b1020" stroke="#3a4a78"/>
+          <rect x="498" y="124" width="42" height="30" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="544" y="124" width="42" height="30" fill="#3a3320" stroke="#ffd166"/>
+          <rect x="590" y="124" width="42" height="30" fill="#3a2418" stroke="#ff9f6b"/>
+          <rect x="498" y="160" width="88" height="30" fill="#3a3320" stroke="#ffd166"/>
+          <rect x="590" y="160" width="42" height="30" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="566" y="216" text-anchor="middle" fill="#cdd6ff" font-size="11">图像进 → 涂上类别</text>
+          <text x="566" y="238" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0190 FCN</text>
+          <text x="566" y="258" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0192 Mask R-CNN</text>
+          <text x="566" y="288" text-anchor="middle" fill="#9fb4ff" font-size="10">共 2 篇 / 2 节课</text>
+          <text x="566" y="314" text-anchor="middle" fill="#cdd6ff" font-size="10">第八季 0160–0167</text>
+          <text x="566" y="332" text-anchor="middle" fill="#cdd6ff" font-size="10">语义先验怎么进地图</text>
+          <text x="566" y="360" text-anchor="middle" fill="#ff9f6b" font-size="10">痛点是「会把救生衣当人」</text>
+          <text x="566" y="384" text-anchor="middle" fill="#9fb4ff" font-size="10">所以 SLAM 要加几何约束</text>
+
+          <rect x="684" y="74" width="192" height="330" rx="12" fill="#16203a" stroke="#7f8fc7"/>
+          <text x="780" y="100" text-anchor="middle" fill="#7f8fc7" font-size="14" font-weight="700">家族四 · 两端外围</text>
+          <rect x="726" y="116" width="26" height="40" rx="4" fill="#24304f" stroke="#ffd166"/>
+          <rect x="729" y="121" width="20" height="8" rx="3" fill="#ffd166"/>
+          <rect x="766" y="126" width="60" height="30" rx="4" fill="#0b1020" stroke="#7f8fc7"/>
+          <rect x="776" y="134" width="40" height="14" fill="#24304f" stroke="#7f8fc7"/>
+          <text x="780" y="188" text-anchor="middle" fill="#cdd6ff" font-size="11">点云从哪来 / 到哪去</text>
+          <text x="780" y="212" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0195 LiDAR 硬件</text>
+          <text x="780" y="234" text-anchor="middle" fill="#e8ecff" font-size="11" font-weight="700">0196 / 0197 3D 检测</text>
+          <text x="780" y="264" text-anchor="middle" fill="#9fb4ff" font-size="10">共 2 篇 / 3 节课</text>
+          <text x="780" y="290" text-anchor="middle" fill="#cdd6ff" font-size="10">回链第四季 0073–0079</text>
+          <text x="780" y="308" text-anchor="middle" fill="#cdd6ff" font-size="10">激光测距的道理</text>
+          <text x="780" y="336" text-anchor="middle" fill="#ffd1d8" font-size="10">红线：硬件篇没有</text>
+          <text x="780" y="352" text-anchor="middle" fill="#ffd1d8" font-size="10">测距范围 / 扫描频率数值</text>
+          <text x="780" y="378" text-anchor="middle" fill="#9fb4ff" font-size="10">综述全文 0 次提 SLAM</text>
+
+          <text x="450" y="440" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">要记住：先读骨架（0187–0189），再读检测与分割——因为后者都站在骨架肩上</text>
+          <text x="450" y="464" text-anchor="middle" fill="#cdd6ff" font-size="12">每个家族最后都指向同一句话：零件不完美，所以 SLAM 必须自己加几何约束</text>
+          <text x="450" y="490" text-anchor="middle" fill="#9fb4ff" font-size="12">这条「零件不完美 → 几何兜底」的链条，是第十季与第八季最重要的连接点</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>四个货架分别对应骨架、检测头、分割头、两端外围四个家族。每个货架里画了它干的活的示意（骨架画成一摞方块、检测头画成框、分割头画成涂色的格子、外围画成激光雷达与一个 3D 框），下面列出该家族的课号与篇数。<br>
+          <b>怎么看这张图：</b>① 看左上角骨架货架：<b>它篇数最多、线最长，也最该先读</b>——因为后面所有家族都站在它肩上；② 看检测与分割两个货架底部的橙字：<b>它们各自带着一个「毛病」，而毛病正是 SLAM 要加几何约束的理由</b>；③ 看最右货架底部两行粉字：那是本季要显式纠正的两处清单问题（0195 硬件篇没有那些数值、3D 检测综述全文不提 SLAM）。<br>
+          <b>要记住的一句话：</b>四个家族的共同结尾是同一句话——零件不完美，所以几何必须兜底。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 暗线：精度 vs 实时性</h2>
+      <p>本季有一条贯穿 13 节课的暗线，第二张总图就讲它。<b>先把两个数放在一起看</b>：第八季动态环境块里，DynaSLAM 引用 Mask R-CNN 的真实耗时是 <b>195 ms / 图</b>——换算过来约 <b>5 fps</b>。而 SLAM 的工程惯例是跑满 30 Hz，也就是每帧只有 <b>33 ms</b>。</p>
+      <p>这意味着什么？<b>语义前端跑一次，SLAM 已经过去了六帧。</b>于是所有「语义 + SLAM」的论文都必须回答同一个问题：这六帧里发生了什么？答案通常是两条路——要么语义前端降频跑（每隔若干帧分割一次，中间靠几何跟踪撑住），要么把语义结果当作<b>慢变量</b>去约束地图，而不是逐帧驱动位姿。</p>
+      <p><b>记住这条暗线，本季很多设计就自动读通了</b>：为什么 YOLO 要强调「one-stage」、为什么 Focal Loss 要解决「正负样本不平衡」、为什么 Mask R-CNN 会被 SLAM 论文抱怨「跑不到帧率」、为什么 0194 的 Swin 与 PVT 整篇都在谈「线性复杂度」。<b>它们不在同一条技术线上，却在同一个预算表里打架。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="540" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">时间预算尺：SLAM 一帧只有 33 ms，语义前端一次要 195 ms</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">横轴 = 单次处理的耗时，从 0 到 200 毫秒；尺子一样长，条子越短越实时</text>
+
+          <line x1="90" y1="90" x2="840" y2="90" stroke="#3a4a78"/>
+          <text x="90" y="82" text-anchor="middle" fill="#9fb4ff" font-size="11">0 ms</text>
+          <text x="277" y="82" text-anchor="middle" fill="#9fb4ff" font-size="11">50 ms</text>
+          <text x="465" y="82" text-anchor="middle" fill="#9fb4ff" font-size="11">100 ms</text>
+          <text x="652" y="82" text-anchor="middle" fill="#9fb4ff" font-size="11">150 ms</text>
+          <text x="840" y="82" text-anchor="middle" fill="#9fb4ff" font-size="11">200 ms</text>
+
+          <text x="90" y="122" fill="#5cffb0" font-size="13" font-weight="700">① SLAM 一帧的预算</text>
+          <rect x="90" y="132" width="124" height="30" rx="4" fill="#1d3a2a" stroke="#5cffb0"/>
+          <text x="152" y="153" text-anchor="middle" fill="#5cffb0" font-size="12">33 ms</text>
+          <text x="240" y="142" fill="#cdd6ff" font-size="12">= 30 Hz；跟踪 + 优化 + 建图全要挤在里面</text>
+          <text x="240" y="160" fill="#9fb4ff" font-size="11">超过它，机器人就会跟不上自己的运动</text>
+
+          <text x="90" y="200" fill="#ff9f6b" font-size="13" font-weight="700">② 语义前端一次前向（Mask R-CNN）</text>
+          <rect x="90" y="210" width="731" height="30" rx="4" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="455" y="231" text-anchor="middle" fill="#ff9f6b" font-size="12">195 ms</text>
+          <text x="628" y="258" text-anchor="middle" fill="#ffd1d8" font-size="12">≈ 5 fps，是预算的 6 倍</text>
+          <text x="90" y="258" fill="#cdd6ff" font-size="12">来源：DynaSLAM 引用的真实耗时（见 0192）</text>
+
+          <text x="90" y="300" fill="#7f8fc7" font-size="13" font-weight="700">③ 另一个学习式零件：TartanVO 位姿网络</text>
+          <rect x="90" y="310" width="150" height="30" rx="4" fill="#1b2440" stroke="#7f8fc7"/>
+          <text x="165" y="331" text-anchor="middle" fill="#cdd6ff" font-size="12">40 ms</text>
+          <text x="266" y="320" fill="#cdd6ff" font-size="12">GTX 1080 上；拆掉 BN、加平移旋转双头</text>
+          <text x="266" y="338" fill="#9fb4ff" font-size="11">勉强够用，但已经吃掉一整帧的预算（见 0188）</text>
+
+          <text x="90" y="378" fill="#ffd166" font-size="13" font-weight="700">④ 特征匹配零件：LoFTR</text>
+          <rect x="90" y="388" width="435" height="30" rx="4" fill="#3a3320" stroke="#ffd166"/>
+          <text x="307" y="409" text-anchor="middle" fill="#ffd166" font-size="12">116 ms</text>
+          <text x="541" y="398" fill="#cdd6ff" font-size="12">RTX 2080Ti 上 640×480 一对图</text>
+          <text x="541" y="416" fill="#9fb4ff" font-size="11">比一帧预算慢 3.5 倍</text>
+          <text x="541" y="436" fill="#9fb4ff" font-size="11">换算：1 ÷ 0.116 s ≈ 8.6 fps</text>
+
+          <text x="450" y="452" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">★ 本季所有零件的落地摩擦，都在这条尺子上：越准的零件越慢</text>
+          <text x="450" y="476" text-anchor="middle" fill="#cdd6ff" font-size="12">所以 SLAM 的做法不是「换更慢的零件」，而是「让语义当慢变量、让几何当快变量」</text>
+          <text x="450" y="500" text-anchor="middle" fill="#9fb4ff" font-size="12">这条线从第八季 0153 一直延到本季 0198，是第十季的暗线而不是某一节的主题</text>
+          <text x="450" y="524" text-anchor="middle" fill="#9fb4ff" font-size="12">要记住：看到「我们用了 Mask R-CNN」，第一反应应该是「那它的帧率怎么办」</text>
+          <text x="90" y="278" fill="#5cffb0" font-size="11">换算：1 ÷ 0.195 s ≈ 5.1 fps</text>
+          <text x="266" y="358" fill="#9fb4ff" font-size="11">换算：1 ÷ 0.040 s = 25 fps</text>
+          <text x="690" y="490" fill="#cdd6ff" font-size="11">一个零件两个价签：精度 + 毫秒</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一把以毫秒为刻度的横尺（0–200 ms），上下四条彩条分别是 SLAM 一帧的预算（33 ms）、Mask R-CNN 语义前端一次前向（195 ms）、TartanVO 位姿网络（40 ms）、LoFTR 特征匹配（116 ms）。条子越长，越不实时。<br>
+          <b>怎么看这张图：</b>① 先看最短那条绿条：<b>33 ms 是 SLAM 必须守住的天花板</b>；② 再看那条几乎占满整张图的橙条：195 ms 是它的六倍，也就是<b>语义前端跑一次，SLAM 已经过去六帧</b>；③ 最后看中间两条蓝黄条：它们都卡在「够用但很贵」的位置上——这正是第八季要发明「语义当慢变量」这种折中的原因。<br>
+          <b>要记住的一句话：</b>本季每一个零件都同时挂着两个价签，一个是精度，一个是毫秒。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">可用帧率 = 1 ÷ 单次处理耗时；语义前端的帧率 = 1 ÷ 0.195 s ≈ 5.1 fps</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「一秒钟能处理几次」——把单次耗时取倒数；② 为什么这么算——因为每一帧都必须完整跑一遍这个零件，跑得慢就直接拉低帧率，没有中间地带；③ <b>具体走一遍数</b>：Mask R-CNN 一次 195 ms = 0.195 s，1 ÷ 0.195 ≈ 5.1，也就是每秒只有约 5 帧；而 SLAM 要 30 Hz，即每帧 33 ms = 0.033 s。两个数字相差 195 ÷ 33 ≈ 5.9 倍。<b>这就是本季所有「精度 vs 实时性」争论的算术根据。</b></p>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 全季课表</h2>
+      <p>下面是第十季的完整课表，13 节课覆盖 11 篇论文。<b>建议的读法</b>：先走骨架三节（0187–0189），再走检测与分割四节（0190–0193），然后换掉卷积那一节（0194），最后读两端外围（0195–0197），收在速查手册（0198）。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">课号</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">主题</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">覆盖论文</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0186</td><td style="padding:.5rem;border:1px solid #3a4a78;">导览：论文里那些没人解释的名词</td><td style="padding:.5rem;border:1px solid #3a4a78;">—</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0187</td><td style="padding:.5rem;border:1px solid #3a4a78;">VGG 与 GoogLeNet（2015）：两条经典骨干</td><td style="padding:.5rem;border:1px solid #3a4a78;">2015_Going_deeper_with_convolutions（实为 GoogLeNet）</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0188</td><td style="padding:.5rem;border:1px solid #3a4a78;">ResNet（2016）：残差连接</td><td style="padding:.5rem;border:1px solid #3a4a78;">2016_Deep_Residual_Learning_for_Image_Recognition</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0189</td><td style="padding:.5rem;border:1px solid #3a4a78;">ResNeXt（2017）：不加深也能变强</td><td style="padding:.5rem;border:1px solid #3a4a78;">2017_Aggregated_Residual_Transformations…</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0190</td><td style="padding:.5rem;border:1px solid #3a4a78;">FCN（2015）：全卷积与逐像素预测</td><td style="padding:.5rem;border:1px solid #3a4a78;">2015_Fully_convolutional_networks_for_semantic_segmentation</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0191</td><td style="padding:.5rem;border:1px solid #3a4a78;">YOLO（2016）：一步到位的检测</td><td style="padding:.5rem;border:1px solid #3a4a78;">2016_You_Only_Look_Once</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0192</td><td style="padding:.5rem;border:1px solid #3a4a78;">Mask R-CNN（2017）：实例分割与 RoIAlign</td><td style="padding:.5rem;border:1px solid #3a4a78;">2017_Mask_R-CNN</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0193</td><td style="padding:.5rem;border:1px solid #3a4a78;">Focal Loss（2017）：九成都是背景怎么办</td><td style="padding:.5rem;border:1px solid #3a4a78;">2017_Focal_Loss_for_Dense_Object_Detection</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0194</td><td style="padding:.5rem;border:1px solid #3a4a78;">Swin 与 PVT（2021）：把金字塔搬进 Transformer</td><td style="padding:.5rem;border:1px solid #3a4a78;">2021_Swin_Transformer ＋ 2021_Pyramid_Vision_Transformer（实为 v1）</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0195</td><td style="padding:.5rem;border:1px solid #3a4a78;">LiDAR 硬件（2017）：点云怎么来的</td><td style="padding:.5rem;border:1px solid #3a4a78;">2017_Lidar_System_Architectures_and_Circuits</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0196</td><td style="padding:.5rem;border:1px solid #3a4a78;">三维检测综述（2023）上：点、体素与 BEV</td><td style="padding:.5rem;border:1px solid #3a4a78;">2023_3D_Object_Detection_for_Autonomous_Driving__A_Comprehens</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0197</td><td style="padding:.5rem;border:1px solid #3a4a78;">三维检测综述（2023）下：多模态融合与度量</td><td style="padding:.5rem;border:1px solid #3a4a78;">同上（拆两节讲两条分类轴）</td></tr>
+          <tr><td style="padding:.5rem;border:1px solid #3a4a78;">0198</td><td style="padding:.5rem;border:1px solid #3a4a78;">收官：零件地图与名词速查手册</td><td style="padding:.5rem;border:1px solid #3a4a78;">—</td></tr>
+        </tbody>
+      </table>
+      <p><b>关于课表里两处「实为」的说明</b>：这一季的课程清单本身就有两处子标题与论文正文不符——标「VGG（2015）」的那篇正文其实是 GoogLeNet，标「PVTv2（2021）」的那篇正文其实是 PVT v1。<b>这两处我们都会在对应课里显式纠正，而不是悄悄改掉</b>；因为它们恰好证明本季的主题：<b>连课程清单都会把经典网络记混，你更不能凭名字猜内容。</b></p>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 收官课要回答什么</h2>
+      <p>本季最后一节（0198）会正面回答一个问题，这个问题也是这一季真正的目的：</p>
+      <div class="callout"><h4>0198 要回答的问题</h4><p><b>看到论文里一个陌生的词，怎么在三十秒内判断「我需不需要读懂它」？</b></p></div>
+      <p>为什么要问这个？因为把 11 篇零件全部读懂，并不等于你会读论文了。<b>真实的读论文场景是：你手里有一篇 SLAM 论文、一个下午，和一个你从没见过的名词。</b>你需要的是一个能在三十秒内做完的判断，而不是再去补一整季课。</p>
+      <p>这一节先给一个预告版的判据（完整版在 0198）：<b>看这个词出现在论文的哪个位置。</b></p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>它出现在「方法主体」里</h4>
+          <p>比如「我们的骨干换成 ResNet-18，特征维度 512」。<b>必须读懂</b>——它决定了方法怎么工作，读不懂就看不懂贡献。</p>
+        </div>
+        <div class="mini-card">
+          <h4>它只出现在「实验设置」里</h4>
+          <p>比如「训练用 AdamW、300 epoch、batch 1024」。<b>知道它是超参就够了</b>——不影响你理解方法，复现时才需要精确。</p>
+        </div>
+        <div class="mini-card">
+          <h4>它只出现在「相关工作」里</h4>
+          <p>比如「[43] 提出的 GoogLeNet 在分类上取得…」。<b>知道有这么个东西即可</b>——它不是你这条路线的关键节点。</p>
+        </div>
+      </div>
+      <p>顺着这条判据回头看，你会发现本季 11 篇零件里有几篇<b>对你可能真的不必细读</b>——比如那个全文 0 次提到 SLAM 的 3D 检测综述，以及本季唯一一个在 SLAM 语料里找不到任何实际引用的骨干。<b>但你必须先知道它是什么，才能做出「不必细读」这个判断。</b>这就是本季存在的理由：<b>补名词的目的不是让你都读懂，而是让你有能力决定要不要读懂。</b></p>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 读完你应该能回答</h2>
+      <ul>
+        <li>第十季为什么与前面九季都不同？本季 11 篇论文的共同点是什么？</li>
+        <li>「论文从来不解释那些词」这句话，具体可以在前八季的哪些课号里看到证据？</li>
+        <li>本季 11 篇零件分成哪四个家族？每个家族各干流水线上的哪一段活？</li>
+        <li>为什么建议先读骨架三节（0187–0189）再读检测与分割？</li>
+        <li>「精度 vs 实时性」这条暗线，具体是哪两个数字在打架？差几倍？</li>
+        <li>看到论文里一个陌生名词，预告版的三十秒判据是什么？</li>
+        <li>课表里哪两处子标题与论文正文不符？为什么本季选择显式纠正而不是悄悄改掉？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>有人对你说：「第十季讲的 ResNet 又不是 SLAM，为什么放在 SLAM 课里？」你怎么回答？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为前八季的 SLAM 论文一直在用它们，但从没解释过。比如 2017 年的 CNN-SLAM 把 ResNet-50 拆开当前半段编码器、后半段换上采样出深度图；2021 年的 TartanVO 用「a modified ResNet50 as the pose network」直接估位姿。这些是真实发生在 SLAM 系统里的用法。本季不产生 SLAM 方法，而是把前八季论文里被随手调用、却从没解释过的通用零件补上——不补，读者对那几节课的理解就永远停在「大概是个神经网络」。</div></details>
+        </li>
+        <li>语义前端 195 ms/图，SLAM 要 30 Hz。除了「降频跑语义」，你还能想到哪些工程出路？（提示：想想 0198 会讲的判据）
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>至少四条：① 把语义结果当慢变量——地图上的语义标签每 N 帧更新一次，位姿仍由几何逐帧跟踪；② 换更快的检测/分割零件，例如从两阶段换成一步到位的方案（0191 YOLO 的思路）；③ 只在关键帧上跑语义，中间帧用几何外推；④ 减小输入分辨率或降采样，用精度换时间。这四条的共同点都是「承认零件跑不满帧率，然后让几何去补」——也就是本季与第八季最重要的连接点。</div></details>
+        </li>
+        <li>本季有一篇论文在 SLAM 语料库里的实际引用数为 0，另有一篇全文 0 次提到 SLAM。既然这样，为什么还要给它们各开课？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为「判断它对你没用」这件事，本身建立在你已经知道它是什么。ZERO 引用的那一篇（0194 里的 PVT）是理解 Swin 那套「金字塔搬进 Transformer」叙事的镜像对照——同一年、同一目标、完全相反的路径；而全文不提 SLAM 的那篇（0196/0197 的 3D 检测综述）是「点云里的框」这个问题的系统性地图，第四季的激光 SLAM 与它用的是同一批表示（点 / 体素 / BEV）。所以本季补名词的目的，不是让你把 11 篇都读懂，而是让你有能力决定要不要读懂。</div></details>
+        </li>
+        <li>回到第八季 0153–0159 或 0160–0167 里任意一节，找出一个你当年跳过的名词，写下它在什么句子里、以及你现在猜测它是什么意思。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>没有标准答案，但请对照本节的「欠账现场」表检查你的猜测落在哪一类。常见的三类：① 支干网络类（backbone / ResNet-18 / VGG-16）——本季 0187–0189、0194 会补；② 检测与分割类（Mask R-CNN / YOLO / 语义分割 / 实例分割 / RoIAlign）——本季 0190–0193 会补；③ 度量和评测类（IoU / AP / mAP / top-5）——0196–0198 会补。如果你当年猜的意思和这三类都不沾边，那正是「凭名字猜内容」的典型后果，也正是本季要纠正的习惯。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0178-事件双目VIO与全季收官.html">← 上一课：事件双目 VIO 与全季收官（第九季）</a>
+        <a class="next" href="0187-VGG与GoogLeNet-2015-两条经典骨干.html">下一课：VGG 与 GoogLeNet（2015）两条经典骨干 →</a>
+      </div>
+      <p class="foot-note">这一季不教你新方法，只把你过去一年跳过的词一个个捡回来。<b>补名词的目的不是让你都读懂，而是让你有能力决定要不要读懂。</b>我们从最长的那条线开始：把网络做深做强的十年 🗺️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

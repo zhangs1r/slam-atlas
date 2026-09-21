@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FCN（2015）：全卷积与逐像素预测 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0190</div>
+      <h1>FCN（2015）：全卷积与逐像素预测</h1>
+      <p class="subtitle">同一张图，为什么以前的网络只能吐出一个词，它却能吐出一张「贴满答案的图」？🐱 这一课讲清「逐像素预测」这个念头的源头，也讲清那个更容易被忽略、但你以后一定会用到的思想——深层语义配浅层细节。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：语义分割的开山之作</span>
+        <span>👥 作者：J. Long、E. Shelhamer、T. Darrell（UC Berkeley）</span>
+        <span>📅 年份 · <i>Fully Convolutional Networks for Semantic Segmentation</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">先分清三个词</a>
+        <a href="#b">旧路线的死结</a>
+        <a href="#c">三处改动</a>
+        <a href="#d">损失与数字</a>
+        <a href="#e">它不完美在哪</a>
+        <a href="#f">和前面课程怎么接</a>
+        <a href="#g">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：① 一眼分清<b>目标检测 / 语义分割 / 实例分割</b>三个词；② 说清<b>全连接层为什么丢空间信息</b>，以及 FCN 用哪三处改动把它救回来；③ 讲出 skip architecture 的两句核心话——「深层管是什么、浅层管在哪里」「融合才让边界变细」；④ 复述 FCN 的关键数字，并说出它承认的失败案例。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本课是<b>第八季 0160–0167 语义建图块</b>的地基：那一块里所有「给地图上色」的网络，源头都在这里。★ <b>2017_SemanticFusion</b> 用的 Deconvolutional Semantic Segmentation 就是同一个套路的下一代（VGG-16 + 反卷积上采样）。★ <b>2017_CNN-SLAM</b> 直接把 ResNet-50 的后半段换成上采样块，同时输出深度与逐像素语义——FCN 在那里是「深度 + 语义」的双料前端。★ 下一课 <b>0191 YOLO</b> 讲「画框」，本课讲「涂色」；两课合起来才能听懂 <b>0192 Mask R-CNN</b> 的第三条分支为什么是「一个作用在单个候选框上的小 FCN」。★ 第九季 <b>0180</b> 提醒「看到轨迹误差先问真值多准」，本课要补上另一半：<b>看到 mean IU / mAP 先问 IoU 阈值是多少</b>。</p></div>
+      </div>
+
+      <h2>1. 先分清三个词：检测、语义分割、实例分割</h2>
+      <p>这一课开始，你会反复遇到三个中文长得很像、但干的活完全不同的词。零基础读者最容易在这里混掉，所以我们先用一张图把它钉死：<b>想像一张照片，画面里有两只挨在一起的猫。</b></p>
+      <p>生活类比先来一发：</p>
+      <ul>
+        <li><b>目标检测</b>像在照片上贴便利贴：「这里有猫」「那里也有猫」——它告诉你<b>数量</b>和<b>大致位置（一个框）</b>，但框里的像素哪些真属于猫、哪些是背景，它不管。</li>
+        <li><b>语义分割</b>像给照片上一遍色：「所有属于猫的像素涂成橙色」——它告诉你<b>哪些像素是猫</b>，但如果两只猫贴在一起，橙色会<b>连成一片</b>，它不数个体。</li>
+        <li><b>实例分割</b>像给照片上色<b>还顺便编号</b>：「第 1 只猫的像素是这些，涂绿；第 2 只猫的像素是那些，涂蓝」——<b>既知道边界，又知道个体</b>。</li>
+      </ul>
+      <p>FCN 属于中间那一类：<b>语义分割</b>。原文对它的定义写得很干脆——语义分割是把「每个像素分进一个固定类别集合」，而且原话强调 <b>without differentiating object instances</b>（<b>不区分物体个体</b>）。这句话就是三个词的分水岭，请记住它。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">同一张图、两只挨着的猫：三个词一次讲清</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">三只网络看的是同一张照片，交出来的答案却完全不同</text>
+          <text x="450" y="68" text-anchor="middle" fill="#ffd166" font-size="11">同一个输入：一张有两只挨在一起猫咪的照片</text>
+
+          <rect x="40" y="74" width="240" height="216" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="160" y="98" text-anchor="middle" fill="#ff5d73" font-size="12.5" font-weight="700">① 目标检测</text>
+          <text x="160" y="116" text-anchor="middle" fill="#9fb4ff" font-size="10">代表零件：YOLO（下一课）</text>
+          <ellipse cx="132" cy="204" rx="33" ry="21" fill="#8a8f9e"/>
+          <circle cx="104" cy="180" r="14" fill="#8a8f9e"/>
+          <polygon points="94,172 98,158 108,168" fill="#8a8f9e"/>
+          <polygon points="114,168 120,158 116,172" fill="#8a8f9e"/>
+          <ellipse cx="192" cy="204" rx="33" ry="21" fill="#8a8f9e"/>
+          <circle cx="220" cy="180" r="14" fill="#8a8f9e"/>
+          <polygon points="210,168 216,158 226,172" fill="#8a8f9e"/>
+          <polygon points="230,172 234,158 240,168" fill="#8a8f9e"/>
+          <rect x="80" y="160" width="84" height="68" fill="none" stroke="#ff5d73" stroke-width="2"/>
+          <rect x="160" y="160" width="84" height="68" fill="none" stroke="#ff5d73" stroke-width="2"/>
+          <text x="80" y="154" fill="#ff5d73" font-size="9">cat 0.98</text>
+          <text x="162" y="154" fill="#ff5d73" font-size="9">cat 0.91</text>
+          <text x="160" y="262" text-anchor="middle" fill="#cdd6ff" font-size="10">返回两个框 + 两个 cat 标签</text>
+          <text x="160" y="280" text-anchor="middle" fill="#ff9f6b" font-size="10">知道有两只，不知边界</text>
+
+          <rect x="330" y="74" width="240" height="216" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="450" y="98" text-anchor="middle" fill="#ff9f6b" font-size="12.5" font-weight="700">② 语义分割</text>
+          <text x="450" y="116" text-anchor="middle" fill="#9fb4ff" font-size="10">代表零件：FCN（本课）</text>
+          <rect x="440" y="186" width="24" height="32" rx="7" fill="#ff9f6b"/>
+          <ellipse cx="422" cy="204" rx="33" ry="21" fill="#ff9f6b"/>
+          <circle cx="394" cy="180" r="14" fill="#ff9f6b"/>
+          <polygon points="384,172 388,158 398,168" fill="#ff9f6b"/>
+          <polygon points="404,168 410,158 406,172" fill="#ff9f6b"/>
+          <ellipse cx="482" cy="204" rx="33" ry="21" fill="#ff9f6b"/>
+          <circle cx="510" cy="180" r="14" fill="#ff9f6b"/>
+          <polygon points="500,168 506,158 516,172" fill="#ff9f6b"/>
+          <polygon points="520,172 524,158 530,168" fill="#ff9f6b"/>
+          <text x="450" y="152" text-anchor="middle" fill="#ff9f6b" font-size="10">两只猫同一色</text>
+          <text x="450" y="240" text-anchor="middle" fill="#ff9f6b" font-size="9">中间这道桥把两只连成一片</text>
+          <text x="450" y="262" text-anchor="middle" fill="#cdd6ff" font-size="10">所有猫像素涂同一色</text>
+          <text x="450" y="280" text-anchor="middle" fill="#ff9f6b" font-size="10">分不出个体，只知边界</text>
+
+          <rect x="620" y="74" width="240" height="216" rx="8" fill="#0b1220" stroke="#2a3a66"/>
+          <text x="740" y="98" text-anchor="middle" fill="#5cffb0" font-size="12.5" font-weight="700">③ 实例分割</text>
+          <text x="740" y="116" text-anchor="middle" fill="#9fb4ff" font-size="10">代表零件：Mask R-CNN（0192）</text>
+          <ellipse cx="712" cy="204" rx="33" ry="21" fill="#5cffb0"/>
+          <circle cx="684" cy="180" r="14" fill="#5cffb0"/>
+          <polygon points="674,172 678,158 688,168" fill="#5cffb0"/>
+          <polygon points="694,168 700,158 696,172" fill="#5cffb0"/>
+          <ellipse cx="772" cy="204" rx="33" ry="21" fill="#4ea8ff"/>
+          <circle cx="800" cy="180" r="14" fill="#4ea8ff"/>
+          <polygon points="790,168 796,158 806,172" fill="#4ea8ff"/>
+          <polygon points="810,172 814,158 820,168" fill="#4ea8ff"/>
+          <text x="660" y="154" fill="#5cffb0" font-size="9">掩码 ①</text>
+          <text x="770" y="154" fill="#4ea8ff" font-size="9">掩码 ②</text>
+          <text x="740" y="240" text-anchor="middle" fill="#5cffb0" font-size="9">两张掩码互相独立，绝不连片</text>
+          <text x="740" y="262" text-anchor="middle" fill="#cdd6ff" font-size="10">返回两张独立的掩码</text>
+          <text x="740" y="280" text-anchor="middle" fill="#5cffb0" font-size="10">既知边界、又知个体</text>
+
+          <text x="160" y="310" text-anchor="middle" fill="#cdd6ff" font-size="10.5">目标检测（YOLO）</text>
+          <text x="160" y="328" text-anchor="middle" fill="#9fb4ff" font-size="10">数得清，但画不准</text>
+          <text x="450" y="310" text-anchor="middle" fill="#cdd6ff" font-size="10.5">语义分割（FCN）</text>
+          <text x="450" y="328" text-anchor="middle" fill="#9fb4ff" font-size="10">涂得满，但不分个</text>
+          <text x="740" y="310" text-anchor="middle" fill="#cdd6ff" font-size="10.5">实例分割（Mask R-CNN）</text>
+          <text x="740" y="328" text-anchor="middle" fill="#9fb4ff" font-size="10">又涂又数，代价是慢</text>
+
+          <rect x="40" y="352" width="820" height="62" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="376" text-anchor="middle" fill="#cdd6ff" font-size="11.5">一句话记牢：检测只说「有几只」，语义只说「哪些像素」，实例才说「第几只是哪些像素」</text>
+          <text x="450" y="398" text-anchor="middle" fill="#9fb4ff" font-size="10.5">数学上的分野：语义分割每个像素做多分类（类间互相竞争）；实例掩码每类各出一张二值图（类间不竞争）</text>
+          <text x="450" y="448" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">三个词的分野不是精度高低，而是「要不要数个体」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一张「两只挨着的猫」的照片，交给三种网络，得到三种完全不同的输出。左格是目标检测（两个红框 + 两个 cat 标签）；中格是语义分割（两只猫都涂成橙色，中间还被一道桥连成一片）；右格是实例分割（第 1 只绿、第 2 只蓝，两张掩码互不重叠）。<br>
+          <b>怎么看这张图：</b>① 先看<b>左格</b>——框是「大概位置」，红框之间的像素归属它根本不管；② 再看<b>中格</b>——这才是 FCN 的活：逐像素归类，但同一类的两只猫被涂成一样、还连片，所以数不出「两只」；③ 最后看<b>右格</b>——掩码分色分号，个体被区分开了，代价是模型复杂得多（这正是一九二课的主题）。<br>
+          <b>要记住的一句话：</b>「语义分割不区分物体个体」这句原文，就是三个词的分水岭。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>一张照片里有三把并排贴在一起的椅子。某网络输出了「椅子」这一类的一套像素掩码，三把椅子连成一片。它做的是哪种任务？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="目标检测输出的是框和类别标签，不会给出逐像素的掩码，所以不是它。" onclick="lessonKit.answer(this,'q0190a')">这是目标检测</button>
+          <button data-correct="yes" data-explanation="对——逐像素归类但不区分个体，正是语义分割的定义。原文用的是 without differentiating object instances。" onclick="lessonKit.answer(this,'q0190a')">这是语义分割</button>
+          <button data-correct="no" data-explanation="实例分割会给每一把椅子一张独立掩码并编号，三把椅子不会连成一片。" onclick="lessonKit.answer(this,'q0190a')">这是实例分割</button>
+        </div>
+        <div class="quiz-feedback" id="q0190a"></div>
+      </div>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 旧路线的死结：全连接层把空间坐标丢掉了</h2>
+      <p>要理解 FCN 的价值，得先理解它出现之前大家卡在哪。2015 年之前，做逐像素分割主要有两条路，原文都点名了：</p>
+      <ul>
+        <li><b>第一条：抠小块（patchwise）。</b>在图上抠出一个个小方块，单独送进分类网络，给<b>方块中心那个像素</b>标一个类别。毛病很直观——相邻方块<b>大面积重叠</b>，同一片像素被反复计算，慢得离谱。而且还得额外配 superpixel、候选区域、CRF 后处理来救场。</li>
+        <li><b>第二条：走 R-CNN 那套。</b>先出候选框，再分类，再分割。精度不错，但原文说得很直接：这两种方法 <b>Neither method is learned end-to-end</b>（都不是端到端可学的）。</li>
+      </ul>
+      <p>但这些都是「症状」，<b>真正的病根在结构上</b>。原文这句话是本课的核心，建议背下来：</p>
+      <div class="callout">
+        <h4>原文的关键一句</h4>
+        <p><b>The fully connected layers of these nets have fixed dimensions and throw away spatial coordinates.</b></p>
+        <p>人话翻译：分类网络最后那几层全连接层，<b>尺寸是钉死的</b>（比如 4096 维、1000 维），它们要做的只有一件事——把整张图的信息<b>硬挤成一根向量</b>。挤成向量的时候，<b>「这个特征在图的哪个位置」这个信息就被扔掉了</b>。</p>
+      </div>
+      <p>为什么非扔不可？因为全连接层的输入必须是<b>固定长度</b>的。要让不同尺寸的图都能进同一个网络，它只能在最后一段「拍扁」——而拍扁这个动作，本质上就是把「二维的、有位置关系的」特征图，变成一个「一维的、位置信息全丢了的」长条。所以这类网络天生只会回答「<b>这是什么</b>」，不会回答「<b>哪里是什么</b>」。</p>
+      <p>下面这张原文图，画的就是「把全连接层换成卷积层之后，分类网络居然能吐出一张热力图」这件事。它是本课所有改动的起点。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Fully_convolutional_networks_for_semantic_segmentation/264476f9f42ed47ab456e2388048f39de859102d864cb3648022e11046462164.jpg" alt="Transforming fully connected layers into convolution layers enables a classification net to output a heatmap">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Transforming fully connected layers into convolution layers enables a classification net to output a heatmap. Adding layers and a spatial loss (as in Figure 1) produces an efficient machine for end-to-end dense learning.<br>
+          <b>怎么看这张图：</b>上图是原来的分类网络，末尾被压成一根向量；下图是把最后几层全连接换成卷积之后的样子——输出不再是一根向量，<b>而是一张小网格（热力图）</b>，网格上每个位置都带着类别打分。你要盯的正是「输出形状」这一处的变化：<b>从「一根竖条」变成「一张二维图」，空间维度就这么回来了</b>。<br>
+          <b>要记住的一句话：</b>把全连接层当卷积用，输出就从「一个答案」变回「一张有位置信息的图」。
+        </figcaption>
+      </figure>
+
+      <p>下面这张自绘图把它摊开成两半，左半是旧路线、右半是 FCN。这一张是本课最重要的视觉锚点，请对着它把「空间信息是哪一步丢掉的」看清楚。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 500" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="500" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">压成向量 vs 输出同尺寸热力图</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">两条路线共用同一张 224×224 的猫图，区别只在最后那几层</text>
+          <line x1="460" y1="62" x2="460" y2="380" stroke="#2a3a66" stroke-width="1" stroke-dasharray="5 5"/>
+
+          <text x="52" y="82" fill="#ff9f6b" font-size="12.5" font-weight="700">① 旧路线：整张图 → 一个答案</text>
+          <rect x="56" y="94" width="58" height="58" rx="4" fill="#1b2338" stroke="#3a4a78"/>
+          <circle cx="85" cy="128" r="13" fill="#8a8f9e"/>
+          <polygon points="76,122 79,109 88,118" fill="#8a8f9e"/>
+          <polygon points="93,118 98,109 95,122" fill="#8a8f9e"/>
+          <rect x="130" y="98" width="50" height="50" fill="#223052" stroke="#3a4a78"/>
+          <rect x="192" y="103" width="40" height="40" fill="#2a3a66" stroke="#3a4a78"/>
+          <rect x="244" y="107" width="32" height="32" fill="#33456f" stroke="#3a4a78"/>
+          <rect x="286" y="111" width="24" height="24" fill="#3c507c" stroke="#3a4a78"/>
+          <rect x="318" y="114" width="18" height="18" fill="#465c88" stroke="#3a4a78"/>
+          <text x="85" y="166" text-anchor="middle" fill="#9fb4ff" font-size="9">224</text>
+          <text x="155" y="166" text-anchor="middle" fill="#9fb4ff" font-size="9">112</text>
+          <text x="212" y="166" text-anchor="middle" fill="#9fb4ff" font-size="9">56</text>
+          <text x="260" y="166" text-anchor="middle" fill="#9fb4ff" font-size="9">28</text>
+          <text x="85" y="182" text-anchor="middle" fill="#9fb4ff" font-size="10">猫图输入</text>
+          <text x="238" y="182" text-anchor="middle" fill="#9fb4ff" font-size="10">逐层下采样</text>
+          <polygon points="340,98 340,148 376,113 376,133" fill="#3a2a10" stroke="#ff9f6b" stroke-width="1.5"/>
+          <rect x="384" y="88" width="16" height="70" fill="#ffd166"/>
+          <text x="406" y="104" fill="#ffd166" font-size="9">4096×1</text>
+          <text x="406" y="120" fill="#ffd166" font-size="9">1000×1</text>
+          <text x="406" y="140" fill="#5cffb0" font-size="10" font-weight="700">这是猫</text>
+          <rect x="296" y="192" width="14" height="14" fill="none" stroke="#ff5d73" stroke-width="1"/>
+          <rect x="326" y="200" width="12" height="12" fill="none" stroke="#ff5d73" stroke-width="1"/>
+          <rect x="290" y="216" width="12" height="12" fill="none" stroke="#ff5d73" stroke-width="1"/>
+          <line x1="294" y1="190" x2="312" y2="208" stroke="#ff5d73" stroke-width="2"/>
+          <line x1="312" y1="190" x2="294" y2="208" stroke="#ff5d73" stroke-width="2"/>
+          <text x="348" y="212" fill="#ff5d73" font-size="10" font-weight="700">空间坐标被丢掉</text>
+          <text x="348" y="228" fill="#9fb4ff" font-size="9">二维位置信息在这里消失</text>
+          <rect x="56" y="240" width="350" height="92" rx="8" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="72" y="264" fill="#ff5d73" font-size="11.5" font-weight="700">整张图 → 一个答案</text>
+          <text x="72" y="286" fill="#9fb4ff" font-size="10.5">它只会回答「这是什么」</text>
+          <text x="72" y="306" fill="#9fb4ff" font-size="10.5">不会回答「哪里是什么」</text>
+          <text x="72" y="324" fill="#9fb4ff" font-size="10.5">因为最后那几层把这个位置彻底抹平了</text>
+
+          <text x="482" y="82" fill="#5cffb0" font-size="12.5" font-weight="700">② FCN：整张图 → 一张贴满答案的图</text>
+          <rect x="486" y="94" width="58" height="58" rx="4" fill="#1b2338" stroke="#3a4a78"/>
+          <circle cx="515" cy="128" r="13" fill="#8a8f9e"/>
+          <polygon points="506,122 509,109 518,118" fill="#8a8f9e"/>
+          <polygon points="523,118 528,109 525,122" fill="#8a8f9e"/>
+          <rect x="556" y="100" width="46" height="46" fill="#223052" stroke="#3a4a78"/>
+          <rect x="610" y="104" width="38" height="38" fill="#2a3a66" stroke="#3a4a78"/>
+          <rect x="656" y="108" width="30" height="30" fill="#33456f" stroke="#3a4a78"/>
+          <rect x="692" y="112" width="22" height="22" fill="#3c507c" stroke="#3a4a78"/>
+          <rect x="722" y="112" width="22" height="24" rx="2" fill="#465c88" stroke="#5cffb0" stroke-width="1"/>
+          <rect x="750" y="104" width="32" height="40" rx="2" fill="#4a6a9a" stroke="#5cffb0" stroke-width="1"/>
+          <rect x="788" y="94" width="46" height="60" rx="2" fill="#4e7cb0" stroke="#5cffb0" stroke-width="1"/>
+          <text x="515" y="166" text-anchor="middle" fill="#9fb4ff" font-size="9">224</text>
+          <text x="679" y="166" text-anchor="middle" fill="#9fb4ff" font-size="9">56</text>
+          <text x="515" y="182" text-anchor="middle" fill="#9fb4ff" font-size="10">同一张猫图</text>
+          <text x="660" y="182" text-anchor="middle" fill="#9fb4ff" font-size="10">下采样</text>
+          <text x="760" y="182" text-anchor="middle" fill="#5cffb0" font-size="10">deconv 上采样</text>
+          <line x1="700" y1="190" x2="700" y2="212" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="700,218 694,206 706,206" fill="#ffd166"/>
+          <text x="700" y="232" text-anchor="middle" fill="#ffd166" font-size="10">再放大回原图尺寸</text>
+          <rect x="546" y="242" width="300" height="150" rx="6" fill="#1b2338" stroke="#3a4a78"/>
+          <ellipse cx="646" cy="330" rx="42" ry="28" fill="#ff9f6b"/>
+          <circle cx="612" cy="298" r="18" fill="#ff9f6b"/>
+          <polygon points="599,288 605,270 617,282" fill="#ff9f6b"/>
+          <polygon points="625,282 634,270 629,288" fill="#ff9f6b"/>
+          <ellipse cx="748" cy="330" rx="42" ry="28" fill="#ff9f6b"/>
+          <circle cx="782" cy="298" r="18" fill="#ff9f6b"/>
+          <polygon points="769,282 775,270 787,288" fill="#ff9f6b"/>
+          <polygon points="795,288 807,282 803,298" fill="#ff9f6b"/>
+          <text x="660" y="266" fill="#ff9f6b" font-size="9">猫像素 = 橙色</text>
+          <text x="800" y="266" text-anchor="end" fill="#9fb4ff" font-size="9">背景 = 灰色</text>
+          <text x="546" y="412" fill="#5cffb0" font-size="10.5" font-weight="700">输出：与原图同尺寸的类别热力图，每个像素都有类别</text>
+          <text x="546" y="430" fill="#9fb4ff" font-size="10">尺寸没变，这就是「尺寸进、尺寸出」</text>
+
+          <rect x="40" y="446" width="820" height="40" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="472" text-anchor="middle" fill="#cdd6ff" font-size="11.5">左：整张图 → 一个答案；右：整张图 → 一张贴满答案的图（尺寸不变）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是旧路线，一串方块逐层缩小（224→112→56→28→…→7），末尾画成一个漏斗，把所有东西<b>硬挤成一根细长的竖条向量</b>，标注 4096×1 与 1000×1，旁边只写一句「这是猫」；挤扁的地方有几块二维坐标格飘散飞出，被红叉划掉。右边是 FCN，同样是那串方块，但结尾不压向量，而是换成一路<b>由小变大的方块</b>（标 deconv / 上采样），最后输出一张与原图同尺寸、猫像素橙色、背景灰色的彩色热力图。<br>
+          <b>怎么看这张图：</b>① 左边盯住那个<b>漏斗</b>——二维特征图在这里被拍扁成一维向量，「位置」信息就是在这一步被扔掉的；② 右边盯住那条<b>由小变大</b>的链——它把粗热力图一路放大回原尺寸，于是每个像素都能拿到自己的类别；③ 两边的差别不在「用了什么卷积核」，而在<b>最后有没有那一下拍扁</b>。<br>
+          <b>要记住的一句话：</b>全连接层不是「差」，而是它天生就要把空间坐标丢掉——FCN 的全部意义就是不再丢。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. 三处改动：fc→conv、上采样进网络、skip architecture</h2>
+      <p>病根找到了，药方也就顺理成章。原文的做法一共三件事，前两件很好懂，第三件才是真正让 FCN 被后来无数方法借用的原因。</p>
+
+      <h3>改动 (a)：全连接层 = 卷积层</h3>
+      <p>数学上有一个很干净的事实：<b>一个全连接层，如果它的输入恰好铺满它的感受野，那就等价于一个「卷积核尺寸等于输入尺寸」的卷积层。</b>既然等价，那就可以直接把最后那几层全连接<b>改写成卷积</b>。改完之后有两个直接好处：</p>
+      <ul>
+        <li>输入不再被钉死在 224×224——<b>任意尺寸的图都能进</b>；</li>
+        <li>输出从一根向量变成<b>一张 10×10 的分类热力图</b>，位置信息保留下来了。</li>
+      </ul>
+      <p>这里有一个很漂亮的速度证据，原文给得很具体：AlexNet 对一张 227×227 的图推理只要 1.2 ms；而<b>全卷积化之后</b>的 AlexNet 用 22 ms 就能从 500×500 的图里产出 10×10 的网格——<b>比逐个抠 patch 喂进去快 5 倍以上</b>。原因就是那句关键词：重叠区域的计算被 <b>amortized（摊薄）</b> 了，不再重复算。</p>
+
+      <h3>改动 (b)：把上采样也放进网络里</h3>
+      <p>粗热力图（比如 10×10）要变回原图尺寸，得放大。原文的做法是用<b>反卷积</b>（backwards strided convolution）做这件事，并且把它作为一个<b>可学习的层塞回网络内部</b>。原文给了一句很关键的话：上采样 f 倍，等价于「用一个输入步长为 1/f 的卷积」。这一手的重要性在于——<b>只有把上采样放进网络里，逐像素的损失才能一路反传回去</b>，整个网络才能端到端训练。</p>
+      <p>还有一句容易被忽略的：这个反卷积<b>不必固定成双线性插值</b>，原文说 the deconvolution filter in such a layer need not be fixed … but can be learned——<b>它是学出来的</b>。</p>
+      <p>顺便说一句，论文还<b>试验并放弃</b>了两条路，如实记一下：一是 shift-and-stitch（输出变密了，但代价是 f² 倍计算，而且滤波器并看不到更细的尺度）；二是直接降低 pooling 的 stride（对 VGG16 会把 fc6 的核撑到 14×14，原文承认 we had difficulty learning such large filters）。</p>
+
+      <h3>改动 (c)：skip architecture —— 这一节请务必读完</h3>
+      <p><b>很多入门材料讲到 (a) 就停了，只把它记住成「一个把 fc 换成 conv 的小技巧」。那样会漏掉 FCN 真正值钱的东西。</b></p>
+      <p>问题是这样：纯全卷积化之后，最后预测层的 <b>stride 是 32</b>——意思是输出图上<b>一个点对应原图 32×32 的一块区域</b>。这么粗的图，边界一定糊。论文的解法是把 <b>pool4、pool3 的预测按 stride 16、8 逐级加回去</b>，得到 FCN-16s、FCN-8s。原文点题的那句话是：</p>
+      <div class="callout">
+        <h4>原文的关键一句</h4>
+        <p><b>Combining fine layers and coarse layers lets the model make local predictions that respect global structure.</b></p>
+        <p>人话翻译：<b>把「细的层」和「粗的层」合起来</b>，模型才能在「局部判断得准」的同时，「尊重整体结构」——也就是说，既不会把一片草地里的一个小块误判成别的东西，也不会让物体边界糊成一团。</p>
+      </div>
+      <p>这就是 <b>skip architecture（跳跃式结构）</b>。用一句大白话说清楚它的分工：</p>
+      <ul>
+        <li><b>深层</b>经过很多次下采样，感受野大、看到的是「整体」——它知道<b>这是什么</b>，但位置很粗；</li>
+        <li><b>浅层</b>下采样次数少，细节保留好——它知道<b>边界在哪里</b>，但语义弱、容易认错；</li>
+        <li><b>把两者加起来</b>，才得到「又准又细」的结果。</li>
+      </ul>
+      <p>所以 <b>你真正会用到 FCN 的地方，不是 fc→conv，而是这个「深层语义 + 浅层细节」的融合思想</b>。前面提到的 SemanticFusion、CNN-SLAM，以及下一课要讲的 Mask R-CNN 的掩码分支，全都建立在这个思想上。<b>只讲 fc→conv，会让学生以为 FCN 只是一个技巧；它其实回答的是「分割的精度从哪来」。</b></p>
+      <p>还有一个细节很能说明论文的严谨：FCN-16s 里<b>新加在 pool4 上的 1×1 卷积层参数是零初始化</b>的——这样网络的「起点」与 FCN-32s 的预测完全一致，然后再把学习率降低 100 倍去微调。也就是说，它是<b>从一个已经会做分割的网络出发，再加一层细节</b>，而不是从头学。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Fully_convolutional_networks_for_semantic_segmentation/da638709e8079bbdadaf147941d6ea06740982250404188687030c55b36f35e8.jpg" alt="Our DAG nets learn to combine coarse, high layer information with fine, low layer information">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Our DAG nets learn to combine coarse, high layer information with fine, low layer information. Pooling and prediction layers are shown as grids that reveal relative spatial coarseness, while intermediate layers are shown as vertical lines. First row (FCN-32s): Our single-stream net, described in Section 4.1, upsamples stride 32 predictions back to pixels in a single step. Second row (FCN-…（原文图注在此处截断）<br>
+          <b>怎么看这张图：</b>读法很简单——<b>每一行就是一条「融合到多浅」的路线</b>。第一行 FCN-32s 只有一条单行道，把 stride 32 的预测一步放大回像素，最粗；第二行往下多接了一条从 pool4 来的线（FCN-16s）；第三行再多接一条从 pool3 来的线（FCN-8s），最细。图中那些「网格」画的是池化层与预测层的相对粗细，「竖线」画的是中间层。你要盯的是<b>分支数在一行一行地增加</b>——每增加一条从更浅层来的线，输出就细一分。<br>
+          <b>要记住的一句话：</b>FCN 的精度不是靠更深的网络，而是靠把更浅层的细节一级一级接回来。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="540" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">skip architecture：深层管「是什么」，浅层管「在哪里」</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="12">同一条输入，一路越走越粗、一路保留细节，最后加起来</text>
+
+          <rect x="50" y="74" width="230" height="110" rx="8" fill="#1b2338" stroke="#ff9f6b" stroke-width="1.5"/>
+          <text x="165" y="94" text-anchor="middle" fill="#ff9f6b" font-size="11.5" font-weight="700">深层：pool5 的预测</text>
+          <text x="165" y="110" text-anchor="middle" fill="#9fb4ff" font-size="10">stride 32 · 每格盖住原图一大片</text>
+          <rect x="70" y="120" width="36" height="24" fill="#3a2a10" stroke="#3a4a78"/>
+          <rect x="106" y="120" width="36" height="24" fill="#ff9f6b" opacity="0.85"/>
+          <rect x="142" y="120" width="36" height="24" fill="#3a2a10" stroke="#3a4a78"/>
+          <rect x="178" y="120" width="36" height="24" fill="#3a2a10" stroke="#3a4a78"/>
+          <rect x="214" y="120" width="36" height="24" fill="#ff9f6b" opacity="0.85"/>
+          <rect x="70" y="144" width="36" height="24" fill="#ff9f6b" opacity="0.85"/>
+          <rect x="106" y="144" width="36" height="24" fill="#ff9f6b" opacity="0.85"/>
+          <rect x="142" y="144" width="36" height="24" fill="#3a2a10" stroke="#3a4a78"/>
+          <rect x="178" y="144" width="36" height="24" fill="#3a2a10" stroke="#3a4a78"/>
+          <rect x="214" y="144" width="36" height="24" fill="#3a2a10" stroke="#3a4a78"/>
+          <text x="70" y="178" fill="#9fb4ff" font-size="9">语义强，边界糊成方块</text>
+
+          <rect x="50" y="198" width="230" height="110" rx="8" fill="#1b2338" stroke="#4ea8ff" stroke-width="1.5"/>
+          <text x="165" y="218" text-anchor="middle" fill="#4ea8ff" font-size="11.5" font-weight="700">浅层：pool3 的预测</text>
+          <text x="165" y="234" text-anchor="middle" fill="#9fb4ff" font-size="10">stride 8 · 每格只盖住一小块</text>
+          <rect x="70" y="244" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="88" y="244" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="106" y="244" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="124" y="244" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="142" y="244" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="160" y="244" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="178" y="244" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="196" y="244" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="214" y="244" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="232" y="244" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="70" y="262" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="88" y="262" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="106" y="262" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="124" y="262" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="142" y="262" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="160" y="262" width="18" height="18" fill="#4ea8ff" opacity="0.7"/>
+          <rect x="178" y="262" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="196" y="262" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="214" y="262" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <rect x="232" y="262" width="18" height="18" fill="#1b2338" stroke="#3a4a78"/>
+          <text x="70" y="296" fill="#9fb4ff" font-size="9">边界清楚，语义容易认错</text>
+
+          <circle cx="330" cy="191" r="24" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <text x="330" y="199" text-anchor="middle" fill="#ffd166" font-size="20" font-weight="700">+</text>
+          <line x1="282" y1="140" x2="306" y2="172" stroke="#ff9f6b" stroke-width="2"/>
+          <polygon points="310,177 302,167 314,167" fill="#ff9f6b"/>
+          <line x1="282" y1="250" x2="306" y2="214" stroke="#4ea8ff" stroke-width="2"/>
+          <polygon points="310,209 302,219 314,219" fill="#4ea8ff"/>
+          <text x="296" y="118" text-anchor="middle" fill="#ff9f6b" font-size="10">深层语义</text>
+          <text x="296" y="292" text-anchor="middle" fill="#4ea8ff" font-size="10">浅层细节</text>
+
+          <line x1="354" y1="191" x2="398" y2="191" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="404,191 392,185 392,197" fill="#ffd166"/>
+
+          <rect x="414" y="74" width="240" height="234" rx="8" fill="#16203a" stroke="#5cffb0" stroke-width="1.5"/>
+          <text x="534" y="96" text-anchor="middle" fill="#5cffb0" font-size="11.5" font-weight="700">融合结果：又准又细</text>
+          <text x="534" y="112" text-anchor="middle" fill="#9fb4ff" font-size="10">边界跟着浅层走，类别跟着深层走</text>
+          <ellipse cx="534" cy="210" rx="42" ry="26" fill="#ff9f6b"/>
+          <circle cx="502" cy="182" r="16" fill="#ff9f6b"/>
+          <polygon points="490,174 495,158 506,168" fill="#ff9f6b"/>
+          <polygon points="514,168 522,158 518,174" fill="#ff9f6b"/>
+          <ellipse cx="626" cy="210" rx="42" ry="26" fill="#ff9f6b"/>
+          <circle cx="658" cy="182" r="16" fill="#ff9f6b"/>
+          <polygon points="646,168 652,158 662,174" fill="#ff9f6b"/>
+          <polygon points="670,174 680,168 676,182" fill="#ff9f6b"/>
+          <rect x="574" y="194" width="14" height="30" rx="5" fill="#3a2a10"/>
+          <text x="534" y="266" text-anchor="middle" fill="#5cffb0" font-size="10">两只猫被分开了，边缘是圆的</text>
+          <text x="534" y="286" text-anchor="middle" fill="#9fb4ff" font-size="10">这就是「局部准 + 整体对」</text>
+
+          <rect x="50" y="330" width="240" height="88" rx="8" fill="#0b1220" stroke="#3a4a78"/>
+          <text x="170" y="352" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">FCN-32s</text>
+          <text x="170" y="372" text-anchor="middle" fill="#9fb4ff" font-size="10">只用最深一层，一步放大</text>
+          <text x="170" y="394" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">59.4 mean IU</text>
+          <text x="170" y="410" text-anchor="middle" fill="#9fb4ff" font-size="9">VOC2011 segval 子集</text>
+
+          <rect x="330" y="330" width="240" height="88" rx="8" fill="#0b1220" stroke="#3a4a78"/>
+          <text x="450" y="352" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">FCN-16s</text>
+          <text x="450" y="372" text-anchor="middle" fill="#9fb4ff" font-size="10">再接回 pool4 的细节</text>
+          <text x="450" y="394" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">62.4 mean IU</text>
+          <text x="450" y="410" text-anchor="middle" fill="#9fb4ff" font-size="9">比 32s 涨了 3.0</text>
+
+          <rect x="610" y="330" width="240" height="88" rx="8" fill="#0b1220" stroke="#5cffb0" stroke-width="1.5"/>
+          <text x="730" y="352" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">FCN-8s</text>
+          <text x="730" y="372" text-anchor="middle" fill="#9fb4ff" font-size="10">再接回 pool3 的细节</text>
+          <text x="730" y="394" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">62.7 mean IU</text>
+          <text x="730" y="410" text-anchor="middle" fill="#9fb4ff" font-size="9">增益明显变小，边际递减</text>
+
+          <rect x="50" y="436" width="800" height="52" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="458" text-anchor="middle" fill="#cdd6ff" font-size="11.5">融合不是「多接几层就更好」：论文还发现「单独从 pool4 学」效果很差，增益来自融合这件事本身</text>
+          <text x="450" y="478" text-anchor="middle" fill="#ff9f6b" font-size="11">FCN-8s 之后继续融合更浅的层，原文自述已经 meet diminishing returns（边际收益递减）</text>
+          <text x="450" y="514" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：你以后用到 FCN 的地方，多半是「深层语义 + 浅层细节」这个思想，而不是 fc 换 conv 这个技巧</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左侧上下两个格子分别代表「深层 pool5 的预测」与「浅层 pool3 的预测」。上面那张网格粗（每格盖住原图一大片），语义对但边界糊成大方块；下面那张网格细（每格只盖住一小块），边界清楚但语义弱。中间一个加号把两者加起来，右边得到「又准又细」的融合结果。底部三个小卡是 FCN-32s / FCN-16s / FCN-8s 的三组数字。<br>
+          <b>怎么看这张图：</b>① 先比较左上的<b>粗网格</b>与左下的<b>细网格</b>——它们各自缺什么，一眼就看得出来；② 再看中间那个 <b>加号</b>——skip architecture 的全部动作就是「把浅层的预测加回深层的预测上」，一共加了两次（pool4、pool3），所以才叫 FCN-16s 与 FCN-8s；③ 最后看底部数字：59.4 → 62.4 → 62.7，<b>涨得最多的是第一次融合</b>，第二次只涨了 0.3，这就是原文自述「边际收益递减」的由来。<br>
+          <b>要记住的一句话：</b>「深层语义 + 浅层细节」才是 FCN 真正传下去的东西——只讲 fc→conv 等于只讲了一半。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Fully_convolutional_networks_for_semantic_segmentation/cdf9a2fa8bd57fab1a93274f93ae540b3d6a0c0591f82af17817a63cdca5e378.jpg" alt="Refining fully convolutional nets by fusing information from layers with different strides improves segmentation detail">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Refining fully convolutional nets by fusing information from layers with different strides improves segmentation detail. The first three images show the output from our 32, 16, and 8 pixel stride nets (see Figure 3).<br>
+          <b>怎么看这张图：</b>这是上面那张示意图的「实物验证」。从左到右依次是 stride 32、16、8 三张网络的输出，请<b>盯着物体边缘看</b>：最左边那版的边缘是锯齿状的、大块大块的；越往右，边缘越贴合真实轮廓。这张图是「融合真的有用」最直接的证据，也是上一张图里那三个数字的可视化版本。<br>
+          <b>要记住的一句话：</b>逐级把浅层接回来，换来的就是边界从「方块拼的」变成「贴着轮廓的」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>有人说：「FCN 的贡献就是把全连接层换成卷积层。」这个说法为什么不够？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="fc→conv 确实是它的第一处改动，而且数学上说得通，这句话本身没错。" onclick="lessonKit.answer(this,'q0190b')">因为 fc 换 conv 是错的</button>
+          <button data-correct="yes" data-explanation="对——fc→conv 只是把位置信息救回来，真正决定精度的是 skip architecture 的深层语义加浅层细节融合。" onclick="lessonKit.answer(this,'q0190b')">因为它漏掉了融合思想</button>
+          <button data-correct="no" data-explanation="它的反卷积是学出来的、不固定为双线性插值，这确实是个细节，但不是这句话「不够」的核心原因。" onclick="lessonKit.answer(this,'q0190b')">因为上采样不能学习</button>
+        </div>
+        <div class="quiz-feedback" id="q0190b"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. 损失函数与关键数字</h2>
+      <p>FCN 的损失特别朴素，但正因为朴素，它才讲清了「在整张图上做 SGD」是什么意思。原文没有排版出逐像素损失的完整公式，只说了一句 <b>We train with a per-pixel multinomial logistic loss</b>（用逐像素的多项式 logistic 损失训练）。它唯一给出的公式化表述是这样一条「损失对空间求和」的性质：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\ell(\mathbf{x};\theta)=\sum_{ij}\ell'(\mathbf{x}_{ij};\theta)$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>整张图的总损失，等于图上<b>每个像素各自那笔损失之和</b>。$\mathbf{x}$ 是整张输入图（任意尺寸），$\mathbf{x}_{ij}$ 是最后一层在空间位置 $(i,j)$ 上的数据向量，$\theta$ 是网络全部参数，$\ell'$ 是单个位置上的损失。</p>
+      <p><b>它为什么这么算：</b>因为一旦损失能写成「逐位置求和」，反向传播时梯度也就是各空间分量梯度之和——于是<b>在整张图上做一次 SGD，就等价于把所有感受野当成一个 minibatch 做 SGD</b>。这正好解释了上一节那个 5 倍速度：重叠区域不再被重复算，batch 也不再需要靠抠 patch 来凑。</p>
+      <p><b>数字账：</b>PASCAL 一共 <b>21 类</b>（20 个物体类 + 1 个背景）。逐像素分类就是对图上每个像素做一次「21 选 1」。一张 500×500 的图，输出的粗热力图是 10×10——注意这里只有 100 个位置在算损失，而不是 25 万个像素；等上采样层把它放大回原尺寸，这 100 笔账就摊到了每一个像素上。</p>
+
+      <p>由 per-pixel multinomial logistic loss 可以还原出逐像素的 softmax 形式（<b>原文未排版，此处为讲解还原</b>）：</p>
+      <div class="formula-box">
+        <div class="flow-formula">$$p_{ij}^{(c)}=\frac{\exp(z_{ij}^{(c)})}{\sum_{c'}\exp(z_{ij}^{(c')})},\qquad \ell'_{ij}=-\log p_{ij}^{(y_{ij})}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>在位置 $(i,j)$ 上，先把 21 个类别的打分 $z_{ij}^{(c)}$ 变成一个概率分布（softmax），然后取「正确类别那一项」的负对数当损失。$y_{ij}$ 是该像素的真值类别。</p>
+      <p><b>它为什么这么算：</b>因为每个像素都要<b>在 21 个类里选一个</b>，类与类之间是<b>互相竞争</b>的（概率加起来等于 1）。请特别记住这一点——下一课和一九二课你会看到一个反例：Mask R-CNN 的掩码用的是 sigmoid 而不是 softmax，类之间<b>不竞争</b>。那个差别价值 5.5 个 AP，到时候我们会回来对账。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>精度</h4><p>PASCAL VOC 2012 test mean IU <b>62.2</b>（FCN-8s），相对前 SOTA <b>提升 20%</b>；训练集只有 <b>1112</b> 张标注图。</p></div>
+        <div class="mini-card"><h4>速度</h4><p>VOC 2011 上 FCN-8s 推理 <b>约 175 ms</b>，同期 SDS 约 <b>50 s</b>。原文写作「reduces inference time by 114 or 286」——<b>两个乘号在 OCR 中丢了</b>，应为 114 倍与 286 倍（50 s ÷ 175 ms ≈ 286，与 Table 3 吻合）。</p></div>
+        <div class="mini-card"><h4>模型规模</h4><p>500×500 输入、Tesla K40c：FCN-AlexNet <b>57M / 50 ms</b>、FCN-VGG16 <b>134M / 210 ms</b>、FCN-GoogLeNet <b>6M / 59 ms</b>；三者最大 stride 都是 32。</p></div>
+        <div class="mini-card"><h4>微调的代价</h4><p>只微调最后一层（FCN-32s-fixed）只有 <b>45.4</b> mean IU，而全量微调是 <b>59.4</b>——只能拿到约 <b>70%</b> 的效果。</p></div>
+        <div class="mini-card"><h4>类别不平衡</h4><p>标签里约 <b>3/4 是背景</b>。有意思的是论文据此认为<b>不需要</b>做类别平衡——这个判断在一九三课会被 Focal Loss 反过来讨论。</p></div>
+        <div class="mini-card"><h4>训练成本</h4><p>FCN-32s 单 GPU <b>3 天</b>，升级到 16s / 8s 各约 <b>1 天</b>；minibatch 20 张，momentum 0.9，至少 175 epochs。</p></div>
+      </div>
+      <p><b>一个容易误读的地方（如实说明）：</b>原文 Table 1 给 FCN-VGG16 是 <b>56.0</b> mean IU，Table 2 给 FCN-32s 是 <b>59.4</b>。这两者<b>不是矛盾，而是口径不同</b>——Table 1 是 VOC2011 val，Table 2 用的是 VOC2011 segval 的一个子集、且用上了额外训练数据。正文用「improves by 3.0 mean IU to 62.4」反推 FCN-32s = 59.4，是自洽的。</p>
+      <p><b>OCR 订正说明：</b>原文 4.3 节的 <b>10−3、10−4、5−5</b> 与 <b>5−4、2−4</b> 在抽取时丢了上标负号，应为 10⁻³、10⁻⁴、5⁻⁵ 与 5⁻⁴、2⁻⁴。本课未直接引用这组学习率，但一并说明，避免读者回原文时困惑。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. 它不完美在哪：把救生衣当成人</h2>
+      <p>论文自己列的局限相当坦率，逐条记一下（这些都是原文自述，不是我们的评价）：</p>
+      <ol>
+        <li><b>融合的边际收益递减。</b>FCN-8s 之后，原文说 our fusion improvements have met diminishing returns，所以没有继续融合更浅的层。</li>
+        <li><b>单独用 pool4 学效果很差。</b>增益来自「融合」这件事本身，不是「多了一层」。</li>
+        <li><b>降 stride 这条路对 VGG16 走不通。</b>pool5 的 stride 改成 1 会让 fc6 的核变成 14×14，原文承认 we had difficulty learning such large filters。</li>
+        <li><b>数据增强没用。</b>镜像加 32 像素抖动，原文说 yielded no noticeable improvement——这在当年算是反直觉的负面结果。</li>
+        <li><b>GoogLeNet 版分割反而差。</b>只有 <b>6M</b> 参数，却只有 <b>42.5</b> mean IU。原文的原话是：Despite similar classification accuracy, our implementation of GoogLeNet did not match the VGG16 segmentation result——<b>分类准不代表分割准</b>。</li>
+        <li><b>最直观的失败案例：把船上的救生衣看成人。</b>原文 Figure 6 第四行就摆着这个例子，原话 the net sees lifejackets in a boat as people。</li>
+      </ol>
+      <p>最后一条值得多想一秒：<b>救生衣是橙色的、人形的、在船上</b>——从「局部外观」看，它的确很像人。<b>FCN 看的正是外观</b>，所以它被外观骗了。这恰恰暴露了一个更深的问题：<b>光靠一张图的像素分类，没有几何约束、没有多视角一致性、也没有时序信息可依</b>。</p>
+      <p>这就是为什么到了第八季，SLAM 论文做语义建图时几乎都在前面加一道或几道别的关卡——多视角几何一致性、深度一致性、或者干脆让语义和几何互相校验。<b>零件不完美，所以 SLAM 要加几何约束。</b>这句话是本季的一条暗线，后面每一课都会以不同的方式碰到它。</p>
+      <p><b>还有一处原文自己承认的错误，顺手记下（诚实标注）：</b>致谢里写着「感谢 Wei Liu 指出我们 SIFT Flow mean IU 计算的一个问题，以及 frequency weighted mean IU 公式中的一个错误」。也就是说，<b>这篇论文的表格里确有一处公式错误是作者自己承认的</b>。这不是贬低，而是提醒你读老论文时对表格数字保持一点警觉。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Fully_convolutional_networks_for_semantic_segmentation/362873713e6f3f90ee6a94b2595715726cacaf37f31339287842fe970d60d234.jpg" alt="Fully convolutional segmentation nets produce state-of-the-art performance on PASCAL">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Fully convolutional segmentation nets produce state-of-the-art performance on PASCAL. The left column shows the output of our highest performing net, FCN-8s. The second shows the segmentations produced by the previous state-of-the-art system by Hariharan et al. [15]. Notice the fine structures recovered (first row), ability to separate closely interacting objects (second row), and robustness…（原文图注在此处截断）<br>
+          <b>怎么看这张图：</b>左边一列是 FCN-8s 的输出，第二列是当时的前 SOTA（Hariharan 等）。图注点出了三处可比的优点：第一行能恢复<b>细结构</b>、第二行能把<b>紧挨着互相影响的物体分开</b>、第三行是鲁棒性。<b>这张图请务必看到最后一行</b>——那里就是原文自述的失败案例：船上的救生衣被当成了人。这张图因此有两重身份：既是 FCN 的成绩单，也是它的自我检讨。<br>
+          <b>要记住的一句话：</b>同一张图里既有「细结构恢复得漂亮」，也有「救生衣被当成人」——这就是一个零件的真实水平。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2015_Fully_convolutional_networks_for_semantic_segmentation/7aa12ecd96321334efcc7ad5185238df693d0eacd2e642f44a230c374805f823.jpg" alt="Fully convolutional networks can efficiently learn to make dense predictions for per-pixel tasks">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Fully convolutional networks can efficiently learn to make dense predictions for per-pixel tasks like semantic segmentation.<br>
+          <b>怎么看这张图：</b>这是全篇的「封面图」：输入是真实照片，输出是一张逐像素涂好类别的图，中间没有抠块、没有候选框、没有 CRF 后处理。<b>盯住输入和输出的尺寸关系</b>——它们是一样大的。这正是本课的核心承诺：尺寸进、尺寸出，每个像素都有答案。<br>
+          <b>要记住的一句话：</b>「逐像素预测」这张牌，是 FCN 第一个打成体系的。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 和前面课程怎么接：这个零件在前八季出现过的地方</h2>
+      <p>本季的性质是「补名词」——这些零件不产生 SLAM 方法，但前八季的论文里到处在引用它们。所以每一课都必须回答一个问题：<b>这个零件，你在前面哪节课、哪个方法里见过它，当时它被用来做什么，又出了什么毛病。</b>FCN 的答案是这样的三处。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>第八季 0160–0167 语义建图块</h4><p>这一整块都在干同一件事：<b>给地图上的点或体素贴上语义标签</b>。而「逐像素分类」这个动作的源头就是 FCN。你在那一块看到的所有把图像变成彩色标签图的网络，往上追都是它。<b>它当时出的毛病</b>就是本课第 5 节那条：会看错（救生衣当人），所以语义建图必须靠多视角融合去反复投票纠正。</p></div>
+        <div class="mini-card"><h4>2017_SemanticFusion</h4><p>它用的分割网络是 Noh 的 Deconvolutional Semantic Segmentation，原文描述为「基于 VGG-16，加上 max unpooling 与反卷积层，训练成输出一张密集的逐像素语义概率图」——<b>这就是同一条 FCN 路线</b>，参考文献里也直接列了 FCN。它的做法是把这种逐像素概率图<b>按贝叶斯更新融进 SLAM 的体素地图</b>，用「很多帧一起投票」来压住单帧的错。<b>为什么非它不可</b>：语义标签要能贴到地图的每个体素上，就必须先有逐像素的输出；只有框是不够的。</p></div>
+        <div class="mini-card"><h4>2017_CNN-SLAM</h4><p>它把 ResNet-50 的后半段（最后的池化层与全连接层）<b>换成了一串残差上采样块</b>，原文明确写是基于 ResNet 到 Fully Convolutional network 的扩展。这一套架构<b>先做深度、再重训做逐像素语义标签</b>——FCN 在它那里是「深度 + 语义」的<b>双料前端</b>。<b>它当年出的毛病</b>：单目尺度本身就不确定，语义再好也救不了几何。</p></div>
+        <div class="mini-card"><h4>2022_WF-SLAM（把关系讲得最清楚的一句）</h4><p>原话：<b>The mask branch is essentially a small FCN network for pixelwise mask prediction.</b>（掩码分支本质上就是一个小小的、做逐像素掩码预测的 FCN。）这句话把 FCN 与 Mask R-CNN 的关系一次说透了——<b>一九二课那条「第三条分支」，血缘就在这里</b>。</p></div>
+      </div>
+
+      <p>还要补一条横向的提醒。<b>第九季 0180</b> 讲 TUM 数据集时立了一条纪律：<b>看到轨迹误差，先问真值有多准</b>。语义分割这边有一条平行的纪律：<b>看到 mean IU 或 mAP，先问 IoU 阈值是多少、真值标得有多细</b>。</p>
+      <p>为什么？因为 FCN 的 62.2 是在 PASCAL VOC 的标注口径下测的——<b>真值只有 1112 张标注图</b>，而且人手工涂的边界本身就有主观性；而「算不算预测对了」还取决于 IoU 判据取多严。同一份预测，判据一严一松，分数能差出一大截。这与「ATE 和 RPE 是两把尺子」是同一个道理：<b>检测/分割的精度用 IoU、AP、mAP 衡量，轨迹精度用 ATE、RPE 衡量，两套尺子不能互相比。</b></p>
+      <p>最后回指第一季。<b>第一季 0002 的 SLAM 全景纲领</b>里有「地图表示」这个概念——本季不展开它，但你可以把这节课看成那张全景地图里一个之前没标注的小方块，现在被填上了。而<b>第一季的术语总表</b>里那种「不加解释的 CV 词」，正是本季要一个个补掉的东西。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 读完你应该能回答</h2>
+      <ol>
+        <li>一张图里有两只挨着的猫，目标检测、语义分割、实例分割分别会返回什么？「分不出个体」这句话对应的是哪一个？</li>
+        <li>全连接层<b>为什么</b>会丢掉空间坐标？FCN 用哪三处改动把它救回来，各自解决什么问题？</li>
+        <li>skip architecture 的分工是什么？为什么说「只讲 fc→conv 等于只讲了一半」？举出三个用到这个思想的后续方法。</li>
+        <li>FCN 的损失为什么可以写成「对空间求和」？这和「整张图上做 SGD 等于把所有感受野当一个 minibatch」有什么关系？</li>
+        <li>「把救生衣当成人」这个失败案例，说明了这个零件的什么根本缺陷？为什么第八季的语义建图要在它后面加几何校验？</li>
+        <li>看到 FCN 报告的 mean IU = 62.2，你应该追问哪两件事？（提示：与第九季 0180 的那条纪律对照着答。）</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用「两只猫」的例子，把目标检测、语义分割、实例分割三个词各写一句话说清，并指出哪一个词的关键字是「不区分个体」。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>目标检测（YOLO）：返回两个框加 cat 标签，知道有几只、知道大概位置，但不知道框内的像素边界。语义分割（FCN）：把属于猫的像素全部涂成同一色，两只连成一片，<b>不区分物体个体</b>——原文的原话就是 without differentiating object instances。实例分割（Mask R-CNN）：返回两张独立掩码，既知边界、又知个体。</div></details>
+        </li>
+        <li>「全连接层会丢掉空间坐标」这句话，能不能改成「全连接层太笨」？为什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不能。全连接层本身没有错，它的输入必须固定长度，所以最后一段要把二维特征图拍扁成一维向量——<b>拍扁这个动作必然丢掉位置信息</b>，这是结构决定的，不是能力不够。正确的表述是：分类网络的设计目标只是「这是什么」，它在结构上就不打算回答「哪里是什么」。</div></details>
+        </li>
+        <li>为什么讲 FCN 不能只讲「把全连接层换成卷积层」？请给出至少两条理由，并举出三个用到「深层语义 + 浅层细节」思想的后续方法。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>理由一：fc→conv 只把位置信息救回来，并没有解决「输出太粗」的问题（stride 32 的输出边界是糊的），精度靠 skip architecture 才有。<br>理由二：后续方法借用的主要是那个融合思想，而不是 fc→conv 这个技巧——只讲 fc→conv 会让人以为 FCN 只是一个结构小把戏。<br>三个后续方法：SemanticFusion（把逐像素语义概率按贝叶斯融进体素地图）、CNN-SLAM（用上采样块同时输出深度与语义）、Mask R-CNN 的掩码分支（原文写作 using an FCN）。</div></details>
+        </li>
+        <li>我在某论文里看到「本方法在 PASCAL 上取得 62.2 mean IU」。要判断这个数字是不是真的可比较，你还需要问清哪两件事？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>① <b>评测口径</b>：是 VOC2012 test 还是 VOC2011 val / segval 子集？用没用额外训练数据？（同一篇论文里 FCN-VGG16 的 56.0 与 FCN-32s 的 59.4 就是口径不同造成的。）② <b>IoU 判据与真值来源</b>：判据阈值是多少、真值标注的粗细如何。这与第九季 0180 那条「看到轨迹误差先问真值多准」是同一纪律。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0189-ResNeXt-2017-不加深也能变强.html">← 0189 ResNeXt：不加深也能变强</a>
+        <a class="next" href="0191-YOLO-2016-一步到位的检测.html">0191 YOLO：一步到位的检测 →</a>
+      </div>
+      <p class="foot-note">这一课你拿到的不是一个小技巧，而是一个可以被借用十年的思想：深层的语义配浅层的细节。继续走。🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

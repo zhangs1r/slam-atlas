@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LiDAR 硬件（2017）：点云是怎么从硬件里出来的 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 J · 基础零件 / Lesson 0195</div>
+      <h1>LiDAR 硬件（2017）：点云是怎么从硬件里出来的</h1>
+      <p class="subtitle">前八季我们把点云当输入用了几十次，但从没问过它到底是怎么被量出来的——这篇电路人写的论文只回答一件事：那一串三维坐标，在硬件里靠什么原理、花什么代价得到 📡</p>
+      <div class="hero-meta">
+        <span>🎯 主题：激光雷达的测距原理与硬件架构（被 SLAM 当传感器的那个零件）</span>
+        <span>👥 作者：Behnam Behroozpour、Phillip A. M. Sandborn、Ming C. Wu、Bernhard E. Boser</span>
+        <span>📅 2017（据文件名；正文未标注发表处与年份） · <i>Lidar System Architectures and Circuits</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">0. 点云不是一张图</a>
+        <a href="#b">1. 测距就是测时间</a>
+        <a href="#c">2. 三种调制方式</a>
+        <a href="#d">3. 两条分类轴</a>
+        <a href="#e">4. 每个点自带时刻戳</a>
+        <a href="#f">5. 诚实的红线</a>
+        <a href="#g">6. 它不完美在哪</a>
+        <a href="#h">7. 读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清点云为什么「不是一张图」，而是一串各自独立的测距结果；② 用 $R = \frac{1}{2}c\tau$ 解释「测距的本质是测时间」，并说出要分辨 1 厘米需要多高的时间分辨率；③ 分清 Pulsed / AMCW / FMCW 三种调制方式各自靠什么信息算距离；④ 分清本篇真正的两条分类轴；⑤ 知道本篇<b>没有</b>给出哪些数字（这是本课的硬纪律）。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>第四季 <a href="0074-LOAM2017-激光SLAM的分水岭.html">0074</a> 的 LOAM 之所以要拆成「先估速度、再逐点补偿畸变」两个算法，根源就在本课要讲的「测距＝测时间，所以每个点各自带一个时刻戳」。同季 <a href="0086-Point-LIO2023-逐点处理与高带宽.html">0086</a> 更进一步：它干脆不把点累积成帧，从根本上绕开这件事。另外，传感器之间的时刻对齐，第五季 <a href="0095-导览-第五季开场-三传感器怎么合成一台机器.html">0095</a> 与 <a href="0096-R3LIVE2022-两条流水线并行.html">0096</a> 讲的是同一件事的另一个层次。<b>但请注意分工：本课只讲前两环（测距＝测时间 → 每个点时刻不同），运动畸变与去畸变属于第四季的课。</b></p>
+        </div>
+      </div>
+
+      <h2 id="pre">0. 点云不是一张图——它是一串测距结果</h2>
+
+      <p>这篇论文的摘要里有一句话，是全课最好的开场。原文说：三维成像通常的做法是<b>测量到物体上（或场景中）多个点的距离，再把这些测距结果做成一张点云</b>。请把这句话读两遍，因为它纠正了一个极常见的直觉错误。</p>
+
+      <div class="callout">
+        <h4>点云的定义</h4>
+        <p><b>点云 = 一大堆测距结果的集合。</b>它不是一张「每个像素都有值」的图像，而是「我朝这个方向打了一束光，它跑了个来回，用了这么久，所以那边有个东西，距离这么远」这样一条一条的<b>测量记录</b>堆在一起。</p>
+      </div>
+
+      <p>为什么要强调这一点？因为相机和激光雷达的差别是根本性的：</p>
+
+      <ul>
+        <li><b>相机</b>是「一瞬间整幅曝光」：一张图里所有像素共享<b>同一个时刻</b>。你按一次快门，得到的是一个时间片。</li>
+        <li><b>激光雷达</b>是「一个点一个点量出来的」：每个点都对应一次独立的「发射—等待—回波」事件，各自发生<b>在不同的时刻</b>。</li>
+      </ul>
+
+      <p>这带来一个直接的后果：整篇论文其实在回答的，是「<b>怎么把『光跑了一个来回用了多久』这件事，变成『那边有个东西、离我多远』</b>」。作者是电路人，所以这篇论文不关心「有了点云之后怎么用」——它只关心那一串三维坐标在硬件里是怎么被量出来的、要花什么代价。</p>
+
+      <p>顺便说一个和 SLAM 关系很大的事实（它出自本季下一课要讲的综述，不是本篇）：在自动驾驶这种场景里，点云的分布<b>极其不均匀</b>——绝大多数点都挤在雷达附近，<b>离得远的物体只能拿到寥寥几个点</b>。这就是「远距离配准不稳」的同一个根。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Lidar_System_Architectures_and_Circuits/b05f72c8f5b774e624de4a3e6eea03e47e37511f3bd593862bd2d8abc0b6867c.jpg" alt="Basic lidar-based 3D camera architecture">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Basic lidar-based 3D camera architecture.（中译：基于激光雷达的三维相机的基本架构。）<br>
+          <b>怎么看这张图：</b>这张图就是本课的总纲——把一台激光雷达拆成「<b>发射机</b>（造光、调光）＋ <b>接收机</b>（收光、把光变成电信号、计时）」两大块，中间是那条打出去又回来的光路。整篇论文后面所有章节，其实都在往这两个方框里填细节：<b>发射侧讲怎么调制光，接收侧讲怎么把微弱的回光从噪声里捞出来</b>。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">1. 测距就是测时间：$R = \frac{1}{2}c\tau$</h2>
+
+      <p>所有激光雷达测距的最底层公式只有一个：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$R=\frac{1}{2}\,c\cdot\tau$$
+        </div>
+      </div>
+
+      <p><b>这句话在说什么：</b>$R$ 是到目标的距离，$c$ 是光在中间介质（比如空气）里的速度，$\tau$ 是<b>回波的往返时延</b>（光从发射到回来的总时间）。光速乘上这个时间，是光走过的总路程；<b>因为光走的是一个来回，所以再除以 2</b>，才是单程距离。</p>
+
+      <p><b>它为什么这么算：</b>原文的说法是，基于激光雷达的测距「等价于测量光波到目标的往返时延」——<b>测距离的本质就是测时间</b>。这句话是本课乃至第四季的地基。</p>
+
+      <p><b>这个式子的杀伤力在哪（由公式换算，不是原文数据）：</b>把 $c = 3\times 10^{8}$ 米每秒代进去，反解出「要分辨多小的距离，需要分辨多小的时间」：</p>
+
+      <ul>
+        <li><b>要分辨 1 厘米，需要分辨出 $\tau$ 的 0.067 纳秒</b>（约 67 皮秒）。也就是说，计时电路的分辨率要到「一秒钟的一千亿分之一」这个量级，点云才准到厘米。</li>
+        <li><b>反过来更直观：1 纳秒的时间误差，就是 15 厘米的距离误差。</b>一个「一亿分之一秒都没数准」的电路，会让整片点云鼓出来或者缩进去十几厘米。</li>
+      </ul>
+
+      <p>所以这篇论文用了整整一节讲轴向精度，原因就在这里：<b>激光雷达本质上是一台极高速的秒表。</b></p>
+
+      <h3>精度和分辨率是两件事，别混</h3>
+
+      <p>原文专门提醒了一句：<b>精度不要和距离分辨率混为一谈</b>。两者的区别是：</p>
+
+      <ul>
+        <li><b>精度 $\sigma_R$</b>：对着一个固定的距离反复测很多次，这些读数的标准差有多小。它衡量「你把这个位置定得有多确定」，<b>可以靠多次测量取平均来改善</b>。</li>
+        <li><b>距离分辨率 $\delta R$</b>：轴向挨得很近的两个目标，能不能被分开。<b>这个靠平均改善不了</b>。</li>
+      </ul>
+
+      <p>原文用「组织切片」打比方：发射光在组织不同层的界面上反射。<b>分辨率好</b>，意味着你能分辨出更薄的层；<b>精度好</b>，意味着你能把这些界面的位置定得更准。这个类比很直观，值得记住。</p>
+
+      <p>分辨率的上限由带宽决定：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$\delta R=\frac{c}{2B}\qquad\text{（}B\text{ 为信号所携带信息的带宽）}$$
+        </div>
+      </div>
+
+      <p><b>这句话在说什么：</b>想分开挨得很近的两个目标，就得让信号「变化得更快」，也就是带宽 $B$ 更大。原文的推导链是：两个相隔 $\delta R$ 的目标，回波时间差是 $\delta t = 2\delta R/c$；带宽又与这个时间成反比，即 $B = c/(2\delta R)$，反解就得到上式。</p>
+
+      <p><b>它为什么重要：</b>原文给了一个量级对比，这几乎是「激光雷达为什么比毫米波雷达准」的量化答案——<b>射频频段的带宽可以做到几十 GHz，对应厘米级分辨率；而光波的带宽可以大得多，能做到微米级</b>。</p>
+
+      <p>精度则同时取决于分辨率和信噪比：$\sigma_R^{2}\propto \dfrac{\delta R^{2}}{\mathrm{SNR}}$。<b>人话：</b>想测得准有两条路——让信号变化更快（$\delta R$ 更小），或者让信噪比更高。注意这是<b>方差</b>正比，所以信噪比翻四倍，标准差才减半。<b>与 SLAM 的连接：</b>回波功率随距离平方衰减，远处的信噪比掉下去，$\sigma_R$ 就涨上来——这就是「远距离点噪声大」的公式版答案。</p>
+
+      <p class="foot-note" style="text-align:left;">⚠️ 一处原文自身的不统一：公式里用的符号是 $\tau$，但同一段文字里又用小写 $t$ 指同一个量。<b>这不是 OCR 问题，是原文的符号前后不一致。</b>本课统一写成 $\tau$。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1622"/>
+
+          <line x1="30" y1="330" x2="870" y2="330" stroke="#2c3a51" stroke-width="2"/>
+          <rect x="726" y="82" width="34" height="248" fill="#3a2b22" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="112" x2="760" y2="112" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="142" x2="760" y2="142" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="172" x2="760" y2="172" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="202" x2="760" y2="202" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="232" x2="760" y2="232" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="262" x2="760" y2="262" stroke="#6b5340" stroke-width="2"/>
+          <line x1="726" y1="292" x2="760" y2="292" stroke="#6b5340" stroke-width="2"/>
+          <text x="772" y="70" font-size="14" fill="#c9b79f">远处的一面砖墙</text>
+
+          <rect x="92" y="212" width="120" height="118" rx="8" fill="#233046" stroke="#4f9dff" stroke-width="2"/>
+          <ellipse cx="152" cy="212" rx="60" ry="15" fill="#2c3a51" stroke="#4f9dff" stroke-width="2"/>
+          <path d="M 106 186 A 56 20 0 0 1 198 186" fill="none" stroke="#5ad1a8" stroke-width="3"/>
+          <path d="M 194 176 L 200 188 L 188 188 Z" fill="#5ad1a8"/>
+          <text x="152" y="166" text-anchor="middle" font-size="14" fill="#5ad1a8">一边转，一边往外发</text>
+
+          <rect x="208" y="250" width="10" height="28" fill="#4f9dff"/>
+          <line x1="218" y1="254" x2="726" y2="180" stroke="#ff5d5d" stroke-width="3"/>
+          <line x1="726" y1="200" x2="218" y2="282" stroke="#f2a65a" stroke-width="3"/>
+          <circle cx="726" cy="186" r="9" fill="#ffe066"/>
+
+          <text x="300" y="228" font-size="14" fill="#ff8a8a">发射时刻 t₁</text>
+          <text x="300" y="316" font-size="14" fill="#f2a65a">回波时刻 t₂</text>
+          <circle cx="152" cy="330" r="3" fill="#4f9dff"/>
+          <text x="152" y="354" text-anchor="middle" font-size="14" fill="#9fc4ef">旋转式激光雷达</text>
+
+          <text x="60" y="406" font-size="20" font-weight="700" fill="#e8eef7">距离 R ＝ 光速 × 往返时延 ÷ 2</text>
+          <text x="60" y="434" font-size="14" fill="#8fb4d9">除以 2 是因为光走的是一个来回（τ 是双程时间）</text>
+
+          <line x1="540" y1="402" x2="860" y2="402" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="540" y1="394" x2="540" y2="410" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="600" y1="396" x2="600" y2="408" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="660" y1="396" x2="660" y2="408" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="720" y1="396" x2="720" y2="408" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="780" y1="396" x2="780" y2="408" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="840" y1="394" x2="840" y2="410" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="600" y1="402" x2="600" y2="420" stroke="#ffe066" stroke-width="4"/>
+          <text x="548" y="442" text-anchor="middle" font-size="14" fill="#ffe066">要分辨这 1 厘米，需分辨出 0.067 纳秒</text>
+          <text x="770" y="442" text-anchor="middle" font-size="14" fill="#f2a65a">1 纳秒没数准 ＝ 15 厘米误差</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一台旋转式激光雷达向远处砖墙发一束激光，墙上打出一个亮斑，回波返回来；下方的刻度尺在说明这台仪器对计时的要求有多苛刻。<br>
+          <b>怎么看这张图：</b>① 红色实线去、橙色实线回，它们不是同一时刻发生的两个动作，中间隔着 $\tau$；② 机体顶上那道绿色弧线表示它<b>一直在转</b>，一边转一边往外发；③ 底部的公式就是全部原理——<b>测距离，就是测时间</b>；④ 右侧那把尺子是本课最该记住的数字：<b>1 厘米的距离分辨率，要求你把时间分辨到 0.067 纳秒</b>。<br>
+          <b>要记住的一句话：</b>「0.067 纳秒」和「15 厘米」这两个换算，<b>是由 $R=\frac{1}{2}c\tau$ 自己算出来的，原文只给了公式、没有给这两个数字</b>——本课所有这类换算都会标明出处。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">2. 三种调制方式：光被打上什么「花样」，就把什么花样量回来</h2>
+
+      <p>既然测距就是测时间，那接下来的问题就是：<b>怎么知道光「回来晚了多久」？</b>原文的思路非常统一，值得先记住这句话：<b>通过对发射光的强度、相位或频率做调制，再测量这个调制花样重新出现在接收端所需要的时间。</b></p>
+
+      <p>按「被打上什么花样」来分，主流方案有三种。原文明确点了这三类的名字：<b>脉冲式（pulsed）、幅度调制连续波（AMCW）、频率调制连续波（FMCW）</b>。</p>
+
+      <h3>① Pulsed（脉冲式）：发一个短脉冲，看它什么时候回来</h3>
+
+      <p>这是最朴素的做法。原文的描述是：在最简单的情况下，朝目标发射一个短光脉冲，<b>脉冲回波到达接收机的时刻</b>就标定了距离。</p>
+
+      <p>原文给了两个很实用的细节：</p>
+
+      <ul>
+        <li><b>脉宽从不到 1 纳秒到几十纳秒。</b></li>
+        <li><b>「更短的脉宽更好」有两个理由</b>：一是在<b>保持平均功率低于眼安全限值</b>的前提下把<b>峰值功率</b>做高（于是能打得更远）；二是由 $\delta R = c/(2B)$，<b>短脉冲意味着大带宽，于是轴向分辨率更好</b>。</li>
+      </ul>
+
+      <p>接收端的核心器件是 <b>SPAD（单光子雪崩二极管）</b>。原文写得很细：它本质上是工作在「反向偏压略微超过击穿电压」状态的雪崩光电二极管；强电场把光子吸收或热涨落产生的电子-空穴对加速到能<b>触发雪崩</b>；此时外围电路必须把反向偏压降下来以终止这次雪崩、准备下一次探测；而这次雪崩发生的<b>时刻由外围电路记录下来</b>——那就是回波到达时刻。</p>
+
+      <p>但 SPAD 有个硬伤：<b>恢复时间最长可达 100 纳秒，会限制测量速率</b>；而且它对热噪声和落在可探测波长窗口内的环境光都会误触发。于是有了 <b>TCSPC（时间相关单光子计数）</b>：不是「测一次」，而是把很多次重复脉冲的到达时刻（往往由许多 SPAD 并行记录）<b>累积成一张直方图</b>，落在「与发射脉宽相当时长的时间窗」内的记录更可能是真信号——<b>用统计把噪声筛掉</b>。这套思路，和 SLAM 里「多帧累积去噪」是同一类思想。</p>
+
+      <h3>② AMCW（幅度调制连续波）：把亮度来回变，量相位差</h3>
+
+      <p>不打脉冲，而是连续发射激光，靠<b>改变偏置电流</b>来调制光的强度（让它按正弦一样亮暗变化），再看这个「花样」回到接收端时<b>相位差了多少</b>。</p>
+
+      <p>原文里最「电路味」的一段在接收端：接收光被一个光电二极管转成电荷，然后靠<b>两个转移栅 $\mathrm{TG}_1$ 与 $\mathrm{TG}_2$</b> 把电荷分送到两个节点 $Q_1$ 与 $Q_2$。<b>距离近，大部分电荷进 $Q_1$；距离远，回波更晚，进 $Q_1$ 的少、进 $Q_2$ 的多</b>——于是<b>两个节点的电荷之比就是飞行时间的度量</b>。原文特别强调这个「比例式」测量对温度与工艺漂移更鲁棒，还能抑制背景光。<b>「用比例而不是用绝对值」是一个很值得迁移的工程思想。</b></p>
+
+      <p>AMCW 的精度可以做到<b>优于 1 厘米</b>。但它有一个固有限制：因为是<b>连续发射光功率</b>，就必须始终低于眼安全限值，所以<b>远处目标的回波不如脉冲式强</b>，不适合长距离。</p>
+
+      <h3>③ FMCW（频率调制连续波）：让两束光的频率差出一个「拍」</h3>
+
+      <p>这一种完全不同，原文的原话是它<b>靠光的波动性、而不是靠强度</b>。做法是让发射光的频率随时间线性地上下扫，再和回波光放在同一根波导里干涉。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">
+          $$R=\frac{1}{2}c\cdot\tau_d=\frac{1}{2\gamma}\,c\cdot f_d,\qquad \gamma=\frac{\Delta f_{max}}{T}$$
+        </div>
+      </div>
+
+      <p><b>这句话在说什么：</b>$\tau_d$ 是往返时延；$f_d$ 是<b>回波光与本振光之间那个固定的频率差</b>（叫拍频）；$\gamma$ 是<b>调频斜率</b>（频率随时间变化的快慢），$\Delta f_{max}$ 是频率调制幅度，$T$ 是调制周期。原文的推导链是：对静止目标，收发之间的时延使两者存在恒定频差 $f_d$；在线性调频下 $f_d = \gamma\tau_d$，<b>正比于 $\tau_d$、于是正比于距离</b>；把一路源光当本振，与回波在波导里合起来，频差就转成周期性的相位差，产生频率为 $f_d$ 的干涉明暗交替，光电探测器把它变成光电流，<b>测这个电流的频率就能反推距离</b>。</p>
+
+      <p><b>它为什么这么算（这是全课最漂亮的一步）：</b>它不数「脉冲什么时候回来」，而是<b>让两束光差出一个「拍」，用拍的频率代替时间差</b>——把「皮秒级的时间测量」换成了「相对容易做的低频电流频率测量」。原文的因果链说得更直接：相干接收下，收发光的干涉<b>在光域就完成了下变频</b>，于是<b>不需要宽带电子电路</b>，主流 CMOS 电子学就能做到极好的距离分辨率与精度。</p>
+
+      <p>原文对 FMCW 的几处判断都值得记：</p>
+
+      <ul>
+        <li>它是<b>唯一在多个设计里做到亚微米精度的架构</b>，原因是「在光域直接调制解调，带宽远大于电子电路所能达到的」。</li>
+        <li>精度依赖两件事：<b>$f_d$ 的测量精度，以及调频斜率 $\gamma$ 被控制或已知的精度</b>。后半句直接解释了为什么论文最后一节要专门用「马赫-曾德尔干涉仪（MZI）＋锁相环（PLL）」去把 $\gamma$ 锁死——用一段<b>已知固定长度</b>的波导当时延标尺，$\gamma = f_{ref}/\tau_{MZI}$，把扫频快慢钉住，测距才准。</li>
+        <li>它<b>顺便能测速度</b>：运动目标会带来多普勒频移，这一点本篇点到，第四季 <a href="0094-4D雷达SLAM-恶劣天气下的另一条路.html">0094</a> 的 4D 雷达则把「速度」直接变成了 SLAM 的状态量。</li>
+      </ul>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1622"/>
+          <text x="170" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">Pulsed 脉冲式</text>
+          <text x="460" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">AMCW 幅度调制连续波</text>
+          <text x="740" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#e8eef7">FMCW 频率调制连续波</text>
+
+          <rect x="70" y="108" width="26" height="44" fill="#ff5d5d"/>
+          <line x1="96" y1="130" x2="196" y2="130" stroke="#ff5d5d" stroke-width="2"/>
+          <rect x="196" y="108" width="26" height="44" fill="#f2a65a"/>
+          <line x1="222" y1="130" x2="290" y2="130" stroke="#f2a65a" stroke-width="2"/>
+          <text x="80" y="94" font-size="13" fill="#ff8a8a">发一个短脉冲</text>
+          <text x="196" y="94" font-size="13" fill="#f2a65a">回波（晚到 τ）</text>
+          <line x1="83" y1="176" x2="209" y2="176" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="83" y1="170" x2="83" y2="182" stroke="#8fb4d9" stroke-width="2"/>
+          <line x1="209" y1="170" x2="209" y2="182" stroke="#8fb4d9" stroke-width="2"/>
+          <text x="146" y="200" text-anchor="middle" font-size="13" fill="#8fb4d9">直接量这段 τ</text>
+
+          <g transform="translate(280,0)">
+            <polyline points="60,150 66,138 72,129 78,126 84,129 90,138 96,150 102,162 108,171 114,174 120,171 126,162 132,150 138,138 144,129 150,126 156,129 162,138 168,150 174,162 180,171 186,174 192,171 198,162 204,150 210,138 216,129 222,126 228,129 234,138 240,150 246,162 252,171 258,174 264,171 270,162 276,150 282,138 288,129 294,126 300,129" fill="none" stroke="#ff5d5d" stroke-width="2"/>
+            <polyline points="60,174 66,168 72,158 78,146 84,135 90,127 96,126 102,132 108,142 114,154 120,165 126,173 132,174 138,168 144,158 150,146 156,135 162,127 168,126 174,132 180,142 186,154 192,165 198,173 204,174 210,168 216,158 222,146 228,135 234,127 240,126 246,132 252,142 258,154 264,165 270,173 276,174 282,168 288,158 294,146 300,135" fill="none" stroke="#f2a65a" stroke-width="2"/>
+          </g>
+          <text x="330" y="94" font-size="13" fill="#ff8a8a">发出去的亮度在变</text>
+          <text x="450" y="230" font-size="13" fill="#f2a65a">回波晚到，相位差了一截</text>
+
+          <polyline points="620,174 624,171 628,168 632,164 636,161 640,158 644,155 648,152 652,148 656,145 660,142 664,139 668,136 672,132 676,129 680,174 684,171 688,168 692,164 696,161 700,158 704,155 708,152 712,148 716,145 720,142 724,139 728,136 732,132 736,129 740,174 744,171 748,168 752,164 756,161 760,158 764,155 768,152 772,148 776,145 780,142 784,139 788,136 792,132 796,129 800,174 804,171 808,168 812,164 816,161 820,158 824,155 828,152 832,148 836,145 840,142 844,139 848,136 852,132 856,129 860,174" fill="none" stroke="#ff5d5d" stroke-width="2"/>
+          <polyline points="620,136 624,132 628,129 632,174 636,171 640,168 644,164 648,161 652,158 656,155 660,152 664,148 668,145 672,142 676,139 680,136 684,132 688,129 692,174 696,171 700,168 704,164 708,161 712,158 716,155 720,152 724,148 728,145 732,142 736,139 740,136 744,132 748,129 752,174 756,171 760,168 764,164 768,161 772,158 776,155 780,152 784,148 788,145 792,142 796,139 800,136 804,132 808,129 812,174 816,171 820,168 824,164 828,161 832,158 836,155 840,152 844,148 848,145 852,142 856,139 860,136" fill="none" stroke="#f2a65a" stroke-width="2"/>
+          <text x="622" y="94" font-size="13" fill="#ff8a8a">发射频率在上下扫</text>
+          <text x="740" y="230" text-anchor="middle" font-size="13" fill="#f2a65a">回波整体平移一点点</text>
+
+          <text x="170" y="290" text-anchor="middle" font-size="14" fill="#cfe0f7">靠什么算距离：τ 本身</text>
+          <text x="170" y="316" text-anchor="middle" font-size="13" fill="#8fb4d9">脉宽不到 1 ns 到几十 ns</text>
+
+          <text x="460" y="290" text-anchor="middle" font-size="14" fill="#cfe0f7">靠什么算距离：相位差</text>
+          <text x="460" y="316" text-anchor="middle" font-size="13" fill="#8fb4d9">精度可优于 1 厘米，但只适合中近距离</text>
+
+          <text x="740" y="290" text-anchor="middle" font-size="14" fill="#cfe0f7">靠什么算距离：拍频 f_d</text>
+          <text x="740" y="316" text-anchor="middle" font-size="13" fill="#8fb4d9">把皮秒计时换成量一个低频电流的频率</text>
+
+          <text x="450" y="372" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">三种做法的共同点：给光打一个「花样」，再看这个花样回来晚了多久</text>
+          <text x="450" y="404" text-anchor="middle" font-size="14" fill="#5ad1a8">FMCW 是唯一在多个设计里做到亚微米精度的架构</text>
+          <text x="450" y="434" text-anchor="middle" font-size="14" fill="#f2a65a">但它和脉冲式一样，仍然是一个点一个点地量——每个点各自带一个时刻戳</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三种调制方式并排。左格脉冲式：一个短脉冲出去，回波晚 τ 到达，直接量这段时间；中格 AMCW：发射光的亮度按正弦变化，回波晚到、相位差了一截，量相位差；右格 FMCW：发射光的频率上下扫（锯齿），回波是同样形状但整体平移一点，<b>量的是两条曲线之间的频率差</b>。<br>
+          <b>怎么看这张图：</b>① 三格的共同结构是「一条发射曲线 + 一条回波曲线」；② 差别在于<b>你量的到底是曲线上哪一维</b>——左格量横轴（时间），中格量相位，右格量纵轴（频率）；③ 右格那两条锯齿曲线里的竖直跳变不是错误，那是扫频到边界后折返；④ 三格下面那行字是重点：<b>无论哪一种，都是一个点一个点量出来的</b>。<br>
+          <b>要记住的一句话：</b>「测距＝测时间」这条地基，在三种实现里都没变，变的只是「用什么中间量去代表时间」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Lidar_System_Architectures_and_Circuits/ce500182fa3f3baeb3a0a12be7704490c77c4741f3ed60ff2bc190d2fcad90e9.jpg" alt="Pulsed lidar with flash light distribution">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Pulsed lidar with flash light distribution presented in [8]: a) simplified architecture; b) timing diagram; c) chip photomicrograph; d) 3D image of a human face (in millimeters).<br>
+          <b>怎么看这张图：</b>四个子图分别是「简化架构 / 时序图 / 芯片显微照片 / 人脸三维成像结果（单位毫米）」。<b>重点看 (b) 时序图</b>——它就是脉冲式测距的时间线：发一个脉冲、等一段、收到回波，那段等待时间就是 τ。<b>(d) 的「单位毫米」也值得注意</b>：人脸的点云尺度在毫米级，正好呼应本课「精度与分辨率是两件事」那一节。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Lidar_System_Architectures_and_Circuits/2f6917e983cb0236a07adefbba5365d46a88b626da4e07e7411beea74f6eb24d.jpg" alt="FMCW lidar architecture and waveforms">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>FMCW lidar: a) architecture; b) waveforms. FM light generation using: c) tunable laser; d) electro-optic modulator; e) I/Q modulator.<br>
+          <b>怎么看这张图：</b>(a) 是架构——注意它有一条「本振光」支路，与回波在同一波导里干涉，这正是 FMCW 与脉冲式的根本差别；(b) 是波形——两条锯齿叠在一起，它们之间的竖直距离就是拍频 $f_d$；(c)(d)(e) 是三种调频实现方式：<b>可调激光器 / 电光调制器 / I-Q 调制器</b>。原文给了一个关键对比：<b>可调激光器的调制带宽可以超过 10 THz，这是电光调制做不到的</b>，所以需要「深亚毫米」分辨率的场合更偏向可调激光器方案。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">3. 两条分类轴：怎么调制光，怎么分配光束</h2>
+
+      <p>这里必须先做一次纠正，否则整棵分类树都会画歪。</p>
+
+      <div class="callout">
+        <h4>纠正：本篇的分类不是「机械旋转式 / 固态 / MEMS / 闪光式」</h4>
+        <p>那四个词是<b>行业通说</b>，也确实在别的综述里能查到系统的表述，但<b>它们不是本篇给出的分类树</b>。本篇用的是两条轴：</p>
+        <ul>
+          <li><b>轴一（怎么调制光）</b>：Pulsed / AMCW / FMCW —— 这是原文在「主流的激光雷达架构」一节明确点名的三类。</li>
+          <li><b>轴二（怎么分配光束）</b>：<b>flash（整场景一次打亮）</b> 与 <b>beam-steering（用光束扫描视场）</b>；原文说两者也可以组合使用。</li>
+        </ul>
+      </div>
+
+      <p>那四个常见的词在本篇里其实出现过，但身份不一样——它们是<b>散落在两处的并列关键词</b>，不是分类节点：</p>
+
+      <ul>
+        <li>「机械旋转式」对应原文那句「<b>机械地移动光源</b>」，并引了一篇文献——<b>那篇文献正是 Velodyne HDL-64E</b>。也就是说，<b>机械旋转式的代表型号在本篇里是有出处的</b>。</li>
+        <li>「MEMS 反射镜」出现在 beam-steering 的技术清单里。</li>
+        <li>「闪光式（flash）」是轴二的一极。</li>
+        <li>「固态」只在一处出现——原文说某种方案可以「提供<b>没有任何机械部件</b>的固态激光雷达」。<b>代表型号原文没给。</b></li>
+      </ul>
+
+      <p>原文给的 beam-steering 技术清单值得单独列出来，因为它一句话把历年方案排完了：<b>机械地移动光源；用宏观或微观的机械反射镜偏转光束；光学相控阵</b>（基于液晶、MEMS 反射镜，或硅光可调相位元件，以及波长调谐）。</p>
+
+      <p><b>为什么要这么较真地纠正？</b>因为「分类轴」决定了你能提出什么问题。如果按「机械 / 固态 / MEMS / 闪光」分，你问的是「这台雷达会坏吗、贵不贵」；如果按「怎么调制光」分，你问的是「它的精度上限在哪、能不能测速度」。<b>两条轴回答的是两种完全不同的问题。</b>（后一条更接近 SLAM 的关心点，所以本课以后者为主。）</p>
+
+      <p>原文还对几种方案的取舍给了几处很实在的平衡论证，其中一条尤其反直觉：直觉上 beam-steering 把全部激光功率集中在一个点上、回波更强，所以长距离更该用扫描式——<b>原文认同这一点，但紧接着补了一句：flash 雷达里所有像素是并行测量的，所以在同一帧率下每个像素可以有更长的测量时间，这可以用来平均噪声、在一定程度上保住信噪比。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Lidar_System_Architectures_and_Circuits/be401692802a3bb77ab542bc63fdfbe1f7928b2d2fc9c0cbcb367f29d92700c1.jpg" alt="Precision versus operating range for lidars since 1990">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Precision vs. operating range for academically published and industrial lidars since 1990.（中译：1990 年以来学术界发表与工业界的激光雷达的「精度 vs 最大工作距离」关系。）<br>
+          <b>怎么看这张图：</b>横轴是最大工作距离，纵轴是精度，每一点是一台真实雷达，<b>阴影区标出三类架构各自常用的区间</b>。这张图是本篇<b>唯一</b>涉及「工作距离」的地方——请注意它是<b>定性阴影区，不是数值表</b>。所以本课在讲「最大测距」时只能说「原文用这张图定性表示」，<b>绝不能说「原文给出最大测距是某某米」</b>。图里右上角那片空白，也正说明「长距离 + 高精度」当时还是难的。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_Lidar_System_Architectures_and_Circuits/a4ac4060ab742cf9147e126e134eb11adc55f200941124a06eb46c1f7cde8780.jpg" alt="Integrated electro-optical PLL for precision FM light generation">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Integrated electro-optical PLL for precision FM light generation a) architecture; b) chip picture and photomicrograph; c) photograph of a gear and its 3D microimage from the FMCW lidar.<br>
+          <b>怎么看这张图：</b>(a) 是那个「用 MZI 测调频斜率、再用 PLL 把它锁死」的闭环——它的原理与 FMCW 测距完全一样，只是把「到目标的未知时延」换成了「一段已知固定长度的波导」。(c) 是本文的展示品：<b>对 40 厘米处的一个齿轮做三维微成像</b>。<b>这里有一处 OCR 必须说明</b>：原文写的是「10 kP/s 的速率、11-m 的距离精度、250-m 的横向分辨率」，那两个 <code>m</code> 显然是 <b>μm（微米）</b>——MinerU 把 μ 弄丢了。道理很简单：这一节标题就是微成像，目标距离只有 40 厘米，前文还刚说 FMCW 能做到亚微米精度，「11 米精度」在物理上荒谬。<b>所以本课按 11 μm 与 250 μm 读，并在此显式标注这是判读、原文写的就是 m。</b>同一节里还有一处 <code>0.18 m CMOS</code> 也应是 <b>0.18 μm CMOS</b>，属于同一类 μ 丢失。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">4. 每个点自带一个时刻戳——这一步接到第四季</h2>
+
+      <p>讲到这里，本课真正的「桥」要搭起来了。请跟着这条链走，每一步都只有一句话：</p>
+
+      <div class="callout">
+        <h4>链条（前三环由本篇支撑，后面属于第四季）</h4>
+        <p>① <b>测距＝测时间</b>（本篇 Eq. 1）；<br>
+        ② 所以<b>每个点都对应一次独立的「发射—等待—回波」事件</b>，各自有一个<b>互不相同的时刻</b>（本篇：SPAD 恢复要 100 ns、TCSPC 要把多次脉冲做成直方图）；<br>
+        ③ 而一台旋转雷达<b>转一圈要 0.1 秒量级</b>，一圈里要打出去几十万个点——<b>同一帧里的第一个点和最后一个点，是在 0.1 秒之隔的两个时刻采到的</b>；<br>
+        ④ 如果雷达<b>同时在移动</b>，那么先扫到的点是在「车还没走远」的位置采的，后扫到的点是在「车已经开出去一段」的位置采的；<br>
+        ⑤ 把这些点<b>统统当成同一个坐标系下的测量</b>去用，原来的直墙就会被扫成<b>斜线或弧线</b>；<br>
+        ⑥ 这就是 <b>motion distortion（运动畸变）</b>。</p>
+      </div>
+
+      <p class="foot-note" style="text-align:left;">⚠️ <b>必须显式标注：第 ③–⑥ 环不是本篇的内容。</b>本篇全文<b>没有出现「运动畸变」</b>——检索 distortion 是 0 命中。上面这条链的 ③–⑥ 环是<b>我们的分析</b>，是把硬件篇的物理事实接到第四季激光主干课上的一次桥接。<b>不许写成「硬件篇指出运动畸变」。</b></p>
+
+      <p>后三环在第四季有明确的原文支撑，这里各给一句：</p>
+
+      <ul>
+        <li><a href="0074-LOAM2017-激光SLAM的分水岭.html">0074</a> 的 LOAM 原话是：<b>因为激光点是在不同时刻收到的，所以点云中会因雷达的运动而存在畸变</b>；它的做法是「一个里程计算法估计雷达速度并补偿点云中的畸变，然后一个建图算法把点云配准、建图」。LOAM 期刊版里还给了很具象的实验：<b>雷达以 0.5 米每秒朝图左侧的墙移动，结果墙面上出现了运动畸变</b>。</li>
+        <li><a href="0086-Point-LIO2023-逐点处理与高带宽.html">0086</a> 的 Point-LIO 说得更狠：<b>现实里激光点是按不同时刻顺序采样的，把这些点累积成一帧会引入「人造的」运动畸变</b>。注意「人造（artificial）」这个词——<b>畸变不是物理世界里本来就有的东西，是「攒帧」这个动作造出来的</b>。所以它干脆不攒帧，每个点一到就更新一次位姿。</li>
+      </ul>
+
+      <p><b>为什么这个桥必须搭？</b>因为第四季整条激光主干线，几乎都建立在「一帧点云不是同一时刻采的」这个前提上。<b>而本课负责的，恰好是这个前提的物理来源。</b>以后再看到论文里写 de-skew、去畸变、motion compensation，你会知道它面对的不是一个算法缺陷，而是一条硬件事实。</p>
+
+      <p><b>还要提醒分工：</b>本课只在「测距＝测时间」和「每个点自带时刻戳」这两环上停住。<b>怎么估速度、怎么逐点补偿、怎么不攒帧，都是第四季的课要讲的，本课不讲完。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1622"/>
+          <text x="450" y="34" text-anchor="middle" font-size="16" font-weight="700" fill="#e8eef7">同一帧点云里，先扫到的点和后扫到的点，是在不同位置采的</text>
+
+          <line x1="80" y1="150" x2="820" y2="150" stroke="#5a6b84" stroke-width="5"/>
+          <text x="132" y="132" font-size="14" fill="#9aa9bd">真实的直墙</text>
+          <circle cx="210" cy="150" r="6" fill="#7ec8ff"/>
+          <circle cx="285" cy="163" r="6" fill="#7ec8ff"/>
+          <circle cx="360" cy="176" r="6" fill="#7ec8ff"/>
+          <circle cx="560" cy="210" r="6" fill="#ff7a7a"/>
+          <circle cx="640" cy="224" r="6" fill="#ff7a7a"/>
+          <circle cx="720" cy="237" r="6" fill="#ff7a7a"/>
+          <polyline points="210,150 285,163 360,176 560,210 640,224 720,237" fill="none" stroke="#8fb4d9" stroke-width="2" stroke-dasharray="7 5"/>
+
+          <polygon points="235,300 210,150 360,176" fill="rgba(126,200,255,0.10)"/>
+          <polygon points="555,300 560,210 720,237" fill="rgba(255,122,122,0.10)"/>
+          <rect x="200" y="300" width="70" height="44" fill="none" stroke="#7ec8ff" stroke-width="2" stroke-dasharray="6 4"/>
+          <rect x="520" y="300" width="70" height="44" fill="none" stroke="#ff7a7a" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="235" y="366" text-anchor="middle" font-size="14" fill="#7ec8ff">t 早</text>
+          <text x="555" y="366" text-anchor="middle" font-size="14" fill="#ff7a7a">t 晚</text>
+          <line x1="286" y1="322" x2="504" y2="322" stroke="#5ad1a8" stroke-width="3"/>
+          <path d="M 512 322 L 498 315 L 498 329 Z" fill="#5ad1a8"/>
+          <text x="395" y="310" text-anchor="middle" font-size="14" fill="#5ad1a8">一边前进</text>
+
+          <text x="468" y="200" text-anchor="middle" font-size="14" fill="#ffe066">同一条直墙，被扫成了斜线</text>
+          <circle cx="210" cy="150" r="10" fill="none" stroke="#7ec8ff" stroke-width="1"/>
+          <circle cx="720" cy="237" r="10" fill="none" stroke="#ff7a7a" stroke-width="1"/>
+
+          <text x="450" y="404" text-anchor="middle" font-size="14" fill="#f2a65a">一帧不是一瞬间——先扫到的点和后扫到的点，是在不同位置采的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>俯视一条走廊。上方的灰线是<b>真实的直墙</b>；下面两个虚线方框是同一台雷达在一帧内的两个时刻（t 早、t 晚），它一边前进一边扫描。浅蓝点是它在 t 早时扫到的，深红点是它在 t 晚时扫到的——这些点被统统放进同一个坐标系后，连起来成了一条<b>斜线</b>。<br>
+          <b>怎么看这张图：</b>① 先看上面那条笔直的灰线，那是世界的真相；② 再看浅蓝点几乎贴在这条线附近，而深红点越来越往下偏；③ 把两种颜色的点用虚线连起来，它就<b>不是一条直线了</b>——这就是「重建出来的一帧」；④ 最后看一下两个方框之间的绿色箭头：差距的来源就是这段时间里雷达往前走了。<br>
+          <b>要记住的一句话：</b><b>这一步原文没讲，是第四季 LOAM 课的开场。</b>2017 硬件篇只负责讲「测距＝测时间，所以每个点各自带一个时刻戳」；这些点怎么拼成帧、畸变怎么补，属于 <a href="0074-LOAM2017-激光SLAM的分水岭.html">0074</a> 与 <a href="0086-Point-LIO2023-逐点处理与高带宽.html">0086</a>。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面哪一句是<b>本篇正文实际写过的</b>？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文说：测距等价于测量光波到目标的往返时延；并且每个点都对应一次独立的探测事件（SPAD 的记录、TCSPC 的直方图）。「测距＝测时间」这一条是整篇论文的地基。" onclick="lessonKit.answer(this,'q0195a')">测距等于测量往返时延</button>
+          <button data-correct="no" data-explanation="不对。本篇全文检索 distortion 是 0 命中——它没有讨论运动畸变。运动畸变是把「每个点时刻不同」这条硬件事实，接到「一帧是怎么拼出来的」之后才出现的，那属于第四季 LOAM 与 Point-LIO 的内容，本课只能作为我们的分析来桥接。" onclick="lessonKit.answer(this,'q0195a')">本篇指出运动畸变的成因</button>
+        </div>
+        <div class="quiz-feedback" id="q0195a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">5. 诚实的红线：本篇没有给出的那些数字</h2>
+
+      <p>这一节是本课的硬纪律。选型文章最容易犯的错，是把「行业常识」当成「本篇结论」写进去。下面这些，<b>本篇正文里都没有</b>：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.95rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.5rem;border:1px solid #cfd9e6;text-align:left;">常见参数</th>
+            <th style="padding:.5rem;border:1px solid #cfd9e6;text-align:left;">本篇是否给出</th>
+            <th style="padding:.5rem;border:1px solid #cfd9e6;text-align:left;">本篇实际写了什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">激光波长</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">✅ 有</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>905 / 1300 / 1550 nm</b>，原文说它们贴近三个成熟的光通信窗口</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">脉冲宽度</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">✅ 有</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>不到 1 ns 到几十 ns</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">测距精度</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">✅ 有</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">AMCW <b>优于 1 cm</b>；FMCW <b>亚微米</b>（唯一在多个设计里做到的架构）；集成芯片实例 11 μm</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">角分辨率</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">✅ 有</td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">可做到 <b>0.1°</b>，只需几百微米的孔径；对比之下 100 GHz 附近的射频要做到同样分辨率需要 <b>1 米</b>孔径</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>最大测距范围</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>❌ 没有数值</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">只在「最大工作距离」一节做<b>定性</b>讨论，具体信息全在 Fig. 2 的阴影区里——<b>那是一张图，没有数值表</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>扫描频率</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>❌ 没有</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">本篇没有讨论扫描频率或帧率的数值</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>功耗</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>❌ 没有数值</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">只有一个形容词：现有激光雷达「<i>costly, bulky, and power-hungry</i>」（贵、笨重、耗电）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>MPE / 激光安全等级</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>❌ 没有</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">原文说 MPE 取决于<b>波长、束径与发散角、光束运动、曝光时长、脉宽与重频</b>——<b>但没给任何一个具体数值，也没给 Class 1 / 3R 之类的等级</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>运动畸变</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>❌ 完全没有</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">检索 <code>distortion</code> 命中 <b>0 次</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>TDC（时间数字转换器）</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;"><b>❌ 完全没有</b></td>
+            <td style="padding:.5rem;border:1px solid #cfd9e6;">检索 <code>TDC</code> 与 <code>time-to-digital</code> 命中 <b>0 次</b>。要讲 TDC，得去 2022 年那篇固态雷达与纳米光子学综述</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><b>有一处特别容易混淆，必须点出来：</b>原文确实有一句提到「<b>毫瓦级的功率就能对人眼造成严重损伤</b>」——但<b>这是眼安全的量级说明，不是这台雷达的功耗指标</b>。把「毫瓦」当成功耗写进去，是典型的张冠李戴。</p>
+
+      <p class="foot-note" style="text-align:left;">还有几处 OCR 坑，一并说明改了什么：① 原文写「光在空气中的速度等于 3 × 10⁸」，<b>单位 m/s 被吞掉了</b>；② MZI（马赫-曾德尔干涉仪）被识别成 <code>MZ1</code> 与 <code>NZ</code>；③ 激光控制信号 <code>V_ctrl</code> 被写成 <code>V_ctr</code>；④ 同一段关于「FMCW 与脉冲/AMCW 根本不同」的文字在正文里<b>出现了两遍</b>，那是分栏版面还原错误，不是原文重复；⑤ <code>11-m</code> / <code>250-m</code> / <code>0.18 m CMOS</code> 三处的 μ 丢失，已在上一节点明。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">6. 它不完美在哪：为什么 SLAM 不能只挑一个「最好的数字」</h2>
+
+      <p>本季每个零件都要讲「它不完美在哪」。激光雷达这个零件的「不完美」有个特点：<b>它不是某一项指标不行，而是几项指标互相拉扯。</b></p>
+
+      <h3>① 精度与分辨率不是一个东西，容易相互冒充</h3>
+
+      <p>前面讲过，精度可以靠多次平均改善，分辨率不行。这意味着<b>两个都标「厘米级」的传感器，实际能力可能完全不同</b>：一个可能只是重复测量稳定（精度好），但两堵挨得很近的墙分不开（分辨率差）。原文专门写了这一句提醒。</p>
+
+      <h3>② 三种调制方式各自被一条物理限制卡着</h3>
+
+      <ul>
+        <li><b>脉冲式</b>：大峰值功率叠加硅光波导极小的有效截面，会增强硅中的非线性光学效应，所以<b>当前脉冲式不适宜配硅光相控阵</b>，连续波方案更合适。</li>
+        <li><b>AMCW</b>：因为是连续发射光功率，必须<b>始终低于眼安全限值</b>，所以远处目标的回波不如脉冲式强——<b>它天生不适合长距离</b>。</li>
+        <li><b>FMCW</b>：可调激光器为了宽范围调谐，波长对噪声与温度等环境扰动更敏感，<b>相位噪声更大</b>。短距离内两路相位噪声相关、可以在相干探测中抵消；<b>长距离则失去相关性</b>，干涉谱变宽、基频功率下降——功率掉到最大值一半处的距离定义为<b>相干长度</b>，也就是 FMCW 的最大工作距离。原文给的量级是：可调谐激光二极管可以小到<b>几毫米</b>；换成「固定频率激光 + 电光调制器」则可以达到<b>几百米</b>。</li>
+      </ul>
+
+      <h3>③ 这些缺陷怎么变成 SLAM 的约束</h3>
+
+      <p>把上面几条翻译成 SLAM 的语言：</p>
+
+      <ul>
+        <li>$\sigma_R^{2}\propto \delta R^{2}/\mathrm{SNR}$ 加上「回波功率随距离平方衰减」，意味着<b>远处点的噪声天然更大</b>——配准的时候，远端那些点不该和近端点同等对待。这与下一课要讲的「自驾场景里远处物体只拿到几个点」是同一件事的两面。</li>
+        <li>「每个点时刻不同」意味着<b>任何把点云当成一个整体去处理的算法，都要先回答「这是哪一时刻的坐标系」这个问题</b>。第四季整条线都在回答它。</li>
+        <li>「性能由参数组合决定」意味着<b>选型不能只比一个数字</b>。原文里那句「眼安全限值取决于波长、束径、发散角、运动、曝光时长、脉宽与重频」其实是个提示：<b>你想要的指标之间是耦合的，改一个往往要动另一个。</b></li>
+      </ul>
+
+      <p>最后连回本季的暗线。第八季 <a href="0155-不删而是跟踪-动态物体变成路标.html">0155</a>、<a href="0156-别把停着的车删掉-语义动态与当前真在动.html">0156</a> 那一块的痛点是「语义前端太慢（约 5 fps）而 SLAM 要实时」。传感器这一层的取舍是同一件事的更上游版本：<b>一个零件的物理代价，会沿着整条流水线一直传下去。</b>原文最后也承认了当下 beam-steering 方案的<b>高成本</b>是「研制廉价长距激光雷达的主要挑战之一」，并把硅光相控阵列为最有希望的解决方向——这句话对 SLAM 的现实含义是：<b>传感器的价格与形态，会决定哪些 SLAM 方案真的能被装到车上。</b></p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">读完你应该能回答</h2>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>1. 为什么说点云不是一张图？</h4>
+          <p>因为它是一串<b>各自独立的测距记录</b>。相机是一瞬间整幅曝光、所有像素共享一个时刻；激光雷达是一个点一个点量出来的，每个点对应一次独立的「发射—等待—回波」事件，各自有各自的时刻。</p>
+        </div>
+        <div class="mini-card">
+          <h4>2. 测距的本质是什么？</h4>
+          <p>测时间。$R=\frac{1}{2}c\tau$——用往返时延 $\tau$ 乘光速再除以 2（因为光走的是来回）。<b>由这个公式换算：要分辨 1 厘米需要分辨出 0.067 纳秒；1 纳秒的计时误差就是 15 厘米的距离误差。</b></p>
+        </div>
+        <div class="mini-card">
+          <h4>3. 三种调制方式各自靠什么算距离？</h4>
+          <p><b>Pulsed</b> 靠 $\tau$ 本身（直接量脉冲什么时候回来）；<b>AMCW</b> 靠相位差（把连续波的亮度来回变）；<b>FMCW</b> 靠拍频 $f_d$（让两束光的频率差出一个「拍」，把皮秒计时换成量一个低频电流的频率）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>4. 本篇真正的分类轴是哪两条？</h4>
+          <p>轴一：<b>怎么调制光</b>（Pulsed / AMCW / FMCW）；轴二：<b>怎么分配光束</b>（flash / beam-steering）。<b>不是</b>「机械旋转式 / 固态 / MEMS / 闪光式」——那是行业通说，不是本篇的分类树。</p>
+        </div>
+        <div class="mini-card">
+          <h4>5. 运动畸变和本课的关系是什么？</h4>
+          <p>本课提供它的<b>物理根源</b>：测距＝测时间 → 每个点自带时刻戳。但<b>畸变本身本篇没写</b>（distortion 0 命中），属于第四季 <a href="0074-LOAM2017-激光SLAM的分水岭.html">0074</a> 与 <a href="0086-Point-LIO2023-逐点处理与高带宽.html">0086</a>。桥接时必须标注这是我们的分析。</p>
+        </div>
+        <div class="mini-card">
+          <h4>6. 本篇没有给出哪些数字？</h4>
+          <p><b>最大测距范围、扫描频率、功耗</b>都没有数值（只有 Fig. 2 的定性阴影区和 power-hungry 这个形容词）；<b>MPE 数值与激光安全等级</b>也没有；<b>运动畸变与 TDC</b> 更是完全没出现。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>用 $R=\frac{1}{2}c\tau$ 算出：如果一台激光雷达的计时电路只能分辨 0.5 纳秒，它的距离分辨率大约是多少？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>$\Delta R = \frac{1}{2}\times 3\times10^{8}\times 0.5\times10^{-9} = 0.075$ 米，也就是 <b>7.5 厘米</b>。<br>
+            反推一下更直观：1 纳秒对应 15 厘米，0.5 纳秒就是 7.5 厘米。<b>这条换算链（时间精度 ↔ 距离精度）是读一切激光雷达参数的前提。</b>注意这里算的是「时间分辨到某一档对应多大的距离变化」，与「测距精度」还不完全等同——后者还要看信噪比。</div>
+          </details>
+        </li>
+        <li>为什么 FMCW 被说成「把皮秒级的时间测量换成了相对容易做的低频电流频率测量」？这个转换为什么重要？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>因为 FMCW 不直接数「脉冲什么时候回来」，而是让回波光与一路本振光在同一波导里干涉。波导里就完成了下变频，产生一个频率为 $f_d$ 的干涉明暗交替，光电探测器把它变成<b>光电流</b>，测这个电流的频率即可反推距离。<br>
+            <b>为什么重要：</b>原文说得直接——「在光域完成下变频，因此不需要宽带电子电路」，所以<b>主流 CMOS 电子学就能做到极好的距离分辨率与精度</b>。换句话说，它把难题从「电子电路的时间分辨率」转移到了「光域」，而光域的带宽比电子电路能做的宽得多。原文还因此判定 FMCW 是唯一在多个设计里做到亚微米精度的架构。</div>
+          </details>
+        </li>
+        <li>原文提到 AMCW 的接收端用「两个转移栅把电荷分到两个节点，用两个节点的电荷之比当飞行时间」。为什么用「比例」而不是「绝对值」？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>因为比值天然抵消了很多公共的、会漂移的量。原文强调这个「比例式」设计<b>对温度与工艺漂移更鲁棒</b>，还能<b>抑制背景光与环境扰动</b>。<br>
+            直觉上：如果光是亮了一点、温度高了一点，两个节点上的电荷会<b>同时</b>变大变小，而它们的比值基本不变。所以「用比例而非绝对值」是一个可以迁移到其他工程问题的思想——<b>凡是能让两个通道共享的干扰，都可以靠取比值把它除掉</b>。</div>
+          </details>
+        </li>
+        <li>本篇没有讨论运动畸变。请说明：为什么本课仍然应该把「每个点自带时刻戳」讲清楚？它和第四季是什么关系？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>因为第四季整条激光主干线都建在「一帧点云不是同一时刻采的」这个前提上。LOAM（<a href="0074-LOAM2017-激光SLAM的分水岭.html">0074</a>）要先估速度、再逐点补偿；Point-LIO（<a href="0086-Point-LIO2023-逐点处理与高带宽.html">0086</a>）干脆不攒帧。<b>这些算法的必要性，全都能追溯到本课这条硬件事实：测距＝测时间，所以每个点各自带一个时刻戳。</b><br>
+            关系是「根源 → 对策」：本课负责根源，第四季负责对策。<b>而且必须标注：畸变这一环不是本篇的结论，是我们把硬件事实与第四季接起来时的分析。</b>这样讲，既给了第四季一个物理地基，又没有把原文没说的话安到原文头上。</div>
+          </details>
+        </li>
+        <li>为什么本课要单独列一张表，把「本篇没有给出的数字」写出来？这和第九季那条纪律有什么关系？
+          <details class="exercise-answer">
+            <summary>展开查看答案</summary>
+            <div>因为选型类文章最容易被「行业常识」污染：搜索引擎上前三条就能查到扫描频率与功耗，很容易顺手写进去，但那样就把「别处的数字」冒充成「本篇的结论」了。<b>本课的纪律是：本篇有多少就说多少，没有的明确说没有。</b><br>
+            这与第九季 <a href="0180-TUM-RGBD-2012-ATE与RPE的出处.html">0180</a> 的精神一致——那里是「看到轨迹误差，先问真值有多准」；这里是<b>「看到一个参数，先问这个数字是从哪来的」</b>。两者都是同一件事：<b>把「我确知的」和「我以为的」分开。</b></div>
+          </details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0194-Swin与PVT-2021-把金字塔搬进Transformer.html">← Swin 与 PVT（2021）：把金字塔搬进 Transformer</a>
+        <a class="next" href="0196-3D检测综述-2023上-点体素与BEV.html">三维检测综述（2023）上：点、体素与 BEV →</a>
+      </div>
+      <p class="foot-note">点云出来了。接下来的问题是：怎样在一片点里框出「那里有一辆车」。下一课我们开始拆那篇 2023 年的三维检测综述 📐</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>
