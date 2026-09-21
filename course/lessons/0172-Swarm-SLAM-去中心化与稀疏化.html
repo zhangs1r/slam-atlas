@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Swarm-SLAM：去中心化与稀疏化 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0172</div>
+      <h1>Swarm-SLAM：去中心化与稀疏化</h1>
+      <p class="subtitle">把「去中心化」和「省带宽」推到极致：只留最少的回环，就能拼出一致地图？🐝 这一节看 swarm 怎么「稀疏地聪明」。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稀疏去中心化协作 SLAM 与通信最优调度</span>
+        <span>👥 作者：Lajoie &amp; Beltrame（DOOR-SLAM 团队，2024）</span>
+        <span>📅 年份 · <i>Swarm-SLAM: Sparse Decentralized Collaborative SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：四性质</a>
+        <a href="#b">去中心化拓扑</a>
+        <a href="#c">光谱优先化</a>
+        <a href="#d">稀疏化与带宽</a>
+        <a href="#e">GNC 后端</a>
+        <a href="#f">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Swarm-SLAM 的「可扩展 / 灵活 / 去中心化 / 稀疏」四性质；解释「光谱优先化（最大化代数连通性 λ₂）」在选什么；理解为什么「只留最少回环」能省两个数量级带宽；把它和 DOOR-SLAM 的血脉关系讲清。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 它和 <b>0168 的 DOOR-SLAM 同团队</b>（Lajoie / Beltrame），后端从 PCM 升级到 GNC——这是「PCM 漏真 → GNC 保真」的具体延续。★ 架构上归 0168 主线的「去中心化」一档。★ 鲁棒后端 GNC 回链 <b>0169 渐进非凸</b>；假回环回链 <b>0140 铁律</b>；位姿图回链 <b>第二季 0018 / 0019</b>。★ 描述子仍用 ScanContext（呼应 <b>0135 / 0170</b>）。</p></div>
+      </div>
+
+      <h2 id="b">1. 先说人话：swarm 要的是「稀疏地聪明」</h2>
+      <p>前面几篇要么有服务器、要么机器人两两碰面交换。Swarm-SLAM 想得更狠：<b>不要中心、也不要全连通，机器人之间用 ad-hoc 网络偶遇就聊</b>。它最特别的一招是——<b>不验证所有回环候选，而是用「光谱优先化」只挑最少的一小撮回环来验证</b>。回环越少，要传的数据越少，但挑得巧，精度反而够。它的目标可归纳成四性质：</p>
+      <ul>
+        <li><b>可扩展（Scalable）</b>：机器人变多不至于崩；</li>
+        <li><b>灵活（Flexible）</b>：前端两阶段，激光用 ScanContext、图像用 CosPlace，传感器可换；</li>
+        <li><b>去中心化（Decentralized）</b>：无主，peer-to-peer，靠 broker 选举临时协调；</li>
+        <li><b>稀疏（Sparse）</b>：只保留对一致性最关键的少数回环，通信极省。</li>
+      </ul>
+      <p>实测：真实 3 机器人（Spot + Scout），通信仅 94.95 MB；KITTI 00 上 GNC 方案 280 kB vs DGS+PCM 30045 kB——差约 100×。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">去中心化拓扑：无主、靠 broker 选举临时协调</text>
+          <!-- 中心化 对比 -->
+          <text x="150" y="64" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">中心化（对照）</text>
+          <circle cx="150" cy="150" r="20" fill="#ff5d73"/><text x="150" y="156" text-anchor="middle" fill="#fff" font-size="11">服</text>
+          <g fill="#5cffb0"><circle cx="80" cy="100" r="12"/><circle cx="220" cy="100" r="12"/><circle cx="80" cy="220" r="12"/><circle cx="220" cy="220" r="12"/></g>
+          <g stroke="#7c8bbf" stroke-width="2"><line x1="150" y1="150" x2="80" y2="100"/><line x1="150" y1="150" x2="220" y2="100"/><line x1="150" y1="150" x2="80" y2="220"/><line x1="150" y1="150" x2="220" y2="220"/></g>
+          <!-- 去中心化 swarm -->
+          <text x="580" y="64" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">Swarm 去中心化（无主）</text>
+          <g fill="#9b8cff">
+            <circle cx="460" cy="130" r="16"/><circle cx="560" cy="100" r="16"/><circle cx="660" cy="140" r="16"/>
+            <circle cx="500" cy="220" r="16"/><circle cx="620" cy="230" r="16"/><circle cx="700" cy="190" r="16"/>
+          </g>
+          <g stroke="#7c8bbf" stroke-width="2">
+            <line x1="460" y1="130" x2="560" y2="100"/><line x1="560" y1="100" x2="660" y2="140"/>
+            <line x1="460" y1="130" x2="500" y2="220"/><line x1="500" y1="220" x2="620" y2="230"/><line x1="620" y1="230" x2="700" y2="190"/>
+            <line x1="660" y1="140" x2="700" y2="190"/><line x1="560" y1="100" x2="500" y2="220"/>
+          </g>
+          <!-- broker 选举 -->
+          <circle cx="560" cy="100" r="22" fill="none" stroke="#ffd166" stroke-width="3" stroke-dasharray="5 4"/>
+          <text x="560" y="80" text-anchor="middle" fill="#ffd166" font-size="11">临时 broker</text>
+          <text x="150" y="270" text-anchor="middle" fill="#ffd1d8" font-size="12">单点故障</text>
+          <text x="580" y="290" text-anchor="middle" fill="#bfe" font-size="12">无主、容断、broker 可换</text>
+          <text x="450" y="360" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：去中心化 = 没有「班长」，谁都能当临时协调者，断网也能局部继续</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左=中心化星型（对照，有单点故障）；右=Swarm 的去中心化网状，黄色虚线圈出「临时 broker」——某个机器人被临时选来协调，随时可换。<br>
+          <b>怎么看这张图：</b>① 左边所有线连中心，中心一挂全停；② 右边任意两点可通信，没有必活的节点；③ broker 选举让「需要协调时有人顶上、不需要时各干各的」。<br>
+          <b>要记住的一句话：</b>去中心化的精髓 = 无主 + broker 可换，于是既容断又没单点。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Swarm-SLAM/8c0457f6b4fb0d8ce4a5b8fed169095cc00cd0adf560ce2250b8fd824cfcb59e.jpg" alt="Swarm-SLAM overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Swarm-SLAM Overview.<br>
+          <b>怎么看这张图：</b>典型「无主、稀疏、可换前端」的总览：前端两阶段（全局描述子检索 → 局部几何验证）、光谱优先化选回环、GNC 后端、anchor 选最低 ID 统一坐标。把这张图和 0168 的中心化 / 0170 的分布式对照看，能清楚看到它是「去中心化 + 稀疏」那一档。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. 光谱优先化：选最少的回环，让图最「连通」</h2>
+      <p>Swarm-SLAM 最核心的创新是<b>光谱优先化（spectral prioritization）</b>。它把「选最小回环候选集，使合并后的位姿图代数连通性 λ₂ 最大」建模成一个 NP-hard 问题，再用谱松弛 + 贪心近似求解。直觉：<b>挑那些「分布在图不同区域」的回环，比挑「挤在同一高相似区」的冗余回环，更能把整张图拉齐</b>。λ₂（图拉普拉斯矩阵的第二小特征值）越大，图越连通、越不容易散架。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="410" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">光谱优先化：选「分散」的回环，而非「冗余」的回环</text>
+          <!-- 左 greedy 冗余 -->
+          <rect x="40" y="60" width="400" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="240" y="84" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">贪心（Greedy）：挤在相似区</text>
+          <g fill="#5cffb0">
+            <circle cx="90" cy="180" r="10"/><circle cx="130" cy="200" r="10"/><circle cx="110" cy="230" r="10"/>
+            <circle cx="300" cy="140" r="10"/><circle cx="340" cy="170" r="10"/><circle cx="320" cy="210" r="10"/><circle cx="360" cy="240" r="10"/>
+          </g>
+          <g stroke="#ff5d73" stroke-width="2">
+            <line x1="90" y1="180" x2="130" y2="200"/><line x1="130" y1="200" x2="110" y2="230"/><line x1="110" y1="230" x2="90" y2="180"/>
+            <line x1="300" y1="140" x2="340" y2="170"/><line x1="340" y1="170" x2="320" y2="210"/><line x1="320" y1="210" x2="360" y2="240"/>
+          </g>
+          <text x="240" y="290" text-anchor="middle" fill="#ffd1d8" font-size="12">回环都挤在两堆 → 中间仍断开</text>
+          <!-- 右 spectral 分散 -->
+          <rect x="460" y="60" width="400" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="660" y="84" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">光谱（Spectral）：分散各区域</text>
+          <g fill="#9b8cff">
+            <circle cx="520" cy="160" r="10"/><circle cx="660" cy="130" r="10"/><circle cx="800" cy="180" r="10"/><circle cx="600" cy="250" r="10"/><circle cx="740" cy="250" r="10"/>
+          </g>
+          <g stroke="#5cffb0" stroke-width="2">
+            <line x1="520" y1="160" x2="660" y2="130"/><line x1="660" y1="130" x2="800" y2="180"/><line x1="520" y1="160" x2="600" y2="250"/><line x1="800" y1="180" x2="740" y2="250"/><line x1="600" y1="250" x2="740" y2="250"/>
+          </g>
+          <text x="660" y="290" text-anchor="middle" fill="#bfe" font-size="12">回环铺满全图 → λ₂ 大、更连通</text>
+          <text x="450" y="356" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：少数「分散」的回环 &gt; 很多「冗余」的回环</text>
+          <text x="450" y="384" text-anchor="middle" fill="#9fb4ff" font-size="12">λ₂（代数连通性）越大 = 全局图越不容易散架</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左=贪心选法，回环候选都挤在图的两个相似区域，中间仍断开；右=光谱选法，回环分散在全图各处，把整张图连起来。<br>
+          <b>怎么看这张图：</b>① 左图红边只在两簇内部，跨区域没有约束，图易散；② 右图绿边横跨各区域，λ₂ 更大、更连通；③ 光谱法用更少回环达到更高 λ₂。<br>
+          <b>要记住的一句话：</b>通信最优 ≠ 回环越多越好，而是「用最少的回环，把图连得最牢」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Swarm-SLAM/9d3fc03fa13bf450aa78b3c77f9959f2979d794d0f262fbb9f8ef2a1dfb867a2.jpg" alt="Spectral vs greedy prioritization">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Comparison between Greedy and Spectral prioritization… the spectral approach outperforms the greedy one in terms of algebraic connectivity (higher is better), and the ATE (lower is better).<br>
+          <b>怎么看这张图：</b>横轴是「已选回环数」，左轴 λ₂（越高越好）、右轴 ATE（越低越好）。光谱曲线（紫）λ₂ 上升更快、ATE 下降更快——用更少回环达到更好的一致，正是上一张抽象图的实验证据。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 稀疏化与带宽：280 kB vs 30045 kB</h2>
+      <p>「稀疏」不止是个数学性质，它直接变成带宽账。Swarm-SLAM 在 KITTI 00 上，GNC + 光谱优先化方案只传 <b>280 kB</b>，而「DGS + PCM（验证所有候选）」要 <b>30045 kB</b>——约 100× 差距。这就是「只挑最少回环」的回报。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 390" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="390" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">稀疏化：密回环（ messy ）vs 稀回环（ clean ）</text>
+          <!-- 密 -->
+          <rect x="40" y="60" width="400" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="240" y="84" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">稠密回环（DGS+PCM）</text>
+          <g fill="#5cffb0">
+            <circle cx="90" cy="140" r="8"/><circle cx="160" cy="120" r="8"/><circle cx="230" cy="150" r="8"/><circle cx="300" cy="130" r="8"/><circle cx="370" cy="160" r="8"/>
+            <circle cx="120" cy="230" r="8"/><circle cx="200" cy="250" r="8"/><circle cx="280" cy="240" r="8"/><circle cx="350" cy="260" r="8"/>
+          </g>
+          <g stroke="#ff5d73" stroke-width="1" opacity="0.7">
+            <line x1="90" y1="140" x2="160" y2="120"/><line x1="160" y1="120" x2="230" y2="150"/><line x1="230" y1="150" x2="300" y2="130"/><line x1="300" y1="130" x2="370" y2="160"/>
+            <line x1="120" y1="230" x2="200" y2="250"/><line x1="200" y1="250" x2="280" y2="240"/><line x1="280" y1="240" x2="350" y2="260"/>
+            <line x1="90" y1="140" x2="120" y2="230"/><line x1="160" y1="120" x2="200" y2="250"/><line x1="230" y1="150" x2="280" y2="240"/><line x1="300" y1="130" x2="350" y2="260"/>
+            <line x1="90" y1="140" x2="280" y2="240"/><line x1="370" y1="160" x2="200" y2="250"/>
+          </g>
+          <text x="240" y="300" text-anchor="middle" fill="#ffd1d8" font-size="13">≈ 30045 kB（全验证）</text>
+          <!-- 稀 -->
+          <rect x="460" y="60" width="400" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="660" y="84" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">稀疏回环（Swarm + GNC）</text>
+          <g fill="#9b8cff">
+            <circle cx="520" cy="140" r="8"/><circle cx="600" cy="120" r="8"/><circle cx="680" cy="160" r="8"/><circle cx="760" cy="130" r="8"/><circle cx="700" cy="240" r="8"/><circle cx="560" cy="250" r="8"/>
+          </g>
+          <g stroke="#5cffb0" stroke-width="2">
+            <line x1="520" y1="140" x2="600" y2="120"/><line x1="680" y1="160" x2="760" y2="130"/><line x1="560" y1="250" x2="700" y2="240"/><line x1="600" y1="120" x2="680" y2="160"/>
+          </g>
+          <text x="660" y="300" text-anchor="middle" fill="#bfe" font-size="13">≈ 280 kB（只挑最关键）</text>
+          <text x="450" y="356" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：稀疏化把带宽从「万 kB」压到「百 kB」——约 100× 差距</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左=稠密回环图（所有候选都验证，红线乱成一团），右=稀疏回环图（只留几条关键绿边）。<br>
+          <b>怎么看这张图：</b>① 左图边多、要传的数据多（30045 kB）；② 右图边少但关键位置都有（280 kB）；③ 稀疏化不是「少就好」，而是「少而准」——靠光谱优先化挑位置。<br>
+          <b>要记住的一句话：</b>Swarm-SLAM 的极致省带宽 = 稀疏化（只验证光谱选出的少数回环）+ GNC（不误杀真回环）。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_Swarm-SLAM/6ef2184a9f8a7e4234f3792c3dc70f3e7958db9cf9e1c0cc81a08d6fbe53e130.jpg" alt="Reference frame convergence via rendezvous">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Reference frame convergence via occasional rendezvous… after three rendezvous, all estimates are within the same global reference frame.<br>
+          <b>怎么看这张图：</b>去中心化不需要一次性全连通——机器人分组偶遇（rendezvous），几次碰面后所有轨迹收敛到同一全局坐标系。这正是「无主、靠偶遇」在工程上怎么落地的证据。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. GNC 后端：和 0169 同一家族</h2>
+      <p>Swarm-SLAM 的后端用 <b>GNC（截断最小二乘）</b>——和 0169 的 LAMP 2.0、0171 的 Kimera-Multi 同属「GNC 族」。代价函数把大残差封顶，outlier 权重渐变到 0。它配光谱优先化从源头减少要验证的候选数，既省带宽又保 recall。anchor 选「最低 ID」的机器人当参考帧，统一坐标。</p>
+      <div class="formula-box">
+        $$ \rho(r) = \min\!\left(\tfrac12 r^2,\ \tfrac12 \bar c^2\right) \quad\text{（截断最小二乘，简化示意）} $$
+        <div class="flow-formula">输入：回环残差 r　→　处理：小残差正常算，大残差封顶到 1/2 c̄²　→　输出：错的回环贡献被封顶、权重趋 0</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「每条回环对总误差的贡献」；② 为什么这样就能判对——残差超过 c̄ 的回环（假回环）不再平方爆炸拖累解，被静音；③ 核函数什么时候把观测当回事：|r| ≤ c̄ 时正常当回事，|r| &gt; c̄ 时不再当回事。这和 0169 讲的 GNC 是同一思想，只是跑在去中心化、稀疏回环的设置里。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Swarm-SLAM 的「光谱优先化」优化的目标，最接近下面哪种？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：它选最少的回环候选集，使合并图的代数连通性 λ₂ 最大——用最少回环把图连得最牢，从而省带宽又保一致。" onclick="lessonKit.answer(this,'q0172a')">最大化图的代数连通性 λ₂</button>
+          <button data-correct="no" data-explanation="不对：那是 PCM 的目标（选最大一致集），光谱优先化是通信调度，不是选最大团。" onclick="lessonKit.answer(this,'q0172a')">求最大一致回环集</button>
+        </div>
+        <div class="quiz-feedback" id="q0172a"></div>
+      </div>
+
+      <h2>5. 小结：Swarm-SLAM 在主线里的位置</h2>
+      <p>把 Swarm-SLAM 放回 0168 的主线：它站在<b>「去中心化」</b>这一档（比中心化、分布式更容断），又用<b>「稀疏化 + GNC」</b>把带宽压到本块最低一档（280 kB vs 30045 kB）。它和 DOOR-SLAM 同团队，后端从 PCM 升级到 GNC——是「PCM 漏真 → GNC 保真」的又一实例。它的代价：依赖描述子质量、低连通场景 λ₂ 优化受限、GNC 仍需迭代。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="330" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">Swarm-SLAM 四性质一览</text>
+          <g font-size="14" text-anchor="middle">
+            <rect x="60" y="70" width="180" height="90" rx="10" fill="#16203a" stroke="#5cffb0"/><text x="150" y="110" fill="#bfe" font-weight="700">可扩展</text><text x="150" y="138" fill="#9fb4ff" font-size="12">规模增大不崩</text>
+            <rect x="270" y="70" width="180" height="90" rx="10" fill="#16203a" stroke="#5cffb0"/><text x="360" y="110" fill="#bfe" font-weight="700">灵活</text><text x="360" y="138" fill="#9fb4ff" font-size="12">前端可换</text>
+            <rect x="480" y="70" width="180" height="90" rx="10" fill="#16203a" stroke="#5cffb0"/><text x="570" y="110" fill="#bfe" font-weight="700">去中心化</text><text x="570" y="138" fill="#9fb4ff" font-size="12">无主、容断</text>
+            <rect x="690" y="70" width="180" height="90" rx="10" fill="#16203a" stroke="#5cffb0"/><text x="780" y="110" fill="#bfe" font-weight="700">稀疏</text><text x="780" y="138" fill="#9fb4ff" font-size="12">最少回环</text>
+          </g>
+          <text x="450" y="210" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">代价：依赖描述子质量 · 低连通时 λ₂ 受限 · GNC 需迭代</text>
+          <text x="450" y="300" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：四性质 = 把「去中心化」与「省带宽」同时推到极致</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>四个绿色卡片列出 Swarm-SLAM 的核心性质，下方一行是代价。<br>
+          <b>怎么看这张图：</b>① 四性质彼此支撑：去中心化 + 稀疏 → 省带宽且容断；灵活 + 可扩展 → 易部署；② 代价也实在：描述子失败就少回环、低连通时 λ₂ 不好优化。<br>
+          <b>要记住的一句话：</b>Swarm-SLAM 是「去中心化 + 稀疏化」的标杆，把本块的带宽下限再往下压了一档。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>Swarm-SLAM 的四个性质是什么？哪个性质直接换来带宽优势？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>可扩展 / 灵活 / 去中心化 / 稀疏。直接换来带宽优势的是「稀疏」——只验证光谱优先化选出的最少回环，KITTI 00 上 280 kB vs DGS+PCM 的 30045 kB（约 100×）。</div></details>
+        </li>
+        <li>「光谱优先化」为什么比「贪心」挑回环更好？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>贪心会挑高相似区里一堆冗余回环，图仍可能断开；光谱优先化选分布在不同区域的回环，使合并图的代数连通性 λ₂ 最大，用更少回环把整张图连得更牢，ATE 更低、带宽更省。</div></details>
+        </li>
+        <li>Swarm-SLAM 和 DOOR-SLAM 有什么血脉关系？后端有何升级？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>同团队（Lajoie / Beltrame）。DOOR-SLAM 后端是分布式 PCM（低 recall），Swarm-SLAM 升级为 GNC（保 recall），并加了光谱优先化做通信调度——是「PCM 漏真 → GNC 保真」的具体延续。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>Swarm-SLAM 的「四性质」是什么？哪个直接带来带宽优势？</li>
+        <li>光谱优先化在选什么？为什么 λ₂ 大意味着图更连通？</li>
+        <li>为什么「稀疏化」能把带宽压到 280 kB 这一档？</li>
+        <li>Swarm-SLAM 的后端 GNC，和 0169 / 0171 是同一家族吗？</li>
+        <li>Swarm-SLAM 在 0168 架构主线里归哪一档？它的代价是什么？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0171-Kimera-Multi-分布式也能出语义网格.html">← 上一课：Kimera-Multi</a>
+        <a class="next" href="0173-D2SLAM-空中集群的近场与远场.html">下一课：D²SLAM →</a>
+      </div>
+      <p class="foot-note">去中心化 + 稀疏化到顶了，下一节看空中集群怎么把「近场 / 远场」分开处理 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

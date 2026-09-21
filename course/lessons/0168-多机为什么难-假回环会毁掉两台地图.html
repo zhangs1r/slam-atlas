@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多机为什么难：假回环会毁掉两台地图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0168</div>
+      <h1>多机为什么难：假回环会毁掉两台地图</h1>
+      <p class="subtitle">一台机器人已经够难了，两台一起跑为什么会难出一个数量级？🤔 答案就藏在「一次假回环」上。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多机协同的底层难度与鲁棒后端的第一块基石</span>
+        <span>👥 作者：Schmuck &amp; Chli（ETH，2017）＋ Lajoie 等（DOOR-SLAM，2020）</span>
+        <span>📅 年份 · <i>CCM-SLAM / DOOR-SLAM: Distributed, Online, and Outlier Resilient Pose Estimation</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：单机 vs 多机</a>
+        <a href="#b">MultiUAV：第一个中心化系统</a>
+        <a href="#c">DOOR-SLAM 与 PCM</a>
+        <a href="#d">架构演进主线</a>
+        <a href="#e">一致集最大化</a>
+        <a href="#f">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清单机假回环和多机假回环后果的区别；讲清 MultiUAV 的中心化架构与代价；用自己的话解释 PCM（成对一致测量集最大化）在算什么；记住整块课会沿「中心化→分布式→去中心化」三档推进。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 直接接 <b>第七季 0140「回环假阳性铁律」</b>：那一节立下铁律「单机一次假回环会毁掉一张图」；本块是这条铁律<b>最残酷的战场</b>——多机一次假回环会把两台机器人的地图一起缝歪。★ 鲁棒后端全是在<b>位姿图</b>上加约束，要回链<b>第二季 0018 / 0019 的 Schur 消元与位姿图优化</b>，理解「一条边错了会怎样」。★ 本块后面大量用激光描述子（Scan Context 等），那是<b>第四季 0092 / 0093</b> 与<b>第七季 0135</b> 的地盘。</p></div>
+      </div>
+
+      <h2 id="b">1. 先说人话：多机到底难在哪</h2>
+      <p>咱们把 SLAM 想成「一边走、一边画地图」。单机的时候，你只有一份地图要操心。多机协同，听起来是「人多力量大」——每台机器人各画各的，最后拼成一张大图，又快又全。但拼图有个致命前提：<b>你怎么知道「我画的这个路口」和「你画的那个路口」是同一个地方？</b></p>
+      <p>这个「认出是同一个地方」的动作，在 SLAM 里叫<b>回环（loop closure）</b>。一旦认错（假回环 / 假阳性），单机只是把自己的那张图拉歪；<b>多机却是拿一根错误的针，把两台机器人的两张图缝在一起，结果两张图同时被扯变形</b>。这就是本块全部鲁棒后端（PCM / GNC / ADMM）要解决的问题，也是 0140 铁律最残酷的战场。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="34" text-anchor="middle" fill="#e8ecff" font-size="20" font-weight="700">为什么假回环在多机里更致命：一条错误的缝，把两台地图一起拉歪</text>
+          <!-- 左：机器人 A 地图 -->
+          <rect x="40" y="60" width="370" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="225" y="86" text-anchor="middle" fill="#9fb4ff" font-size="16" font-weight="700">机器人 A 的地图（自己坐标系）</text>
+          <polyline points="80,250 140,200 200,210 260,160 320,180 380,140" fill="none" stroke="#5cffb0" stroke-width="4"/>
+          <circle cx="200" cy="210" r="7" fill="#ffd166"/>
+          <text x="200" y="232" text-anchor="middle" fill="#ffd166" font-size="13">地标 甲</text>
+          <text x="380" y="128" fill="#5cffb0" font-size="12">A 轨迹</text>
+          <!-- 右：机器人 B 地图 -->
+          <rect x="490" y="60" width="370" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="675" y="86" text-anchor="middle" fill="#9fb4ff" font-size="16" font-weight="700">机器人 B 的地图（自己坐标系）</text>
+          <polyline points="520,150 580,190 640,170 700,220 760,200 820,240" fill="none" stroke="#ff9f6b" stroke-width="4"/>
+          <circle cx="640" cy="170" r="7" fill="#ffd166"/>
+          <text x="640" y="192" text-anchor="middle" fill="#ffd166" font-size="13">地标 乙</text>
+          <text x="820" y="258" fill="#ff9f6b" font-size="12">B 轨迹</text>
+          <!-- 错误的缝 -->
+          <line x1="200" y1="210" x2="640" y2="170" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 6"/>
+          <text x="420" y="178" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">假回环（错误缝合）</text>
+          <!-- 拉歪箭头 -->
+          <path d="M 200 210 Q 360 230 520 195" fill="none" stroke="#ff5d73" stroke-width="2" marker-end="url(#ah)"/>
+          <path d="M 640 170 Q 480 200 300 205" fill="none" stroke="#ff5d73" stroke-width="2" marker-end="url(#bh)"/>
+          <defs>
+            <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ff5d73"/></marker>
+            <marker id="bh" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ff5d73"/></marker>
+          </defs>
+          <text x="225" y="330" text-anchor="middle" fill="#ffd1d8" font-size="14">单机：假回环只拉歪「自己」一张图</text>
+          <text x="675" y="330" text-anchor="middle" fill="#ffd1d8" font-size="14">多机：假回环把「两张图」一起拉歪</text>
+          <text x="450" y="400" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：假回环在多机里不是 1 倍代价，而是「一针缝歪两张图」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边机器人 A、右边机器人 B 各自有一张地图与一条轨迹；中间那条红色虚线是一次「假回环」——它错误地宣称 A 的地标甲 = B 的地标乙。<br>
+          <b>怎么看这张图：</b>① 盯住红色虚线：它本不该存在；② 看两条红色弯曲箭头：优化器为了「满足这条假边」，会把 A 的轨迹往 B 那边拽、B 的轨迹也往 A 那边拽；③ 结果两台机器人的地图都被扭曲，而不是只有一台。<br>
+          <b>要记住的一句话：</b>多机一次假回环的代价，是「一针缝歪两张图」，这正是 0140 铁律最残酷的版本。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. 论文一：MultiUAV-SLAM（2017）——第一个能跑的中心化系统</h2>
+      <p>ETH Zürich 的 Schmuck &amp; Chli 在 2017 年（IROS）把单目协作 SLAM 做成了「<b>中心化服务器 + 多个轻量 agent</b>」的可扩展系统，后来这套血脉一路走到 COVINS。它的核心思想今天看很朴素：</p>
+      <ul>
+        <li>每台无人机（agent）本地跑 ORB-SLAM2 的前端里程计，只保留一小块地图（限容 N 个关键帧）；</li>
+        <li>地面服务器（server）负责三件「重活」：<b>地点识别（place recognition）</b>、<b>地图融合（map fusion）</b>、<b>全局 BA</b>；</li>
+        <li>通信只传<b>关键帧（KeyFrame）和地图点</b>，不传原始图像——这就是它省带宽的根本。</li>
+      </ul>
+      <p>融合时它用 <b>Sim(3)</b>（7 自由度的相似变换）而不是普通的 SE(3)，因为单目 SLAM 每张图自带一个不确定的尺度，Sim(3) 能同时把「旋转、平移、尺度」三件事对齐。4 架无人机户外实验里，它做到 ATE 0.22 m，通信在 4 台时约 3.37 s / 周期。</p>
+      <p>但有个关键短板：<b>它没有显式的鲁棒后端</b>。它靠 BA + Sim(3) 的几何一致性、靠 BoW（词袋）投票 + 几何验证来挡假回环，没有 PCM / GNC 这类「outlier rejection」。这是早期系统的通病——对假回环的鲁棒性弱。本块后面所有鲁棒后端，都是来补这个洞的。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_MultiUAV-SLAM/846a30e11372b7d79bfc76446ec2545959485be5b584da47bf88aa2efa96bffe.jpg" alt="Collaborative SLAM system in action with two UAVs">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Our collaborative SLAM system in action, combining information from two UAVs (i.e. AscTec Neos visible in the inset) flying over a garden area, here augmented with the Google Earth's view for clarity. Following a loop-closure detection across the estimated trajectories (in blue and black) the red map points, as opposed to the black ones, are used by both UAVs for position tracking.<br>
+          <b>怎么看这张图：</b>两张轨迹（蓝、黑）是两台无人机各自的估计；红色地图点是「被两台无人机共同用来定位」的点——也就是成功建立机间关联的地方。注意这是「协作成功」的样子，本节要担心的反面是：一旦这类关联认错，两条轨迹会同时被拉歪。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_MultiUAV-SLAM/613a3cdd02ed377cb72f242f83d3402d2939ee837151cb219c74d84e98a6a0c6.jpg" alt="System architecture overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of the system architecture. An agent runs real-time Visual Odometry maintaining a Local Map, and a Communication module to exchange KeyFrames and Map Points with the server. The server executes Place Recognition, Map Fusion, and Bundle Adjustment.<br>
+          <b>怎么看这张图：</b>典型「星型」中心化拓扑——agent 在左边各自跑 VO、维护本地小地图；server 在右边集中做地点识别、地图融合、BA。所有通信都走 agent↔server 这一条线，这就是后面要说到的「带宽瓶颈与单点故障」的种子。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 论文二：DOOR-SLAM（2020）——把「拒假回环」做成系统</h2>
+      <p>三年后的 DOOR-SLAM（Lajoie、Ramtoula、Chang、Carlone、Beltrame，IEEE RA-L 2020）换了思路：它<span style="border-bottom:2px solid #ffd166;">不要中心服务器</span>，做成<span style="border-bottom:2px solid #ffd166;">完全分布式 peer-to-peer</span>——机器人相遇（rendezvous）才交换信息，不要求全连通，理论上能跑几千台。它最大的贡献，是第一次把<b>PCM（Pairwise Consistent Measurement set Maximization，成对一致测量集最大化）</b>当成后端的核心来用。</p>
+      <p>DOOR-SLAM 的前端不传原始图像：它用 <b>NetVLAD</b> 描述子（128 维，约 1 kB / 帧）做机间回环检索，再用 solvePnP + RANSAC 做几何验证。比传原始图像省约 10×。后端用<b>分布式 PCM</b> 拒假回环，再做<b>分布式 PGO</b>（Choudhary 的 DGS）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DOOR-SLAM/b8603dc9c67e8a76bcc174c115f5049f4e5425aa389cf9703a2fb6efabce0d8d.jpg" alt="DOOR-SLAM system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>DOOR-SLAM system overview.<br>
+          <b>怎么看这张图：</b>对比 MultiUAV 的星型，这里是「mesh（网状）无主」结构：每个机器人既跑本地前端，又和邻居交换回环候选、做分布式 PCM 与分布式 PGO。没有中心节点 = 没有单点故障，但也意味着「拒假回环」不能再靠一台服务器集中算，而要分布式地完成——这正是 PCM 被选中的原因。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2020_DOOR-SLAM/6a08c2490d3a66866c5716e55de32d0ad2ecfb38a979d62955b93a69e1b64b9e.jpg" alt="Measurements to check pairwise consistency">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Measurements needed to check pairwise consistency.<br>
+          <b>怎么看这张图：</b>这是 PCM 判据的几何来源——要确认「机器人 α 到 β 之间的一条机间回环」是否可信，得把它和「各自里程计攒出来的闭合回路」比一比。若两者凑成的环闭合不上（残差大），这条回环就可疑。下一节的公式就是把这个几何直觉写成数学。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. PCM 在算什么：把「互相矛盾」的回环剔除</h2>
+      <p>DOOR-SLAM 的 PCM 判据长这样（两机 α、β 之间两条回环，和它们各自的里程计凑成一个环）：</p>
+      <div class="formula-box">
+        $$ \left\| (z_{\alpha_j}^{\alpha_i} \oplus z_{\beta_k}^{\alpha_j} \oplus z_{\beta_l}^{\beta_k}) \ominus z_{\beta_l}^{\alpha_i} \right\|_{\Sigma} \leq \gamma $$
+        <div class="flow-formula">输入：四条测量（两条机间回环 z 与两条里程计 z）　→　处理：用 ⊕ 串联、用 ⊖ 求闭环残差、用 Σ 加权求马氏距离　→　输出：残差是否小于阈值 γ</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「如果我相信这四条测量同时成立，它们能不能闭合成一个没有缝隙的环」；② 为什么这样就能判对——里程计是各自一步一步走出来的、相对可信，若一条机间回环和里程计凑出的环「对不上」（残差大），那这条回环多半是假的；③ 权重 / 阈值 γ 由卡方分位定（实验用 1% 阈值），γ 卡得越严，越敢扔掉可疑回环，但也越容易误杀真回环（低 recall）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="34" text-anchor="middle" fill="#e8ecff" font-size="20" font-weight="700">一致集最大化（PCM）：桌上几张候选回环，圈出能同时成立的最大那一堆</text>
+          <!-- 桌子 -->
+          <rect x="60" y="70" width="780" height="280" rx="14" fill="#1b2440" stroke="#3a4a78"/>
+          <text x="450" y="62" text-anchor="middle" fill="#9fb4ff" font-size="14">候选机间回环（每张卡片 = 一条「我觉得 A 这处 = B 那处」的声明）</text>
+          <!-- 卡片 -->
+          <g font-size="14" font-weight="700" text-anchor="middle">
+            <rect x="100" y="110" width="110" height="64" rx="8" fill="#223056" stroke="#5cffb0"/><text x="155" y="148" fill="#cfe">M1 一致</text>
+            <rect x="240" y="110" width="110" height="64" rx="8" fill="#223056" stroke="#5cffb0"/><text x="295" y="148" fill="#cfe">M2 一致</text>
+            <rect x="380" y="110" width="110" height="64" rx="8" fill="#223056" stroke="#5cffb0"/><text x="435" y="148" fill="#cfe">M3 一致</text>
+            <rect x="520" y="110" width="110" height="64" rx="8" fill="#2a1c30" stroke="#ff5d73"/><text x="575" y="148" fill="#ffd1d8">M4 矛盾</text>
+            <rect x="660" y="110" width="110" height="64" rx="8" fill="#223056" stroke="#5cffb0"/><text x="715" y="148" fill="#cfe">M5 一致</text>
+            <rect x="100" y="210" width="110" height="64" rx="8" fill="#223056" stroke="#5cffb0"/><text x="155" y="248" fill="#cfe">M6 一致</text>
+            <rect x="240" y="210" width="110" height="64" rx="8" fill="#2a1c30" stroke="#ff5d73"/><text x="295" y="248" fill="#ffd1d8">M7 矛盾</text>
+            <rect x="380" y="210" width="110" height="64" rx="8" fill="#223056" stroke="#5cffb0"/><text x="435" y="248" fill="#cfe">M8 一致</text>
+          </g>
+          <!-- 红叉 标记矛盾对 -->
+          <text x="575" y="178" text-anchor="middle" fill="#ff5d73" font-size="22" font-weight="700">✕</text>
+          <text x="295" y="278" text-anchor="middle" fill="#ff5d73" font-size="22" font-weight="700">✕</text>
+          <!-- 绿圈 最大一致集 -->
+          <ellipse cx="295" cy="142" rx="245" ry="58" fill="none" stroke="#5cffb0" stroke-width="3" stroke-dasharray="9 6"/>
+          <ellipse cx="335" cy="242" rx="245" ry="58" fill="none" stroke="#5cffb0" stroke-width="3" stroke-dasharray="9 6"/>
+          <text x="450" y="320" text-anchor="middle" fill="#5cffb0" font-size="15" font-weight="700">绿色虚线圈 = 能同时成立的最大一致集（最大团）</text>
+          <text x="575" y="200" text-anchor="middle" fill="#ffd1d8" font-size="13">M4 与 M1/M2/M3 冲突</text>
+          <text x="295" y="300" text-anchor="middle" fill="#ffd1d8" font-size="13">M7 与 M5/M6 冲突</text>
+          <text x="450" y="412" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：PCM 求的是「最大一致集」，被丢掉的（M4、M7）可能是真回环 → 低 recall</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>桌上有 8 张候选回环卡片；M4、M7 与别的可信卡片互相矛盾（红叉），其余能和平共处。<br>
+          <b>怎么看这张图：</b>① 每张绿框卡片代表「和大多数候选不冲突」的可信回环；② 红叉卡片一旦加入，会让某个环闭不上，所以被排除；③ 绿色虚线椭圆圈出的就是「能同时成立的最大那一堆」——数学上叫最大团（max clique）。<br>
+          <b>要记住的一句话：</b>PCM 追求「最大一致集」，代价是容易误杀真回环（低 recall），这正是后面 GNC 要修复的痛点。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>多机协同里，一次假回环（假阳性机间关联）最可能的后果是？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：假回环拿错误针脚把两台机器人的两张图缝在一起，优化时两张图被同时拉歪，这正是 0140 铁律最残酷的版本。" onclick="lessonKit.answer(this,'q0168a')">把两台地图一起拉歪</button>
+          <button data-correct="no" data-explanation="不对：这只是一台单机的情况。多机里错误针脚同时牵动两张图。" onclick="lessonKit.answer(this,'q0168a')">只拉歪其中一台地图</button>
+        </div>
+        <div class="quiz-feedback" id="q0168a"></div>
+      </div>
+
+      <h2>5. 架构演进主线：中心化 → 分布式 → 去中心化</h2>
+      <p>本块 7 节课会沿一条清晰的主线推进，0168 先把这三档摆在桌面上，后面每篇各归其位：</p>
+      <ul>
+        <li><b>中心化（centralized）</b>：有中央服务器汇总所有地图并做全局 BA（MultiUAV → COVINS → LAMP 2.0）。简单可靠，但有<b>单点故障 + 带宽瓶颈</b>，且假定通信可达。</li>
+        <li><b>分布式（distributed）</b>：每台机器人本地建图、本地优化，相遇时才交换（DiSCo / DCL / RDC）。把计算从服务器拆到各机，但仍靠 rendezvous。</li>
+        <li><b>完全分布式 / 去中心化（decentralized）</b>：peer-to-peer、无主、容断（DOOR / Kimera-Multi / Swarm / D²）。最稳，但一致性更难保证。</li>
+      </ul>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">架构演进三档：谁当中心，决定了带宽与容错</text>
+          <!-- 中心化 -->
+          <text x="150" y="64" text-anchor="middle" fill="#ffd166" font-size="15" font-weight="700">① 中心化（星型）</text>
+          <circle cx="150" cy="140" r="22" fill="#ff5d73"/><text x="150" y="146" text-anchor="middle" fill="#fff" font-size="13">服</text>
+          <circle cx="70" cy="230" r="16" fill="#5cffb0"/><circle cx="150" cy="250" r="16" fill="#5cffb0"/><circle cx="230" cy="230" r="16" fill="#5cffb0"/>
+          <line x1="150" y1="162" x2="70" y2="222" stroke="#7c8bbf" stroke-width="2"/><line x1="150" y1="162" x2="150" y2="234" stroke="#7c8bbf" stroke-width="2"/><line x1="150" y1="162" x2="230" y2="222" stroke="#7c8bbf" stroke-width="2"/>
+          <text x="150" y="300" text-anchor="middle" fill="#cdd6ff" font-size="12">单点故障 + 带宽瓶颈</text>
+          <!-- 分布式 -->
+          <text x="450" y="64" text-anchor="middle" fill="#ffd166" font-size="15" font-weight="700">② 分布式（各机本地优化）</text>
+          <circle cx="380" cy="150" r="18" fill="#5cffb0"/><circle cx="470" cy="130" r="18" fill="#5cffb0"/><circle cx="520" cy="200" r="18" fill="#5cffb0"/><circle cx="400" cy="230" r="18" fill="#5cffb0"/>
+          <line x1="380" y1="150" x2="470" y2="130" stroke="#7c8bbf" stroke-width="2"/><line x1="470" y1="130" x2="520" y2="200" stroke="#7c8bbf" stroke-width="2"/><line x1="380" y1="150" x2="400" y2="230" stroke="#7c8bbf" stroke-width="2"/><line x1="400" y1="230" x2="520" y2="200" stroke="#7c8bbf" stroke-width="2"/>
+          <text x="450" y="300" text-anchor="middle" fill="#cdd6ff" font-size="12">算在本地，靠相遇交换</text>
+          <!-- 去中心化 -->
+          <text x="750" y="64" text-anchor="middle" fill="#ffd166" font-size="15" font-weight="700">③ 去中心化（无主网状）</text>
+          <circle cx="700" cy="150" r="18" fill="#9b8cff"/><circle cx="800" cy="130" r="18" fill="#9b8cff"/><circle cx="820" cy="210" r="18" fill="#9b8cff"/><circle cx="700" cy="230" r="18" fill="#9b8cff"/><circle cx="760" cy="240" r="18" fill="#9b8cff"/>
+          <line x1="700" y1="150" x2="800" y2="130" stroke="#7c8bbf" stroke-width="2"/><line x1="800" y1="130" x2="820" y2="210" stroke="#7c8bbf" stroke-width="2"/><line x1="700" y1="150" x2="700" y2="230" stroke="#7c8bbf" stroke-width="2"/><line x1="700" y1="230" x2="760" y2="240" stroke="#7c8bbf" stroke-width="2"/><line x1="760" y1="240" x2="820" y2="210" stroke="#7c8bbf" stroke-width="2"/><line x1="700" y1="230" x2="820" y2="210" stroke="#7c8bbf" stroke-width="2"/>
+          <text x="750" y="300" text-anchor="middle" fill="#cdd6ff" font-size="12">无主、容断</text>
+          <text x="450" y="376" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：越往右越容错，但「让所有图一致」越难 → 端看鲁棒后端</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三种网络拓扑：左=星型（中心服务器在中间），中=各机本地跑优化再相遇交换，右=无主网状（谁都能和邻居说话）。<br>
+          <b>怎么看这张图：</b>① 左边所有线都连到中心，中心一挂全停；② 中间每台机自己算，只在碰面时通信；③ 右边没有中心，任意两点可通信，断网也能局部继续。<br>
+          <b>要记住的一句话：</b>架构越往右越稳，但「保证全局一致」的担子就从服务器转移到鲁棒后端算法上。
+        </figcaption>
+      </figure>
+
+      <h2>6. 通信带宽光谱：本块反复出现的另一条线</h2>
+      <p>多机协同还有一条和「拒假回环」同样重要的暗线：<b>传什么才省带宽</b>。越往右越省，本块会反复出现：</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="360" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">通信带宽光谱：从左传「最重」到右传「最轻」</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">管子越粗 = 每帧要传的数据越多（箭头宽度代表数据量）</text>
+          <g font-size="13" text-anchor="middle">
+            <rect x="40" y="90" width="140" height="40" rx="6" fill="#3a2030" stroke="#ff5d73"/><text x="110" y="115" fill="#ffd1d8">原始图像</text>
+            <rect x="200" y="100" width="120" height="34" rx="6" fill="#3a2a20" stroke="#ffa15d"/><text x="260" y="122" fill="#ffd9b0">点云</text>
+            <rect x="340" y="112" width="100" height="26" rx="6" fill="#2a3340" stroke="#ffd166"/><text x="390" y="130" fill="#ffe9a8">描述子</text>
+            <rect x="460" y="120" width="80" height="20" rx="6" fill="#223056" stroke="#5cffb0"/><text x="500" y="134" fill="#cfe">关键帧</text>
+            <rect x="560" y="128" width="100" height="14" rx="6" fill="#1f3a2a" stroke="#5cffb0"/><text x="610" y="139" fill="#bfe">拓扑/里程计</text>
+            <rect x="700" y="132" width="160" height="10" rx="6" fill="#1f2e44" stroke="#9b8cff"/><text x="780" y="142" fill="#cdbcff">（最省）</text>
+          </g>
+          <line x1="110" y1="130" x2="110" y2="200" stroke="#ff5d73" stroke-width="22" marker-end="url(#da)"/>
+          <line x1="260" y1="134" x2="260" y2="200" stroke="#ffa15d" stroke-width="16" marker-end="url(#da)"/>
+          <line x1="390" y1="138" x2="390" y2="200" stroke="#ffd166" stroke-width="10" marker-end="url(#da)"/>
+          <line x1="500" y1="140" x2="500" y2="200" stroke="#5cffb0" stroke-width="6" marker-end="url(#da)"/>
+          <line x1="610" y1="142" x2="610" y2="200" stroke="#5cffb0" stroke-width="3" marker-end="url(#da)"/>
+          <line x1="780" y1="142" x2="780" y2="200" stroke="#9b8cff" stroke-width="2" marker-end="url(#da)"/>
+          <defs><marker id="da" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><circle cx="4" cy="4" r="3" fill="#cdd6ff"/></marker></defs>
+          <text x="110" y="240" text-anchor="middle" fill="#ffd1d8" font-size="12">≈ 900 kB/帧</text>
+          <text x="390" y="240" text-anchor="middle" fill="#ffe9a8" font-size="12">ScanContext ≈ 4 kB</text>
+          <text x="610" y="240" text-anchor="middle" fill="#bfe" font-size="12">MR-TopoMap 仅拓扑</text>
+          <text x="450" y="320" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：省带宽的秘诀 = 用「紧凑描述子 / 拓扑」替代「原始图像 / 点云」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条从左到右「越来越细」的数据管：原始图像最粗、点云次之、描述子更细、关键帧更细、拓扑 / 里程计最细。<br>
+          <b>怎么看这张图：</b>① 每个向下的箭头粗细代表「每帧要传多少」；② 左边原始图像约 900 kB / 帧，右边描述子只要几 kB；③ 本块所有系统都在往右挪——能传描述子就不传点云，能传拓扑就不传栅格。<br>
+          <b>要记住的一句话：</b>多机协同的第一性原理之一：把「要传的东西」压到最轻，系统才能跑得动。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PCM（一致集最大化）求解的目标，最接近下面哪种？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：PCM 求的是「能同时成立的最大回环集合」，数学上是最大团（max clique）问题，被排除的可能是真回环。" onclick="lessonKit.answer(this,'q0168b')">最大一致回环集合</button>
+          <button data-correct="no" data-explanation="不对：那是 GNC / 鲁棒核的思路（给 outlier 降权），不是 PCM 的「选最大团」。" onclick="lessonKit.answer(this,'q0168b')">给每条边算权重</button>
+        </div>
+        <div class="quiz-feedback" id="q0168b"></div>
+      </div>
+    </main>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么「多机一次假回环」比「单机一次假回环」后果更严重？用 0168 第一节那张图说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>单机假回环只把「自己一张图」拉歪；多机假回环是一根错误针脚把两台机器人的两张图缝在一起，优化器为了让这条假边「闭合」，会同时把 A 的轨迹往 B 拽、B 的轨迹往 A 拽，于是两张图一起变形。这正是 0140 铁律最残酷的版本。</div></details>
+        </li>
+        <li>MultiUAV 用 Sim(3) 而不是 SE(3) 做地图融合，为什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>单目 SLAM 每张地图自带一个不确定的尺度因子，SE(3) 只能对齐旋转和平移、无法吸收尺度差；Sim(3) 是 7 自由度的相似变换，能同时把旋转、平移、尺度三件事对齐，所以适合多单机地图的融合。</div></details>
+        </li>
+        <li>PCM 的 γ 阈值卡得很严（比如 1%）会有什么副作用？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>γ 越严，越敢扔掉可疑回环，假回环确实被挡住了；但代价是把一些「真回环」也误杀掉，导致 recall 低——这是 PCM 族被后面 GNC 族取代的核心原因（GNC 保 recall）。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>多机一次假回环，为什么会把「两台地图」一起拉歪，而不只是一台？</li>
+        <li>MultiUAV 的中心化架构由哪三部分组成？它最大的短板是什么？</li>
+        <li>PCM 在算什么？为什么它会「低 recall」？</li>
+        <li>本块的架构主线「中心化 → 分布式 → 去中心化」各指什么？</li>
+        <li>通信带宽光谱里，从最重到最轻依次传什么？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0167-语义块的收束-语义怎么反过来帮定位.html">← 上一课：语义块的收束</a>
+        <a class="next" href="0169-中心化路线能做到多大-COVINS与LAMP2.html">下一课：中心化路线能做到多大 →</a>
+      </div>
+      <p class="foot-note">多机的难，从这节课开始只是开胃菜；下一节看中心化路线到底能做到多大 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>纯事件路线：时间表面与对比度最大化 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0176</div>
+      <h1>纯事件路线：时间表面与对比度最大化</h1>
+      <p class="subtitle">上一课说了事件相机不拍照、只报变化。那它到底怎么算位姿？🧩 这一课看三篇「只带一台事件相机、什么也不加」的论文：它们各自发明了一种「把流水账攒成能看的东西」的办法。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：两种事件流中间表示 + 两种优化目标</span>
+        <span>👥 作者：Rebecq 等（EVO，2017）＋ Le Gentil 等（事件线 SLAM，2022）＋ Peng 等（CMax-SLAM，2024）</span>
+        <span>📅 年份 · <i>EVO: A Geometric Approach to Event-Based 6-DOF Parallel Tracking and Mapping in Real Time / Event-Based Line SLAM in Real-Time / CMax-SLAM: Event-Based Rotational-Motion Bundle Adjustment and SLAM System Using Contrast Maximization</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：没有帧，先造一张「能看的图」</a>
+        <a href="#b">中间表示一：事件累积图与时间表面</a>
+        <a href="#c">阵营一：把事件对齐到地图边缘</a>
+        <a href="#d">EVO 的建图：射线投票</a>
+        <a href="#e">事件线 SLAM：用直线当路标</a>
+        <a href="#f">阵营二：对比度最大化</a>
+        <a href="#g">纯事件的天花板</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清事件累积图与时间表面这两种中间表示各是什么、为什么要造它们；解释「对齐派」与「最大化派」这两种优化目标的根本差别；用 EVO 的 50 层深度平面说清射线投票怎么把事件变成地图；说准事件线 SLAM 为什么要求场景里至少有 6 条直线；<b>并如实指出 CMax-SLAM 只估旋转、不是完整的 6 自由度 SLAM</b>；最后讲清纯事件路线共同的天花板在哪。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ EVO 的架构直接抄自 <b>0042 PTAM</b>：跟踪线程与建图线程并行开，一个负责位姿、一个负责更新地图——这是「跟踪与建图分家」的又一次实践。★ 它的跟踪用的是逆合成 Lucas-Kanade，属于直接法一脉，回链 <b>0046 DTAM</b> 与 <b>0048 DSO</b>；区别是 DSO 对齐的是亮度，EVO 对齐的是「事件累积图」——<b>因为按 0175 说的，事件里没有亮度可用</b>。★ EVO 的建图是 EMVS 射线密度，与 <b>0047 LSD-SLAM</b> 的半稠密深度图是同一层次的产物（半稠密，不是稠密）。★ 事件线 SLAM 用直线当路标，直接接上 <b>第三季 0069 / 0070「线特征与光照鲁棒」</b>——那两节讲的是点线融合，这一节是它的纯事件版。★ CMax-SLAM 的后端是 BA，回链 <b>第二季 0018 / 0019 Schur 消元</b>与 BA 的稀疏结构。</p></div>
+      </div>
+
+      <h2>1. 开场：没有帧，第一步是「造一张能看的图」</h2>
+      <p>先把问题的形状摆清楚。前三季我们习惯了这套流程：拿两张图 → 找对应点 → 最小化重投影误差。可现在按 0175 讲的，事件相机给的是一串 $(x, y, t, p)$ 的流水账，<b>既没有图，也没有亮度</b>，前面那条流水线从第一个环节就断了。</p>
+      <p>所以本块的每篇论文，第一步都必须做同一件事：<b>把这串流水账攒成某种「能看的中间表示」。</b>你不妨把它想成「把门铃的记录本翻译成一张示意图」——门铃只记了「几号门、几点响、有人进还是出」，但把一段时间里的记录按位置铺开，你就能看出「有人在屋里走了个 S 形」。</p>
+      <p>攒完之后，第二步是<b>换一个优化目标</b>。本课的三篇论文刚好分成两个阵营：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>阵营一：对齐派（EVO、事件线 SLAM）</h4><p>造出一张事件图，再去和「地图里的边」对齐。位姿对了，两张图就贴在一起；位姿错了，就对不齐。<b>本质还是最小化一个对齐残差</b>，只是被对齐的东西从亮度换成了事件。</p></div>
+        <div class="mini-card"><h4>阵营二：最大化派（CMax-SLAM）</h4><p>不跟任何地图对齐。它拿一整包事件，假设「相机在以某个角速度转」，按这个假设把事件挪一挪，看它们会不会攒成一张<b>锐利</b>的图；越锐利说明假设越对，于是「找最锐利的那个角速度」。</p></div>
+      </div>
+      <p>记住这个二分，后面三篇论文的位置就都清楚了。下面先讲两种中间表示，再分别看两个阵营。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 两种中间表示：事件累积图与时间表面</h2>
+      <p>「攒」这个动作看起来简单，其实有两种完全不同的做法，本块几乎所有论文都在这两种之中选一个。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">中间表示</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">每个像素存什么</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">谁在用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;"><b>事件累积图</b>（event image）</td><td style="padding:.6rem;border:1px solid #3a4a78;">一段时间窗口里，这个像素收到<b>几个</b>事件（累加计数）</td><td style="padding:.6rem;border:1px solid #3a4a78;">EVO：每次 warp 用最近约 <b>2000 个事件</b>攒一张</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;"><b>时间表面</b>（Time Surface / SAE）</td><td style="padding:.6rem;border:1px solid #3a4a78;">这个像素<b>上次收到事件距现在多久</b>，再按时间做指数衰减</td><td style="padding:.6rem;border:1px solid #3a4a78;">ESVO（η = 30 ms、100 Hz 更新）、DEVO、ESVIO、PL-EVIO</td></tr>
+        </tbody>
+      </table>
+      <p>两类表示的关键差别在「时间」怎么处理。累加图把一整个时间窗口压平成一个数，窗口内谁先谁后全丢了；时间表面则把<b>「多久以前」编码成亮度</b>——刚变过的像素很亮，很久没变的像素很暗，像黄昏时看着余晖一点点褪去。时间表面的正式写法是（ESVO 式 (1)）：</p>
+      <div class="formula-box">
+        $$ \mathcal{T}(\mathbf{x}, t) \;=\; \exp\!\left(-\frac{t - t_{\text{last}}(\mathbf{x})}{\eta}\right) $$
+        <div class="flow-formula">输入：当前时刻 t 与该像素上一次触发事件的时刻 t_last → 处理：算时间差，按时间常数 η 做指数衰减 → 输出：这个像素此刻的「新鲜度」，刚变过接近 1，很久没变接近 0</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「这个像素上一次变化，距今多久了」，并把「多久」翻译成一个 0 到 1 的数；② 为什么这样就能用——因为物体的<b>边缘扫过</b>某个像素时，那个像素会刚刚触发事件，于是它的「新鲜度」很高；整幅图一铺开，边缘就自己浮现出来了，等价于一张用手电筒照出来的轮廓图；③ 参数 η 什么时候说了算——它决定「多久算旧」：ESVO 取 η = 30 ms，也就是 30 毫秒衰减到原来的 0.37（$e^{-1}$），120 毫秒后只剩 0.02，几乎归零。所以时间表面关心的是<b>刚刚</b>发生了什么，这正好匹配「事件相机只报告变化」的性格。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">时间表面就是在每个像素上记一句「我上次变化是多久以前」</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">刚变过的像素亮，很久没变的像素暗——像一张正在褪色的余晖照片</text>
+          <rect x="40" y="76" width="470" height="264" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="275" y="100" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">一面墙 + 一扇门 + 一张桌子：谁刚变过？</text>
+          <rect x="80" y="120" width="390" height="180" fill="#131a2e" stroke="#33406b"/>
+          <rect x="120" y="150" width="80" height="150" fill="none" stroke="#3a4a78"/>
+          <rect x="290" y="230" width="150" height="10" fill="none" stroke="#3a4a78"/>
+          <rect x="300" y="240" width="9" height="40" fill="none" stroke="#33406b"/>
+          <rect x="421" y="240" width="9" height="40" fill="none" stroke="#33406b"/>
+          <g>
+            <rect x="118" y="148" width="7" height="7" fill="#ffe9a8"/>
+            <rect x="118" y="196" width="7" height="7" fill="#ffd166"/>
+            <rect x="118" y="244" width="7" height="7" fill="#8a7a3a"/>
+            <rect x="118" y="290" width="7" height="7" fill="#3e4256"/>
+            <rect x="192" y="148" width="7" height="7" fill="#ffe9a8"/>
+            <rect x="192" y="196" width="7" height="7" fill="#c9a83f"/>
+            <rect x="192" y="244" width="7" height="7" fill="#6b6034"/>
+            <rect x="118" y="148" width="7" height="7" fill="#ffe9a8"/>
+            <rect x="150" y="148" width="7" height="7" fill="#ffd166"/>
+            <rect x="160" y="148" width="7" height="7" fill="#9a8b45"/>
+            <rect x="170" y="148" width="7" height="7" fill="#5a5540"/>
+            <rect x="180" y="148" width="7" height="7" fill="#3e4256"/>
+            <rect x="288" y="228" width="7" height="7" fill="#ffe9a8"/>
+            <rect x="326" y="228" width="7" height="7" fill="#ffd166"/>
+            <rect x="364" y="228" width="7" height="7" fill="#8a7a3a"/>
+            <rect x="402" y="228" width="7" height="7" fill="#4b4d5e"/>
+            <rect x="288" y="298" width="7" height="7" fill="#ffe9a8"/>
+            <rect x="326" y="298" width="7" height="7" fill="#6b6034"/>
+            <rect x="364" y="298" width="7" height="7" fill="#3e4256"/>
+            <rect x="428" y="228" width="7" height="7" fill="#5a5540"/>
+          </g>
+          <text x="275" y="322" text-anchor="middle" fill="#bfe" font-size="12">亮黄 = 刚刚变过（事件刚到）　暗灰 = 很久没变</text>
+          <rect x="530" y="76" width="330" height="264" rx="10" fill="#16203a" stroke="#9b8cff"/>
+          <text x="695" y="100" text-anchor="middle" fill="#cdbcff" font-size="14" font-weight="700">每个像素的值随时间衰减（η = 30 ms）</text>
+          <line x1="560" y1="280" x2="836" y2="280" stroke="#4a5a88"/>
+          <line x1="560" y1="110" x2="560" y2="280" stroke="#4a5a88"/>
+          <polyline points="560.0,118.1 570.8,143.0 581.6,164.0 592.4,181.8 603.2,196.9 614.0,209.6 624.8,220.4 635.6,229.6 646.4,237.3 657.2,243.9 668.0,249.4 678.8,254.1 689.6,258.1 700.4,261.5 711.2,264.3 722.0,266.7 732.8,268.8 743.6,270.5 754.4,271.9 765.2,273.2 776.0,274.2 786.8,275.1 797.6,275.9 808.4,276.5 819.2,277.0 830.0,277.5" fill="none" stroke="#5cffb0" stroke-width="3"/>
+          <text x="553" y="122" text-anchor="end" fill="#9fb4ff" font-size="11">1.00</text>
+          <text x="553" y="204" text-anchor="end" fill="#9fb4ff" font-size="11">0.50</text>
+          <text x="553" y="284" text-anchor="end" fill="#9fb4ff" font-size="11">0.00</text>
+          <text x="560" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">0</text>
+          <text x="625" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">30</text>
+          <text x="690" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">60</text>
+          <text x="755" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">90</text>
+          <text x="820" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">120</text>
+          <text x="695" y="322" text-anchor="middle" fill="#bfe" font-size="12">距上次变化的时间 Δt（毫秒）</text>
+          <text x="450" y="386" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：时间表面把「多久以前变过」翻译成亮度，于是边缘自己浮现出来</text>
+          <text x="450" y="410" text-anchor="middle" fill="#9fb4ff" font-size="12">左边亮黄的那些边，就是此刻事件流正在「讲」的轮廓</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一个室内场景（墙、门框、桌沿、桌腿），每条边上贴了一串小方块，颜色从亮黄到暗灰；右边那条曲线是时间表面的衰减规律：从刚变化那一刻（1.00）开始，按 η = 30 ms 指数衰减，30 毫秒后剩 0.37，120 毫秒后只剩 0.02。<br>
+          <b>怎么看这张图：</b>① 先看左边方块的颜色梯度：同一条门框边，靠近「刚刚被扫过」的一段是亮黄，越远越暗——这正是「余晖」的样子；② 再对照右边的曲线：亮黄 ≈ 衰减刚开始，暗灰 ≈ 已经衰减完；③ 于是整张图的作用就清楚了——<b>它把「时间」编码成了「亮度」，让一串没有图的事件重新变成一张可以拿去对齐的灰度图</b>。<br>
+          <b>要记住的一句话：</b>时间表面不是图像，而是「记忆的新鲜度地图」；它是纯事件方法能重新用上图像类工具的那座桥。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_EVO/e729ed4949a4e5ebb6da4841d21ca4529f182313a4ae23625dc3a03729748073.jpg" alt="Aligning event image with projected semi-dense map">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Pose Tracking computes the pose of the camera with respect to a reference pose by aligning the event image I with the projected semi-dense map M. Edges parallel to the camera motion are not captured by the event sensor. (a) 3D scene and poses involved in the registration process. (b) Projected semi-dense map M. (c) Event image I.（中译：位姿跟踪通过把事件图 I 与投影后的半稠密地图 M 对齐，来求相机相对参考位姿；<b>与相机运动方向平行的边缘不会被事件传感器捕捉到。</b>(a) 配准过程中的三维场景与位姿；(b) 投影后的半稠密地图 M；(c) 事件图 I。）<br>
+          <b>怎么看这张图：</b>这是「对齐派」最标准的一张示意图：把地图里的边缘投影到图像平面，得到 (b)；把最近约 2000 个事件攒成一张图，得到 (c)；<b>让这两张图对齐，就解出了位姿</b>。图注里那句提醒非常重要：<b>平行于运动方向的边缘不会产生事件</b>——因为那样的边缘只是沿着自己滑动，像素亮度不变。所以事件图上的信息天生是「有方向偏好」的，这是纯事件方法常见的一个盲区。<br>
+          <b>要记住的一句话：</b>对齐派做的事，就是把「没有亮度的两张图」对齐；残差越小，位姿越对——这和 DSO 的哲学一模一样，只是换了被对齐的对象。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 阵营一（上）：EVO（2017）——PTAM 架构搬到事件相机上</h2>
+      <p><b>EVO</b>（Rebecq 等，IEEE RA-L 2017）的地位很明确：<b>第一个纯事件、单目、6 自由度、并行跟踪与建图、并且能在 CPU 上实时的系统。</b>它的架构几乎是把 PTAM（<b>0042</b>）照搬过来：一个跟踪线程、一个建图线程，并行跑。</p>
+      <ul>
+        <li><b>跟踪线程</b>：把最近约 <b>2000 个事件</b>攒成一张事件累积图（这些事件通常在 0.6–2 ms 内产生），再用<b>逆合成 Lucas-Kanade</b> 把这张图和「地图边缘投影出来的图」对齐，解出 6 自由度位姿。输出位姿率 <b>&gt; 500 poses/s</b>。</li>
+        <li><b>建图线程</b>：用 <b>EMVS</b>（Event-based Multi-View Stereo）把事件反投影到空间里，做射线投票（下一节展开）。</li>
+        <li><b>成绩</b>：在 DAVIS（240×180，动态范围 130 dB）上，事件率 1–3 M events/s，轨迹误差 0.057%（平移）/ 0.2%（旋转，均为相对指标）；RTF 在中速下 1.25–3、高速下 0.5–0.75（RTF 是「处理一秒数据需要几秒」，小于 1 才算比实时快）。</li>
+      </ul>
+      <div class="formula-box">
+        $$ \min_{\mathbf{T}_k}\ \sum_{\mathbf{x}\in\mathcal{M}} \left\|\, I_{\text{evt}}\big(W(\mathbf{x};\mathbf{T}_k)\big) - \mathcal{M}(\mathbf{x}) \,\right\|^{2} $$
+        <div class="flow-formula">输入：地图点集 M 里每个点应该出现在图像上的位置，以及事件累积图 I_evt → 处理：用待求位姿 T_k 把地图点 warp 到当前图像，与事件图逐点相减 → 输出：这组位姿假设下的总对齐误差，误差最小者即所求位姿</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「如果相机位姿是 T_k，那么地图里的边缘应该出现在图上这些地方；我把它们和真实的事件图比一比，对得有多齐」；② 为什么这样就能判对——因为事件<b>只在地图边缘扫过时产生</b>，所以「事件图」和「地图边缘图」在位姿正确时应该严丝合缝，位姿一偏，两边的边就错开，残差立刻变大；③ 权重／核函数在这里的位置由 $W(\cdot)$ 承担——它是把地图点投影到图像上的「warp 函数」，决定每个地图点落在哪个像素上；它<b>在每一轮迭代里都被重新求一次</b>（逆合成法的特点：warp 在参考帧上做，可以用固定雅可比反复复用，所以快）。需要提醒的是：这里的对比基准是「事件累积值」，是 0 或正数，<b>没有亮度含义</b>，所以它和 DSO 的光度误差长得像、含义完全不同。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2017_EVO/31e236dc2c55ccc743a5d586edd39e0872033d7e9b0c22a6df5cf9590e6d61cc.jpg" alt="EMVS: rays from events, high ray density marks 3D edges">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Mapping: the main idea of the EMVS [10] method used in our mapping module of Fig. 2. Images courtesy of [10]. (a) As the event sensor moves, events are triggered by edges in the scene. Back-projection of the events provides rays through space. The regions of high ray density mark the candidate locations of 3D edges.（中译：建图——我们建图模块里用到的 EMVS 方法的主要思想。(a) 事件传感器移动时，场景中的边缘触发事件；把这些事件反投影回空间就得到一条条射线；<b>射线密度高的区域就是三维边缘可能存在的位置</b>。）<br>
+          <b>怎么看这张图：</b>盯住画面里那些<b>交叠得很密的射线</b>——它们来自不同时刻、不同位置的事件，却在空间里挤到同一个位置，那个「挤」出来的交点就是场景里的三维边。这是纯事件建图最漂亮的一步：<b>它不需要亮度、不需要先把事件配成对应点</b>，只要不停地反投影、数密度。<br>
+          <b>要记住的一句话：</b>三维结构是「票数」投出来的：一条射线不能定位置，一堆射线的交点才能——这就是下一节要展开的射线投票。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. EVO 的建图：50 个深度平面上的射线投票</h2>
+      <p>上面那张图的想法，落到算法里就是 <b>EMVS</b>。做法分三步：</p>
+      <ol>
+        <li>以某个参考视点为中心，把空间切成一个<b>投影体素网格</b>，文献里叫 <b>DSI</b>（Disparity Space Image，视差空间图）。EVO 用的是 <b>50 个深度平面</b>。</li>
+        <li>把事件按当时求得的位姿<b>反投影</b>出去，每条射线穿过哪些体素，就给那些体素<b>加一票</b>。</li>
+        <li>最后看哪个体素票数最高（射线密度最大），那里就是三维边缘所在；再做一次自适应阈值，把票数最高的那些保留下来，得到一张<b>半稠密深度图</b>，转成点云。</li>
+      </ol>
+      <p>这一切用的是过去约 <b>200 万</b>个事件在 DSI 上投出来的结果；位姿靠插值得到（因为事件的时间戳和跟踪输出位姿的时刻不一定对上）。要特别注意最后那个词：<b>半稠密</b>——它只在有边缘的地方有深度，空白墙面、桌子平面上一片空白。这和 <b>0047 LSD-SLAM</b> 的产物是同一层次的，不要误以为事件相机能顺便给出稠密深度。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">射线投票：一条射线说不清位置，一堆射线交在一起就能定下来</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">相机一边走，事件一边被判出自哪个边缘，然后把射线投进空间里数票</text>
+          <rect x="40" y="76" width="820" height="270" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <rect x="70" y="120" width="120" height="130" fill="#1b2440" stroke="#6f86c9"/>
+          <text x="130" y="150" text-anchor="middle" fill="#cdd6ff" font-size="12">相机在位置 A</text>
+          <rect x="70" y="256" width="120" height="70" fill="#1b2440" stroke="#3a4a78"/>
+          <text x="130" y="296" text-anchor="middle" fill="#9fb4ff" font-size="12">相机在位置 B</text>
+          <rect x="700" y="120" width="24" height="150" fill="#8a6a45"/>
+          <text x="712" y="296" text-anchor="middle" fill="#ffd1d8" font-size="12">场景里的一根柱子边缘</text>
+          <g stroke="#5cffb0" stroke-width="1.6" opacity="0.75">
+            <line x1="190" y1="160" x2="700" y2="150"/>
+            <line x1="190" y1="170" x2="700" y2="152"/>
+            <line x1="190" y1="180" x2="700" y2="154"/>
+          </g>
+          <g stroke="#9b8cff" stroke-width="1.6" opacity="0.75">
+            <line x1="190" y1="280" x2="700" y2="156"/>
+            <line x1="190" y1="290" x2="700" y2="158"/>
+            <line x1="190" y1="300" x2="700" y2="160"/>
+          </g>
+          <ellipse cx="700" cy="155" rx="26" ry="42" fill="none" stroke="#ffd166" stroke-width="2.5" stroke-dasharray="7 5"/>
+          <text x="640" y="118" text-anchor="middle" fill="#ffd166" font-size="12">密度最高处 = 三维边</text>
+          <text x="330" y="120" text-anchor="middle" fill="#5cffb0" font-size="12">位置 A 投出的射线</text>
+          <text x="340" y="330" text-anchor="middle" fill="#cdbcff" font-size="12">位置 B 投出的射线</text>
+          <text x="450" y="398" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：它不靠亮度、也不靠「配好对的事件」，只靠「数射线有多密」</text>
+          <text x="450" y="422" text-anchor="middle" fill="#9fb4ff" font-size="12">投票做完得到的是半稠密深度图：只有边缘有深度，墙面依然是空白</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左下一台相机在位置 A、位置 B 两个位置各拍了一串事件（左上、左下分别是两个时刻的相机位姿），每个事件被反投影成一条射线（绿色来自 A，紫色来自 B）。所有射线在右侧那根柱子的边缘处交汇，交汇最密的地方用黄色虚线圈了出来。<br>
+          <b>怎么看这张图：</b>① 先看单条射线：它只说了「这个边缘在我这条线的某个地方」，完全没定下位置；② 再看两批射线：来自不同位置的射线交汇到一个点上，那个点就唯一了——这就是视差带来的深度；③ 最后看黄圈：算法并不求「交点」，而是把空间切成体素（EVO 用 50 个深度平面）数每个体素被几条射线穿过，<b>票数最高的地方就是答案</b>。<br>
+          <b>要记住的一句话：</b>纯事件建图的全部秘密是「用数量换精度」——单条射线没用，几百万条射线的密度分布就能把边缘的位置顶出来。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 阵营一（下）：事件线 SLAM（2022）——把直线当路标</h2>
+      <p>第二篇的切入角度不同。EVO 用的是「点 + 边」的半稠密地图，而 <b>事件线 SLAM</b>（Le Gentil 等，2022）认为：<b>在人造环境里，最稳的特征不是点，而是直线。</b>窗框、门框、桌沿、墙角——这些直线在事件流里非常抢眼，因为一条直线扫过像素时会产出一串整齐的事件。</p>
+      <p>它的做法是：</p>
+      <ul>
+        <li><b>跟踪</b>：每 <b>300 微秒</b>开一个小事件窗，在窗内检测并跟踪直线，用 <b>error-state EKF</b>（状态在 $SO(3)\times\mathbb{R}^3$ 这个李代数流形上）最小化<b>事件线的重投影误差</b>，输出位姿率高达 <b>3.3 kHz</b>，跟踪部分的 RTF 是 3.57（意思是比实时还快 3.57 倍）。</li>
+        <li><b>建图</b>：用 <b>space sweep</b>（和 EMVS 同源的思想）给每条被跟踪的直线投票出它的三维位置，再用 Hough + SVD 拟合，最后用 Ceres 做 BA 优化三维直线（用 Plücker 表示）与位姿。</li>
+        <li><b>硬前提</b>：场景里<b>至少要有 6 条直线</b>才能工作（论文给了「平均误差 vs 直线数量」的曲线来说明这一点）。</li>
+      </ul>
+      <p>它判断「这条事件属于哪条线」用的残差是「点到直线的带符号距离」：</p>
+      <div class="formula-box">
+        $$ z \;=\; \frac{\mathbf{e}^{\top}\mathbf{l}}{\sqrt{a^{2}+b^{2}}}, \qquad \mathbf{l}=(a,\ b,\ c)^{\top} $$
+        <div class="flow-formula">输入：一个事件在像平面上的位置 e，以及一条直线 l 的方程系数 → 处理：把 e 代入直线方程再除以法向长度，得带符号的垂直距离 → 输出：这个事件离这条线有多远（正负表示在线的哪一侧）</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「这个事件点，离那条候选直线有多远」；② 为什么这样就能判对——如果位姿算对了，被这条三维边触发的事件应该<b>正好落在</b>这条边投影出来的直线上，距离接近 0；位姿一偏，事件点就会成排地偏离直线，残差集体变大；符号（正负）还有额外用处——它告诉你事件在线的哪一侧，可以用来区分这条边的「亮暗方向」，也就顺带用上了 0175 讲过的极性；③ 什么时候把某个观测当回事——距离小的内点被重权重，远离直线的点（多半来自别的边缘或噪声）在 EKF 里被自动降权，这就是「数据关联」在纯事件里的做法：<b>先按距离分派事件属于哪条线，再按距离决定信多少。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">人造环境里最抢眼的特征是直线：窗框、门框、桌沿</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">一条直线扫过像素时会产出一整串整齐的事件，比散乱的点好跟得多</text>
+          <rect x="40" y="76" width="400" height="264" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="240" y="100" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">会议室：窗框与桌沿上全是事件</text>
+          <rect x="70" y="120" width="340" height="180" fill="#131a2e" stroke="#33406b"/>
+          <g stroke="#4a5a88" stroke-width="2">
+            <line x1="120" y1="140" x2="120" y2="270"/>
+            <line x1="200" y1="140" x2="200" y2="270"/>
+            <line x1="280" y1="140" x2="280" y2="270"/>
+            <line x1="120" y1="140" x2="280" y2="140"/>
+            <line x1="120" y1="200" x2="280" y2="200"/>
+            <line x1="120" y1="270" x2="280" y2="270"/>
+          </g>
+          <rect x="320" y="228" width="90" height="8" fill="none" stroke="#4a5a88" stroke-width="2"/>
+          <g fill="#5cffb0">
+            <circle cx="120" cy="150" r="3"/><circle cx="120" cy="165" r="3"/><circle cx="120" cy="180" r="3"/>
+            <circle cx="120" cy="215" r="3"/><circle cx="120" cy="235" r="3"/><circle cx="120" cy="255" r="3"/>
+            <circle cx="200" cy="145" r="3"/><circle cx="200" cy="160" r="3"/><circle cx="200" cy="175" r="3"/>
+            <circle cx="200" cy="215" r="3"/><circle cx="200" cy="240" r="3"/><circle cx="200" cy="260" r="3"/>
+            <circle cx="145" cy="140" r="3"/><circle cx="165" cy="140" r="3"/><circle cx="185" cy="140" r="3"/>
+            <circle cx="145" cy="270" r="3"/><circle cx="165" cy="270" r="3"/><circle cx="235" cy="200" r="3"/>
+          </g>
+          <g fill="#ff5d73">
+            <circle cx="280" cy="152" r="3"/><circle cx="280" cy="168" r="3"/><circle cx="280" cy="230" r="3"/>
+            <circle cx="280" cy="250" r="3"/><circle cx="330" cy="228" r="3"/><circle cx="360" cy="228" r="3"/>
+            <circle cx="390" cy="228" r="3"/><circle cx="240" cy="140" r="3"/><circle cx="260" cy="140" r="3"/>
+          </g>
+          <text x="240" y="322" text-anchor="middle" fill="#bfe" font-size="12">事件成串地贴在直边上——这正是该方法能吃到的信息</text>
+          <rect x="470" y="76" width="390" height="264" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="665" y="100" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">判据：事件点到直线的带符号距离</text>
+          <line x1="520" y1="280" x2="800" y2="150" stroke="#ffd166" stroke-width="3"/>
+          <text x="812" y="146" fill="#ffd166" font-size="12">直线 l</text>
+          <g fill="#5cffb0">
+            <circle cx="580" cy="247" r="4"/><circle cx="620" cy="230" r="4"/><circle cx="660" cy="212" r="4"/>
+            <circle cx="700" cy="194" r="4"/><circle cx="740" cy="176" r="4"/>
+          </g>
+          <circle cx="680" cy="270" r="5" fill="#ff5d73"/>
+          <line x1="680" y1="270" x2="646" y2="185" stroke="#ff5d73" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="700" y="292" fill="#ffd1d8" font-size="12">偏离太远 = 外点</text>
+          <line x1="626" y1="238" x2="626" y2="212" stroke="#9fb4ff" stroke-width="1.6"/>
+          <text x="600" y="176" fill="#cdd6ff" font-size="12">残差 z</text>
+          <text x="665" y="322" text-anchor="middle" fill="#bfe" font-size="12">距离接近 0 的事件被当内点，用来更新位姿</text>
+          <text x="450" y="398" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：纯事件做数据关联的手段，就是「点到直线的距离」这一件事</text>
+          <text x="450" y="422" text-anchor="middle" fill="#9fb4ff" font-size="12">代价是场景必须有结构：论文要求画面里至少 6 条直线才跑得起来</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一间会议室，窗框的竖线、横线与桌沿上密密麻麻贴着绿点和红点，而平整的墙面上干干净净。右边把判据画了出来：一条黄色的直线（地图里的三维边的投影），绿色事件点几乎落在线上，红色那个明显偏离，它到直线的垂直距离就是残差 z。<br>
+          <b>怎么看这张图：</b>① 先看左图的事件分布：它们<b>成串贴着直边</b>，而不是均匀铺开——这就是为什么「直线」在纯事件里比「点」好用的原因；② 再看右图：位姿正确时事件会落在直线上，偏了就成排地离开直线，所以「让这些距离尽量小」就等于「让位姿尽量对」；③ 注意红点那个外点：它可能来自另一条边、也可能是噪声，EKF 会把它降权，不让它带坏位姿。<br>
+          <b>要记住的一句话：</b>事件线 SLAM 把「数据关联」简化成了几何距离——代价是它必须假设场景里有人造结构（至少 6 条线），在自然场景里它会直接失效。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Event-Based_Line_SLAM_in_Real-Time/558aceeffd4d62e551f8104eedb6aebf3b44eac403bd3ee4f03bac6bd2a21295.jpg" alt="Event-based parallel tracking and mapping using lines">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Event-based parallel tracking and mapping using lines.（中译：基于事件的、使用直线的并行跟踪与建图。）<br>
+          <b>怎么看这张图：</b>对照 <b>0042 PTAM</b> 与上一节的 EVO，这是一张「同一架构的第三个版本」：左边跟踪、右边建图，两条线程并行，中间交换位姿与地图。区别只在「地图里存的东西」从点变成了<b>直线</b>。<br>
+          <b>要记住的一句话：</b>纯事件领域里，架构几乎是共享的（跟踪 + 建图并行），真正在卷的是「地图里存什么、残差怎么写」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 阵营二：CMax-SLAM（2024）——不跟地图对齐，而是让事件「抱成一团」</h2>
+      <p>第三篇换了一种思路，也是本块最值得停下来想一想的创新。它的起点是一个很朴素的观察：</p>
+      <p><b>如果相机在以某个角速度匀速旋转，而我对这个角速度猜对了，那么把所有事件按这个角速度「反向旋转」回同一时刻，它们应该全都叠加到场景的边缘上，攒出一张又尖又清晰的图；如果猜错了，事件就会糊成一团。</b></p>
+      <p>于是「求运动」这件事，就变成了「<b>找一个运动参数，使得攒出来的图最锐利</b>」。这个攒出来的图叫 <b>IWE</b>（image of warped events，变形后的事件图），「锐利」用<b>图像方差</b>来度量：</p>
+      <div class="formula-box">
+        $$ \omega^{*} \;=\; \arg\max_{\omega}\ \operatorname{Var}\big(I(\omega,\ \mathcal{E})\big) $$
+        <div class="flow-formula">输入：一整包事件 E，以及一个候选角速度 ω → 处理：按 ω 把每个事件反向旋转回同一时刻，叠加成一张 IWE，再算这张图的方差 → 输出：方差最大的那个 ω，就是估计出来的角速度</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「哪个角速度，能把这包事件攒得最尖」；② 为什么这样就能判对——方差衡量的是「图的取值起伏有多大」：事件散成一片糊的时候，每个像素都只分到一点点，方差很小；事件聚到边缘上时，少数像素拿到很多、其余接近零，方差就大了，所以「方差最大」等价于「事件聚得最紧」，也就等价于「运动补偿得最准」；③ 权重／参数在这里的角色由 ω 本身承担——它是被搜索的那个量；<b>方法不需要对比度阈值 C，也不需要极性</b>，因为它只关心「点聚不聚」，不关心「点是什么颜色」，这一点和阵营一很不一样。</p>
+      <p>CMax-SLAM 的系统分两层：<b>前端</b>用上述方式逐包估角速度（假设一小包内角速度恒定；切包策略是「等间隔时间戳 + 固定事件数」，单包跨度约 $1/(10f)$，还用它来判「是不是静止了」）；<b>后端</b>做<b>旋转 BA</b>：用连续的 B 样条轨迹表示旋转随时间的变化，把每个事件按它自己的时刻旋转后投到<b>等距柱状投影的全景 IWE</b> 上，再最大化全局 IWE 的方差；在线版用滑窗，过去控制位姿固定、当前优化，并用一个自适应系数 α 平衡「当前事件」与「历史事件」的贡献。</p>
+      <p>它的意义在于<b>它从原始事件直接估计运动，不需要地图、不需要 3D 结构、不需要深度</b>。论文还给了两个很有说服力的数字：事件相机功耗约 <b>20 mW</b>（对比常规相机约 1.5 W）、动态范围 <b>140 dB</b>（对比约 60 dB）；批处理时 100 个事件的插值位姿平均跨度 &lt; 0.5 ms。应用场景甚至包括<b>太空里的望远镜星跟踪</b>。</p>
+
+      <div class="callout">
+        <h4>⚠️ 必须显式说明的一条限定</h4>
+        <p>CMax-SLAM <b>只做旋转运动（rotational-motion）</b>。它的题目里就写着「Rotational-Motion Bundle Adjustment」，前端只估角速度 ω，后端只优化旋转轨迹，<b>完全不估计平移</b>。所以它<b>不是一套完整的 6 自由度 SLAM</b>——没有位置、没有尺度、没有地图的三维结构。原文也把「仅旋转估计（不处理平移）」列在自己的局限里，并说明需要前端先给出初始轨迹、初始全景图模糊时会陷入局部最优。</p>
+        <p>把它当成「6 自由度事件 SLAM 的新 SOTA」是典型的误读。它的正确读法是：<b>在「相机只转不平移」这一大类问题里（全景拍摄、监控云台、星敏感器），它给出了一个不含地图、极省算力的漂亮解法。</b></p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">对比度最大化：同一包事件，只换一个「假设的角速度」，糊和锐就差出来了</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">左边没补偿，事件散成一团；右边补偿对了，事件聚在边缘上勾出物体轮廓</text>
+          <rect x="40" y="76" width="400" height="250" rx="10" fill="#16203a" stroke="#ff9f6b" stroke-width="2"/>
+          <text x="240" y="100" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">补偿前：糊成一团（方差小）</text>
+          <g fill="#5cffb0" opacity="0.75">
+            <circle cx="120" cy="170" r="3"/><circle cx="140" cy="182" r="3"/><circle cx="162" cy="166" r="3"/>
+            <circle cx="180" cy="196" r="3"/><circle cx="200" cy="178" r="3"/><circle cx="220" cy="200" r="3"/>
+            <circle cx="240" cy="184" r="3"/><circle cx="258" cy="208" r="3"/><circle cx="278" cy="190" r="3"/>
+            <circle cx="298" cy="212" r="3"/><circle cx="318" cy="196" r="3"/><circle cx="338" cy="218" r="3"/>
+            <circle cx="356" cy="204" r="3"/><circle cx="374" cy="226" r="3"/><circle cx="392" cy="210" r="3"/>
+            <circle cx="148" cy="216" r="3"/><circle cx="186" cy="230" r="3"/><circle cx="226" cy="240" r="3"/>
+            <circle cx="266" cy="248" r="3"/><circle cx="306" cy="254" r="3"/><circle cx="346" cy="258" r="3"/>
+            <circle cx="386" cy="260" r="3"/><circle cx="130" cy="204" r="3"/><circle cx="170" cy="212" r="3"/>
+            <circle cx="210" cy="222" r="3"/><circle cx="250" cy="232" r="3"/><circle cx="290" cy="240" r="3"/>
+          </g>
+          <g fill="#ff5d73" opacity="0.7">
+            <circle cx="158" cy="238" r="3"/><circle cx="198" cy="250" r="3"/><circle cx="238" cy="258" r="3"/>
+            <circle cx="278" cy="262" r="3"/><circle cx="318" cy="266" r="3"/><circle cx="358" cy="268" r="3"/>
+            <circle cx="136" cy="226" r="3"/><circle cx="176" cy="240" r="3"/><circle cx="216" cy="250" r="3"/>
+          </g>
+          <text x="240" y="298" text-anchor="middle" fill="#ffd1d8" font-size="12">每个像素只分到零星几个事件，看不出任何轮廓</text>
+          <rect x="470" y="76" width="390" height="250" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="665" y="100" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">补偿后：聚成锐利边缘（方差大）</text>
+          <rect x="600" y="150" width="130" height="120" fill="none" stroke="#5cffb0" stroke-width="2"/>
+          <g fill="#5cffb0">
+            <circle cx="600" cy="152" r="3.4"/><circle cx="604" cy="152" r="3.4"/><circle cx="608" cy="152" r="3.4"/>
+            <circle cx="612" cy="152" r="3.4"/><circle cx="616" cy="152" r="3.4"/><circle cx="620" cy="152" r="3.4"/>
+            <circle cx="628" cy="152" r="3.4"/><circle cx="634" cy="152" r="3.4"/><circle cx="640" cy="152" r="3.4"/>
+            <circle cx="648" cy="152" r="3.4"/><circle cx="656" cy="152" r="3.4"/><circle cx="664" cy="152" r="3.4"/>
+            <circle cx="672" cy="152" r="3.4"/><circle cx="680" cy="152" r="3.4"/><circle cx="688" cy="152" r="3.4"/>
+            <circle cx="696" cy="152" r="3.4"/><circle cx="704" cy="152" r="3.4"/><circle cx="712" cy="152" r="3.4"/>
+            <circle cx="720" cy="152" r="3.4"/><circle cx="726" cy="152" r="3.4"/>
+            <circle cx="600" cy="168" r="3.4"/><circle cx="600" cy="184" r="3.4"/><circle cx="600" cy="200" r="3.4"/>
+            <circle cx="600" cy="216" r="3.4"/><circle cx="600" cy="232" r="3.4"/><circle cx="600" cy="248" r="3.4"/>
+            <circle cx="600" cy="264" r="3.4"/>
+            <circle cx="728" cy="170" r="3.4"/><circle cx="728" cy="188" r="3.4"/><circle cx="728" cy="206" r="3.4"/>
+            <circle cx="728" cy="224" r="3.4"/><circle cx="728" cy="242" r="3.4"/><circle cx="728" cy="260" r="3.4"/>
+            <circle cx="616" cy="268" r="3.4"/><circle cx="632" cy="268" r="3.4"/><circle cx="650" cy="268" r="3.4"/>
+            <circle cx="668" cy="268" r="3.4"/><circle cx="686" cy="268" r="3.4"/><circle cx="704" cy="268" r="3.4"/>
+            <circle cx="720" cy="268" r="3.4"/>
+          </g>
+          <text x="665" y="298" text-anchor="middle" fill="#bfe" font-size="12">事件全部叠到边缘上，轮廓一下就清楚了</text>
+          <text x="480" y="340" fill="#9fb4ff" font-size="12">同一行像素上的取值（横轴 = 像素位置）</text>
+          <polyline points="150.0,408.0 161.0,408.0 172.0,408.0 183.0,408.0 194.0,408.0 205.0,408.0 216.0,408.0 227.0,408.0 238.0,408.0 249.0,408.0 260.0,408.0 271.0,408.0 282.0,408.0 293.0,408.0 304.0,408.0 315.0,408.0 326.0,408.0 337.0,408.0 348.0,406.5 359.0,386.5 370.0,355.6 381.0,386.5 392.0,406.5 403.0,408.0 414.0,408.0 425.0,408.0 436.0,408.0 447.0,408.0 458.0,408.0 469.0,408.0 480.0,408.0 491.0,408.0 502.0,408.0 513.0,408.0 524.0,408.0 535.0,408.0 546.0,408.0 557.0,408.0 568.0,406.5 579.0,386.5 590.0,355.6 601.0,386.5 612.0,406.5 623.0,408.0 634.0,408.0 645.0,408.0 656.0,408.0 667.0,408.0 678.0,408.0 689.0,408.0 700.0,408.0 711.0,408.0 722.0,408.0 733.0,408.0 744.0,408.0 755.0,408.0 766.0,408.0 777.0,408.0 788.0,408.0 799.0,408.0 810.0,408.0" fill="none" stroke="#5cffb0" stroke-width="2.4"/>
+          <polyline points="150.0,408.0 161.0,408.0 172.0,408.0 183.0,408.0 194.0,408.0 205.0,408.0 216.0,408.0 227.0,408.0 238.0,407.9 249.0,407.8 260.0,407.6 271.0,407.2 282.0,406.7 293.0,405.9 304.0,404.8 315.0,403.5 326.0,402.0 337.0,400.6 348.0,399.3 359.0,398.5 370.0,398.2 381.0,398.5 392.0,399.3 403.0,400.6 414.0,402.0 425.0,403.5 436.0,404.8 447.0,405.8 458.0,406.6 469.0,407.0 480.0,407.1 491.0,407.0 502.0,406.6 513.0,405.8 524.0,404.8 535.0,403.5 546.0,402.0 557.0,400.6 568.0,399.3 579.0,398.5 590.0,398.2 601.0,398.5 612.0,399.3 623.0,400.6 634.0,402.0 645.0,403.5 656.0,404.8 667.0,405.9 678.0,406.7 689.0,407.2 700.0,407.6 711.0,407.8 722.0,407.9 733.0,408.0 744.0,408.0 755.0,408.0 766.0,408.0 777.0,408.0 788.0,408.0 799.0,408.0 810.0,408.0" fill="none" stroke="#ffd166" stroke-width="2.4"/>
+          <line x1="150" y1="408" x2="815" y2="408" stroke="#4a5a88"/>
+          <text x="480" y="428" text-anchor="middle" fill="#cdd6ff" font-size="12">同一批事件、同一张 IWE：绿线（补偿后）方差 0.0259，黄线（补偿前）方差 0.0028，差约 9 倍</text>
+          <text x="450" y="460" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：位姿对不对，就看事件能不能「抱成一团」——方差是最好的裁判</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上方左右两块是同一包事件按两种假设 warp 出来的 IWE：左边（补偿前）事件散成一大片、每个像素只有零星几个；右边（补偿后）所有事件都叠到同一个方框的边上，轮廓立刻清楚。下方那条曲线图是同一行像素上的取值剖面：绿线（补偿后）在边缘处顶出两个尖峰，黄线（补偿前）几乎是一条平线。<br>
+          <b>怎么看这张图：</b>① 先看上面两块的点分布：点数是一样的，<b>变的只有一个「假设的角速度」</b>；② 再看下面的剖面：尖峰的方差是 0.0259，平线的方差是 0.0028，差约 9 倍——这就是「对比度最大化」这个名字的由来，也是算法用来判断「哪个角速度对」的裁判；③ 想清楚这一步的深意：<b>整个判断过程不需要地图、不需要三维点、也不需要知道事件是正还是负</b>，只需要「点聚不聚」。<br>
+          <b>要记住的一句话：</b>对比度最大化把「求运动」变成「求最锐利的一张图」；这是与「跟地图对齐」完全不同的一条路，代价是它只能在没有平移（或平移可忽略）的场景里成立。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_CMax-SLAM__Event-Based_Rotational-Motion_Bundle_Adjustme/0d7db225491e16f0e73b3186f3e1ff828717f8f75b1bdec3abb0f2ef2b336475.jpg" alt="CMax-SLAM system overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Proposed CMax-SLAM system takes as input the asynchronous event stream to estimate the rotational egomotion of the camera while producing a sharp panoramic map (IWE) as by-product. We can further reconstruct a grayscale map by feeding the events and the estimated trajectory to the mapping module of SMT [12].（中译：所提出的 CMax-SLAM 系统输入异步事件流，估计相机的<b>旋转自运动</b>，同时顺带产出一张锐利的全景图（IWE）；把事件与估计出的轨迹送入 SMT 的建图模块，还能进一步重建灰度地图。）<br>
+          <b>怎么看这张图：</b>盯住两个词，它们就是这篇论文的边界：<b>rotational egomotion</b>（旋转自运动）与 as by-product（作为副产品）。整张流程图从头到尾<b>没有任何一个模块输出平移</b>；「灰度地图」还是借别人的建图模块（SMT）才做出来的。<br>
+          <b>要记住的一句话：</b>这是一篇「旋转估计 + 旋转 BA」的论文，不是完整 6 自由度 SLAM——读它的成绩单之前，先把这句话记住。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 纯事件的天花板：无 IMU 时静止退化</h2>
+      <p>把三篇放在一起，会看到一条共同的裂缝：<b>它们都不带 IMU，所以都继承了 0175 讲的那个致命弱点——静止时没有信息。</b>三篇论文的自述局限几乎在说同一件事，只是程度不同。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">论文</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">传感器</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">原文自述的局限</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">EVO（2017）</td><td style="padding:.6rem;border:1px solid #3a4a78;">纯事件单目</td><td style="padding:.6rem;border:1px solid #3a4a78;">需要场景在传感器前方<b>近似平面地持续运动数秒</b>才能 bootstrap；对参数敏感；纹理缺失 / 高速时退化；建图是半稠密而非稠密</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">事件线 SLAM（2022）</td><td style="padding:.6rem;border:1px solid #3a4a78;">纯事件单目</td><td style="padding:.6rem;border:1px solid #3a4a78;">需要结构化场景（<b>至少 6 条线</b>）；<b>无 IMU 故静止退化</b>；参数敏感</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">CMax-SLAM（2024）</td><td style="padding:.6rem;border:1px solid #3a4a78;">纯事件单目（<b>仅旋转</b>）</td><td style="padding:.6rem;border:1px solid #3a4a78;">仅旋转估计、不处理平移；需要前端给初始轨迹，初始全景模糊会陷入局部最优；长时全局图的内存与平衡需要额外策略</td></tr>
+        </tbody>
+      </table>
+      <p>这三条局限合起来就是<b>纯事件路线的天花板</b>：它把「不依赖亮度」这个优势吃得很透，但一切信息都来源于运动，于是「怎么开始」（初始化）和「不动怎么办」（静止）这两个问题它自己解决不了。这也是本块精读材料硬结论第 1 条的原话：<b>事件相机的真实优势只在高速 / 高动态 / 低光时才兑现，而且几乎每篇都靠标准帧或 IMU 兜底才能全天候工作。</b></p>
+      <p>所以要读下一课了：<b>0177 讲混合路线</b>——把标准帧、深度相机、IMU 拉进来，看看它们各自负责补哪一块短板。而在那之前，请先记住本节留下的一句话：<b>纯事件方法不是「更好的 SLAM」，而是「在帧相机彻底失效时仍然能转的 SLAM」。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>CMax-SLAM 的「对比度最大化」和其他两篇 EVO、事件线 SLAM 最根本的区别是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：EVO 与事件线 SLAM 都要先把事件跟「地图里的边 / 直线」对齐，属于最小化对齐残差的阵营；CMax-SLAM 完全不依赖地图和三维结构，它是通过「假设一个角速度去 warp 事件、看能不能攒得最锐」来直接估运动，属于最大化 IWE 方差的阵营。" onclick="lessonKit.answer(this,'q0176a')">要不要跟三维地图对齐</button>
+          <button data-correct="no" data-explanation="不对：EVO 用事件累积图、ESVO 系列用时间表面，而 CMax-SLAM 用的是 IWE；三者都在用不同的中间表示，这并不是它们的分水岭。" onclick="lessonKit.answer(this,'q0176a')">中间表示的选型不同</button>
+        </div>
+        <div class="quiz-feedback" id="q0176a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 CMax-SLAM，下面哪种说法是准确的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：它的题目与正文都限定在 rotational motion，前端只估角速度、后端只优化旋转轨迹，不估平移，也没有三维地图，因此不能当完整的 6 自由度 SLAM 来读。它适用于相机只转不平移的场景，如全景、云台、星敏感器。" onclick="lessonKit.answer(this,'q0176c')">它只估旋转不估平移</button>
+          <button data-correct="no" data-explanation="不对：这是对它最大的误读。它没有位置输出、没有尺度、不建三维地图，原文也把「只做旋转、不处理平移」写在自己的局限里。" onclick="lessonKit.answer(this,'q0176c')">它旋转平移都一起估</button>
+        </div>
+        <div class="quiz-feedback" id="q0176c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>事件累积图与时间表面分别存的是什么？为什么必须先把事件「攒成一张图」？</li>
+        <li>时间表面的指数衰减里，η 这个参数控制什么？η = 30 ms 意味着什么？</li>
+        <li>EVO 的跟踪与建图各用什么方法？它为什么被称为「PTAM 的事件版」？</li>
+        <li>「射线投票」为什么能在不知道亮度的前提下建出三维边缘？它给出的是稠密还是半稠密结果？</li>
+        <li>事件线 SLAM 用什么残差判断「这个事件属于哪条线」？它为什么要假设场景里至少 6 条直线？</li>
+        <li>对比度最大化为什么能把「求运动」变成「求最锐利的图」？它和其他两篇的根本区别在哪？</li>
+        <li>为什么必须说明 CMax-SLAM 只做旋转？把它当成完整 6 自由度 SLAM 会有什么后果？</li>
+        <li>纯事件路线的共同天花板是什么？它为什么必须靠标准帧或 IMU 才能全天候工作？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>时间表面为什么能把「没有图像」的事件流变成一张可以用图像类工具处理的图？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它给每个像素记的是「上一次触发事件距现在多久」，并按指数规律 exp(−Δt/η) 衰减成一个 0 到 1 的值。物体边缘扫过像素时该像素刚刚触发事件，于是取值接近 1；很久没变的区域接近 0。把这批数值按位置铺开，就得到一张亮暗分明、边缘浮现的灰度图，于是 Canny 边缘检测、LK 对齐这类图像工具可以重新用上。ESVO 取 η = 30 ms、并以 100 Hz 更新。</div></details>
+        </li>
+        <li>EVO 的建图为什么能不用亮度、也不用先做数据关联？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它用的是 EMVS 的射线投票：把每个事件按当时位姿反投影成一条射线，空间被切成一个以参考视点为中心的投影体素网格（DSI，EVO 用 50 个深度平面），射线穿过哪个体素就给哪个体素加一票。三维边缘处会聚集成千上万条射线，密度远高于别处，所以只要取密度最高的地方就是三维边。整个过程不需要亮度、也不需要知道「哪个事件跟哪个事件是同一个点」，代价是结果是半稠密（只有边缘有深度）而非稠密。</div></details>
+        </li>
+        <li>事件线 SLAM 的残差 z 为什么能同时完成「数据关联」与「位姿估计」两件事？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>z = eᵀl/√(a²+b²) 算的是一个事件点到某条候选直线的带符号垂直距离。距离小说明这个事件很可能就是由这条三维边触发的（完成数据关联），距离大则说明它属于别的边或是噪声，会在 EKF 中被降权（完成鲁棒性）；而位姿一偏，整条边的事件就会成排地偏离直线，残差集体变大，所以最小化这些距离的总和又等价于把位姿调到对（完成位姿估计）。一次几何计算同时承担了两个角色，这就是它简单的地方；代价是它必须假设场景里至少 6 条直线。</div></details>
+        </li>
+        <li>「对比度最大化」里的「对比度」具体指什么量？为什么最大化它就等于找到了正确的运动？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>具体指攒出来的 IWE（变形后事件图）的<b>图像方差</b>。假设一个角速度 ω，把所有事件按它反向旋转回同一时刻再叠加：ω 猜对了，事件就全部叠到场景边缘上，少数像素拿到很多事件、其余接近零，方差大；ω 猜错了，事件散成一片，每个像素都只分到一点点，方差小。所以方差最大就等价于事件聚得最紧，也就等价于运动补偿最准。整个判据不需要对比度阈值、不需要极性、不需要地图和三维结构——这是它与 EVO、事件线 SLAM 最根本的区别。</div></details>
+        </li>
+        <li>为什么说 CMax-SLAM 不能当完整 6 自由度 SLAM 来读？它适合什么场景？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它的题目和正文都限定在 rotational motion：前端只估角速度 ω，后端只优化旋转轨迹（B 样条），完全没有平移输出，也不建三维地图（灰度地图是借 SMT 的建图模块重建的）。原文自述局限里就写着「仅旋转估计（不处理平移）」。误读的后果是会把它的成绩与完整 SLAM 系统直接比较，得出错误结论。它真正适合的是相机只转不平移、或平移可忽略的场景，比如全景拍摄、监控云台，论文还做了太空里望远镜星跟踪的实验。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0175-事件相机是什么-先补物理机理.html">← 上一课：事件相机是什么</a>
+        <a class="next" href="0177-混合路线-事件加帧加深度加IMU.html">下一课：混合路线 →</a>
+      </div>
+      <p class="foot-note">纯事件的天花板看到了，下一课看大家怎么把帧、深度和 IMU 拉进来补短板 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

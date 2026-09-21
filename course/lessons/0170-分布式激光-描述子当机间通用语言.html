@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>分布式激光：描述子当机间通用语言 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0170</div>
+      <h1>分布式激光：描述子当机间通用语言</h1>
+      <p class="subtitle">把中心服务器拆掉，三台激光机器人怎么认出「咱去的是同一个地方」？🔑 答案是一串紧凑的描述子。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：分布式 3D 激光协同 SLAM 与描述子演进</span>
+        <span>👥 作者：Huang 等（DiSCo）＋ Zhong 等（DCL）＋ Xie 等（RDC），2022–2024</span>
+        <span>📅 年份 · <i>Distributed Scan Context-Enabled / LiDAR-Iris / DELIGHT</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：描述子当通用语言</a>
+        <a href="#b">DiSCo-SLAM（ScanContext）</a>
+        <a href="#c">DCL-SLAM（LiDAR-Iris）</a>
+        <a href="#d">RDC-SLAM（DELIGHT）</a>
+        <a href="#e">分布式 Gauss-Seidel</a>
+        <a href="#f">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：解释为什么「描述子」能当机器人之间的通用语言；说出 ScanContext → LiDAR-Iris → DELIGHT 的演进；讲清 DiSCo / DCL / RDC 三兄弟的异同；理解分布式 Gauss-Seidel（DGS）怎么在「没有服务器」时解位姿图。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 核心是回链<b>第七季 0135 Scan Context 系列</b>——那一节讲的免训练几何描述子，这一季被 DiSCo-SLAM<b>直接拿来当机器人之间的通用语言</b>，是隔一季的技术接续。★ 激光回环描述子（BoW3D / RING++）见<b>第四季 0092 / 0093</b>。★ 鲁棒后端仍是 PCM / 位姿图，回链<b>0168 一致集最大化</b>与<b>第二季 0018 / 0019 位姿图优化</b>。★ 假回环仍是敌人，回链<b>0140 铁律</b>。</p></div>
+      </div>
+
+      <h2 id="b">1. 先说人话：没有服务器，怎么认出「同一个地方」</h2>
+      <p>中心化里，「认不认得出同一个地方」是服务器说了算。分布式把服务器拆了——每台机器人只跟碰面的邻居说话。那它们怎么让对方相信自己看到的楼就是对方看过的那栋？答案是：<b>不传原始点云（太重），而是各自抽出一串紧凑的「描述子」，把描述子当通用语言对一下</b>。谁的描述子对上了，谁就是同一个地点。</p>
+      <p>本节的「三兄弟」都用这条路，只是描述子不同：<b>DiSCo 用 ScanContext</b>（极坐标环带）、<b>DCL 用 LiDAR-Iris</b>（二值旋转不变图）、<b>RDC 用 DELIGHT</b>（强度 + 特征值段）。描述子一个比一个更小、对视角更不敏感。它们同属 SYSU 血脉（DiSCo→DCL→RDC，分布式激光三兄弟），都用 PCM + 两阶段 DGS。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">描述子当机间通用语言：两台机器人各抽一张极坐标图，对上了</text>
+          <!-- 机器人 A -->
+          <g>
+            <rect x="40" y="60" width="360" height="200" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="220" y="84" text-anchor="middle" fill="#9fb4ff" font-size="14" font-weight="700">机器人 A 看到的楼（激光扫描）</text>
+            <!-- 楼 -->
+            <rect x="150" y="150" width="60" height="90" fill="#3a4a78"/><rect x="210" y="120" width="50" height="120" fill="#4a5a88"/>
+            <circle cx="120" cy="240" r="12" fill="#5cffb0"/><text x="120" y="262" fill="#5cffb0" font-size="12">A</text>
+            <!-- 极坐标图 -->
+            <g transform="translate(360,160)">
+              <circle r="14" fill="none" stroke="#ffd166"/><circle r="26" fill="none" stroke="#ffd166"/><circle r="38" fill="none" stroke="#ffd166"/>
+              <path d="M0,0 L26,-10 A26,26 0 0 1 24,10 Z" fill="#5cffb0" opacity="0.7"/>
+              <path d="M0,0 L14,-12 A14,14 0 0 1 12,-6 Z" fill="#5cffb0" opacity="0.7"/>
+            </g>
+            <text x="360" y="220" text-anchor="middle" fill="#ffd166" font-size="11">A 的描述子</text>
+          </g>
+          <!-- 机器人 B -->
+          <g>
+            <rect x="500" y="60" width="360" height="200" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="680" y="84" text-anchor="middle" fill="#9fb4ff" font-size="14" font-weight="700">机器人 B 看到的楼（另一角度）</text>
+            <rect x="640" y="150" width="60" height="90" fill="#3a4a78"/><rect x="700" y="120" width="50" height="120" fill="#4a5a88"/>
+            <circle cx="780" cy="240" r="12" fill="#ff9f6b"/><text x="780" y="262" fill="#ff9f6b" font-size="12">B</text>
+            <g transform="translate(540,160)">
+              <circle r="14" fill="none" stroke="#ffd166"/><circle r="26" fill="none" stroke="#ffd166"/><circle r="38" fill="none" stroke="#ffd166"/>
+              <path d="M0,0 L-26,-10 A26,26 0 0 0 -24,10 Z" fill="#5cffb0" opacity="0.7"/>
+              <path d="M0,0 L-14,-12 A14,14 0 0 0 -12,-6 Z" fill="#5cffb0" opacity="0.7"/>
+            </g>
+            <text x="540" y="220" text-anchor="middle" fill="#ffd166" font-size="11">B 的描述子</text>
+          </g>
+          <!-- 对上箭头 -->
+          <line x1="400" y1="160" x2="500" y2="160" stroke="#5cffb0" stroke-width="4" marker-end="url(#m1)"/>
+          <defs><marker id="m1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#5cffb0"/></marker></defs>
+          <text x="450" y="148" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">两张图对上</text>
+          <text x="450" y="320" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">→ 认出是「同一地点」→ 建立一条机间回环</text>
+          <text x="450" y="396" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：传描述子（几 kB）远比传点云（MB 级）省 → 这就是带宽光谱的右端</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左机器人 A、右机器人 B 各自扫描同一栋楼（只是角度不同），各自抽出一张极坐标格子描述子；中间箭头表示「两张描述子对上了」。<br>
+          <b>怎么看这张图：</b>① 楼在两边画法不同（视角差），但描述子（右侧同心圆里的绿色扇区）编码的是「俯视一圈的距离分布」，对视角不敏感；② 绿色扇区位置一致 → 判定同一地点；③ 于是建立一条机间回环，而不必互传整片点云。<br>
+          <b>要记住的一句话：</b>描述子就是机器人之间「通用语言」——对得上就认亲，传它比传点云省两三个数量级。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. 论文一：DiSCo-SLAM（2022）——第一个把 ScanContext 用进多机激光</h2>
+      <p>DiSCo-SLAM（Huang、Shan、Englot，IEEE RA-L 2022，NYU / See Metric）是<b>首个用 Scan Context 描述子的分布式 3D 激光多机 SLAM</b>。它的两个卖点：</p>
+      <ul>
+        <li><b>两阶段全局-局部图优化</b>：先求机器人之间的全局变换（LM），再做局部 PGO——专门克服 DGS 在「差初值」下不收敛的毛病；</li>
+        <li><b>增量 PCM（incremental Pairwise Consistent Measurement set Maximization）</b>拒假回环：判据和 DOOR 类似，实验取 ε = 5，lazy 初始化（检测到 &gt; 5 个回环才启动 PCM）。</li>
+      </ul>
+      <p>通信：ScanContext 特征约 4.08 kB/帧（VLP-16），加上匹配点云与坐标变换，单帧激光 1.04 MB → 方法约 200 kB/帧。三机器人 Park 数据集上 ATE 1.43 m，远优于 DGS+PCM 的 13.00 m。</p>
+      <p>★ <b>命名教学点（重要）</b>：本文（DiSCo-SLAM）名字和 <b>D²SLAM</b>（2024，Xu 等港科大，空中集群视觉惯性）极像，常被误认成同一篇甚至误以为清单标错。其实<b>两篇都在语料库、清单本身没错</b>：DiSCo = 激光分布式（Huang 等，用 Scan Context），D²SLAM = 视觉惯性空中 swarm（Xu 等，港科大）。<b>必须靠作者与传感器区分</b>，下一节 0173 会专门讲 D²SLAM。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DiSCo-SLAM/1985ba03f50892a0c00bc698ffa8ba53be968c721a8644bbca6aa8d2c55a8106.jpg" alt="DiSCo-SLAM architecture">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Overview of the architecture of DiSCo-SLAM, our proposed distributed multi-robot SLAM system, with robot α as the local robot.<br>
+          <b>怎么看这张图：</b>典型「分布式」结构：本地前端（LIO-SAM / LeGO-LOAM）→ Scan Context 检索 → ICP 验证 → 增量 PCM 拒 outlier → 两阶段优化（先全局转、再局部 PGO）。注意没有中央服务器，每个机器人 α 自己跑完整流程，只和邻居交换描述子 / 点云 / 位姿。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DiSCo-SLAM/67b95ef93470b4e0038e7acc5d6a34648038d317e6badc03b344c474e4e6a132.jpg" alt="Differences between DGS and DiSCo">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Differences between DGS and our proposed method. Green, cyan and blue triangles indicate the poses of three different robots.<br>
+          <b>怎么看这张图：</b>对比 DGS（原分布式求解器）和 DiSCo 的两阶段优化——DGS 在差初值下三条轨迹对不齐（分散），DiSCo 先求全局变换把机器人「先摆正」再做局部 PGO，轨迹收敛到一致。这正是 DiSCo 相对 DGS 的核心改进。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 论文二：DCL-SLAM（2024）——LiDAR-Iris 做到 9 台</h2>
+      <p>DCL-SLAM（Zhong、Qi、Liu 等，IEEE RA-L 2024，SYSU）把描述子换成了更轻的 <b>LiDAR-Iris</b>（一个 80×360 的二值图，用 LoG-Gabor + 傅里叶旋转不变编码），并设计了<b>三阶段通信流水线</b>：描述子检索 → 滤波点云 → ICP 验证相对位姿。后端用 <b>PCM + RANSAC</b>（先 RANSAC 几何验证再 PCM 集最大化，比纯 PCM 鲁棒），两阶段 DGS 求解。</p>
+      <ul>
+        <li>LiDAR-Iris 全局描述子约 29.12 kB/帧，单帧激光 VLP-16 1 MB / HDL-64 2 MB → 描述子只占约 29 kB；</li>
+        <li>演示了 <b>9 台机器人</b>规模（图书馆场景，平均 ATE 1.83 m，带宽 34.36 kB/s）；</li>
+        <li>前端无关（LIO-SAM / FAST-LIO2 都能换），完整开源。</li>
+      </ul>
+      <p>★ 它和 DiSCo 同属「分布式激光 + PCM + DGS」家族，区别在描述子更小、规模更大、且用 RANSAC 给 PCM 先过滤一遍。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DCL-SLAM__A_Distributed_Collaborative_LiDAR_SLAM_Framewo/4bf3ef7bdf2306a9b0b327239e277a37c3894a5197702b31cdc0f4b21d40fb4e.jpg" alt="DCL-SLAM architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Proposed fully distributed collaborative LiDAR SLAM, DCL-SLAM, consists of a replaceable single-robot front-end, a distributed loop closure module, a distributed PGO module, and a p…<br>
+          <b>怎么看这张图：</b>左「可换前端」→ 中「分布式回环模块」（描述子→滤波点云→ICP 验证）→ 右「分布式 PGO + 拒假测量」。和 DiSCo 比，多了「三阶段通信」和「RANSAC + PCM」双重保险，且明确写「fully distributed」。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_DCL-SLAM__A_Distributed_Collaborative_LiDAR_SLAM_Framewo/6d0cdfe710b349d64f11eea11544c8bfaa14842064bb68b615bfe683f3183f34.jpg" alt="Encoding laser scan into global descriptor">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Demonstration of encoding the laser scan into the global descriptor.<br>
+          <b>怎么看这张图：</b>这就是 LiDAR-Iris 的来历——把一圈激光扫描编码成一张旋转不变的二值描述图。对比 DiSCo 的 ScanContext「环带距离图」，Iris 对视角旋转更不敏感，所以更适合多机器人从不同方向扫同一处。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 论文三：RDC-SLAM（2022）——实时、极低带宽</h2>
+      <p>RDC-SLAM（Xie、Zhang、Chen 等，IEEE RA-L 2022，SYSU）走「实时 + 极低带宽」路线：四模块（PR 地点识别 / 相对位姿 RP / 分布式图优化 DGO / 通信），用 <b>DELIGHT 强度描述子</b>检回环、再用<b>特征值段描述子</b>精修相对位姿。后端用 <b>分布式 DGS（两阶段：先转后位）</b>，但<b>没有显式鲁棒后端</b>——只靠 DELIGHT 相似度阈值（卡方检验）+ RANSAC 几何验证，鲁棒性弱于 PCM / GNC 族。</p>
+      <ul>
+        <li>通信：KITTI 全程 &lt; 350 kB（145 s），原始数据 &gt; 5 GB——省了四个数量级；</li>
+        <li>真实双机器人：ATE 0.0604 m（KITTI Seq.05）、0.1256 m（SYSU 校园）；</li>
+        <li>实用结论：「连接时长而非距离决定精度」——50 m 因连接太短、没跑完一次 DGO 而变差。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_RDC-SLAM__A_Real-Time_Distributed_Cooperative_SLAM_Syste/37c4e59d352cb7738ded9bd210b78cb9516c36bc3b8791358c432fdde6f60670.jpg" alt="RDC-SLAM framework">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Framework for the proposed RDC-SLAM approach. The system performs in a distributed manner…<br>
+          <b>怎么看这张图：</b>左 PR（地点识别，产候选）、中 RP（相对位姿，DELIGHT + 段描述子精修）、右 DGO（分布式图优化）。四模块通过一套含重传 / 超时的通信协议串联，工程上很实用，但注意它依赖几何验证而非 PCM / GNC 硬拒 outlier。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_RDC-SLAM__A_Real-Time_Distributed_Cooperative_SLAM_Syste/19a3dfefa90d22299c9ca96e63a3bf7da53549ec11e2a87ff5409a756049f433.jpg" alt="DELIGHT descriptor structure">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>The structure of the DELIGHT descriptor. The space is divided by spherical partitions along the radial, elevation and azimuth axes… 2 divisions in radial, 4 in elevation, 2 in azimuth, totally 16 bins.<br>
+          <b>怎么看这张图：</b>DELIGHT 把空间按「径向 / 俯仰 / 方位」三个轴切成球壳格子（共 16 个 bin），用强度统计编码。它是 ScanContext 类的又一个替代描述子——比 ScanContext 多了一个「强度」维度，更省带宽。
+        </figcaption>
+      </figure>
+
+      <h2>5. 描述子演进：ScanContext → LiDAR-Iris → DELIGHT</h2>
+      <p>三兄弟的描述子一条线演进，画成三张「极坐标 / 球壳格子图」就很直观：从「环带距离图」到「旋转不变二值图」再到「球壳强度图」，共同趋势是<b>更小、对视角更不敏感</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">描述子三兄弟：越来越小、对视角越来越不敏感</text>
+          <g font-size="13" text-anchor="middle">
+            <!-- ScanContext -->
+            <rect x="40" y="60" width="260" height="280" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="170" y="86" fill="#ffd166" font-size="15" font-weight="700">ScanContext</text>
+            <g transform="translate(170,180)">
+              <circle r="18" fill="none" stroke="#9fb4ff"/><circle r="36" fill="none" stroke="#9fb4ff"/><circle r="54" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L18,-40 A18,18 0 0 1 18,-40 Z" fill="#5cffb0" opacity="0.6"/>
+              <path d="M0,0 L-36,30 A36,36 0 0 0 -36,30 Z" fill="#5cffb0" opacity="0.6"/>
+              <path d="M0,0 L40,20 A54,54 0 0 1 40,20 Z" fill="#5cffb0" opacity="0.6"/>
+            </g>
+            <text x="170" y="270" fill="#cfe" font-size="12">环带距离图</text>
+            <text x="170" y="294" fill="#9fb4ff" font-size="12">≈ 4 kB / 帧</text>
+            <text x="170" y="318" fill="#ffd1d8" font-size="11">DiSCo（2022）</text>
+            <!-- LiDAR-Iris -->
+            <rect x="320" y="60" width="260" height="280" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="450" y="86" fill="#ffd166" font-size="15" font-weight="700">LiDAR-Iris</text>
+            <g transform="translate(450,180)">
+              <circle r="14" fill="none" stroke="#9fb4ff"/><circle r="28" fill="none" stroke="#9fb4ff"/><circle r="42" fill="none" stroke="#9fb4ff"/><circle r="56" fill="none" stroke="#9fb4ff"/>
+              <rect x="-3" y="-56" width="6" height="112" fill="#5cffb0" opacity="0.5"/>
+              <rect x="-56" y="-3" width="112" height="6" fill="#5cffb0" opacity="0.5"/>
+              <rect x="-38" y="-38" width="6" height="76" fill="#5cffb0" opacity="0.4" transform="rotate(45)"/>
+            </g>
+            <text x="450" y="270" fill="#cfe" font-size="12">旋转不变二值图</text>
+            <text x="450" y="294" fill="#9fb4ff" font-size="12">≈ 29 kB / 帧</text>
+            <text x="450" y="318" fill="#ffd1d8" font-size="11">DCL（2024）</text>
+            <!-- DELIGHT -->
+            <rect x="600" y="60" width="260" height="280" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="730" y="86" fill="#ffd166" font-size="15" font-weight="700">DELIGHT</text>
+            <g transform="translate(730,180)">
+              <path d="M0,0 L0,-56 A56,56 0 0 1 40,-40 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L40,-40 A56,56 0 0 1 56,0 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L56,0 A56,56 0 0 1 40,40 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L40,40 A56,56 0 0 1 0,56 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L0,56 A56,56 0 0 1 -40,40 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L-40,40 A56,56 0 0 1 -56,0 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L-56,0 A56,56 0 0 1 -40,-40 Z" fill="none" stroke="#9fb4ff"/>
+              <path d="M0,0 L-40,-40 A56,56 0 0 1 0,-56 Z" fill="none" stroke="#9fb4ff"/>
+              <circle cx="20" cy="-10" r="4" fill="#ffd166"/><circle cx="-15" cy="20" r="4" fill="#ffd166"/>
+            </g>
+            <text x="730" y="270" fill="#cfe" font-size="12">球壳强度图（16 bin）</text>
+            <text x="730" y="294" fill="#9fb4ff" font-size="12">极轻（MB→kB）</text>
+            <text x="730" y="318" fill="#ffd1d8" font-size="11">RDC（2022）</text>
+          </g>
+          <text x="450" y="384" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：描述子越往右越省、越抗视角差 → 多机「对暗号」越可靠</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三张描述子的结构示意：ScanContext（同心环带，按距离着色）、LiDAR-Iris（多环 + 旋转不变二值条）、DELIGHT（球面 8 扇区 + 强度点）。<br>
+          <b>怎么看这张图：</b>① 左图编码「俯视一圈的距离分布」；② 中图把编码做成旋转不变，机器人转个角度描述子仍对得上；③ 右图加「强度」维并切成球壳 bin，最紧凑。<br>
+          <b>要记住的一句话：</b>描述子演进 = 更小 + 更抗视角差，这正是分布式多机「对暗号」能成立的前提。
+        </figcaption>
+      </figure>
+
+      <h2>6. 分布式 Gauss-Seidel（DGS）：没有服务器怎么解位姿图</h2>
+      <p>中心化里「全局 BA」是服务器一把梭。分布式里没有服务器，常用 <b>分布式 Gauss-Seidel（DGS）</b>：每台机器人手里攥着「半张位姿图」（自己的轨迹 + 和邻居的约束），大家<b>交替「你算一半、我算一半」</b>——我固定你的变量、优化我的，再把更新过的变量发给你；你再固定我的、优化你的。来回几轮就收敛。DiSCo / DCL / RDC 都用「两阶段 DGS」：先对齐旋转、再优化位置（先转后位）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">分布式 Gauss-Seidel：两台机器人各拿半张图，交替求解</text>
+          <!-- 机器人 A 半图 -->
+          <rect x="40" y="70" width="360" height="240" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="220" y="94" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">机器人 A 的半张图</text>
+          <g fill="#5cffb0"><circle cx="90" cy="150" r="10"/><circle cx="160" cy="200" r="10"/><circle cx="230" cy="160" r="10"/><circle cx="300" cy="220" r="10"/></g>
+          <g stroke="#5cffb0" stroke-width="2"><line x1="90" y1="150" x2="160" y2="200"/><line x1="160" y1="200" x2="230" y2="160"/><line x1="230" y1="160" x2="300" y2="220"/></g>
+          <circle cx="300" cy="220" r="14" fill="none" stroke="#ffd166" stroke-width="3"/>
+          <text x="300" y="248" text-anchor="middle" fill="#ffd166" font-size="11">共享边</text>
+          <!-- 机器人 B 半图 -->
+          <rect x="500" y="70" width="360" height="240" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="680" y="94" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">机器人 B 的半张图</text>
+          <g fill="#ff9f6b"><circle cx="600" cy="220" r="10"/><circle cx="670" cy="160" r="10"/><circle cx="740" cy="200" r="10"/><circle cx="810" cy="150" r="10"/></g>
+          <g stroke="#ff9f6b" stroke-width="2"><line x1="600" y1="220" x2="670" y2="160"/><line x1="670" y1="160" x2="740" y2="200"/><line x1="740" y1="200" x2="810" y2="150"/></g>
+          <circle cx="600" cy="220" r="14" fill="none" stroke="#ffd166" stroke-width="3"/>
+          <text x="600" y="248" text-anchor="middle" fill="#ffd166" font-size="11">共享边</text>
+          <!-- 消息来回 -->
+          <line x1="314" y1="220" x2="600" y2="220" stroke="#ffd166" stroke-width="3" marker-end="url(#mA)"/>
+          <line x1="586" y1="200" x2="314" y2="200" stroke="#9b8cff" stroke-width="3" marker-end="url(#mB)"/>
+          <defs>
+            <marker id="mA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ffd166"/></marker>
+            <marker id="mB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#9b8cff"/></marker>
+          </defs>
+          <text x="457" y="212" text-anchor="middle" fill="#ffd166" font-size="12">A→B：我的更新</text>
+          <text x="457" y="192" text-anchor="middle" fill="#9b8cff" font-size="12">B→A：我的更新</text>
+          <text x="450" y="356" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：DGS = 你固定我、我优化我；我再固定你、你优化你 → 来回几轮收敛</text>
+          <text x="450" y="384" text-anchor="middle" fill="#9fb4ff" font-size="12">两阶段：先对齐旋转（转），再优化位置（位）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左机器人 A、右机器人 B 各拿半张位姿图，中间黄色 / 紫色箭头是「更新后的变量」来回传递。<br>
+          <b>怎么看这张图：</b>① 黄圈标出「两台共享的那条边」（机间约束）；② A 固定 B 的变量、优化自己的，把结果发给 B；B 同样做；③ 来回几轮，两张图在共享边上对齐、整体收敛。<br>
+          <b>要记住的一句话：</b>DGS 把「全局 BA」拆成「各机轮流转、互相发更新」，不需要中央服务器——这就是分布式解位姿图的本质。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DiSCo-SLAM 用的描述子，最早是在哪一节被我们详细讲过的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：Scan Context 是第七季 0135 讲的免训练几何描述子，DiSCo 直接拿它当机器人之间的通用语言——隔一季的技术接续。" onclick="lessonKit.answer(this,'q0170a')">第七季 0135 Scan Context</button>
+          <button data-correct="no" data-explanation="不对：RING++ 是第四季 0092/0093 的激光回环描述子，DiSCo 用的是 ScanContext。" onclick="lessonKit.answer(this,'q0170a')">第四季 0092 RING++</button>
+        </div>
+        <div class="quiz-feedback" id="q0170a"></div>
+      </div>
+
+      <h2>7. 通信量预算：三兄弟都比传点云省两三个数量级</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="360" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">通信量预算：原始点云撑爆，描述子只占一小股</text>
+          <g font-size="13" text-anchor="middle">
+            <rect x="60" y="70" width="170" height="40" rx="6" fill="#3a2030" stroke="#ff5d73"/><text x="145" y="96" fill="#ffd1d8">原始点云</text>
+            <rect x="260" y="84" width="120" height="26" rx="6" fill="#2a3340" stroke="#ffd166"/><text x="320" y="103" fill="#ffe9a8">ScanContext</text>
+            <rect x="410" y="86" width="120" height="24" rx="6" fill="#2a3340" stroke="#ffd166"/><text x="470" y="104" fill="#ffe9a8">LiDAR-Iris</text>
+            <rect x="560" y="92" width="90" height="18" rx="6" fill="#223056" stroke="#5cffb0"/><text x="605" y="106" fill="#cfe">DELIGHT</text>
+          </g>
+          <line x1="145" y1="110" x2="145" y2="200" stroke="#ff5d73" stroke-width="30" marker-end="url(#c1)"/>
+          <line x1="320" y1="110" x2="320" y2="200" stroke="#ffd166" stroke-width="9" marker-end="url(#c1)"/>
+          <line x1="470" y1="110" x2="470" y2="200" stroke="#ffd166" stroke-width="11" marker-end="url(#c1)"/>
+          <line x1="605" y1="110" x2="605" y2="200" stroke="#5cffb0" stroke-width="5" marker-end="url(#c1)"/>
+          <defs><marker id="c1" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><circle cx="4" cy="4" r="3" fill="#cdd6ff"/></marker></defs>
+          <text x="145" y="240" text-anchor="middle" fill="#ffd1d8" font-size="12">≈ 1 MB / 帧（VLP-16）</text>
+          <text x="320" y="240" text-anchor="middle" fill="#ffe9a8" font-size="12">≈ 4 kB</text>
+          <text x="470" y="240" text-anchor="middle" fill="#ffe9a8" font-size="12">≈ 29 kB</text>
+          <text x="605" y="240" text-anchor="middle" fill="#cfe" font-size="12">极轻</text>
+          <text x="450" y="312" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">省 2–3 个数量级：MB → kB</text>
+          <text x="450" y="350" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：分布式多机能跑起来，靠的就是「只传描述子、不传点云」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>四种「每帧要传的东西」的粗细对比：原始点云最粗（约 1 MB / 帧），ScanContext ≈ 4 kB、LiDAR-Iris ≈ 29 kB、DELIGHT 极轻。<br>
+          <b>怎么看这张图：</b>① 左边红色管是「传原始点云」，会撑爆带宽；② 右边几条细管是各描述子，差两三个数量级；③ 这正是 0168 带宽光谱的「落地版」。<br>
+          <b>要记住的一句话：</b>分布式多机的可行性，根子上来自「用紧凑描述子替代原始点云」这一招。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>RDC-SLAM 相比 DiSCo / DCL，在鲁棒性上的短板是？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：RDC 没有 PCM / GNC 这类显式鲁棒后端，只靠 DELIGHT 阈值 + RANSAC 几何验证，对假回环的韧性弱于 PCM / GNC 族。" onclick="lessonKit.answer(this,'q0170b')">没有显式鲁棒后端</button>
+          <button data-correct="no" data-explanation="不对：RDC 也用 DGS 两阶段优化，短板在 outlier rejection 而非优化器。" onclick="lessonKit.answer(this,'q0170b')">分布式求解器太慢</button>
+        </div>
+        <div class="quiz-feedback" id="q0170b"></div>
+      </div>
+    </main>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么说「描述子」能当机器人之间的通用语言？用 0170 第一节那张图解释。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>每台机器人把同一处场景抽成一串紧凑描述子（如 ScanContext 的极坐标距离分布），对视角不敏感；两台机器人交换描述子、比对一致就判定「同一地点」并建立机间回环，而不必互传整片点云。描述子就是双方都能读懂的「暗号」。</div></details>
+        </li>
+        <li>DiSCo、DCL、RDC 三兄弟的描述子分别是什么？它们共同的演进趋势是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>DiSCo=ScanContext（环带距离图）、DCL=LiDAR-Iris（旋转不变二值图）、RDC=DELIGHT（球壳强度图）。趋势是越来越小、对视角旋转越来越不敏感、越来越省带宽。</div></details>
+        </li>
+        <li>DiSCo 的「两阶段优化」解决 DGS 的什么毛病？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>DGS 在差初值下不收敛、多机器人轨迹对不齐。DiSCo 先求机器人之间的全局变换（LM 把大家先摆正），再做局部 PGO，用「先全局转、再局部位」克服初值敏感。</div></details>
+        </li>
+        <li>为什么 DiSCo-SLAM 与 D²SLAM 常被混淆，但清单没错？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两者缩写极像，但 DiSCo-SLAM（Huang 等，2022，激光分布式，用 ScanContext）与 D²SLAM（Xu 等港科大，2024，视觉惯性空中 swarm）是完全不同的两篇，都在语料库。混淆源于 D²SLAM 的文件名被转义成 _D__2__SLAM_，看起来像 DiSCo 的变形；必须靠作者与传感器区分，清单本身没错。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>为什么「描述子」能当机器人之间的通用语言，而不必传点云？</li>
+        <li>ScanContext → LiDAR-Iris → DELIGHT 的演进趋势是什么？</li>
+        <li>DiSCo / DCL / RDC 三兄弟在描述子、规模、鲁棒后端上各有什么差异？</li>
+        <li>分布式 Gauss-Seidel（DGS）怎么在没有服务器时解位姿图？</li>
+        <li>为什么 DiSCo-SLAM 与 D²SLAM 名字像但清单无误？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0169-中心化路线能做到多大-COVINS与LAMP2.html">← 上一课：中心化路线</a>
+        <a class="next" href="0171-Kimera-Multi-分布式也能出语义网格.html">下一课：Kimera-Multi →</a>
+      </div>
+      <p class="foot-note">分布式激光三兄弟把「对暗号」玩明白了，下一节看分布式也能出语义网格 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

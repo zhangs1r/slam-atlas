@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kimera 与 DSG：场景图的五层 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0163</div>
+      <h1>Kimera 与 DSG：场景图的五层</h1>
+      <p class="subtitle">当 SLAM 不再是终点，而只是引擎里的一个模块 🏗️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：3D 动态场景图（DSG）与 Kimera 系统总览</span>
+        <span>👥 作者：Rosinol、Violette、Abate 等（MIT SPARK）</span>
+        <span>📅 2021 · <i>Kimera: from SLAM to Spatial Perception (IJRR)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">文件名不符</a>
+        <a href="#b">DSG五层</a>
+        <a href="#c">Semantics模块</a>
+        <a href="#d">Core引擎</a>
+        <a href="#e">关联方式</a>
+        <a href="#f">实时与Multi</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 说出 DSG 五层各自的名字与存什么、层与层之间靠什么边连接；② 讲清 Kimera-Semantics 模块（§3.3）做什么、它与 DSG 的关系是「产出 Layer 1」；③ 把 Kimera 当作「系统总览」而非「只讲语义建图的专文」来理解；④ 复述为何本文<b>不能</b>佐证「Kimera 是 Kimera-Multi 的前身」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p><b>0159–0162</b> 的地图表示一路从 surfel → octree/TSDF 体素 → 全景体素，Kimera 把它们再向上抽象成「五层场景图」，是主线「surfel → 体素 → 场景图」的收口。<b>0162</b> 的 panoptic 标签正是 Kimera-Semantics 给 Layer 1 网格打的标签来源之一。<b>0171</b>（Kimera-Multi）会在多机块把这套度量-语义网格做成分布式版本——但本课必须强调：本文并未提及它，不能据此断言前身关系。</p></div>
+      </div>
+
+      <div class="callout" style="border-left:4px solid #e0533d;">
+        <h4>⚠️ 先说一件必须诚实标注的事：文件名与内容不符</h4>
+        <p>本课对应的素材文件名叫 <b>2019_Kimera-Semantics.md</b>，但这个文件的正文其实是 <b>Kimera 的整套系统总论文</b>《Kimera: from SLAM to Spatial Perception with 3D Dynamic Scene Graphs》（<i>The International Journal of Robotics Research, 2021</i>，约 27k 词），<b>不是</b>一篇只讲 Kimera-Semantics 模块的专文。文件名里的「2019」也与正文 2021 不符。真正的「Kimera-Semantics 模块」只是该论文的 <b>§3.3 一节</b>（约一页）。所以本课按「<b>Kimera 系统总览（含语义建图模块）</b>」来讲，不把它假称成语义建图专文——这是你最该记住的信息。</p>
+      </div>
+
+      <h2 id="b">1. Kimera 在解决什么：SLAM 降格为「引擎里的一个模块」</h2>
+      <p>前七季里，SLAM 是当之无愧的主角——建张地图、估个位姿就算完成任务。Kimera 换了个视角：SLAM 不该是终点，而只是<b>空间感知引擎里的一个模块</b>。它要的产出不是一张点云，而是一张<b>3D 动态场景图（DSG, Dynamic Scene Graph）</b>——一种「可行动（actionable）」的表示：机器人不仅能知道「墙在哪」，还能直接回答「厨房里有哪些物体、人在哪个房间、从 A 到 B 怎么走」。</p>
+      <p>一句话定位：Kimera 是<b>第一个从视觉-惯性数据全自动构建 DSG</b> 的方法，把 SLAM 从「目的」降格为「手段」。</p>
+
+      <h2 id="c">2. DSG 五层：最关键的一张图</h2>
+      <p>DSG 的核心思想是把场景<b>分层、分层级</b>地抽象。Kimera 用的是五层，从最底层的稠密几何，一路到最顶层的整栋建筑：</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#f5f7fa"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">一栋真实房子，从上到下圈出 DSG 的五层</text>
+          <rect x="120" y="60" width="660" height="300" rx="6" fill="#f3e8ff" stroke="#9b6dd6" stroke-width="3"/>
+          <text x="450" y="80" text-anchor="middle" font-size="14" font-weight="700" fill="#6a3aa0">⑤ Building（单层建筑根节点）</text>
+          <rect x="180" y="110" width="540" height="225" rx="6" fill="#fff4e0" stroke="#e0a93a" stroke-width="3"/>
+          <text x="450" y="132" text-anchor="middle" font-size="14" font-weight="700" fill="#a3700a">④ Rooms（房间 / 走廊，含厨房等语义类）</text>
+          <rect x="240" y="160" width="420" height="160" rx="6" fill="#e3f3ea" stroke="#3a9d5d" stroke-width="3"/>
+          <text x="450" y="182" text-anchor="middle" font-size="13" font-weight="700" fill="#1d6b3c">③ Places &amp; Structures（自由空间节点 + 墙/地/天花板）</text>
+          <rect x="300" y="205" width="300" height="100" rx="6" fill="#e6effb" stroke="#4a90c2" stroke-width="3"/>
+          <text x="450" y="226" text-anchor="middle" font-size="13" font-weight="700" fill="#0b4f7a">② Objects &amp; Agents（物体 + 人/机器人）</text>
+          <rect x="340" y="248" width="220" height="48" rx="4" fill="#fdeaea" stroke="#e0533d" stroke-width="3"/>
+          <text x="450" y="277" text-anchor="middle" font-size="12" font-weight="700" fill="#a32617">① Metric-Semantic Mesh（带标签的 3D 网格表面）</text>
+          <circle cx="380" cy="255" r="9" fill="#e0533d"/>
+          <text x="380" y="245" text-anchor="middle" font-size="12" fill="#a32617">人</text>
+          <rect x="470" y="245" width="18" height="18" fill="#5aa86a"/>
+          <text x="500" y="259" text-anchor="middle" font-size="12" fill="#1d6b3c">椅</text>
+          <line x1="380" y1="264" x2="450" y2="190" stroke="#e0533d" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="180" y="200" font-size="11" fill="#a32617">人在房间里</text>
+          <line x1="479" y1="264" x2="450" y2="190" stroke="#1d6b3c" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="620" y="255" font-size="11" fill="#1d6b3c">椅在房间里</text>
+          <line x1="270" y1="112" x2="270" y2="68" stroke="#e0a93a" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="270" y="92" text-anchor="middle" font-size="11" fill="#a3700a">房间属于楼</text>
+          <text x="450" y="410" text-anchor="middle" font-size="13" fill="#6b7785">虚线 = 层与层之间的「边」</text>
+          <text x="450" y="434" text-anchor="middle" font-size="13" fill="#6b7785">（如「人在房间里」「房间属于楼」）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>用一栋真实房子把 DSG 五层从外到内（从顶到底）圈出来：⑤ Building 整栋楼 → ④ Rooms 房间 → ③ Places &amp; Structures 自由空间与墙地 → ② Objects &amp; Agents 物体与人 → ① Metric-Semantic Mesh 带标签的 3D 网格表面。虚线表示层间的「边」，例如「人（②）在房间里（④）」。<br>
+          <b>怎么看这张图：</b>① 越往下越「稠密几何」、越往上越「抽象语义」；② 每层是一个图节点集合，靠边连接（人在房间、房间属于楼）；③ 这种分层让「导航 / 问答 / 规划」能在合适的抽象层上操作，不必每次都算稠密点云。<br>
+          <b>要记住的一句话：</b>DSG 五层 = 把「表面网格」一路抽象到「整栋楼」，每层都是图、靠边相连。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 580" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="580" fill="#faf6f1"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#3d2a22">一栋真实房子：DSG 的五层，从「网格表面」一路抽象到「整栋楼」</text>
+          <rect x="30" y="76" width="280" height="404" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="170" y="106" text-anchor="middle" font-size="15" font-weight="700" fill="#4a342c">五层各自「圈走」什么</text>
+          <rect x="50" y="137" width="20" height="20" rx="4" fill="#c0563d"/>
+          <text x="82" y="153" font-size="13" font-weight="700" fill="#3d2a22">① Metric-Semantic Mesh</text>
+          <text x="82" y="172" font-size="12" fill="#6b5b53">墙地表面的带标签网格</text>
+          <rect x="50" y="201" width="20" height="20" rx="4" fill="#3f6f9c"/>
+          <text x="82" y="217" font-size="13" font-weight="700" fill="#3d2a22">② Objects &amp; Agents</text>
+          <text x="82" y="236" font-size="12" fill="#6b5b53">桌子 / 椅子 / 人的节点</text>
+          <rect x="50" y="265" width="20" height="20" rx="4" fill="#3a7a52"/>
+          <text x="82" y="281" font-size="13" font-weight="700" fill="#3d2a22">③ Places &amp; Structures</text>
+          <text x="82" y="300" font-size="12" fill="#6b5b53">可走的自由空间 + 墙地</text>
+          <rect x="50" y="329" width="20" height="20" rx="4" fill="#b07a1e"/>
+          <text x="82" y="345" font-size="13" font-weight="700" fill="#3d2a22">④ Rooms</text>
+          <text x="82" y="364" font-size="12" fill="#6b5b53">厨房 / 客厅 / 卧室</text>
+          <rect x="50" y="393" width="20" height="20" rx="4" fill="#8a5fb0"/>
+          <text x="82" y="409" font-size="13" font-weight="700" fill="#3d2a22">⑤ Building</text>
+          <text x="82" y="428" font-size="12" fill="#6b5b53">整栋楼（图的根节点）</text>
+          <text x="170" y="462" text-anchor="middle" font-size="12" fill="#8a756a">右侧房子上的 ①–⑤ 标在各层代表位置</text>
+          <polygon points="360,176 610,96 860,176" fill="#e6d7c3" stroke="#b89b78" stroke-width="3"/>
+          <rect x="370" y="176" width="480" height="306" fill="#fdfaf6" stroke="#b89b78" stroke-width="3"/>
+          <line x1="370" y1="322" x2="850" y2="322" stroke="#b89b78" stroke-width="2"/>
+          <line x1="610" y1="322" x2="610" y2="482" stroke="#b89b78" stroke-width="2"/>
+          <line x1="340" y1="486" x2="880" y2="486" stroke="#b89b78" stroke-width="3"/>
+          <rect x="410" y="272" width="150" height="48" rx="8" fill="#e9d9c3" stroke="#b89b78"/>
+          <rect x="420" y="280" width="34" height="32" rx="6" fill="#fffdfa" stroke="#b89b78"/>
+          <rect x="760" y="206" width="76" height="64" fill="#dceaf5" stroke="#b89b78" stroke-width="2"/>
+          <text x="520" y="228" text-anchor="middle" font-size="13" fill="#8a756a">卧室</text>
+          <rect x="420" y="402" width="120" height="14" rx="4" fill="#cc9a6a" stroke="#8a5a26"/>
+          <rect x="428" y="416" width="8" height="52" fill="#b89b78"/>
+          <rect x="524" y="416" width="8" height="52" fill="#b89b78"/>
+          <rect x="548" y="420" width="34" height="10" rx="3" fill="#cc9a6a" stroke="#8a5a26"/>
+          <rect x="574" y="388" width="9" height="40" rx="3" fill="#cc9a6a" stroke="#8a5a26"/>
+          <text x="500" y="352" text-anchor="middle" font-size="13" fill="#8a756a">厨房</text>
+          <rect x="650" y="404" width="140" height="46" rx="10" fill="#e9d9c3" stroke="#b89b78"/>
+          <rect x="650" y="384" width="140" height="24" rx="8" fill="#ddcbb2" stroke="#b89b78"/>
+          <circle cx="800" cy="353" r="11" fill="#f2c9a0" stroke="#b89b78"/>
+          <rect x="789" y="364" width="22" height="42" rx="8" fill="#cc785c"/>
+          <line x1="795" y1="406" x2="795" y2="460" stroke="#7a5a00" stroke-width="4"/>
+          <line x1="805" y1="406" x2="805" y2="460" stroke="#7a5a00" stroke-width="4"/>
+          <text x="760" y="352" text-anchor="middle" font-size="13" fill="#8a756a">客厅</text>
+          <circle cx="395" cy="206" r="13" fill="#c0563d"/>
+          <text x="395" y="211" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">①</text>
+          <circle cx="700" cy="352" r="13" fill="#3f6f9c"/>
+          <text x="700" y="357" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">②</text>
+          <circle cx="452" cy="340" r="13" fill="#3a7a52"/>
+          <text x="452" y="345" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">③</text>
+          <circle cx="620" cy="240" r="13" fill="#b07a1e"/>
+          <text x="620" y="245" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">④</text>
+          <circle cx="610" cy="124" r="13" fill="#8a5fb0"/>
+          <text x="610" y="129" text-anchor="middle" font-size="12" font-weight="700" fill="#ffffff">⑤</text>
+          <line x1="632" y1="228" x2="628" y2="146" stroke="#8a5fb0" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="644" y="190" font-size="12" fill="#8a5fb0">房间属于楼</text>
+          <line x1="800" y1="344" x2="800" y2="298" stroke="#3f6f9c" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="790" y="286" text-anchor="end" font-size="12" fill="#3f6f9c">人 属于 房间（人在客厅里）</text>
+          <rect x="30" y="498" width="840" height="62" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="450" y="522" text-anchor="middle" font-size="13" font-weight="700" fill="#4a342c">虚线 = 层与层之间的「边」</text>
+          <text x="450" y="546" text-anchor="middle" font-size="12" fill="#6b5b53">「人在客厅里」把 ② 的节点连到 ④ 的房间节点；「房间属于楼」把 ④ 连到 ⑤；「椅子在房间里」同理</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>画的是一栋真实房子的剖面：屋顶下面是卧室、厨房、客厅三间房，屋里有床、桌子、椅子、沙发，客厅里站着一个人。图上用 ①–⑤ 五个彩色圆点把 DSG 的五层「圈」在各自该管的地方：① 是墙地表面那层带标签的网格，② 是桌子椅子人这些节点，③ 是屋里能走的自由空间与墙地，④ 是「卧室 / 厨房 / 客厅」这些房间，⑤ 是整栋楼这个根节点。<br>
+          <b>怎么看这张图：</b>① 先看左边五行的颜色方块，记住每层「圈走」的是什么；② 再到房子上找同色圆点，确认它标的是哪一块（比如 ① 贴在墙面上、② 贴在沙发旁）；③ 最后看两条虚线的箭头——它们不是房子的结构，而是「边」：「人 属于 房间」说明人在客厅里这条关系被显式记成一条边，「房间属于楼」说明卧室挂在整栋楼下面。整张图连起来，就是「节点 + 边」构成的一张图。<br>
+          <b>要记住的一句话：</b>DSG 的五层不是五张分开的地图，而是同一栋房子被「圈」了五遍，再用边把它们缝成一张可查询的大图。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2019_Kimera-Semantics/b807faf9b8de5b6028f83f6a376366592940b0a85c2253b16b8a52ce7950cffa.jpg" alt="Kimera DSG layered hierarchical representation">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>(a) A 3D Dynamic Scene Graph (DSG) is a layered and hierarchical representation that abstracts a dense 3D model (e.g., a metric-semantic mesh) into higher-level spatial concepts (e.g., objects, agents, places, rooms) and models their spatio-temporal relations (e.g., "agent A is in room B at time t"). Kimera is the first Spatial Perception Engine that reconstructs a DSG from visual-inerti...<br>
+          <b>怎么看这张图：</b>这是原文给出的 DSG 定义图，和上面自绘图一一对应：左边是稠密 3D 模型（即 Layer 1），右边抽象成 objects / agents / places / rooms 等高层节点，并显式画出了它们的时空关系边（如「agent A 在 room B 于时间 t」）。它是理解全课的总纲，务必盯住「分层 + 边」这两个词。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 五层各自存什么、靠什么边连</h2>
+      <p>把五层拆开看，每一层都是一个「图」，节点 + 边：</p>
+      <ul>
+        <li><b>① Metric-Semantic Mesh（底层）</b>：带全景语义标签的 3D 网格，每个顶点含位置 / 法向 / RGB / panoptic 标签。这一层就是前面 0162 那种「全景体素网格」的网格化版本——是 DSG 的几何底座。</li>
+        <li><b>② Objects and Agents</b>：物体节点（位姿 + 包围盒 + 语义类）和动态智能体节点（人 / 机器人，含随时间变化的位姿图与网格）。「物体属于哪个房间」是它和 ④ 的边。</li>
+        <li><b>③ Places and Structures</b>：places 是自由空间节点 + 可达性边（机器人能不能走），structures 是墙 / 地 / 天花板等。这是 0159 说的「surfel 没有自由空间」终于被补上的地方。</li>
+        <li><b>④ Rooms</b>：房间 / 走廊节点，带语义类（如厨房、走廊）。</li>
+        <li><b>⑤ Building</b>：单层建筑的根节点，把所有 rooms 收口。</li>
+      </ul>
+      <p><b>边的含义</b>是 DSG 的灵魂：它不是「五张独立地图」，而是一张大图，跨层用边连起来（人在房间里、房间在楼里、物体靠在墙上）。这让「厨房里有什么」「从卧室到厨房怎么走」这类问题可以直接图查询回答。</p>
+
+      <h2 id="e">4. Kimera-Semantics 模块：它产出 Layer 1</h2>
+      <p>现在落到「语义建图」本身——也就是本课文件里真正叫 <b>Kimera-Semantics</b> 的那一节（§3.3）。它做的事是：用 <b>2D 逐像素语义分割</b>（真实实验用 <b>Mask R-CNN</b>）给全局网格打标签，底层网格基于 <b>Voxblox 的 TSDF 体素</b>（bundled raycasting + marching cubes）生成。</p>
+      <p>标签怎么融合？和 0159 的 SemanticFusion 同思路：每个 ray bundle 建一个「标签频率向量」，在截断距离内做<b>逐体素贝叶斯更新</b>。所以它和 0159 是「同一招」，只是从 surfel 搬到了 TSDF 体素、再从体素抽成网格。</p>
+      <p><b>关键关系</b>：Kimera-Semantics 产出的就是 DSG 的 <b>Layer 1（Metric-Semantic Mesh）</b>。换句话说，语义建图模块是「给场景图打地基」的那一层；上面的 ②–⑤ 层由 Kimera-BuildingParser 等模块通过几何解析往上搭。</p>
+      <figure class="figure">
+        <img src="../../md/images/2019_Kimera-Semantics/a9a0fd2b3463c597a65654d837599b315cfa6cdf20c45e433632dba1313998b5.jpg" alt="Kimera-Core open-source library for real-time metric-semantic SLAM">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Kimera-Core is an open-source library for real-time metric-semantic SLAM. It provides (a) visual-inertial state estimates at IMU rate (Kimera-VIO), and a globally consistent and outlier-robust trajectory estimate (Kimera-RPGO), computes (b) a low-latency local mesh of the scene (Kimera-Mesher), and builds (c) a semantically annotated 3D mesh (Kimera-Semantics), which can be optimized for...<br>
+          <b>怎么看这张图：</b>这张图把 Kimera-Core 的几个模块摊开：(c) 就是 Kimera-Semantics 产出的「带语义标注的 3D 网格」——也就是 DSG 的 Layer 1。注意它和 (a) VIO、(b) 局部网格、(Kimera-RPGO) 位姿图是并列的，说明语义只是 Core 的一部分，印证「SLAM 是引擎里的一个模块」。</p>
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. Kimera-Core 引擎：四个模块怎么协作</h2>
+      <p>整台引擎叫 <b>Kimera-Core</b>，由四个关键模块组成（注意语义只是其中之一）：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h3>Kimera-VIO</h3>
+          <p>视觉-惯性里程计：IMU 预积分 + 固定滞后平滑（iSAM2 / GTSAM），输出 IMU 频率的位姿。</p>
+        </div>
+        <div class="mini-card">
+          <h3>Kimera-Mesher</h3>
+          <p>低延迟局部网格（&lt;20 ms），给上层提供几何底座。</p>
+        </div>
+        <div class="mini-card">
+          <h3>Kimera-Semantics</h3>
+          <p>Voxblox TSDF 全局网格 + 贝叶斯标签（即 Layer 1），前面第 4 节已讲。</p>
+        </div>
+        <div class="mini-card">
+          <h3>Kimera-PGMO</h3>
+          <p>位姿图 + 网格同时形变优化（变形图 + GTSAM 求解）；相比只优化位姿图的 RPGO，PGMO 连网格一起形变，回环更准。</p>
+        </div>
+      </div>
+      <figure class="figure">
+        <svg viewBox="0 0 900 500" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="500" fill="#faf6f1"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#3d2a22">一台真实机器人身上：Kimera 各模块分别产出什么</text>
+          <text x="170" y="150" text-anchor="middle" font-size="12" fill="#8a756a">数据只有两路：相机的图像 + IMU 的惯性</text>
+          <rect x="120" y="206" width="64" height="46" rx="8" fill="#3d2a22"/>
+          <circle cx="178" cy="229" r="12" fill="#7ec4f0"/>
+          <circle cx="178" cy="229" r="5" fill="#dceaf5"/>
+          <text x="98" y="196" font-size="12" fill="#4a342c">相机</text>
+          <rect x="145" y="252" width="16" height="64" fill="#b89b78"/>
+          <rect x="70" y="316" width="170" height="72" rx="14" fill="#e6d7c3" stroke="#b89b78" stroke-width="3"/>
+          <rect x="95" y="330" width="54" height="26" rx="5" fill="#cc785c"/>
+          <text x="62" y="342" text-anchor="end" font-size="12" fill="#4a342c">IMU</text>
+          <line x1="64" y1="338" x2="93" y2="340" stroke="#b89b78" stroke-width="1.5"/>
+          <circle cx="105" cy="392" r="18" fill="#6b5b53"/>
+          <circle cx="215" cy="392" r="18" fill="#6b5b53"/>
+          <line x1="40" y1="412" x2="300" y2="412" stroke="#b89b78" stroke-width="3"/>
+          <text x="170" y="442" text-anchor="middle" font-size="12" fill="#6b5b53">一台带相机 + IMU 的机器人</text>
+          <line x1="326" y1="116" x2="326" y2="420" stroke="#b89b78" stroke-width="2"/>
+          <line x1="326" y1="116" x2="338" y2="116" stroke="#b89b78" stroke-width="2"/>
+          <line x1="326" y1="192" x2="338" y2="192" stroke="#b89b78" stroke-width="2"/>
+          <line x1="326" y1="268" x2="338" y2="268" stroke="#b89b78" stroke-width="2"/>
+          <line x1="326" y1="344" x2="338" y2="344" stroke="#b89b78" stroke-width="2"/>
+          <line x1="326" y1="420" x2="338" y2="420" stroke="#b89b78" stroke-width="2"/>
+          <line x1="245" y1="330" x2="320" y2="300" stroke="#b89b78" stroke-width="2" marker-end="url(#k1)"/>
+          <text x="250" y="300" font-size="11" fill="#8a756a">位姿总线</text>
+          <rect x="340" y="84" width="530" height="64" rx="10" fill="#eef7f1" stroke="#3a7a52" stroke-width="2"/>
+          <text x="362" y="110" font-size="13" font-weight="700" fill="#3d2a22">Kimera-VIO</text>
+          <text x="362" y="131" font-size="12" fill="#6b5b53">产出：IMU 频率的位姿序列（iSAM2 固定滞后平滑）</text>
+          <rect x="340" y="160" width="530" height="64" rx="10" fill="#eaf2fb" stroke="#4a90c2" stroke-width="2"/>
+          <text x="362" y="186" font-size="13" font-weight="700" fill="#3d2a22">Kimera-Mesher</text>
+          <text x="362" y="207" font-size="12" fill="#6b5b53">产出：低延迟的局部网格（小于 20 毫秒）</text>
+          <rect x="340" y="236" width="530" height="64" rx="10" fill="#fdecea" stroke="#c0563d" stroke-width="2"/>
+          <text x="362" y="262" font-size="13" font-weight="700" fill="#3d2a22">Kimera-Semantics</text>
+          <text x="362" y="283" font-size="12" fill="#6b5b53">产出：全局度量-语义网格，就是 DSG 的第 ① 层</text>
+          <rect x="340" y="312" width="530" height="64" rx="10" fill="#f3eafc" stroke="#8a5fb0" stroke-width="2"/>
+          <text x="362" y="338" font-size="13" font-weight="700" fill="#3d2a22">Kimera-PGMO</text>
+          <text x="362" y="359" font-size="12" fill="#6b5b53">产出：位姿图与网格一起形变（回环后网格不撕裂）</text>
+          <rect x="340" y="388" width="530" height="64" rx="10" fill="#fdf4e3" stroke="#b07a1e" stroke-width="2"/>
+          <text x="362" y="414" font-size="13" font-weight="700" fill="#3d2a22">Kimera-DSG 的上层模块</text>
+          <text x="362" y="435" font-size="12" fill="#6b5b53">产出：物体 / places / 房间 / 整栋楼（第 ② 到 ⑤ 层）</text>
+          <text x="450" y="478" text-anchor="middle" font-size="12" fill="#6b5b53">同一份位姿，被 Mesher 拿去拼网格、被 Semantics 拿去贴标签、被 PGMO 拿去连网格一起形变</text>
+          <defs><marker id="k1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#b89b78"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边画一台真实的轮式机器人，头上装相机、机身里装 IMU；右边五张卡片是 Kimera 的五个模块，用一条「位姿总线」从机器人接过去。每张卡片写的是「它产出什么」：VIO 出位姿、Mesher 出局部网格、Semantics 出全局度量-语义网格（也就是 DSG 第 ① 层）、PGMO 把位姿图和网格一起形变、上层模块再搭出 ② 到 ⑤ 层。<br>
+          <b>怎么看这张图：</b>① 先看左边的机器人——输入其实只有「图像 + 惯性」两路，别以为语义是天上掉下来的；② 再顺着总线往右看，注意 VIO 是唯一的公共上游，别人都吃它的位姿；③ 重点盯第 3 张卡片：Kimera-Semantics 只产出 DSG 的最底层（第 ① 层），上面四层是别的模块干的——这就是「语义模块 ≠ 整个 Kimera」的意思。<br>
+          <b>要记住的一句话：</b>Kimera 是「一台机器人 + 一条位姿总线 + 五个各管一段的模块」，语义只是其中一段，负责打地基。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2019_Kimera-Semantics/30b129709e344f9fa4f9c3d74d06abef31f664a8c3320a1a6677f4ccd182ba22.jpg" alt="Kimera architecture with Kimera-Core and Kimera-DSG">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Kimera's architecture, with Kimera-Core and Kimera-DSG as sub-modules. Kimera-Core generates a globally consistent 3D metric-semantic mesh (Figure 5) that represents the first layer of the DSG and is further used by Kimera-DSG to build the subsequent layers. Kimera-DSG further comprises three key modules: Kimera-Objects, Kimera-Humans, and Kimera-BuildingParser (which generates layers 3 ...<br>
+          <b>怎么看这张图：</b>这张架构图是本课总纲的「官方版」：Kimera-Core 产出全局一致的度量-语义网格（= DSG 第一层），交给 Kimera-DSG 去搭 ②–⑤ 层；Kimera-DSG 含 Objects / Humans / BuildingParser 三个模块。它清楚表明「语义模块产出 Layer 1，上层由别的模块往上建」。</p>
+        </figcaption>
+      </figure>
+
+      <h2>6. 数据关联：底层贝叶斯、上层几何解析</h2>
+      <p>前面 0160–0161 花了很大力气讲「实例怎么跨帧关联」（IoU、EM）。Kimera 的关联逻辑不一样，分两层：</p>
+      <ul>
+        <li><b>底层网格内</b>：仍是<b>逐体素贝叶斯标签融合</b>，和 0159 / 本节 §4 一致——靠 SLAM 投影把 2D 标签贴到 3D，多帧投票。</li>
+        <li><b>DSG 上层（物体 / 房间 / 楼层）</b>：<b>不靠逐帧 IoU / 匈牙利</b>，而是靠<b>几何解析与空间关系</b>连接——例如「这个包围盒落在哪个房间多边形里」就加一条边。这是表示能力升级后的自然结果：有了结构化层，关联从「像素级匹配」变成了「空间归属判断」。</li>
+      </ul>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Kimera 的 DSG 上层（物体 / 房间 / 楼层）之间，主要靠什么方式建立关联（连边）？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：逐帧 IoU / 匈牙利是 0160–0161 的对象级关联手段；Kimera 上层靠几何解析与空间关系（如包围盒落在哪个房间）连边，不做逐帧像素匹配。" onclick="lessonKit.answer(this,'q0163a')">它用逐帧IoU匹配</button>
+          <button data-correct="yes" data-explanation="对：DSG 上层靠「几何解析 + 空间关系」（如物体包围盒属于哪个房间多边形）建立边，底层网格内才用逐体素贝叶斯标签融合。" onclick="lessonKit.answer(this,'q0163a')">它靠几何与空间关系</button>
+        </div>
+        <div class="quiz-feedback" id="q0163a"></div>
+      </div>
+
+      <h2>7. 实时性、局限，以及与 Kimera-Multi 的关系</h2>
+      <p>Kimera 在 <b>NVIDIA TX2 嵌入式 CPU</b> 上做到实时：Kimera-Semantics 网格约 <b>0.1 s / 关键帧</b>，整系统 5 个线程并行，PGMO 形变优化增量进行。uHumans2 数据集（12 个新场景）上，数十个物体 / 人的复杂室内环境可在数分钟内建出 DSG。</p>
+      <p><b>作者自陈的局限</b>：物体层还没纳入「材料 / 功能（affordance）」等更丰富属性；动态实体目前只建模 human / robot 两类。</p>
+      <div class="callout" style="border-left:4px solid #e0a93a;">
+        <h4>⚠️ 关于 Kimera-Multi：本文未提及，请勿断言「前身」关系</h4>
+        <p>精读核实后确认：<b>这篇 2021 的 Kimera 总论文里，完全没有出现 Kimera-Multi</b>。因此<b>不能用它来佐证「Kimera 是 Kimera-Multi 的前身」</b>。能说的、有据的较弱表述只有：两者<b>同属 MIT-SPARK 团队血脉</b>，且 Kimera-Multi（2022）后续确实把这里的「度量-语义网格」做成了<b>分布式版本</b>——但这层关系是基于团队延续性的<b>推断</b>，不是本文给出的证据。写引用时务必标注「这是推断」，不要写成定论。（多机块的 0171 会正式展开 Kimera-Multi。）</p>
+      </div>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于「Kimera 是 Kimera-Multi 的前身」这句话，基于本课文件能得出什么结论？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：本课文件（2021 Kimera 总论文）未提及 Kimera-Multi，无法据此断言前身关系；只能较弱地说「同团队、同一表示体系延续」，且须标注为推断。" onclick="lessonKit.answer(this,'q0163b')">文件能证明是前身</button>
+          <button data-correct="yes" data-explanation="对：文件完全没提 Kimera-Multi，所以只能说「同属 MIT-SPARK、后续做成分布式」这一推断性较弱表述，并明确标注为推断，不能当定论。" onclick="lessonKit.answer(this,'q0163b')">文件不能证明前身</button>
+        </div>
+        <div class="quiz-feedback" id="q0163b"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>为什么说「文件名 2019_Kimera-Semantics 与内容不符」？这篇文件实际是什么？（诚实标注）</li>
+        <li>DSG 五层从底到顶各叫什么？每层主要存什么？层与层之间靠什么边连接？</li>
+        <li>Kimera-Semantics 模块（§3.3）具体做什么？它和 DSG 的关系是什么（产出哪一层）？</li>
+        <li>Kimera-Core 由哪四个模块组成？其中语义只是哪一个？</li>
+        <li>基于本课文件，能不能说「Kimera 是 Kimera-Multi 的前身」？为什么？（诚实标注）</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用生活类比解释「DSG 把 SLAM 降格为引擎里的一个模块」。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>传统 SLAM 像「摄影师」，任务就是拍出一张好地图。Kimera 像「盖房子的总包」——摄影师（SLAM / VIO）只是其中一个工种，产出的照片（度量-语义网格）被总包拿去，再交给结构师、水电工（Objects / Humans / BuildingParser）搭成整栋可入住的房子（DSG）。地图不再是目的，而是上游原材料。这正是「SLAM 降格为模块」的含义。</div></details>
+        </li>
+        <li>DSG 的 Layer 1（Metric-Semantic Mesh）和 0162 的 PanopticFusion 全景体素网格有什么联系？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两者是「同源不同形态」：PanopticFusion 用 TSDF 体素哈希存 stuff+things 的全景标签；Kimera-Semantics 也基于 Voxblox 的 TSDF 体素做逐体素贝叶斯标签融合，再经 marching cubes 抽成网格，就成了 DSG 的 Layer 1 Metric-Semantic Mesh。也就是说，0162 那种全景体素网格，正是 Kimera 底层网格的「体素版前身」；Kimera 多做了「抽网格 + 向上搭四层」这一步。</div></details>
+        </li>
+        <li>为什么 Kimera 的上层关联不靠逐帧 IoU / 匈牙利，而靠几何解析与空间关系？这算进步还是偷懒？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>这是表示能力升级后的「换打法」，而非偷懒。有了结构化的 rooms / places 层，很多关联问题变成了「空间归属判断」：一个物体包围盒落在哪个房间多边形里，就加一条「属于该房间」的边，远比逐帧像素匹配稳。它回避了 0160–0161 那种「关联判错就双杯」的脆弱性，代价是放弃了像素级的精细对应，适合「理解场景结构」而非「逐物体追得极准」的任务。</div></details>
+        </li>
+        <li>既然本课文件未提及 Kimera-Multi，为什么规则仍然允许我们说「两者同团队、后续做成分布式」？这句话该怎么措辞才不出错？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>允许说的是「较弱表述」：基于团队延续性（都署名 MIT-SPARK）和表示一致性（都用度量-语义网格），可推断 Kimera-Multi 是 Kimera 表示体系的分布式延续。但必须明确标注这是「推断」，因为本课文件（2021）本身没有任何文字提到 Kimera-Multi，无法提供直接证据。绝不能写「本文指出 Kimera 是 Kimera-Multi 的前身」或「前者催生了后者」这类定论式句子。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0162-PanopticFusion-全景分割建图.html">← 0162 PanopticFusion：全景分割建图</a>
+        <a class="next" href="0164-SO-SLAM-对象级尺度与方向.html">0164 SO-SLAM：对象级尺度与方向 →</a>
+      </div>
+      <p class="foot-note">从一张地图变成一张可问答的「场景图」，语义块的天花板就在这里 🏢</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

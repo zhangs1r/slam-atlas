@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态环境补充：激光侧与语义侧 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0158</div>
+      <h1>动态环境补充：激光侧与语义侧的两条延伸路线</h1>
+      <p class="subtitle">动态检测不只长在相机上 🔭——往激光侧看一眼 SW-NDT，再往语义侧借 SemanticFusion 的「可动类先验」</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态块的两条延伸对照</span>
+        <span>👥 作者：McCormac 等（SemanticFusion 2017）</span>
+        <span>📅 补充课 · 复用 2017_SemanticFusion</span>
+      </div>
+      <div class="toc">
+        <a href="#a">往激光侧看</a>
+        <a href="#b">往语义侧看</a>
+        <a href="#c">先验从哪来</a>
+        <a href="#d">两条路怎么喂给动态</a>
+        <a href="#e">横向链接</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 说清激光侧处理动态（0005 SW-NDT 思路）和视觉侧（0153 起）的根本差异；② 用 SemanticFusion 2017 解释「语义通道怎么被动态检测借用」；③ 指出 SemanticFusion 的 CRF 是标签平滑而非回环检测（纠正一处常见误读）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>激光侧回链第一季 <b>0005</b>（SW-NDT）——全项目第一次碰「动态」，那是激光侧做法，本块 0153 起才是视觉侧系统做法，二者是同一问题的两条传感路线。<b>0153</b> 的 DynaSLAM 用的正是 SemanticFusion 这条「语义分割当可动先验」的思路；<b>0147</b> 的 SAM / DINOv2 是更现代的「语义零件」。<b>0159</b> 下一节会把 SemanticFusion 当做「语义建图本身」完整展开，本课只取它的「语义通道」.</p></div>
+      </div>
+
+      <h2 id="b">1. 往激光侧看：同一问题，另一种传感器</h2>
+      <p>0153–0156 八篇几乎都长在相机上——靠像素、靠分割、靠对极和深度。但「环境会动」这个问题，激光雷达那边早就遇过了。第一季 <b>0005</b>（SW-NDT）就是全项目第一次碰动态：它用 NDT（正态分布变换）做扫描配准，靠「扫描到地图的残差」判断哪些点不参与静态结构，从而把动态物体从配准里排除。关键区别是——<b>激光侧根本不认识「人 / 车」，它只认「这个点这一帧和上一帧对不上」</b>。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="410" fill="#eef2f6"/>
+          <rect x="30" y="30" width="400" height="350" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="62" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">激光侧（0005 SW-NDT 思路）</text>
+          <polygon points="120,330 380,330 340,150 160,150" fill="#e9f7ef" stroke="#3a9d5d"/>
+          <text x="250" y="320" text-anchor="middle" font-size="13" fill="#1d6b3c">静止的墙 / 地</text>
+          <circle cx="160" cy="230" r="10" fill="#3a9d5d"/>
+          <circle cx="300" cy="220" r="10" fill="#3a9d5d"/>
+          <circle cx="230" cy="200" r="11" fill="#e0533d"/>
+          <text x="230" y="180" text-anchor="middle" font-size="13" fill="#a32617">走动的人</text>
+          <path d="M230,200 Q260,260 230,330" stroke="#e0533d" stroke-width="2" stroke-dasharray="5 4" fill="none"/>
+          <text x="230" y="365" text-anchor="middle" font-size="13" fill="#6b7785">残差大 → 不参与配准</text>
+          <text x="230" y="385" text-anchor="middle" font-size="13" fill="#6b7785">不认识物体，只认「对不上」</text>
+          <rect x="470" y="30" width="400" height="350" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="62" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">视觉侧（0153 起）</text>
+          <rect x="510" y="120" width="320" height="180" fill="#f3f6fa" stroke="#c2ccd6"/>
+          <rect x="560" y="180" width="60" height="44" fill="#fff3cf" stroke="#e0b449"/>
+          <rect x="660" y="180" width="60" height="44" fill="#d8f0ff" stroke="#4a90c2"/>
+          <text x="590" y="235" text-anchor="middle" font-size="12" fill="#7a5a00">人(红)</text>
+          <text x="690" y="235" text-anchor="middle" font-size="12" fill="#0b4f7a">车(蓝)</text>
+          <text x="670" y="160" text-anchor="middle" font-size="13" fill="#33414f">分割网络先给「可动类」</text>
+          <text x="670" y="320" text-anchor="middle" font-size="13" fill="#6b7785">认识物体，要 GPU / 训练</text>
+          <text x="670" y="385" text-anchor="middle" font-size="13" fill="#6b7785">几何再确认「此刻动没动」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是激光侧——一面静态墙和地用绿点表示，一个走动的人用红点表示，它和墙「对不上」形成大残差，于是被排除在 NDT 配准之外；右图是视觉侧——分割网络先把「人刷红、车刷蓝」当可动先验，几何再确认。<br>
+          <b>怎么看这张图：</b>① 激光侧的红点并不「知道」那是人，它只看到残差大；② 视觉侧的红框是「语义先验」，先入为主认为人可能动；③ 两条路都靠几何残差收尾，但视觉侧多了「类别知识」这一步，也因此多了算力与误删风险。<br>
+          <b>要记住的一句话：</b>激光侧用「配准残差」判动态，天生不依赖语义标签，是和视觉侧平行的另一种传感路线。
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>激光侧（如 SW-NDT 思路）判断一个点是动态的，主要依据是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：激光侧靠「扫描到地图的配准残差」——这个点这一帧和静态地图对不上，就当成动态排除，它并不先识别物体类别。" onclick="lessonKit.answer(this,'q0158a')">它和静态地图对不上</button>
+          <button data-correct="no" data-explanation="错：识别「人 / 车」是视觉语义路线的做法；激光侧天生不认识物体，只认几何残差。" onclick="lessonKit.answer(this,'q0158a')">它属于「人 / 车」类别</button>
+        </div>
+        <div class="quiz-feedback" id="q0158a"></div>
+      </div>
+
+      <h2 id="c">2. 往语义侧看：SemanticFusion 2017 的语义通道</h2>
+      <p>动态块八篇里，DynaSLAM、DS-SLAM、室外动态、WF-SLAM 都靠「分割网络给可动类先验」。这个思路的源头可以追溯到 SemanticFusion（2017，RSS）：它把逐像素 CNN 语义分割递归贝叶斯融合进 ElasticFusion 的 <b>surfel</b> 地图，开「稠密语义建图」先河。本课只取它最有用的那一半——<b>「语义通道」是怎么产出「可动类先验」的</b>；完整的语义建图（surfel 上挂概率、CRF 平滑、实例级）留给 0159。</p>
+      <p>SemanticFusion 的流水线很直观：相机图像一边送进 SLAM（ElasticFusion）建几何地图，一边送进 CNN 出每像素类概率；两类信息在 surfel 上汇合。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#f5f7fa"/>
+          <rect x="30" y="40" width="180" height="70" rx="8" fill="#d8f0ff" stroke="#4a90c2"/>
+          <text x="120" y="72" text-anchor="middle" font-size="14" fill="#0b4f7a">输入图像</text>
+          <line x1="210" y1="75" x2="260" y2="75" stroke="#9aa7b4" marker-end="url(#b1)"/>
+          <rect x="270" y="30" width="200" height="70" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="370" y="62" text-anchor="middle" font-size="14" fill="#7a5a00">CNN 逐像素</text>
+          <text x="370" y="84" text-anchor="middle" font-size="13" fill="#7a5a00">类概率图</text>
+          <line x1="470" y1="65" x2="520" y2="120" stroke="#9aa7b4" marker-end="url(#b1)"/>
+          <rect x="270" y="120" width="200" height="70" rx="8" fill="#e9f7ef" stroke="#3a9d5d"/>
+          <text x="370" y="152" text-anchor="middle" font-size="14" fill="#1d6b3c">SLAM 地图</text>
+          <text x="370" y="174" text-anchor="middle" font-size="13" fill="#1d6b3c">（surfel）</text>
+          <line x1="470" y1="155" x2="520" y2="200" stroke="#9aa7b4" marker-end="url(#b1)"/>
+          <rect x="540" y="190" width="200" height="80" rx="8" fill="#ffffff" stroke="#1f3a5f"/>
+          <text x="640" y="222" text-anchor="middle" font-size="14" fill="#1f3a5f">贝叶斯融合</text>
+          <text x="640" y="246" text-anchor="middle" font-size="12" fill="#33414f">多帧概率→surfel</text>
+          <line x1="740" y1="230" x2="800" y2="230" stroke="#9aa7b4" marker-end="url(#b1)"/>
+          <rect x="810" y="190" width="70" height="80" rx="8" fill="#fdecea" stroke="#e0533d"/>
+          <text x="845" y="222" text-anchor="middle" font-size="13" fill="#a32617">语义</text>
+          <text x="845" y="244" text-anchor="middle" font-size="13" fill="#a32617">地图</text>
+          <text x="370" y="330" text-anchor="middle" font-size="14" fill="#6b7785">这条「语义通道」产出的类标签，</text>
+          <text x="370" y="356" text-anchor="middle" font-size="14" fill="#6b7785">正是下游动态检测想要的「可动类先验」</text>
+          <text x="370" y="388" text-anchor="middle" font-size="13" fill="#6b7785">（人 / 车 → 潜在动态候选）</text>
+          <defs><marker id="b1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa7b4"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>这是 SemanticFusion 的流水线概览（对应原文 Fig.2）：输入图像兵分两路，一路进 CNN 出逐像素类概率图，一路进 SLAM 建 surfel 几何地图；两者用递归贝叶斯更新融合到同一个 surfel 上，得到稠密语义地图。<br>
+          <b>怎么看这张图：</b>① 本课关心的不是右边最终语义地图，而是中间那条「CNN 类概率」通道；② 这类概率图一旦标出「人 / 车」，下游动态 SLAM 就能直接拿它当「潜在动态候选」；③ 所以 SemanticFusion 虽然是「语义建图」论文，它的语义通道却被 0153 起的动态方法当成了现成零件。<br>
+          <b>要记住的一句话：</b>动态检测要的「可动类先验」，本质上就是 SemanticFusion 这条语义通道的输出。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2017_SemanticFusion/01ca5629574699a50d9dcce8a0f332a593375e4a44cdc56a92c708a7fef7a969.jpg" alt="SemanticFusion system output: surfel reconstruction and semantic annotation">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The output of our system: On the left, a dense surfel based reconstruction from a video sequence in the NYUv2 test set. On the right the same map, semantically annotated with the classes given in the legend below.<br>
+          <b>怎么看这张图：</b>左图是纯几何的 surfel 重建（一张密集点面地图），右图在同一个地图上叠加了逐像素语义标签（墙、地、家具、人等按图例着色）。本课要你盯的是「人」被标成了单独一类——这正是动态检测眼里最该警惕的「可动类」。注意 surfel 地图只存几何＋逐点语义概率，不区分「这是第几个杯子」（那是实例级，属 0159 / 0160 之后）。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 先验从哪来：一张反卷积 CNN</h2>
+      <p>语义通道的「类概率」不是凭空来的，而是一个反卷积网络（Noh 等，VGG16 主干）在 RGB（或 RGB-D 多一通道）上逐帧预测的。理解它的结构，你就明白为什么下游动态方法愿意「白跑一次网络」去换可动先验。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_SemanticFusion/fd5d86bcfb58263bb9ff20bf8705b0207a4844d0f9bc046a2aa475e904ead774.jpg" alt="SemanticFusion CNN architecture: deconvolutional network of Noh et al.">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>CNN Architecture: RGB-CNN of Noh et al. used in our experiments. 「conv3」 denotes a 3×3 kernel size, with unit border padding. BN denotes batch normalisation. For RGBD experiments, the input actually has 4 channels.<br>
+          <b>怎么看这张图：</b>这是一个编码–反卷积结构：下采样提取特征，再上采样恢复成逐像素的类别热力图。注意原文特别说明「RGBD 实验输入其实是 4 通道」——多出来的那一通道就是深度。本课把它和动态检测连起来看：深度通道让这个语义先验同时带几何信息，下游（如 DynaSLAM 的多视角深度一致性）就能更稳地确认「这个被标成人的是不是真在动」。
+        </figcaption>
+      </figure>
+      <p>一个诚实的提醒：这类逐像素语义网络有个老毛病——<b>它只能给「类」，给不出「这是第几个人 / 第几辆车」</b>（实例级要靠 Co-Fusion / MaskFusion，见 0160）。所以下游动态方法拿它当「可动类先验」时，只能整类剔除，没法逐物体追踪——这也正是 DynaSLAM II（0155）要换实例分割、并进一步「留＋追踪」的动机。</p>
+
+      <h3>3.1 一处必须纠正的误读：CRF 不是回环检测</h3>
+      <p>SemanticFusion 用了一个<b>全连接 CRF</b>（Krähenbühl & Koltun 模型）给标签做空间平滑——让相邻的像素更可能标成同一类，修掉分割的锯齿。但一篇 2023 年的综述（本季语义块精读材料已核实）把它的 CRF 说成「enabling loop detection（促成回环检测）」，<b>这是错的</b>：CRF 在 SemanticFusion 里只做标签平滑，和回环毫无关系。引用时请勿采信这个误读。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="360" fill="#f5f7fa"/>
+          <rect x="60" y="50" width="340" height="260" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="82" text-anchor="middle" font-size="16" font-weight="700" fill="#1d6b3c">CRF 实际作用</text>
+          <text x="230" y="130" text-anchor="middle" font-size="14" fill="#33414f">标签空间平滑</text>
+          <text x="230" y="160" text-anchor="middle" font-size="13" fill="#6b7785">邻域像素更像同一类</text>
+          <text x="230" y="200" text-anchor="middle" font-size="13" fill="#6b7785">修分割锯齿</text>
+          <text x="230" y="250" text-anchor="middle" font-size="13" fill="#1d6b3c">✓ 原文真实用途</text>
+          <rect x="500" y="50" width="340" height="260" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="82" text-anchor="middle" font-size="16" font-weight="700" fill="#a32617">误读：CRF＝回环</text>
+          <text x="670" y="130" text-anchor="middle" font-size="14" fill="#33414f">「enabling loop</text>
+          <text x="670" y="155" text-anchor="middle" font-size="14" fill="#33414f">detection」</text>
+          <text x="670" y="200" text-anchor="middle" font-size="13" fill="#6b7785">把标签平滑当回环</text>
+          <text x="670" y="250" text-anchor="middle" font-size="13" fill="#a32617">✗ 2023 综述错读</text>
+          <line x1="500" y1="290" x2="840" y2="290" stroke="#e0533d" stroke-width="3"/>
+          <text x="670" y="320" text-anchor="middle" font-size="13" fill="#a32617">写课时务必纠正，勿采信</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左半边是 SemanticFusion 里 CRF 的真实角色——对逐像素语义标签做空间平滑；右半边是某综述的误读——把 CRF 说成「促成回环检测」，并用一道红叉划掉。<br>
+          <b>怎么看这张图：</b>① CRF 操作的对象是「标签的邻域一致性」，和「两帧是不是同一个地方」的回环完全是两件事；② 这个误读出自一篇 2023 综述的 §V-A，本季语义块精读时已核实；③ 诚实标注不确定性是硬规范，遇到这类冲突必须显式纠正而非照搬。<br>
+          <b>要记住的一句话：</b>SemanticFusion 的 CRF 只做标签平滑，不是回环检测——引用前先核对原文。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 两条延伸路线怎么喂给动态检测</h2>
+      <p>把这一节收个口：动态环境的「判动」可以从两个外侧借力，而它们喂给动态检测的东西恰好互补。</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h3>激光侧 → 给「几何残差」</h3>
+          <p>激光用扫描配准残差直接判「这个点对不上」，不依赖任何标签，也不耗分割网络。它对应动态块里<b>纯几何派</b>（DSLAM、CRF、Dynam）的同源思想——靠运动残差，不靠类别。</p>
+        </div>
+        <div class="mini-card">
+          <h3>语义侧 → 给「可动类先验」</h3>
+          <p>SemanticFusion 这类语义通道产出「人 / 车」类概率，下游动态方法直接拿它当<b>潜在动态候选</b>。它对应动态块里<b>语义派</b>（DynaSLAM、DS-SLAM、室外、WF）的先验来源，省去了「从零训分割」的力气。</p>
+        </div>
+      </div>
+      <p>这也是为什么 0152 导览说「动态 ↔ 语义」是四块间最强的交叉：<b>动态检测最省力的「动」信号，恰恰来自语义分割</b>。0159 会把 SemanticFusion 当「语义建图本身」完整展开（surfel 上挂概率分布、CRF 平滑、与实例级的关系），而本课只是先把它最有用的「语义通道」借给动态块用上。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面这话对不对：「SemanticFusion 的语义通道输出，已经能区分『这是第几个人』，所以动态 SLAM 可以直接逐人追踪。」</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：SemanticFusion 是逐像素语义，不区分实例（第几个人 / 第几辆车），只能整类标「人」。逐物体追踪要等 Co-Fusion / MaskFusion（0160）和 DynaSLAM II 的实例分割。" onclick="lessonKit.answer(this,'q0158b')">这是不对的</button>
+          <button data-correct="yes" data-explanation="对：它只给「类」不给「实例」，下游只能整类剔除，无法逐物体追踪——这正是 DynaSLAM II 要换实例分割并「留＋追踪」的原因。" onclick="lessonKit.answer(this,'q0158b')">这是过于夸大的</button>
+        </div>
+        <div class="quiz-feedback" id="q0158b"></div>
+      </div>
+
+      <h2>5. 横向链接与下一步</h2>
+      <ul>
+        <li><b>↔ 0153 / 0156</b>：DynaSLAM、DS-SLAM、WF-SLAM 的「可动类先验」正是本课讲的语义通道产物，现在你知道它最早来自 SemanticFusion 这条脉络。</li>
+        <li><b>↔ 0005</b>：激光侧 SW-NDT 是同一「环境会动」问题在另一种传感器上的解答，和视觉侧平行。</li>
+        <li><b>↔ 0147</b>：SAM / DINOv2 是现代版「语义零件」，比 2017 的逐像素 CNN 更强，动态 / 语义块都在用它们当现成工具。</li>
+        <li><b>→ 0159</b>：下一节正式进入语义建图块，把 SemanticFusion 当「语义建图本身」完整讲——surfel 概率地图、CRF、与实例级（0160）的衔接。</li>
+      </ul>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>激光侧（0005 SW-NDT 思路）和视觉侧（0153 起）判断「动」的根本差异是什么？各自最大的盲区？</li>
+        <li>SemanticFusion 2017 的「语义通道」是怎么被下游动态检测当「可动类先验」借用的？</li>
+        <li>SemanticFusion 的逐像素语义有什么先天不足，导致动态 SLAM 不能直接拿它做「逐物体追踪」？</li>
+        <li>为什么综述里「CRF 促成回环检测」是错的？正确的 CRF 用途是什么？</li>
+        <li>激光侧和语义侧，分别喂给动态检测的是什么东西（几何残差 vs 可动类先验）？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用一句话说明「动态 ↔ 语义」为什么是四块里最强的交叉，并举出本课提到的一个具体证据。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为动态检测最省力的「动」信号就来自语义分割——把「人」整类划掉。具体证据：SemanticFusion 2017 的逐像素语义通道产出的类概率，正是 0153 起 DynaSLAM / DS-SLAM / WF-SLAM 直接当「可动类先验」用的东西。语义通道给动态检测提供了现成零件，所以两块咬合最紧。</div></details>
+        </li>
+        <li>如果让你设计一个「不依赖 GPU、又要可动类先验」的动态 SLAM，激光侧思路和 SemanticFusion 语义通道哪个更适合？为什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>选激光侧思路更合适。因为 SemanticFusion 的语义通道依赖 CNN 逐帧推理，要 GPU / 训练数据；而激光侧靠扫描配准残差判动，不依赖标签、不需要神经网络，和动态块里纯几何派（DSLAM 30.65 ms、CRF 16–18 fps 无 GPU）同源。若要「可动类先验」又不想跑网络，只能退化成「所有残差大的都当动态」，牺牲类别知识换实时。</div></details>
+        </li>
+        <li>为什么下游动态方法用 SemanticFusion 的语义先验时只能「整类剔除」，而不是直接「逐物体追踪」？这给 0155 的 DynaSLAM II 留下了什么改进空间？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为 SemanticFusion 是逐像素语义、不区分实例，只告诉你是「人」这个类，不告诉你是「第几个人」。所以下游只能把整类当潜在动态一刀切。DynaSLAM II 的改进空间就在于换用实例分割（instance seg），把每个可动物体单独关联成轨迹，从「删」升级到「留＋追踪」，从而既保留有用特征又拿到运动线索。</div></details>
+        </li>
+        <li>请纠正下面这句话并说明依据：「SemanticFusion 用 CRF 来做回环检测，从而提升了动态场景下的定位精度。」
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>纠正：SemanticFusion 的 CRF 只用于「标签空间平滑」（让邻域像素更可能同属一类，修分割锯齿），与回环检测无关；把它当回环是某 2023 综述的误读，原文并未如此使用。依据：本季语义块精读已核实该综述 §V-A 的 CRF＝loop detection 说法错误，且 SemanticFusion 全文 CRF 用途是标签后处理。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0157-动态块小结-代价账与验收.html">← 0157 动态块小结：代价账与验收</a>
+        <a class="next" href="0159-SemanticFusion2017-语义建图的开端.html">0159 SemanticFusion：语义建图的开端 →</a>
+      </div>
+      <p class="foot-note">动态检测的两端——几何残差与可动先验——都有了来路 🔭 下一节正式踏入语义建图块。</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

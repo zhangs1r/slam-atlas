@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SemanticFusion 2017：语义建图的开端 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0159</div>
+      <h1>SemanticFusion 2017：语义建图的开端</h1>
+      <p class="subtitle">当 SLAM 第一次给地图里的每个点都贴上「这是什么」的标签 🏷️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：稠密语义建图的起点</span>
+        <span>👥 作者：McCormac、Handa、Davison、Leutenegger（帝国理工）</span>
+        <span>📅 2017 · <i>SemanticFusion: Dense 3D Semantic Mapping with CNNs (RSS)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">要解决什么</a>
+        <a href="#b">surfel 地图</a>
+        <a href="#c">语义从哪来</a>
+        <a href="#d">贝叶斯融合</a>
+        <a href="#e">完整流水线</a>
+        <a href="#f">surfel 的天花板</a>
+        <a href="#g">实时性与误读</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 说清 SemanticFusion 为什么是「稠密语义建图」的开端；② 讲出 surfel 地图是怎么「挂」上语义概率分布的；③ 复述递归贝叶斯融合公式及其人话含义；④ 指出 surfel 表示的天花板（没有自由空间），为后面的体素路线（0161–0162）埋好伏笔。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p><b>0158</b> 已经借用过 SemanticFusion 的「语义通道」给动态检测当可动先验——那只是它的副产物，本节课把它当「语义建图本身」完整展开。<b>0054–0056</b>（CNN-SLAM / CodeSLAM / DeepFactors）是同一时期「用 CNN 出深度」的学习式 SLAM 上一代，可对照看「语义」与「深度」两条 CNN 用途。<b>0114</b> 把语义当感知零件、<b>0147</b> 的 SAM / DINOv2 是现代版语义零件——SemanticFusion 是这条脉络最早的、最朴素的版本。</p></div>
+      </div>
+
+      <h2 id="b">1. 这一节要解决什么疑惑</h2>
+      <p>前面七季里，地图几乎都是「几何」：点、面、体素、轨迹。它知道「墙在哪、桌子多高」，却不知道「那是墙、那是桌子」。生活里这就很别扭——你闭上眼让机器人给你递个杯子，它知道杯子在空间里的坐标，却说不出「那是个杯子」。语义建图块要补的就是这件事：<b>给地图里的每个点贴上「这是什么」的标签</b>。</p>
+      <p>SemanticFusion（2017，RSS）做的事很朴素也很关键：一边跑 SLAM（用的还是 ElasticFusion 那套 surfel 地图），一边用 CNN 给每一帧图像做逐像素语义分割，再把多帧的语义「揉」到同一个三维地图上。它第一次做到了<b>稠密（dense）、在线、带语义标签</b>的三维重建，是整个语义建图块公认的起点。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="380" fill="#eef2f6"/>
+          <rect x="30" y="40" width="380" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="220" y="72" text-anchor="middle" font-size="16" font-weight="700" fill="#1f3a5f">只有几何的地图</text>
+          <polygon points="120,300 360,300 320,150 160,150" fill="#d7dee6" stroke="#9aa7b4"/>
+          <text x="240" y="245" text-anchor="middle" font-size="13" fill="#5a6675">一堆面，不知道是啥</text>
+          <text x="240" y="330" text-anchor="middle" font-size="13" fill="#6b7785">「墙」和「桌子」长得一样灰</text>
+          <rect x="490" y="40" width="380" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="680" y="72" text-anchor="middle" font-size="16" font-weight="700" fill="#1f3a5f">带语义的地图</text>
+          <polygon points="580,300 820,300 780,150 620,150" fill="#cfe3d2" stroke="#3a9d5d"/>
+          <rect x="600" y="160" width="70" height="120" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="635" y="228" text-anchor="middle" font-size="12" fill="#7a5a00">桌子</text>
+          <text x="680" y="330" text-anchor="middle" font-size="13" fill="#2d6b3c">每个面有自己的标签</text>
+          <text x="680" y="352" text-anchor="middle" font-size="13" fill="#6b7785">机器人终于「认识」场景</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是传统几何地图——只有形状和位置，所有表面一个颜色；右图是 SemanticFusion 想要的地图——不同表面被刷上不同语义颜色（桌子=黄、墙=绿），机器人能「认出」场景里有什么。<br>
+          <b>怎么看这张图：</b>① 区别不在几何精度，而在「是否知道物体类别」；② 这正是语义建图块要补的能力；③ 后面的课会看到，光「认出类别」还不够，还要认出「这是第几个」。<br>
+          <b>要记住的一句话：</b>语义建图 = 在几何地图的每个点 / 区域上，额外挂一个「这是什么」的标签。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. surfel 地图长什么样</h2>
+      <p>SemanticFusion 直接站在 ElasticFusion 的肩膀上。ElasticFusion 的地图表示叫 <b>surfel</b>（surface element，面元）——你可以把它想成「把物体表面贴满密密麻麻的小圆片」，每个圆片记着自己那一小块的颜色、法向、位置。它不是体素，不存物体内部，只存表面。</p>
+      <p>关键来了：SemanticFusion 在每个 surfel 上<b>额外挂一个「各类别的离散概率分布」</b>。也就是说，一个 surfel 不再是「纯灰」，而是「80% 像桌子、15% 像椅子、5% 像别的」。这就是它「存语义」的方式——用概率分布，而不是一个死标签。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#f5f7fa"/>
+          <text x="450" y="40" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">一张真实的沙发，表面被贴满 surfel 小圆片</text>
+          <rect x="250" y="90" width="400" height="170" rx="18" fill="#e9d9c3" stroke="#b89b78" stroke-width="2"/>
+          <rect x="270" y="250" width="60" height="90" rx="10" fill="#e9d9c3" stroke="#b89b78" stroke-width="2"/>
+          <rect x="570" y="250" width="60" height="90" rx="10" fill="#e9d9c3" stroke="#b89b78" stroke-width="2"/>
+          <circle cx="300" cy="130" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="345" cy="125" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="390" cy="132" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="435" cy="122" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="480" cy="130" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="525" cy="126" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="570" cy="132" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="615" cy="125" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="320" cy="180" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="380" cy="185" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="440" cy="178" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="500" cy="184" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="560" cy="180" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="600" cy="186" r="13" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="290" cy="285" r="11" fill="#f6c453" stroke="#d9a93a"/>
+          <circle cx="600" cy="285" r="11" fill="#f6c453" stroke="#d9a93a"/>
+          <line x1="635" y1="125" x2="700" y2="95" stroke="#9aa7b4"/>
+          <text x="710" y="92" font-size="13" fill="#7a5a00">每个小圆片</text>
+          <text x="710" y="112" font-size="13" fill="#7a5a00">记着颜色+法向</text>
+          <text x="710" y="134" font-size="13" fill="#7a5a00">+ 各类别概率</text>
+          <rect x="250" y="365" width="400" height="50" rx="8" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="450" y="395" text-anchor="middle" font-size="13" fill="#33414f">surfel = 贴满表面的小面片，只存「表面」，不存内部</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一张真实沙发的表面被密密麻麻的小圆片（surfel）覆盖，每个圆片用黄色标出——它们各自存着一小块的颜色、法向，以及「像桌子 / 椅子 / 沙发」的概率分布。<br>
+          <b>怎么看这张图：</b>① surfel 是「表面采样」，不是体素，所以天然不存物体内部；② 语义不是贴在整张沙发上的一句话，而是「分摊」到每个 surfel 的小概率；③ 这正是 SemanticFusion「挂语义」的物理位置。<br>
+          <b>要记住的一句话：</b>surfel 上挂的不是单个标签，而是「各类别的概率分布」，靠多帧融合来变准。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 语义从哪来：一张反卷积 CNN</h2>
+      <p>每个 surfel 的「语义概率」不是凭空来的，而是来自一个逐像素语义分割网络。SemanticFusion 用的是 Noh 等人的<b>反卷积网络</b>（VGG16 主干）：输入一张 RGB 图（或 RGB-D，多一个深度通道），输出一张和原图一样大的「各类别热力图」——每个像素都有一组「像墙 / 像地 / 像桌子…」的概率。</p>
+      <p>训练套路是：先在 PASCAL VOC 2012 上预训练，再在 NYUv2 的 13 个室内类别上微调。注意它做的是<b>逐像素语义</b>——只告诉你是「椅子」这个类，不告诉你是「第几把椅子」（那是后面的实例级，见 0160）。而且它<b>逐帧独立预测</b>，帧与帧之间的语义一致性，是靠 SLAM 把标签「贴」回地图来维系的。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_SemanticFusion/fd5d86bcfb58263bb9ff20bf8705b0207a4844d0f9bc046a2aa475e904ead774.jpg" alt="SemanticFusion CNN architecture: deconvolutional network of Noh et al.">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>CNN Architecture: RGB-CNN of Noh et al. used in our experiments. 「conv3」 denotes a 3×3 kernel size, with unit border padding. BN denotes batch normalisation. For RGBD experiments, the input actually has 4 channels.<br>
+          <b>怎么看这张图：</b>这是一个「编码–反卷积」结构：左边下采样提取特征，右边上采样把特征「摊」回逐像素的类别热力图。注意原文特别说明 RGBD 实验输入其实是 4 通道——多出来的那一路就是深度。本课要你记住：这个网络只负责「给每张图出语义概率」，真正的「多帧融合」是下一步的事。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 核心操作：递归贝叶斯融合</h2>
+      <p>现在到了全文最关键的式子。SLAM 已经把每个 surfel 的几何位置定好了，CNN 又不断给每个像素出新标签。问题变成：<b>怎么把不断到来的「这一帧的标签看法」和「地图里已有的看法」合并？</b> SemanticFusion 用的是递归贝叶斯更新——每来一帧，就拿新证据去「修正」旧概率。</p>
+      <div class="formula-box"><div class="flow-formula">$$P(l_i \mid I_{1..k}) = \frac{1}{Z}\; P(l_i \mid I_{1..k-1})\; P(O_u = l_i \mid I_k)$$</div></div>
+      <p><b>这句话在说什么：</b>「surfel 上标签 = 第 i 类」这件事的置信度，等于「上一帧为止的置信度」乘以「这一帧 CNN 说它是第 i 类的似然」，再除以一个归一化常数 Z。用人话说就是——<b>旧看法 × 新证据 = 更新后的看法</b>。看的次数越多、看法越一致，最终概率就越集中、越准。这就是「递归」二字的含义：永远拿当前结果去接下一帧，不必回放历史。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#f5f7fa"/>
+          <text x="450" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">同一个杯子被反复看到，概率条逐渐收敛到「杯子」</text>
+          <rect x="40" y="300" width="820" height="110" rx="8" fill="#ffffff" stroke="#cfd8e3"/>
+          <line x1="60" y1="300" x2="60" y2="410" stroke="#9aa7b4"/>
+          <line x1="60" y1="410" x2="850" y2="410" stroke="#9aa7b4"/>
+          <text x="55" y="320" font-size="12" fill="#6b7785">概率</text>
+          <text x="70" y="406" font-size="12" fill="#6b7785">帧 1→5</text>
+          <rect x="95" y="330" width="40" height="20" fill="#7ec4f0"/>
+          <rect x="95" y="352" width="40" height="20" fill="#f6c453"/>
+          <rect x="95" y="374" width="40" height="20" fill="#b7e0a8"/>
+          <text x="115" y="424" text-anchor="middle" font-size="11" fill="#33414f">帧1</text>
+          <text x="115" y="280" text-anchor="middle" font-size="12" fill="#5a6675">杯/碗/瓶 还很散</text>
+          <rect x="250" y="335" width="40" height="15" fill="#7ec4f0"/>
+          <rect x="250" y="352" width="40" height="23" fill="#f6c453"/>
+          <rect x="250" y="377" width="40" height="13" fill="#b7e0a8"/>
+          <text x="270" y="424" text-anchor="middle" font-size="11" fill="#33414f">帧2</text>
+          <rect x="405" y="340" width="40" height="10" fill="#7ec4f0"/>
+          <rect x="405" y="352" width="40" height="30" fill="#f6c453"/>
+          <rect x="405" y="384" width="40" height="11" fill="#b7e0a8"/>
+          <text x="425" y="424" text-anchor="middle" font-size="11" fill="#33414f">帧3</text>
+          <rect x="560" y="345" width="40" height="7" fill="#7ec4f0"/>
+          <rect x="560" y="352" width="40" height="38" fill="#f6c453"/>
+          <rect x="560" y="392" width="40" height="8" fill="#b7e0a8"/>
+          <text x="580" y="424" text-anchor="middle" font-size="11" fill="#33414f">帧4</text>
+          <rect x="715" y="350" width="40" height="4" fill="#7ec4f0"/>
+          <rect x="715" y="352" width="40" height="46" fill="#f6c453"/>
+          <rect x="715" y="400" width="40" height="2" fill="#b7e0a8"/>
+          <text x="735" y="424" text-anchor="middle" font-size="11" fill="#33414f">帧5</text>
+          <rect x="40" y="60" width="240" height="90" rx="10" fill="#fff7e6" stroke="#e0b449"/>
+          <text x="160" y="92" text-anchor="middle" font-size="13" fill="#7a5a00">蓝=碗 黄=杯子</text>
+          <text x="160" y="116" text-anchor="middle" font-size="13" fill="#7a5a00">绿=瓶子</text>
+          <rect x="620" y="60" width="240" height="90" rx="10" fill="#eafaf0" stroke="#3a9d5d"/>
+          <text x="740" y="92" text-anchor="middle" font-size="13" fill="#1d6b3c">越看越像杯子</text>
+          <text x="740" y="116" text-anchor="middle" font-size="13" fill="#1d6b3c">别的类别被压下去</text>
+          <path d="M285,105 C420,60 540,60 615,105" stroke="#9aa7b4" stroke-width="2" fill="none" marker-end="url(#ar1)"/>
+          <defs><marker id="ar1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa7b4"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个杯子被相机反复看到，五帧里「像碗 / 像杯子 / 像瓶子」的概率条逐渐变化：一开始三类都挺高（很散），看到第 5 帧时黄色（杯子）几乎占满，蓝绿被压到很小。<br>
+          <b>怎么看这张图：</b>① 这正是递归贝叶斯更新的效果——每帧都用新证据把概率往「更准」推；② 收敛的意义是「多看几眼就认准了」，单帧不准没关系；③ 它解释了为什么 SemanticFusion 单帧 class-avg 只有 39.4%，融合后却到 48.6%。<br>
+          <b>要记住的一句话：</b>语义不是「一帧定生死」，而是「多帧投票、越看越准」。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. 完整流水线</h2>
+      <p>把上面几步串起来，就是 SemanticFusion 的流水线：相机图像兵分两路，一路进 SLAM（ElasticFusion）建 surfel 几何地图，一路进 CNN 出逐像素类概率图；两者通过 SLAM 已有的「帧→地图」投影关联，把 2D 标签贴到 3D surfel 上，再用递归贝叶斯融合。CRF 是最后一步的空间平滑（修掉分割锯齿）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_SemanticFusion/01ca5629574699a50d9dcce8a0f332a593375e4a44cdc56a92c708a7fef7a969.jpg" alt="SemanticFusion system output: surfel reconstruction and semantic annotation">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The output of our system: On the left, a dense surfel based reconstruction from a video sequence in the NYUv2 test set. On the right the same map, semantically annotated with the classes given in the legend below.<br>
+          <b>怎么看这张图：</b>左图是纯几何的 surfel 重建（密集点面地图），右图在同一个地图上叠加了逐像素语义标签（按图例着色）。本课要你盯两件事：一是它确实「稠密」地给每个点上了色；二是它只做逐像素语义，不区分「这是第几个杯子」——那是实例级，属 0160 之后。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2017_SemanticFusion/f29d9f47936704089293c5c7280f3c832c5e6f0c02cb1c28bd4d25a328d37589.jpg" alt="SemanticFusion pipeline overview with probability prediction maps">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>An overview of our pipeline: Input images are used to produce a SLAM map, and a set of probability prediction maps (here only four are shown). These maps are fused into the final dense semantic map via Bayesian updates.<br>
+          <b>怎么看这张图：</b>这张总览图把「SLAM 地图」和「一组概率预测图」并列，再用贝叶斯更新融合成最终稠密语义地图。它和 0158 借用的「语义通道」是同一个东西——只是 0158 只取它当动态检测的可动先验，这里才是它的本职。
+        </figcaption>
+      </figure>
+
+      <h2 id="g">6. surfel 的天花板：没有自由空间</h2>
+      <p>SemanticFusion 开了个好头，但它的地图表示 surfel 有个天生的短板，也正是后面体素路线要解决的：<b>surfel 只存表面，不存物体内部，也不存「自由空间」</b>。一个 surfel 地图能告诉你「墙表面在哪」，却说不清「墙后面是不是通的、房间之间怎么连」。这种「可达性 / 连通性」信息，对导航级任务（机器人能不能从 A 走到 B）是命根子。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="410" fill="#f5f7fa"/>
+          <text x="450" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">surfel 只存「表面」，内部与自由空间是一片空白</text>
+          <rect x="40" y="70" width="380" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">surfel 表示</text>
+          <rect x="90" y="130" width="280" height="200" fill="none" stroke="#b89b78" stroke-width="3"/>
+          <circle cx="120" cy="160" r="6" fill="#f6c453"/>
+          <circle cx="160" cy="150" r="6" fill="#f6c453"/>
+          <circle cx="200" cy="165" r="6" fill="#f6c453"/>
+          <circle cx="150" cy="200" r="6" fill="#f6c453"/>
+          <circle cx="220" cy="210" r="6" fill="#f6c453"/>
+          <circle cx="180" cy="250" r="6" fill="#f6c453"/>
+          <circle cx="300" cy="190" r="6" fill="#f6c453"/>
+          <circle cx="320" cy="250" r="6" fill="#f6c453"/>
+          <text x="230" y="300" text-anchor="middle" font-size="13" fill="#7a5a00">只有框上的小点(表面)</text>
+          <text x="230" y="322" text-anchor="middle" font-size="13" fill="#7a5a00">框内=空 框外=空</text>
+          <text x="230" y="352" text-anchor="middle" font-size="13" fill="#a32617">✗ 不知道哪能走</text>
+          <rect x="480" y="70" width="380" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">体素表示(后文)</text>
+          <rect x="520" y="130" width="280" height="200" fill="none" stroke="#b89b78" stroke-width="3"/>
+          <g fill="#cfe3d2">
+            <rect x="525" y="135" width="22" height="22"/><rect x="549" y="135" width="22" height="22"/>
+            <rect x="573" y="135" width="22" height="22"/><rect x="597" y="135" width="22" height="22"/>
+            <rect x="621" y="135" width="22" height="22"/><rect x="645" y="135" width="22" height="22"/>
+            <rect x="669" y="135" width="22" height="22"/><rect x="693" y="135" width="22" height="22"/>
+            <rect x="525" y="159" width="22" height="22"/><rect x="549" y="159" width="22" height="22"/>
+            <rect x="573" y="159" width="22" height="22"/><rect x="597" y="159" width="22" height="22"/>
+            <rect x="621" y="159" width="22" height="22"/><rect x="645" y="159" width="22" height="22"/>
+          </g>
+          <g fill="#d8e6f5">
+            <rect x="669" y="159" width="22" height="22"/><rect x="693" y="159" width="22" height="22"/>
+            <rect x="525" y="183" width="22" height="22"/><rect x="549" y="183" width="22" height="22"/>
+            <rect x="573" y="183" width="22" height="22"/><rect x="597" y="183" width="22" height="22"/>
+            <rect x="621" y="183" width="22" height="22"/><rect x="645" y="183" width="22" height="22"/>
+            <rect x="669" y="183" width="22" height="22"/><rect x="693" y="183" width="22" height="22"/>
+            <rect x="525" y="207" width="22" height="22"/><rect x="549" y="207" width="22" height="22"/>
+            <rect x="573" y="207" width="22" height="22"/><rect x="597" y="207" width="22" height="22"/>
+            <rect x="645" y="207" width="22" height="22"/><rect x="669" y="207" width="22" height="22"/>
+            <rect x="693" y="207" width="22" height="22"/>
+          </g>
+          <text x="670" y="300" text-anchor="middle" font-size="13" fill="#2d6b3c">小方块填满空间</text>
+          <text x="670" y="322" text-anchor="middle" font-size="13" fill="#2d6b3c">能标「可走 / 不可走」</text>
+          <text x="670" y="352" text-anchor="middle" font-size="13" fill="#1d6b3c">✓ 支持导航级抽象</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图 surfel 只在物体「外壳」上撒小点，框内框外都是空白，所以无从判断哪里是自由空间；右图体素表示把空间切成小方块填满，哪些空、哪些实一目了然（这是 0161–0162 的主角）。<br>
+          <b>怎么看这张图：</b>① 表示的粒度决定了「能回答什么问题」；② surfel 擅长稠密几何+语义，却不擅长「可达性」；③ 这正是本块主线「surfel → 体素 → 场景图」的第一次跨越动机。<br>
+          <b>要记住的一句话：</b>地图表示决定能力上限——surfel 的上限就是「认得表面」，要到导航级还得换体素 / 图。
+        </figcaption>
+      </figure>
+
+      <h2>7. 实时性代价与一处必须纠正的误读</h2>
+      <p>稠密语义很贵。SemanticFusion 的一帧开销拆开是：SLAM 29.3 ms + CNN 51.2 ms + 贝叶斯融合 41.1 ms（每 10 帧算一次），CRF 后处理更是 20.3 秒 / 10 次迭代（CPU，离线）。它之所以还能「实时」（约 25.3 Hz 整体），靠的是<b>每 10 帧才跑一次 CNN</b> 这个降频技巧。换句话说，它是「用几何实时、用语义降频」换来的在线体验。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面关于 SemanticFusion 的实时性，哪种说法对？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：它每帧都跑 SLAM（实时），但 CNN 是每 10 帧才跑一次——靠「语义降频」换实时，并非全程每帧都跑 CNN。" onclick="lessonKit.answer(this,'q0159a')">它每帧都跑完整CNN</button>
+          <button data-correct="yes" data-explanation="对：SLAM 实时跑，CNN 每 10 帧才跑一次，整体约 25.3 Hz；CRF 后处理是离线、不可在线的。" onclick="lessonKit.answer(this,'q0159a')">它靠每10帧跑CNN</button>
+        </div>
+        <div class="quiz-feedback" id="q0159a"></div>
+      </div>
+      <p>另外要提一句 <b>CRF 的误读</b>（0158 已点过一次）：SemanticFusion 用 Krähenbühl &amp; Koltun 的全连接 CRF 只做<b>标签空间平滑</b>（让邻域像素更像同一类），和回环检测毫无关系。某篇 2023 综述把它说成「enabling loop detection」，<b>这是错的</b>。写引用时请勿采信。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SemanticFusion 的全连接 CRF 是用来做什么的？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：CRF 在这里只做语义标签的空间平滑，修掉分割锯齿，和回环检测无关。" onclick="lessonKit.answer(this,'q0159b')">它做标签平滑</button>
+          <button data-correct="no" data-explanation="错：回环检测是位姿图层面的事，CRF 只在标签层做平滑，某综述的「CRF=回环」是误读。" onclick="lessonKit.answer(this,'q0159b')">它做回环检测</button>
+        </div>
+        <div class="quiz-feedback" id="q0159b"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>为什么说 SemanticFusion 是「稠密语义建图」的开端？它和前一季「用 CNN 出深度」的路线（0054–0056）本质区别在哪？</li>
+        <li>surfel 地图是怎么「挂」上语义的？它存的是单个标签还是概率分布？</li>
+        <li>递归贝叶斯融合公式 $P(l_i \mid I_{1..k}) \propto P(l_i \mid I_{1..k-1}) P(O_u=l_i \mid I_k)$ 在算什么？用一句话翻译它。</li>
+        <li>surfel 表示的天花板是什么？为什么它做不到「导航级」的可达性信息？</li>
+        <li>SemanticFusion 靠什么把「稠密语义」做到接近实时？CRF 的真实用途和常见误读分别是什么？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用生活类比解释「递归贝叶斯融合」：假设你在昏暗的房间里看一个物体，第一眼觉得它像猫，第二眼觉得像猫也像狗，第三眼灯光亮了确认是猫。这对应公式里的哪些量？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>「第一眼像猫」对应先验 $P(l_i \mid I_{1..k-1})$（上一帧为止的看法）；「第三眼灯光亮了确认是猫」对应似然 $P(O_u=l_i \mid I_k)$（这一帧新证据）；最终的「确认是猫」对应更新后的后验 $P(l_i \mid I_{1..k})$。递归的意思是：每看一眼，就把「当前最确信的看法」当作下一眼的起点，不必回放所有历史。这解释了为什么单帧不准（39.4%）但融合后变准（48.6%）。</div></details>
+        </li>
+        <li>SemanticFusion 是「逐像素语义」，请问它能不能区分「这是第几个杯子」？如果不能，后面哪节课会补上这个能力？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不能。逐像素语义只给「类别标签」（这是椅子、这是杯子），不区分类内实例。要区分「第几个杯子」需要实例分割 / 实例级关联，这正是 0160（Co-Fusion / MaskFusion）进场的能力，以及 0162（PanopticFusion）把「stuff + things」统一建图时所处理的粒度。</div></details>
+        </li>
+        <li>为什么 SemanticFusion 的 CRF 后处理无法在线（20.3 秒 / 10 迭代），但系统整体还能约 25.3 Hz？这两者不矛盾吗？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不矛盾。CRF 是「后处理平滑」，被放在离线程 / 离线做，不参与实时主循环；实时主循环靠「SLAM 每帧跑 + CNN 每 10 帧才跑一次」维持约 25.3 Hz。也就是说，你看到的实时语义地图是「未做 / 偶做 CRF 平滑」的版本，精细平滑是回头补的。这正是「几何实时、语义降频」的代价账。</div></details>
+        </li>
+        <li>surfel 没有自由空间这一短板，对「机器人从客厅走到厨房」这种任务意味着什么？请用本课图 6 的语言说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>意味着 surfel 地图虽然能认出「墙是墙、桌子是桌子」，却说不清「客厅和厨房之间有没有连通的路、哪片地能站人」。因为 surfel 只在物体表面撒点，框内框外都是空白，没有「可走 / 不可走」的体积信息。要支持这种导航级任务，必须把表示换成能填满空间、标出自由体素的体素 / TSDF（见 0161–0162），乃至更上层的场景图（0163）。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0158-动态环境补充-两条延伸路线.html">← 0158 动态环境补充：两条延伸路线</a>
+        <a class="next" href="0160-MaskFusion与CoFusion-实例级分割进场.html">0160 Co-Fusion 与 MaskFusion：实例级分割进场 →</a>
+      </div>
+      <p class="foot-note">从一个会认标签的地图开始，下一站我们让它能数清「第几个」🪑</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

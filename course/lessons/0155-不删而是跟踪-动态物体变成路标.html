@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>不删而是跟踪 · 动态物体变成路标 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态环境）/ Lesson 0155</div>
+      <h1>不删而是跟踪 · 动态物体变成路标</h1>
+      <p class="subtitle">从「把动点删掉」到「把动点当路标追踪」——动态 SLAM 的范式跃迁 🎯</p>
+      <div class="hero-meta">
+        <span>🎯 主题：留+追踪（DynaSLAM II）· 虚拟路标（Dynam-SLAM）</span>
+        <span>👥 作者：Bescos 等 / Yin 等</span>
+        <span>📅 2021 (T-RO) / 2023</span>
+      </div>
+      <div class="toc">
+        <a href="#a">范式跃迁</a>
+        <a href="#b">DynaSLAM II 追踪</a>
+        <a href="#c">把动点当路标</a>
+        <a href="#d">Dynam-SLAM 虚拟路标</a>
+        <a href="#e">代价账</a>
+        <a href="#f">读完之后</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清「删动态」vs「留并追踪动态」这两种哲学的区别；② 讲出 DynaSLAM II 怎么把动态物体紧耦合进 BA（Eq 2 重投影误差）；③ 背出 seq0001 上 Ours 2.31 &gt; ORB 1.95 这个「代价实锤」；④ 讲出 Dynam-SLAM 的「虚拟路标」怎么补静态点不足；⑤ 背出 χ²(3) 阈值 7.81 / 11.34 的物理意义。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>两篇都<b>在第三季 0043–0045 的 ORB-SLAM2 上扩展</b>，但 DynaSLAM II 走的是「同团队（Bescos/Neira）从删除到追踪的范式跃迁」——和 <b>0153 的 DynaSLAM(2018)</b> 是同一系统名的上下游。Dynam-SLAM 的 IMU 松耦合/紧耦合要回链<b>第三季 VIO 相关课（0054–0056 一带）</b>的「紧耦合 vs 松耦合」术语。<b>第七季 0147</b> 的实例分割（YOLACT 一类）正是 DynaSLAM II 的语义零件。本节也回应 <b>0005</b> 激光侧动态——视觉侧终于开始「利用」动态而非「避开」动态。</p>
+        </div>
+      </div>
+
+      <h2>1. 四种处理动态的哲学，本节讲第三种</h2>
+      <p>动态 SLAM 对「动点」有四种态度，本季逐步展开：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>① 删（硬删除）</h4>
+          <p>0153 的 DynaSLAM/DS-SLAM、0154 的纯几何派：判出动点就剔掉，只用静态点。</p>
+        </div>
+        <div class="mini-card">
+          <h4>② 降权（软删除）</h4>
+          <p>0156 的 WF-SLAM：不删点，给可靠点大权重、不可靠点小权重。</p>
+        </div>
+        <div class="mini-card">
+          <h4>③ 留 + 追踪（本节）</h4>
+          <p>DynaSLAM II：把动态物体当带自身位姿的刚体，<b>联合优化</b>进 BA，反而帮定位。</p>
+        </div>
+        <div class="mini-card">
+          <h4>④ 造虚拟路标（本节）</h4>
+          <p>Dynam-SLAM：动态点太多、静态点不够时，把动态特征「转化」成虚拟静态约束。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <p><b>命名排雷</b>：本节两篇名字也极易混——<b>DynaSLAM II（2021，Bescos 团队，T-RO）</b> 是「留+追踪」；<b>Dynam-SLAM（2023，Yin 等，立体 VISLAM）</b> 是「虚拟路标」。注意它俩都和 <b>0153 的 DynaSLAM（2018）</b>、<b>0156 的 Dynamic SLAM（Wen 2023，室外）</b> 不同——写课时一律用「全称 + 第一作者 + 年份」。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. DynaSLAM II：把动态物体紧耦合进 BA</h2>
+      <p>生活类比：0153 的做法是「看见有人挡镜头，就把那块画面抠掉别算」。DynaSLAM II 反过来想：<b>那个人明明在动，他动的信息本身就能帮我判断「我（相机）动没动」</b>——只要我把「人」当成一个带自身位置和速度的刚体，一起塞进优化里。它不再是垃圾，而是额外的路标。</p>
+      <p>关键改写：动态点不再投影自「静态地图」，而是投影自「动态物体的位姿」。重投影误差变成：</p>
+      <div class="formula-box"><div class="flow-formula">$$e = u_i^j - \pi_i\!\left(T_{CW}^{i}\;\cdot\; T_{W0}^{k,i}\;\cdot\; x_0^{j,k}\right)$$</div></div>
+      <p><b>这句话在说什么</b>：对动态物体 k 上的点 j，在相机 i 看到的投影 u_i^j，应当等于「把点先放到物体 k 的自身坐标系 x_0，再用物体位姿 T_W0^{k,i} 搬到世界系，再用相机位姿 T_CW^i 投影回图像」的结果。差别在于<b>多乘了一个物体位姿</b>——这就把「物体在动」显式建模进来了。BA 目标联合优化相机位姿、静态点、物体位姿/速度/点，并加 constant-velocity 平滑项防止非物理解。当物体实际静止时，估出的速度 ≈ 0，这些点就「等同静态点」，所以 II 在停驶车场景反而比 I 更准。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">把对面走来的人，画成一个带轨迹的移动路标</tspan></text>
+
+          <!-- 相机 -->
+          <rect x="60" y="330" width="80" height="44" rx="8" fill="#6c7a89"/>
+          <circle cx="100" cy="352" r="8" fill="#2b3a4a"/>
+          <text x="100" y="320" text-anchor="middle" font-size="11.5" fill="#34415a"><tspan font-weight="700">相机（自身位姿）</tspan></text>
+
+          <!-- 人（动态物体，带位姿+速度） -->
+          <circle cx="560" cy="150" r="22" fill="#f1c7b0"/>
+          <rect x="542" y="172" width="36" height="80" rx="10" fill="#5b8bd0"/>
+          <rect x="512" y="120" width="96" height="40" rx="10" fill="#fff3d6" stroke="#d9b25a"/>
+          <text x="560" y="146" text-anchor="middle" font-size="11" fill="#8a6f3a"><tspan font-weight="700">物体位姿 T + 速度 v</tspan></text>
+          <line x1="560" y1="252" x2="560" y2="300" stroke="#3a4a5a" stroke-width="6"/>
+          <line x1="560" y1="252" x2="538" y2="300" stroke="#3a4a5a" stroke-width="6"/>
+
+          <!-- 预测轨迹 -->
+          <path d="M 540 200 q -60 30 -120 10 q -60 -20 -120 20" stroke="#e0533d" stroke-width="3" fill="none" stroke-dasharray="6 4" marker-end="url(#ah)"/>
+          <text x="360" y="200" text-anchor="middle" font-size="11" fill="#9a2b1c"><tspan font-weight="700">预测他下一帧出现在这</tspan></text>
+          <circle cx="300" cy="230" r="6" fill="#e0533d" opacity="0.5"/>
+          <circle cx="360" cy="240" r="6" fill="#e0533d" opacity="0.5"/>
+          <circle cx="420" cy="230" r="6" fill="#e0533d" opacity="0.5"/>
+
+          <!-- 投影连线 相机->人 -->
+          <line x1="140" y1="330" x2="560" y2="200" stroke="#2f7a45" stroke-width="2.5"/>
+          <text x="320" y="290" text-anchor="middle" font-size="11" fill="#2f7a45"><tspan font-weight="700">重投影误差 e 闭环</tspan></text>
+
+          <defs>
+            <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#e0533d"/>
+            </marker>
+          </defs>
+          <rect x="60" y="360" width="780" height="50" rx="8" fill="#eef7ee" stroke="#8fbf8f"/>
+          <text x="80" y="386" font-size="11.5" fill="#2f7a45">和 0153「抠掉人」相反：人成了带位姿的路标，他的运动反过来约束相机位姿 → 动得多时净赚</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边是相机（带自身位姿），中间是一个走动的人，被画成「带物体位姿 T + 速度 v 的刚体」，旁边一条红色虚线是预测他下一帧出现的轨迹；绿线是相机到人的重投影误差闭环。</p>
+          <p><b>怎么看这张图：</b>① 红色虚线 + 半透明红点表示「系统预测这个人会走到哪」——这是 0153 完全没有的「追踪」能力；② 绿线表示这个动态点也参与重投影误差，和相机位姿、物体位姿一起被 BA 优化；③ 关键反转：<b>人不再是被删的垃圾，而是额外的约束</b>，他动得越多，给相机的定位线索越多。④ 下方绿框点明范式跃迁。</p>
+          <p><b>要记住的一句话：</b>把动态物体当「带位姿的路标」联合优化，是 DynaSLAM II 相对 I 的范式跃迁。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_DynaSLAM-II/ecd5c4cb613d438d5dac84e05e3cf52b7e9e90d01f4acb3888965366c9c59b4b.jpg" alt="Notation used to model the dynamic structure">
+        <figcaption>
+          <p><b>原图注（DynaSLAM II Fig. 2）：</b>Notation used to model the dynamic structure. The cameras i and i+1 observe the dynamic object k and the static structure. The objects with poses T_W0^{k,i} and T_W0^{k,i+1} are the same moving body at consecutive observations.</p>
+          <p><b>怎么看这张图：</b>它画的是 Eq 2 里的符号世界：相机 i、i+1 同时看静态结构和动态物体 k；动态物体用 T_W0^{k,i}（在观测 i 时的位姿）和 T_W0^{k,i+1}（下一帧位姿）表示，两者是「同一个运动刚体在连续观测下的不同姿态」。这正是自绘图里「带位姿 T + 速度 v」的论文原版。</p>
+          <p><b>要记住的一句话：</b>Fig. 2 是 DynaSLAM II 把动态物体建模成「带 SE(3) 位姿刚体」的记号总览。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_DynaSLAM-II/f1221b25cdc8f2086cf95a1f47a0ebd43be22d50c291ebfb33de6c18332f67a8.jpg" alt="BA factor graph representation with dynamic objects">
+        <figcaption>
+          <p><b>原图注（DynaSLAM II Fig. 4）：</b>BA factor graph representation with dynamic objects.</p>
+          <p><b>怎么看这张图：</b>这是联合优化的因子图：相机位姿、静态地图点、动态物体位姿/速度/点都成了图中的节点，用重投影误差边连起来。它直观证明「动态物体已是一等公民」——不再是被过滤掉的离群点，而是和静态点同台参与 BA。constant-velocity 平滑项也在图里，防止物体位姿解出非物理的跳变。</p>
+          <p><b>要记住的一句话：</b>Fig. 4 的因子图是「留+追踪」哲学的工程落地：动态物体与相机、静态点联合优化。</p>
+        </figcaption>
+      </figure>
+
+      <div class="callout">
+        <p><b>代价实锤（seq0001）</b>：KITTI tracking seq0001 上，ORB-SLAM2 ATE <b>1.95</b>、DynaSLAM <b>2.42</b>、DynaSLAM II <b>2.31</b>。注意 DynaSLAM II（2.31）仍<b>略逊于原始 ORB-SLAM2（1.95）</b>——因为给动态物体轨迹额外自由度，灵活性换来少量精度损失；但它比「删一切」的 DynaSLAM I（2.42）好。这正说明「留动态特征」不是免费午餐：<b>在静止/停驶场景，它会比 ORB-SLAM2 略差</b>。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 为什么「留」在停驶车场景反而更准</h2>
+      <p>这正是本节要记住的对照。0153 的 DynaSLAM I 把「可动类」一律当动态删掉——停着的车也被删，损失了本可用于定位的静态特征，所以静态/停驶场景它比 ORB-SLAM2 还差。DynaSLAM II 把车当动态物体追踪：<b>车实际静止 → 估出的速度 ≈ 0 → 这些点等同静态点</b>，于是保住了特征，定位反而更准。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 320" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="320" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">停驶车：删（I）亏特征，留（II）保特征</tspan></text>
+
+          <rect x="40" y="56" width="400" height="210" rx="8" fill="#fdf0ee" stroke="#e0a08f"/>
+          <text x="240" y="82" text-anchor="middle" font-size="12.5" fill="#9a2b1c"><tspan font-weight="700">DynaSLAM I（删）</tspan></text>
+          <rect x="150" y="120" width="180" height="80" rx="12" fill="#7d8794" opacity="0.35"/>
+          <text x="240" y="168" text-anchor="middle" font-size="11" fill="#7a4630">停驶车被删</text>
+          <line x1="120" y1="230" x2="360" y2="230" stroke="#c0392b" stroke-width="3"/>
+          <text x="240" y="252" text-anchor="middle" font-size="11" fill="#9a2b1c">特征变少 → 定位略差</text>
+
+          <rect x="470" y="56" width="390" height="210" rx="8" fill="#eef7ee" stroke="#8fbf8f"/>
+          <text x="665" y="82" text-anchor="middle" font-size="12.5" fill="#2f7a45"><tspan font-weight="700">DynaSLAM II（留+追踪）</tspan></text>
+          <rect x="585" y="120" width="180" height="80" rx="12" fill="#7d8794"/>
+          <rect x="585" y="105" width="180" height="20" rx="8" fill="#fff3d6" stroke="#d9b25a"/>
+          <text x="675" y="135" text-anchor="middle" font-size="10.5" fill="#8a6f3a">速度 v ≈ 0</text>
+          <text x="675" y="170" text-anchor="middle" font-size="11" fill="#2f7a45">车静止 → 等同静态点</text>
+          <line x1="545" y1="230" x2="800" y2="230" stroke="#2f7a45" stroke-width="3"/>
+          <text x="665" y="252" text-anchor="middle" font-size="11" fill="#2f7a45">特征保住 → 定位更准</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左右对照停驶车场景。左边 I 把车（灰块）半透明化表示「删掉」，特征变少；右边 II 把车当动态物体追踪，标出「速度 ≈ 0」，于是它等同静态点被保留。</p>
+          <p><b>怎么看这张图：</b>① 左图红横线表示「特征减少 → 定位略差」（seq0001 上 I 2.42 &gt; ORB 1.95 的来由）；② 右图绿横线表示「特征保住 → 更准」（II 2.31 虽仍 &gt; ORB 1.95，但已比 I 好，且在真正动态时净赚）；③ 核心：<b>「删」对静止可动物体是亏本，「留+追踪」把它救回</b>。④ 这就是「留 vs 删」两种哲学在停驶车上的具体胜负。</p>
+          <p><b>要记住的一句话：</b>停驶车场景，DynaSLAM II 用「追踪而非删除」保住特征，比 I 更准——这是「留」哲学的最大卖点。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动一：DynaSLAM II 在 seq0001 上 ATE 2.31 仍高于 ORB-SLAM2 的 1.95，说明什么？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0155a')">留动态有代价</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0155b')">方法失效</button></p>
+        <p class="quiz-feedback" id="q0155a" hidden>正确。给动态物体轨迹/速度额外自由度，灵活性换来少量精度损失——这是「留+追踪」的固有代价。但注意它（2.31）已比「删一切」的 DynaSLAM I（2.42）好，且在真正动态多的场景会净赚。所以 2.31 &gt; 1.95 不是「方法失效」，而是「在静止/停驶场景，留动态特征略亏」的如实记录，正是代价账要算清的点。</p>
+        <p class="quiz-feedback" id="q0155b" hidden>不对。2.31 虽高于 ORB-SLAM2 的 1.95，但低于 DynaSLAM I 的 2.42，且论文证明其是当时唯一实时的 MOT+SLAM 方案、在动态多时净赚。把它说成「方法失效」忽略了两个事实：① 它比纯删除派好；② 它换来的是「动态物体 6DoF 轨迹 + 3D box」这种高层输出。这叫「有代价的净收益」，不是失效。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. Dynam-SLAM：动态点太多时，造「虚拟路标」</h2>
+      <p>Dynam-SLAM（Yin 等，2023）走得更远。它是<b>立体 VISLAM</b>：用场景流不确定性建模 + IMU 预积分（松耦合）检测动态特征，再把动态、静态特征与 IMU 紧耦合做非线性优化。它的招牌创新是：<b>当动态物体多到静态点不够时，拿动态特征造「虚拟路标」补约束</b>。</p>
+      <p>先说判定。它对立体场景流算残差（减掉相机刚体运动后的剩余），并对该残差的不确定性做高斯传播，得到协方差 Σ；再用马氏距离判动静：</p>
+      <div class="formula-box"><div class="flow-formula">$$\xi = \sqrt{\,\delta M^{\top}\,\Sigma^{-1}\,\delta M\,},\qquad \xi^2 \sim \chi^2(3)$$</div></div>
+      <p><b>这句话在说什么</b>：δM 是「减掉相机运动后的场景流残差」（残差大 = 可能动态）。但残差本身有噪声（像素量化、视差、光流误差），所以不能直接比大小，而要除以它的不确定性 Σ（马氏距离）。ξ² 服从 3 自由度卡方分布，<b>95% 分位 7.81、99% 分位 11.34</b> 作阈值——超过就说「这个点动态的概率很高」。用统计显著性定阈，比拍一个固定像素门槛更稳，对「沿极线运动」这类几何法痛点也更鲁棒（IMU 提供准静态参考）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">虚拟路标：动态点不够静态点时，把动点转成约束</tspan></text>
+
+          <!-- 静态点少 -->
+          <text x="200" y="70" text-anchor="middle" font-size="12.5" fill="#2f7a45"><tspan font-weight="700">静态点太少</tspan></text>
+          <g>
+            <circle cx="120" cy="120" r="7" fill="#2f7a45"/>
+            <circle cx="170" cy="140" r="7" fill="#2f7a45"/>
+            <circle cx="230" cy="110" r="7" fill="#2f7a45"/>
+            <circle cx="200" cy="170" r="7" fill="#2f7a45"/>
+          </g>
+          <text x="200" y="205" text-anchor="middle" font-size="11" fill="#2f7a45">不足以约束相机</text>
+
+          <!-- 动态点多 -->
+          <text x="620" y="70" text-anchor="middle" font-size="12.5" fill="#9a2b1c"><tspan font-weight="700">动态点很多</tspan></text>
+          <g>
+            <circle cx="540" cy="120" r="7" fill="#c0392b"/>
+            <circle cx="600" cy="100" r="7" fill="#c0392b"/>
+            <circle cx="660" cy="130" r="7" fill="#c0392b"/>
+            <circle cx="580" cy="160" r="7" fill="#c0392b"/>
+            <circle cx="640" cy="175" r="7" fill="#c0392b"/>
+            <circle cx="700" cy="150" r="7" fill="#c0392b"/>
+          </g>
+          <text x="620" y="205" text-anchor="middle" font-size="11" fill="#9a2b1c">直接删 → 没约束可用</text>
+
+          <!-- 虚拟路标 -->
+          <line x1="540" y1="120" x2="610" y2="250" stroke="#e0968f" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="660" y1="130" x2="620" y2="255" stroke="#e0968f" stroke-width="2" stroke-dasharray="5 4"/>
+          <circle cx="610" cy="250" r="9" fill="none" stroke="#d9a23a" stroke-width="3"/>
+          <circle cx="620" cy="255" r="9" fill="none" stroke="#d9a23a" stroke-width="3"/>
+          <text x="615" y="290" text-anchor="middle" font-size="11" fill="#8a6a1a"><tspan font-weight="700">虚拟路标（预测下一帧位置）</tspan></text>
+
+          <!-- 相机 -->
+          <rect x="380" y="330" width="80" height="44" rx="8" fill="#6c7a89"/>
+          <circle cx="420" cy="352" r="8" fill="#2b3a4a"/>
+          <line x1="420" y1="330" x2="610" y2="255" stroke="#2f7a45" stroke-width="2.5"/>
+          <line x1="420" y1="330" x2="620" y2="255" stroke="#2f7a45" stroke-width="2.5"/>
+          <text x="520" y="320" text-anchor="middle" font-size="11" fill="#2f7a45"><tspan font-weight="700">虚拟约束补进 BA</tspan></text>
+
+          <rect x="60" y="360" width="780" height="44" rx="8" fill="#fff7ef" stroke="#e0b48f"/>
+          <text x="80" y="386" font-size="11.5" fill="#7a4630">假设动态物体帧间匀速 → 用当前运动预测其下一帧位置，作为「虚拟静态约束」补进 BA</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边静态点太少、右边动态点很多；虚线把几个动态点连到下方两个黄色空心圆（虚拟路标），再和相机连成绿色约束。</p>
+          <p><b>怎么看这张图：</b>① 当动态占多数，若直接删动态点，相机几乎没有约束可用（会漂）；② Dynam-SLAM 假设动态物体「帧间近似匀速」，用当前运动预测它下一帧该在哪，造出黄色「虚拟路标」；③ 这些虚拟路标作为<b>静态约束</b>补进 BA，帮相机定位；④ 下方橙框点明：这是「动态点太多导致静态约束不足」的直接补丁，是它相对纯几何派（只删不补）的增量。</p>
+          <p><b>要记住的一句话：</b>虚拟路标 = 把动态特征「转化」成预测位置的静态约束，专治「动态占满画面、静态点不够」。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Dynam-SLAM/ca358cb01639fee2466cb42d46fe9a3156296184aaeb616203953e1bc0192a72.jpg" alt="Schematic diagram of virtual landmark construction">
+        <figcaption>
+          <p><b>原图注（Dynam-SLAM Fig. 6）：</b>Schematic diagram of virtual landmark construction.</p>
+          <p><b>怎么看这张图：</b>这就是上面自绘图的论文原版——它画出动态 landmark 如何被「预测到下一帧位置」从而生成虚拟路标，再参与滑动窗口 BA。它解决的是「高动态环境里静态特征稀缺」这个纯几何派也会遇到、但纯几何派只会「少就少、退化」的问题。Dynam-SLAM 用虚拟路标把问题接住。</p>
+          <p><b>要记住的一句话：</b>Fig. 6 是 Dynam-SLAM 招牌创新「虚拟路标」的可视化。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Dynam-SLAM/97e9dbd5d99094e4c0404acb68b64c65559f4fd549d1319076277ee87b321aa5.jpg" alt="Mahalanobis distance distribution of scene flow">
+        <figcaption>
+          <p><b>原图注（Dynam-SLAM Fig. 8）：</b>Mahalanobis distance distribution of scene flow.</p>
+          <p><b>怎么看这张图：</b>它展示场景流的马氏距离分布，并标出 χ²(3) 的 95%/99% 门槛（7.81 / 11.34）。落在门槛右侧的点被判定动态。用「统计显著性」而非「固定像素差」定阈，是它比 0153 的 τ_z=0.4 m 更自适应之处——尤其对噪声大、沿极线运动的难点更鲁棒（IMU 提供准静态参考）。</p>
+          <p><b>要记住的一句话：</b>Fig. 8 是「用不确定性定阈」的范例：ξ² 超 χ²(3) 的 7.81/11.34 即判动态。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动二：Dynam-SLAM 用马氏距离（带不确定性 Σ）定阈，相比 DynaSLAM 的固定 0.4 m 门槛，好处是什么？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0155c')">更抗噪声</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0155d')">更简单</button></p>
+        <p class="quiz-feedback" id="q0155c" hidden>正确。马氏距离把「残差 δM」除以它的不确定性协方差 Σ，等价于「按噪声大小归一化后再比」。这样像素量化、视差、光流误差大的地方不会被误判，阈值随噪声自适应；对「沿极线运动」这类几何法痛点也更鲁棒（IMU 提供准静态参考）。固定 0.4 m 门槛则对所有点一视同仁，噪声大的点容易翻车。所以好处是「更抗噪声、更自适应」，不是更简单。</p>
+        <p class="quiz-feedback" id="q0155d" hidden>不对。马氏距离要算场景流残差的协方差 Σ（像素量化、SGM 视差、光流误差三路传播），比「减深度比 0.4 m」复杂得多。它的好处是「按不确定性归一化 → 更抗噪声、对难点更鲁棒」，代价是计算更重。把「带 Σ 定阈」说成「更简单」正好说反了取舍。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" font-size="16.5" font-weight="700" fill="#9fb4ff">同一个停驶的车：左边是「黑洞」，右边是「约束源」</text>
+
+          <!-- 左：删 -->
+          <rect x="46" y="52" width="390" height="290" rx="12" fill="#16203a" stroke="#a32617" stroke-width="1.8"/>
+          <text x="241" y="78" text-anchor="middle" font-size="13.5" font-weight="700" fill="#ffd1d8">做法 I：删掉（DynaSLAM 原版）</text>
+          <rect x="96" y="150" width="130" height="60" rx="8" fill="#b9803f" stroke="#8a5a26" stroke-width="1.5"/>
+          <text x="161" y="186" text-anchor="middle" font-size="11" fill="#0f1424">停着的车</text>
+          <rect x="88" y="142" width="146" height="76" rx="10" fill="none" stroke="#a32617" stroke-width="2.4" stroke-dasharray="7 5"/>
+          <text x="161" y="132" text-anchor="middle" font-size="11" fill="#ffd1d8">整块挖空</text>
+          <text x="161" y="240" text-anchor="middle" font-size="11" fill="#ffd1d8">车身上的特征点全部丢弃</text>
+          <circle cx="300" cy="176" r="4" fill="#a32617"/><circle cx="330" cy="166" r="4" fill="#a32617"/>
+          <line x1="292" y1="168" x2="338" y2="184" stroke="#a32617" stroke-width="1.6"/>
+          <text x="316" y="204" text-anchor="middle" font-size="10.5" fill="#ffd1d8">这些点本来能帮定位</text>
+          <text x="241" y="276" text-anchor="middle" font-size="11.5" fill="#cdd6ff">画面里少了一块可用信息</text>
+          <text x="241" y="298" text-anchor="middle" font-size="11.5" fill="#ffd1d8">✗ 静态序列上因此略输原版</text>
+          <text x="241" y="322" text-anchor="middle" font-size="11.5" fill="#ffd166">好处：实现简单，绝不让动的东西污染地图</text>
+
+          <!-- 右：留 + 追踪 -->
+          <rect x="464" y="52" width="390" height="290" rx="12" fill="#16203a" stroke="#5cffb0" stroke-width="1.8"/>
+          <text x="659" y="78" text-anchor="middle" font-size="13.5" font-weight="700" fill="#5cffb0">做法 II：留着并追踪（DynaSLAM II）</text>
+          <rect x="514" y="150" width="130" height="60" rx="8" fill="#b9803f" stroke="#8a5a26" stroke-width="1.5"/>
+          <text x="579" y="186" text-anchor="middle" font-size="11" fill="#0f1424">停着的车</text>
+          <rect x="506" y="142" width="146" height="76" rx="10" fill="none" stroke="#5cffb0" stroke-width="2.4"/>
+          <text x="579" y="132" text-anchor="middle" font-size="11" fill="#5cffb0">建一个 3D 框 + 估计位姿</text>
+          <!-- 观测线 -->
+          <line x1="660" y1="180" x2="740" y2="146" stroke="#5cffb0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="660" y1="180" x2="740" y2="196" stroke="#5cffb0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <circle cx="748" cy="142" r="5" fill="#ffd166"/><text x="748" y="128" text-anchor="middle" font-size="9.5" fill="#ffd166">帧 t</text>
+          <circle cx="748" cy="200" r="5" fill="#ffd166"/><text x="748" y="220" text-anchor="middle" font-size="9.5" fill="#ffd166">帧 t+1</text>
+          <!-- 轨迹 -->
+          <path d="M 620 246 C 668 254, 706 240, 748 232" fill="none" stroke="#5cffb0" stroke-width="2.4"/>
+          <circle cx="620" cy="246" r="4.5" fill="#5cffb0"/>
+          <circle cx="748" cy="232" r="4.5" fill="#5cffb0"/>
+          <text x="684" y="268" text-anchor="middle" font-size="10.5" fill="#5cffb0">物体轨迹进入 BA</text>
+          <text x="659" y="298" text-anchor="middle" font-size="11.5" fill="#5cffb0">✓ 停驶车的特征点被保留下来</text>
+          <text x="659" y="320" text-anchor="middle" font-size="11.5" fill="#5cffb0">✓ 实测在停驶车场景反而更准</text>
+          <text x="659" y="340" text-anchor="middle" font-size="11.5" fill="#ffd166">代价：要把物体位姿也一起优化，复杂度上升</text>
+
+          <text x="450" y="368" text-anchor="middle" font-size="12.5" fill="#cdd6ff">同样是「一个停着的车」：I 把它变成地图上的洞，II 把它变成一条额外约束</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>同一个停驶的车，两种处理方式画成左右对照。左边是 DynaSLAM 原版的做法——只要语义说它是「可动类」就整块挖掉，车身上的特征点全丢；右边是 DynaSLAM II 的做法——给车建一个 3D 框、估出它的位姿并跨帧跟踪，于是它的特征点被保留，还多了一条运动约束进 BA。
+          <br>
+          <b>怎么看这张图：</b>① 看左边那个红色虚线框，以及框外被划掉的红点——那些点本来能参与定位；② 看右边那条虚线与物体轨迹：同一辆车现在有了自己的位姿与速度，从「要避开的东西」变成了「能帮忙定位的东西」；③ 注意两边底部绿色的代价行：右侧精度更好，但要额外优化物体位姿，复杂度上去了；④ 最下面一句是这一节的题眼——「洞」与「约束」的差别。
+          <br>
+          <b>要记住的一句话：</b>面对动态物体，「删」是把它当作要避开的噪声，「留＋追踪」是把它当作可利用的信息——后者更准，但更贵。
+        </figcaption>
+      </figure>
+
+      <h2>5. 代价账：追踪与虚拟路标亏在了哪</h2>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(204,120,92,.35)">代价项</th>
+            <th style="text-align:left;padding:.6rem">DynaSLAM II（留+追踪）</th>
+            <th style="text-align:left;padding:.6rem">Dynam-SLAM（虚拟路标）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">静止场景</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">seq0001 上 Ours 2.31 &gt; ORB 1.95（留动态自由度略亏）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">V1_03/V2_03 因运动模糊略差于 w/o DFT</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">硬件门槛</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">不含 CNN 时间（YOLACT 另算），10–12 fps</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">必须 stereo VISLAM + IMU，需 Kalibr 标定</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">特征法局限</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">难给精确 3D box、难追踪低纹理物体</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">轮廓附近静态点会被误判动态</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;font-weight:700">高层输出</td>
+            <td style="padding:.5rem .6rem">输出 6DoF 轨迹 + 3D box（唯一）</td>
+            <td style="padding:.5rem .6rem">不输出轨迹，只把动态转虚拟约束</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>本课小结（四种哲学对照）</b>：① 删（0153/0154）——简单但误删静止可动物体；② 降权（0156）——不删但软处理；③ <b>留+追踪（本节 DynaSLAM II）</b>——把动点当路标联合优化，动得多时净赚，但静止场景略亏、且只有它输出轨迹；④ <b>造虚拟路标（本节 Dynam-SLAM）</b>——动态占满画面时补约束，但必须 stereo+IMU。两条路线都证明：<b>动态不一定要「避开」，也可以「利用」</b>。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 读完你应该能回答</h2>
+      <ul>
+        <li>动态 SLAM 对动点有哪四种态度（删/降权/留+追踪/造虚拟路标）？本节讲哪两种？</li>
+        <li>DynaSLAM II 的 Eq 2 重投影误差，比 0153 多乘了什么？为什么这让动点成了「路标」？</li>
+        <li>为什么 DynaSLAM II 在停驶车场景反而比 DynaSLAM I 更准？seq0001 的 2.31 / 2.42 / 1.95 说明什么？</li>
+        <li>Dynam-SLAM 的「虚拟路标」解决什么特殊困境？它为什么必须 stereo + IMU？</li>
+        <li>χ²(3) 的 7.81 / 11.34 是什么？为什么用马氏距离定阈比固定 0.4 m 更抗噪声？</li>
+        <li>DynaSLAM II（2021）与 Dynam-SLAM（2023）名字差在哪、方法差在哪？</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>如果场景里全是停着的车（没有真在动的物体），DynaSLAM II 相比 ORB-SLAM2 会怎样？为什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>车都静止 → 估出的物体速度 ≈ 0 → 这些点等同静态点被保留，不亏特征。但仍可能略逊 ORB-SLAM2：因为把每个车当「带位姿+速度的刚体」塞进 BA，增加了待优化变量，灵活性带来少量精度损失（seq0001 的 2.31 &gt; 1.95 就是这个效应）。所以它比「删一切」的 I 好，但比「什么都不管」的 ORB 仍可能略差——这是「留动态」的固有代价，不是 bug。</p>
+            </div></details>
+          </li>
+          <li>虚拟路标依赖「动态物体帧间匀速」假设。如果这个假设错了（比如车突然刹车），会怎样？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>虚拟路标是用「当前运动预测下一帧位置」造的约束。若车突然刹车，预测位置会和真实位置偏差大，这个虚拟约束就成了错误信息，反而可能把相机位姿带偏。所以「匀速假设」是虚拟路标的命门——作者也承认它适合「近似匀速」的动态。这正好对应代价账里「轮廓附近/非匀速时可能误判」的局限。</p>
+            </div></details>
+          </li>
+          <li>为什么 Dynam-SLAM II 输出的「6DoF 轨迹 + 3D box」被视为重要增量，而其他动态 SLAM 不输出？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为 0153/0154/0156 的路线都是「把动点剔除/降权，只服务定位」，动态信息被当垃圾扔了。DynaSLAM II 把动态物体当成一等公民参与 BA，自然就解出了它的位姿、速度和 3D bounding box——这是「留+追踪」路线的天然副产品。对机器人避人、预测车流等上层任务，这个轨迹是刚需。所以「是否输出轨迹」是区分「删派」与「留派」的关键标志。</p>
+            </div></details>
+          </li>
+          <li>用一句话概括本节相对 0153 的范式跃迁，并说明它付出了什么代价。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>范式跃迁：从「把动态物体当垃圾删掉」变成「把动态物体当带位姿的路标联合优化（甚至动态太多时造虚拟路标补约束）」，于是动态信息从「污染」变成「线索」。代价：① 静止/停驶场景因额外自由度略亏精度（2.31 &gt; 1.95）；② 计算更重（要解更大规模的 BA、Dynam-SLAM 还需 stereo+IMU 标定）；③ 追踪依赖实例分割（YOLACT 等），整体实时性取决于轻量分割。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0154-纯几何路线-不靠语义也能判动态.html">← 上一课：0154 纯几何路线</a>
+        <a class="next" href="0156-别把停着的车删掉-语义动态与当前真在动.html">下一课：0156 别把停着的车删掉 · 语义动态 ≠ 当前真在动 →</a>
+      </div>
+      <p class="foot-note">「删」是避开动态，「留+追踪」与「虚拟路标」是利用动态。下一节看室外与「别把停着的车删掉」🎯</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PanopticFusion：全景分割建图 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0162</div>
+      <h1>PanopticFusion：全景分割建图</h1>
+      <p class="subtitle">把「背景（stuff）」和「物体（things）」用同一种语言统一建图 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：stuff + things 的全景粒度在线建图</span>
+        <span>👥 作者：Narita、Seno、Ishikawa、Kaji（Preferred Networks）</span>
+        <span>📅 2019 · <i>PanopticFusion (ICRA)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">全景是什么</a>
+        <a href="#b">三档进阶</a>
+        <a href="#c">单张体素图</a>
+        <a href="#d">标签积分</a>
+        <a href="#e">关联匹配</a>
+        <a href="#f">在线CRF</a>
+        <a href="#g">数字与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 解释「全景（panoptic）」= stuff（背景类）+ things（实例物体） unified 建图的含义；② 讲清 PanopticFusion 怎么用「单张 TSDF 体素哈希地图」同时存背景语义和前景实例；③ 说明体素标签用「增量/减量权重」更新、跌破阈值换标签的机制；④ 复述它的关联判据（地图参考 + IoU&gt;0.25 贪心独占匹配）与在线 CRF 的正则思路。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p><b>0159</b> 是逐像素语义（只有 stuff 级别），<b>0160</b> 是实例级（只管 things），本课把两者<b>统一</b>成全景——这是语义粒度三档（像素→实例→全景）的收口。<b>0161</b> 的 octree / TSDF 体素在这里延续为「TSDF + 体素哈希（voxblox）」单一全局地图，并挂上 panoptic 标签。<b>0147</b> 的 SAM 也输出 panoptic，可见这已是当代标准粒度。</p></div>
+      </div>
+
+      <h2 id="b">1. 全景（panoptic）到底是什么</h2>
+      <p>前面两档粒度各有盲区：0159 的逐像素语义，把所有「墙」都标成墙，但不区分「哪面墙」；0160 的实例级，能数清物体，却往往不管「背景墙地」这种没有实例的东西。现实里我们需要两者都要——既要「这面墙是墙」（stuff），又要「这把椅子是第几把」（things）。</p>
+      <p><b>全景分割（panoptic segmentation）</b>就是把这两类统一：stuff = 没有实例概念的「背景类」（墙、地、天空）；things = 有独立 ID 的「具体物体」（椅子①、椅子②、人）。PanopticFusion（2019）是<b>第一个在 stuff+things 全景粒度上做在线稠密语义建图</b>的系统。</p>
+
+      <h2 id="c">2. 语义 → 实例 → 全景：三档进阶</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#f5f7fa"/>
+          <text x="450" y="36" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">同一个房间，三种语义粒度（0159 → 0160 → 本课）</text>
+          <rect x="30" y="60" width="260" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="160" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="#1f3a5f">① 逐像素语义</text>
+          <rect x="60" y="120" width="200" height="130" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="160" y="190" text-anchor="middle" font-size="13" fill="#7a5a00">整片=「墙」</text>
+          <rect x="90" y="270" width="60" height="60" fill="#b7e0a8" stroke="#5aa86a"/>
+          <rect x="190" y="270" width="60" height="60" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="160" y="350" text-anchor="middle" font-size="12" fill="#6b7785">两椅都叫「椅子」</text>
+          <rect x="320" y="60" width="260" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="450" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="#1f3a5f">② 实例级</text>
+          <rect x="350" y="120" width="200" height="130" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="450" y="190" text-anchor="middle" font-size="13" fill="#7a5a00">墙（无ID）</text>
+          <rect x="380" y="270" width="60" height="60" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="410" y="350" text-anchor="middle" font-size="12" fill="#1d6b3c">椅①</text>
+          <rect x="480" y="270" width="60" height="60" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="510" y="350" text-anchor="middle" font-size="12" fill="#1d6b3c">椅②</text>
+          <rect x="610" y="60" width="260" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="740" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="#1f3a5f">③ 全景</text>
+          <rect x="640" y="120" width="200" height="130" fill="#e6e6e6" stroke="#9aa7b4"/>
+          <text x="740" y="190" text-anchor="middle" font-size="13" fill="#5a6675">墙(stuff类)</text>
+          <rect x="670" y="270" width="60" height="60" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="700" y="350" text-anchor="middle" font-size="12" fill="#1d6b3c">椅①</text>
+          <rect x="770" y="270" width="60" height="60" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="800" y="350" text-anchor="middle" font-size="12" fill="#1d6b3c">椅②</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同一个房间，三档粒度对比：① 逐像素语义——墙是一片黄、两把椅子都叫「椅子」；② 实例级——墙没 ID、两把椅子分别编 ①②；③ 全景——墙作为 stuff 类（灰）没有实例 ID，两把椅子作为 things 各有 ID。<br>
+          <b>怎么看这张图：</b>① 全景 = ①和②的合体，两类信息一张图里都有；② stuff 与 things 用不同上色约定（背景灰、物体绿）；③ 这正是本课 PanopticFusion 要统一建的东西。<br>
+          <b>要记住的一句话：</b>全景 = 背景类 + 实例物体，两种粒度一张地图一次建完。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 表示：单张 TSDF 体素哈希地图</h2>
+      <p>PanopticFusion 的地图是一张<b>全局 TSDF 体素哈希地图</b>（基于 voxblox，CPU 实现）。关键设计是：每个体素除了存 TSDF / 颜色 / 权重，还<b>额外挂一个 panoptic 标签 + 一个权重</b>。注意它存的不是「概率分布」，而是一个「当前标签 + 对它有多自信」的标量权重——这就和 0159 的概率分布、0161 的语义体素都不同。</p>
+      <figure class="figure">
+        <img src="../../md/images/2019_PanopticFusion/278d3663b69ddface396d9bef5affe182ac5b16f227159aa94c4ee2f2e44083a.jpg" alt="PanopticFusion online volumetric semantic mapping stuff and things">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>PanopticFusion realizes an online volumetric semantic mapping at the level of stuff and things. The system performs large-scale 3D reconstruction, as well as dense semantic labeling on stuff regions and segmentation of individual things in an online manner, as shown in the top figure. It is also able to restore the class labels of things and yield a colored mesh, as shown in the bottom fig...<br>
+          <b>怎么看这张图：</b>这张图直接展示了「stuff 区域做密集语义标注、things 做个体分割」同时在线进行，并能在全局尺度上重建。它把本课核心——背景与物体统一建图——可视化出来，是理解全景建图最该看的一张。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2019_PanopticFusion/fbfd9caf096ecd87b60ad4584c5a32e8804d5e40d21238ed91cc290af619eae7.jpg" alt="PanopticFusion system overview">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System overview of PanopticFusion.<br>
+          <b>怎么看这张图：</b>系统总览：输入 RGB-D，分别用 PSPNet（语义）和 Mask R-CNN（实例）出 panoptic 标签，再做标签追踪（地图参考 + IoU）、体素积分、在线 CRF 正则，最终写入那张全局 TSDF 体素哈希地图。整条流水线都围绕「一张图、两种标签」展开。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 标签怎么积分：增量 / 减量权重</h2>
+      <p>每个体素的 panoptic 标签不是一锤定音，而是靠<b>增量/减量策略</b>更新：新观测支持当前标签，权重就「+1」；不支持就「−1」。当权重<b>跌破某个阈值</b>，体素就<b>换标签</b>。这让地图能随新证据自我纠正——比如一开始把一个物体误标成墙，多看几帧后权重掉下去，就翻成正确类。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="380" fill="#f5f7fa"/>
+          <text x="450" y="36" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">体素标签随证据「加 / 减」权重，跌破阈值就翻标签</text>
+          <rect x="60" y="80" width="120" height="240" rx="8" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="120" y="110" text-anchor="middle" font-size="13" fill="#33414f">体素</text>
+          <rect x="85" y="200" width="70" height="100" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="120" y="255" text-anchor="middle" font-size="12" fill="#7a5a00">墙</text>
+          <text x="120" y="330" text-anchor="middle" font-size="12" fill="#6b7785">权重=3</text>
+          <rect x="250" y="80" width="400" height="240" rx="8" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="450" y="110" text-anchor="middle" font-size="14" fill="#33414f">新证据来了，权重变化</text>
+          <rect x="280" y="150" width="40" height="120" fill="#d8e6f5" stroke="#9aa7b4"/>
+          <text x="300" y="290" text-anchor="middle" font-size="12" fill="#5a6675">墙+1</text>
+          <rect x="360" y="180" width="40" height="90" fill="#d8e6f5" stroke="#9aa7b4"/>
+          <text x="380" y="290" text-anchor="middle" font-size="12" fill="#5a6675">墙+1</text>
+          <rect x="440" y="210" width="40" height="60" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="460" y="290" text-anchor="middle" font-size="12" fill="#7a5a00">墙</text>
+          <rect x="520" y="240" width="40" height="30" fill="#e0533d" stroke="#a32617"/>
+          <text x="540" y="290" text-anchor="middle" font-size="12" fill="#a32617">椅−1</text>
+          <rect x="600" y="200" width="40" height="70" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="620" y="290" text-anchor="middle" font-size="12" fill="#1d6b3c">椅+1</text>
+          <rect x="700" y="80" width="140" height="240" rx="8" fill="#eafaf0" stroke="#3a9d5d"/>
+          <text x="770" y="110" text-anchor="middle" font-size="13" fill="#33414f">翻标签</text>
+          <rect x="725" y="200" width="90" height="100" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="770" y="255" text-anchor="middle" font-size="12" fill="#1d6b3c">椅①</text>
+          <text x="770" y="330" text-anchor="middle" font-size="12" fill="#1d6b3c">墙权重跌破阈值</text>
+          <path d="M180,200 C220,160 230,160 270,160" stroke="#9aa7b4" stroke-width="2" fill="none" marker-end="url(#p1)"/>
+          <path d="M660,210 C680,170 690,170 710,170" stroke="#9aa7b4" stroke-width="2" fill="none" marker-end="url(#p1)"/>
+          <defs><marker id="p1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa7b4"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左：一个体素当前标签是「墙」，权重 3。中：新证据来了——多数支持墙（蓝 +1），但有几个像素说它是椅子（红 −1）；当墙的权重跌破阈值，右：体素翻成「椅①」。<br>
+          <b>怎么看这张图：</b>① 标签更新是「加减权重」而非硬覆盖，抗单帧噪声；② 阈值机制让错误标签能自我纠正；③ 这比 0159 的纯概率分布更省内存（只存一个标签+一个权重）。<br>
+          <b>要记住的一句话：</b>PanopticFusion 的体素标签靠「权重加减、跌破即翻」来自我修正。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" font-size="16.5" font-weight="700" fill="#9fb4ff">时间窗内出现的物体只留标签、体积清空——靠权重「加」与「减」</text>
+
+          <!-- 时间轴 -->
+          <line x1="70" y1="86" x2="836" y2="86" stroke="#cdd6ff" stroke-width="2"/>
+          <text x="58" y="90" text-anchor="end" font-size="11" fill="#cdd6ff">时间</text>
+          <circle cx="180" cy="86" r="6" fill="#5cffb0"/><text x="180" y="72" text-anchor="middle" font-size="10.5" fill="#5cffb0">t1 看到</text>
+          <circle cx="350" cy="86" r="6" fill="#5cffb0"/><text x="350" y="72" text-anchor="middle" font-size="10.5" fill="#5cffb0">t2 看到</text>
+          <circle cx="520" cy="86" r="6" fill="#a32617"/><text x="520" y="72" text-anchor="middle" font-size="10.5" fill="#ffd1d8">t3 被挡</text>
+          <circle cx="690" cy="86" r="6" fill="#a32617"/><text x="690" y="72" text-anchor="middle" font-size="10.5" fill="#ffd1d8">t4 仍被挡</text>
+
+          <!-- 这一格体素的标签概率条 -->
+          <rect x="96" y="118" width="700" height="150" rx="10" fill="#16203a" stroke="#9fb4ff" stroke-width="1.6"/>
+          <text x="446" y="142" text-anchor="middle" font-size="12.5" fill="#9fb4ff">这一格体素里的「人」标签权重怎么变</text>
+
+          <!-- 4 根柱 -->
+          <g>
+            <rect x="150" y="238" width="34" height="0" fill="#5cffb0"/>
+            <rect x="150" y="180" width="34" height="58" fill="#5cffb0" fill-opacity="0.85"/>
+            <text x="167" y="176" text-anchor="middle" font-size="10" fill="#5cffb0">+1</text>
+            <rect x="172" y="238" width="34" height="0"/>
+            <text x="167" y="258" text-anchor="middle" font-size="10.5" fill="#cdd6ff">t1</text>
+          </g>
+          <g>
+            <rect x="320" y="238" width="34" height="0"/>
+            <rect x="320" y="158" width="34" height="80" fill="#5cffb0" fill-opacity="0.95"/>
+            <text x="337" y="154" text-anchor="middle" font-size="10" fill="#5cffb0">+1</text>
+            <text x="337" y="258" text-anchor="middle" font-size="10.5" fill="#cdd6ff">t2</text>
+          </g>
+          <g>
+            <rect x="490" y="238" width="34" height="0"/>
+            <rect x="490" y="196" width="34" height="42" fill="#ffd166" fill-opacity="0.9"/>
+            <text x="507" y="192" text-anchor="middle" font-size="10" fill="#ffd166">−1</text>
+            <text x="507" y="258" text-anchor="middle" font-size="10.5" fill="#cdd6ff">t3</text>
+          </g>
+          <g>
+            <rect x="660" y="238" width="34" height="0"/>
+            <rect x="660" y="228" width="34" height="10" fill="#ffd166" fill-opacity="0.55"/>
+            <text x="677" y="224" text-anchor="middle" font-size="10" fill="#ffd166">−1</text>
+            <text x="677" y="258" text-anchor="middle" font-size="10.5" fill="#cdd6ff">t4</text>
+          </g>
+          <line x1="120" y1="238" x2="790" y2="238" stroke="#4a5568" stroke-width="1.4"/>
+          <text x="140" y="234" text-anchor="end" font-size="10" fill="#6b7785">0</text>
+
+          <text x="450" y="300" text-anchor="middle" font-size="11.5" fill="#5cffb0">被看到 → 权重累加，标签越来越可信</text>
+          <text x="450" y="320" text-anchor="middle" font-size="11.5" fill="#ffd166">被遮挡 / 没观测 → 权重衰减，标签保底不删</text>
+          <text x="450" y="352" text-anchor="middle" font-size="12" fill="#cdd6ff">积分规则的作用：让「偶尔被挡住」不至于把标签抹掉</text>
+          <text x="450" y="374" text-anchor="middle" font-size="12" fill="#9fb4ff">全景建图要同时兼顾「稳定」与「能忘」——这正是衰减项的职责</text>
+          <text x="450" y="400" text-anchor="middle" font-size="11.5" fill="#ffd1d8">代价：权重一多，在线 CRF 的复杂度就上来了</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>PanopticFusion 把标签一块块积分进体素里。图里盯着「同一格体素」在四个时刻的标签权重：t1、t2 相机看到它，权重往上涨；t3、t4 它被前面的东西挡住了，权重就往下降，但标签不立刻删掉。
+          <br>
+          <b>怎么看这张图：</b>① 先看上面那条时间轴，绿点=看到、红点=被挡；② 再看下面四根柱子，绿色是「+1」的累加、黄色是「−1」的衰减，柱高就是这一格现在有多相信「这里有个标签」；③ 注意 t3→t4 柱子降到很低但没归零——这就是「衰减而不是删除」：一次短暂遮挡不该让标签消失，但长期没观测就该让它淡出；④ 最后一行小字提醒你代价：这种逐格积分 + 在线 CRF 正则，算起来不便宜。
+          <br>
+          <b>要记住的一句话：</b>语义建图的标签不是「一票定终身」，而是一个被反复加加减减的权重——加是为了稳，减是为了能忘。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. 关联：地图参考 + IoU &gt; 0.25</h2>
+      <p>things 的实例 ID 怎么跨帧保持一致？PanopticFusion 用<b>地图参考（map reference）+ IoU</b>：把当前帧的每个实例 mask，和地图里已有实例的渲染 mask 求 IoU，<b>阈值 θ_U = 0.25</b> 判为同一实例。匹配策略是<b>按 mask 面积降序、贪心独占匹配</b>——大的先配，配上的就独占，避免前景过分割（一个小 mask 误吞大物体）。things 类的概率还会再做<b>置信度加权融合</b>。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PanopticFusion 用「地图参考 + IoU」做实例关联，它的 IoU 阈值（θ_U）是多少？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：原文阈值 θ_U = 0.25，比 MID-Fusion 的 0.5 更松，因为背景复杂、mask 形状更易波动，需要更宽容的匹配。" onclick="lessonKit.answer(this,'q0162a')">它的阈值是零点二五</button>
+          <button data-correct="no" data-explanation="错：0.5 是 MID-Fusion 的 IoU 阈值；PanopticFusion 用的是更松的 0.25，并配合「地图参考 + 贪心独占匹配」。" onclick="lessonKit.answer(this,'q0162a')">它的阈值是零点五</button>
+        </div>
+        <div class="quiz-feedback" id="q0162a"></div>
+      </div>
+
+      <h2 id="g">6. 在线 CRF 正则与复杂度</h2>
+      <p>标签积分后还要做空间正则，让相邻体素标签更一致——用<b>全连接 CRF</b>。它的核心技巧是：一元势用近似
+        $$p \simeq \tfrac{1}{2}\left(1 + \frac{W^L}{W^D}\right)$$
+        其中 $W^L$ 是「标签权重」、$W^D$ 是「深度/几何权重」。更关键的是<b>地图划分（map division）</b>：把体素地图切成最大 25 块的子块分别做 CRF，把复杂度从 $O(NM)$ 降到 $O(NM)/S$，这才让它「在线」勉强可行。</p>
+      <p><b>这句话在说什么：</b>一元势 $p$ 衡量「这个体素更像它的标签、还是更像几何」——标签权重相对几何权重越高，越信标签。而把大地图切块处理，是为了不让 CRF 在整张大图上算到天荒地老。</p>
+
+      <h2>7. 数字与局限</h2>
+      <p>关键数字：<b>体素大小 0.024 m</b>，截断距离 4×0.024；ScanNet v2 隐藏测试集上，<b>instance AP（AP@0.5）47.8</b>（优于 MASC 44.7、3D-SIS 38.2）；<b>全景 PQ 29.7，加 CRF 后 33.5</b>。系统吞吐约 <b>4.3 Hz</b>，瓶颈是 Mask R-CNN（235 ms）。</p>
+      <p>局限也诚实：CRF 后处理在末帧约 10 s（只能靠只处理相机视锥附近体素块缓解）；3D 语义 avg IoU 不如大体素 3D DNN（TextureNet 56.6 / 3DMV 48.4），因为它<b>没有 3D 大感受野</b>——3D DNN 没接进在线部分。这些都为后面 Kimera（0163）用 DSG 抽更上层抽象埋下对比。</p>
+      <figure class="figure">
+        <img src="../../md/images/2019_PanopticFusion/ef3ddacc39fb5e4e65a4e1fff2ca581f792f47c14e9ff83954c39048177ae460.jpg" alt="PanopticFusion qualitative results ScanNet v2">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Qualitative results obtained with PanopticFusion system. From left to right, typical scenes in ScanNet v2 of scene0608 00, scene0643 00 and scene0488 01 are displayed. Note that ground truth and our results leverage different reconstruction algorithms, and the colors of things in our results are not necessarily the same as the ground truth.<br>
+          <b>怎么看这张图：</b>这是 ScanNet v2 上的定性结果，展示在真实大场景里 stuff+things 同时被重建与标注。注意右边颜色只是实例的可视化编码，不代表与真值颜色一致——提醒读者看图时盯「结构对不对」，别被配色带偏。
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>PanopticFusion 的「单张全局 TSDF 体素哈希地图」同时存了哪两类标签？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：它用一张地图同时存 stuff（背景类，如墙地）的语义标签和 things（具体物体，带实例 ID）的实例标签，这正是「全景」的含义。" onclick="lessonKit.answer(this,'q0162b')">背景类加实例物体</button>
+          <button data-correct="no" data-explanation="错：它存的是「标签+权重」的标量，不是 0159 那种「各类别概率分布」；且两类标签是 stuff 与 things，不是「概率分布」。" onclick="lessonKit.answer(this,'q0162b')">各类别概率分布</button>
+        </div>
+        <div class="quiz-feedback" id="q0162b"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>「全景（panoptic）」= stuff + things 这句话在说什么？它和 0159 的逐像素语义、0160 的实例级各差在哪？</li>
+        <li>PanopticFusion 的地图表示是什么？每个体素除了 TSDF 还挂了什么？</li>
+        <li>体素标签的「增量/减量权重 + 跌破阈值翻标签」机制怎么让地图自我纠正？</li>
+        <li>它的实例关联判据是什么（阈值多少、匹配策略）？和 MID-Fusion 的 0.5 比松还是紧？</li>
+        <li>在线 CRF 的一元势近似 $p \simeq \frac12(1+W^L/W^D)$ 在表达什么？地图划分把复杂度降到了多少？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>为什么「只做语义」或「只做实例」都不够，非要全景？举一个只有全景才能回答的问题。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>「只做语义」（0159）知道墙是墙、椅子是椅子，但分不清两把椅子谁是谁，无法「拿第②把」；「只做实例」（0160）能数物体，却常忽略「背景墙地」这种没有实例的东西，无法回答「这面墙通向哪里」。只有全景同时持有 stuff（墙/地类）和 things（带 ID 的物体），才能既规划「沿墙走」又「拿第②把椅子」。PanopticFusion 就是把这两类一次性建进同一张体素图。</div></details>
+        </li>
+        <li>PanopticFusion 用「标签 + 权重」而非「概率分布」存语义，和 0159 比有什么利弊？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>利：只存一个标量标签 + 一个权重，比 0159 每 surfel 存「各类别概率分布」省内存，且「加减权重、跌破翻标签」的更新逻辑简单直观，适合大场景体素地图。弊：丢了「不确定性分布」的细粒度信息——你只知道「它当前最像什么、有多自信」，却不知道「它第二可能是什么」，对模糊区域的表达力弱于概率分布。这是在线大场景下的取舍。</div></details>
+        </li>
+        <li>为什么 PanopticFusion 的 IoU 关联阈值（0.25）比 MID-Fusion（0.5）更松？这会带来什么新风险？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为全景场景更大、背景更复杂，mask 形状更容易波动，用 0.5 会频繁「配不上」而误开新实例；放宽到 0.25 提高召回。代价是：太松可能把本该是两个的物体并成一个（过合并），或把同一物体的两部分当成同一实例。所以它额外用「按面积降序贪心独占匹配」来抑制前景过分割——大的先独占，小的再配，减少误吞。</div></details>
+        </li>
+        <li>地图划分（map division）把 CRF 复杂度从 O(NM) 降到 O(NM)/S，这个 S 是什么？它为什么重要？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>S 是地图被切出的子块数（原文每块最大 25 个 voxel blocks）。全连接 CRF 本要在整张大图上两两计算，复杂度 O(NM) 随体素数爆炸，根本无法在线。切成 S 块后每块独立算，总复杂度降到约 O(NM)/S，这正是 PanopticFusion 能「在线」跑 CRF 的关键工程技巧——代价是子块边界处正则可能不连续，但换来实时性。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0161-体素对象级-八叉树与EM关联.html">← 0161 MID-Fusion 与 EM-Fusion：体素对象级</a>
+        <a class="next" href="0163-Kimera与DSG-场景图的五层.html">0163 Kimera 与 DSG：场景图的五层 →</a>
+      </div>
+      <p class="foot-note">背景和物体终于说同一种语言了，下一步把它叠成「可行动的」五层场景图 🏢</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

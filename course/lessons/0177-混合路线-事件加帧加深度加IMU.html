@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>混合路线：事件加帧加深度加 IMU — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0177</div>
+      <h1>混合路线：事件加帧加深度加 IMU</h1>
+      <p class="subtitle">上一课看清了纯事件的天花板：一静止就失明，还没有尺度。🤝 这一课看四篇「给事件相机配队友」的论文——每个队友负责补哪一块短板，是这节课唯一要记住的事。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：事件 + 标准帧 / 深度 / IMU 各自扮演什么角色</span>
+        <span>👥 作者：Vidal 等（Ultimate SLAM，2018）＋ Rebecq 等（EventTracking，2018）＋ Nunes 等（DEVO，2022）＋ Klenk 等（行星机器人，2022）</span>
+        <span>📅 年份 · <i>Ultimate SLAM? Combining Events, Images, and IMU / Event-Based, 6-DOF Camera Tracking from Photometric Depth Maps / DEVO: Depth-Event Camera Visual Odometry / Exploring Event Camera-Based Odometry for Planetary Robots</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：谁补谁的短板</a>
+        <a href="#b">Ultimate SLAM：事件 + 帧 + IMU</a>
+        <a href="#c">EventTracking：事件 + 已有深度图</a>
+        <a href="#d">DEVO：事件 + 深度相机</a>
+        <a href="#e">行星机器人：事件 + 帧 + IMU（火星版）</a>
+        <a href="#f">四篇横向对照</a>
+        <a href="#g">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：用一张表说清事件、标准帧、深度、IMU 这四种东西各自解决什么；解释为什么「双目 / 深度相机管尺度，帧 / IMU 管静止退化与初始化」；说清 Ultimate SLAM 的虚拟事件帧是怎么造出来的；<b>如实说明 EventTracking 是「从已有深度图做跟踪」而不是完整 SLAM</b>；说清 DEVO 为什么只要 1 Hz 的深度相机就够；说清行星机器人那篇的真实定位（是方法论文，不是纯对比综述）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本节的融合结构回到 <b>第五季 0095–0103「多传感器融合」</b>与 <b>第三季 0057 / 0058 VINS-Mono</b>：事件 + 帧 + IMU 的三路残差紧耦合，本质上就是 VIO 那套因子图，只是把「图像特征」换成了「事件特征」。★ IMU 预积分、时间偏移标定回链 <b>0057</b> 与 <b>0064 纯惯性初始化</b>——Ultimate SLAM 花大力气标定的 2.5 ms 时间偏移，就是那一套里最经典的坑。★ EventTracking 的测量函数来自「事件产生机理」，与 <b>0048 DSO</b> 的光度误差是同一血脉：都在比「预测的亮度关系」与「观测到的亮度关系」；区别是 DSO 比的是两帧之间的亮度，它比的是<b>同一张参考图上两点的对数亮度差</b>。★ DEVO 直接用深度相机的深度来 warp，与 <b>第三季 0051 DVO-SLAM「用现成深度做直接法」</b>思路完全一致。★ 事件提供的高频运动信息与 IMU 的关系，回链 <b>0059 ROVIO</b> 那种「滤波 + 高频测量」的组合。</p></div>
+      </div>
+
+      <h2>1. 开场：一张分工表，胜过十页公式</h2>
+      <p>先把结论摆在最前面。事件相机有四块天生的短板，而每一种「队友」恰好补其中一块：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">队友</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">它补的是哪一块短板</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">凭什么能补</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;"><b>标准帧</b>（APS）</td><td style="padding:.6rem;border:1px solid #3a4a78;">静止退化；以及「事件没有绝对亮度」这条</td><td style="padding:.6rem;border:1px solid #3a4a78;">帧有完整亮度图，静止时它照样能给出特征；而且很多算法需要一张帧来<b>启动</b>（bootstrap）模板</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;"><b>IMU</b></td><td style="padding:.6rem;border:1px solid #3a4a78;">初始化；以及高频段的运动先验</td><td style="padding:.6rem;border:1px solid #3a4a78;">IMU 高频且不依赖场景，能先猜一个运动，让事件不用从零开始找</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;"><b>深度相机 / 双目</b></td><td style="padding:.6rem;border:1px solid #3a4a78;"><b>尺度</b>（单目事件根本拿不到的那个量）</td><td style="padding:.6rem;border:1px solid #3a4a78;">有了深度，二维事件点立刻变成一个已知位置的三维点，一步到位</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;"><b>已有的离线深度图</b></td><td style="padding:.6rem;border:1px solid #3a4a78;">把问题从「SLAM」降级成「跟踪」</td><td style="padding:.6rem;border:1px solid #3a4a78;">地图不用建了，只剩「我在哪」，问题一下子简单很多</td></tr>
+        </tbody>
+      </table>
+      <p>这就是整节课的骨架。记住一句口诀：<b>双目 / 深度管尺度，帧 / IMU 管静止退化与初始化。</b>后面四篇论文，无非是这四种队友的不同组合。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">一台背着四种传感器的四旋翼：每个人都在补别人补不了的那一块</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">暗走廊 + 高速飞行，正是常规相机同时失效的场合</text>
+          <rect x="50" y="76" width="800" height="150" fill="#131a2e" stroke="#33406b"/>
+          <line x1="120" y1="226" x2="420" y2="150" stroke="#33406b"/>
+          <line x1="780" y1="226" x2="480" y2="150" stroke="#33406b"/>
+          <line x1="120" y1="76" x2="420" y2="150" stroke="#33406b"/>
+          <line x1="780" y1="76" x2="480" y2="150" stroke="#33406b"/>
+          <rect x="420" y="122" width="60" height="56" fill="#1b2440" stroke="#6f86c9"/>
+          <rect x="430" y="200" width="40" height="6" fill="#9b8cff"/>
+          <rect x="424" y="190" width="52" height="10" rx="3" fill="#cdd6ff"/>
+          <circle cx="436" cy="188" r="9" fill="none" stroke="#8fd4ff" stroke-width="2"/>
+          <circle cx="464" cy="188" r="9" fill="none" stroke="#8fd4ff" stroke-width="2"/>
+          <circle cx="450" cy="212" r="5" fill="#ffd166"/>
+          <text x="450" y="120" text-anchor="middle" fill="#9fb4ff" font-size="11">走廊尽头一扇门</text>
+          <rect x="40" y="246" width="195" height="140" rx="8" fill="#16203a" stroke="#5cffb0"/>
+          <text x="137" y="270" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">事件相机</text>
+          <text x="137" y="296" text-anchor="middle" fill="#bfe" font-size="11">「哪里在动我说了算，</text>
+          <text x="137" y="314" text-anchor="middle" fill="#bfe" font-size="11">转再快我也不糊」</text>
+          <text x="137" y="342" text-anchor="middle" fill="#9fb4ff" font-size="11">弱项：静止时没输出</text>
+          <text x="137" y="362" text-anchor="middle" fill="#9fb4ff" font-size="11">拿不到尺度、没有绝对亮度</text>
+          <rect x="245" y="246" width="195" height="140" rx="8" fill="#16203a" stroke="#ffd166"/>
+          <text x="342" y="270" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">标准帧（APS）</text>
+          <text x="342" y="296" text-anchor="middle" fill="#ffe9a8" font-size="11">「静止的时候我来顶，</text>
+          <text x="342" y="314" text-anchor="middle" fill="#ffe9a8" font-size="11">启动模板也得靠我」</text>
+          <text x="342" y="342" text-anchor="middle" fill="#9fb4ff" font-size="11">弱项：高速会糊</text>
+          <text x="342" y="362" text-anchor="middle" fill="#9fb4ff" font-size="11">极暗 / 极亮会曝废</text>
+          <rect x="450" y="246" width="195" height="140" rx="8" fill="#16203a" stroke="#9b8cff"/>
+          <text x="547" y="270" text-anchor="middle" fill="#cdbcff" font-size="13" font-weight="700">深度相机</text>
+          <text x="547" y="296" text-anchor="middle" fill="#cdbcff" font-size="11">「每个点多远，</text>
+          <text x="547" y="314" text-anchor="middle" fill="#cdbcff" font-size="11">这个尺度我来给」</text>
+          <text x="547" y="342" text-anchor="middle" fill="#9fb4ff" font-size="11">弱项：慢（1 Hz 也够用）</text>
+          <text x="547" y="362" text-anchor="middle" fill="#9fb4ff" font-size="11">深度图有噪声与空洞</text>
+          <rect x="655" y="246" width="195" height="140" rx="8" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="752" y="270" text-anchor="middle" fill="#ff9f6b" font-size="13" font-weight="700">IMU</text>
+          <text x="752" y="296" text-anchor="middle" fill="#ffd1d8" font-size="11">「我先猜一个运动，</text>
+          <text x="752" y="314" text-anchor="middle" fill="#ffd1d8" font-size="11">你们少算很多来回」</text>
+          <text x="752" y="342" text-anchor="middle" fill="#9fb4ff" font-size="11">弱项：积分会漂</text>
+          <text x="752" y="362" text-anchor="middle" fill="#9fb4ff" font-size="11">而且要先标好时间偏移</text>
+          <text x="450" y="414" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：双目 / 深度管尺度，帧 / IMU 管静止退化与初始化</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一台四旋翼在一条昏暗的走廊里飞行，身上背着四种传感器。下面四张卡片分别写出每一种「队友」对整件事的贡献，以及它自己带进来的新麻烦。<br>
+          <b>怎么看这张图：</b>① 先横向读四张卡片的第二行（各自的一句台词）：事件说「哪里在动」，帧说「静止时我顶」，深度说「远近我来给」，IMU 说「我先猜一个」；② 再读每张卡片下半部分的「弱项」——这是本课要反复强调的：<b>没有哪个队友是白送的，每一个都带着自己的毛病</b>；③ 把四张卡片合起来看，你就得到了整节课的架构：几乎所有事件相机系统，都是从这个菜单里挑两到三种来组合。<br>
+          <b>要记住的一句话：</b>混合路线的全部智慧不在「多装几个传感器」，而在「知道每个传感器负责补哪一个洞」。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. Ultimate SLAM（2018）：事件 + 标准帧 + IMU 的三路紧耦合</h2>
+      <p><b>Ultimate SLAM</b>（Vidal 等，RA-L 2018）是第一个把<b>事件 + 标准帧 + IMU</b> 三者紧耦合起来的事件相机 SLAM 系统（单目）。它的课题很实在：在 HDR 与高速这两种常规相机最难受的场合下，把鲁棒性做出来。作者甚至在标题里带了个问号——「Ultimate SLAM?」，意思是「这么拼，够不够叫终极？」</p>
+      <p>它的关键机关叫<b>虚拟事件帧</b>。做法是：拿 IMU 预积分出来的运动，把这段时间里的事件<b>运动补偿（warp）</b>到参考时刻，再累加成一张图：</p>
+      <div class="formula-box">
+        $$ I_k(\mathbf{x}) \;=\; \sum_i \delta(\mathbf{x} - \mathbf{x}'_i) $$
+        <div class="flow-formula">输入：被 IMU 运动补偿到同一时刻的一批事件 → 处理：把每个事件按它补偿后的像坐标落进对应的像素里，累加计数 → 输出：一张「假设相机在参考时刻静止」时看到的事件图</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「如果所有事件都发生在同一瞬间，画面会是什么样」；② 为什么这样就能用——因为相机在动，事件会散在整条运动轨迹上，糊成一片；用 IMU 的运动把每个事件「退回」到参考时刻，它们就重新聚回到物体的边缘上，这张图于是可以像普通图像一样去做 FAST 角点检测与 KLT 跟踪（每帧大约用 <b>20000 个事件</b>）；③ 权重／核函数在这里的角色由 IMU 的运动估计承担——<b>IMU 猜得准，事件就聚得紧、特征就好找；IMU 猜得不准，这张虚拟事件帧就是糊的</b>，所以 IMU 在这一步里说的分量很重。这也是为什么系统必须把 IMU 与事件相机之间的时间偏移标定得非常准（论文标到 <b>2.5 ms</b>）。</p>
+      <p>有了虚拟事件帧之后，前端变成「双源」：在虚拟事件帧上做一遍 FAST + KLT，在标准 APS 帧上再做一遍，两条线的特征都进入后端。后端用 Ceres 做非线性最小二乘，<b>三路残差一起优化</b>：</p>
+      <div class="formula-box">
+        $$ \min\ \sum \|\mathbf{r}_{evt}\|^{2}_{\Omega_{evt}} \;+\; \sum \|\mathbf{r}_{img}\|^{2}_{\Omega_{img}} \;+\; \sum \|\mathbf{r}_{imu}\|^{2}_{\Omega_{imu}} $$
+        <div class="flow-formula">输入：事件特征的重投影残差、标准帧特征的重投影残差、IMU 预积分残差 → 处理：三者按各自的信息矩阵加权求和 → 输出：一个统一的代价函数，一起解出位姿、速度、IMU 偏置</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「三路证据合起来有多矛盾」；② 为什么三路一起就能判对——事件特征在高速段最可靠、标准帧在静止段最可靠、IMU 在两者都失效的短暂间隙里还能顶住，三路互相补位，任何一路烂掉都不会让整个系统崩；③ 权重什么时候把观测当回事——每个残差前面的 $\Omega$ 是它的信息矩阵（可以理解为「这条证据有多可信」）：在高速运动时事件特征的权重实际更高，在静止或弱纹理时标准帧的权重更高，而 IMU 项的权重由它自己的噪声模型与预积分时长决定。这就是「紧耦合」的含义：<b>不是先各自算一个结果再投票，而是在同一个优化里共同决定位姿。</b></p>
+      <p><b>成绩与代价</b>：在 Event-Camera Dataset 上，比「事件 + IMU」准 <b>85%</b>、比「帧 + IMU」准 <b>130%</b>（这两个百分比务必带着对比基线来读）。它也是<b>第一个在事件相机 SLAM 上做了四旋翼闭环飞行验证</b>的工作。原文自述的局限同样要记住：事件分支对参数和场景运动敏感；<b>静止 / 弱纹理时标准帧仍是主力</b>；时间偏移需要仔细标定。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_UltimateSLAM/1ea0fd9d1364d09bfddcfa3e4e945d7fd109622df56a67cab4521abd79400ce4.jpg" alt="Ultimate SLAM pipeline: standard frame, virtual event frame, events only">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Our state estimation pipeline combines events, standard frames, and inertial measurements to provide robust state estimation, and can run onboard an autonomous quadrotor with limited computational power. Bottom Left: Standard frame, Bottom Middle: Virtual event frame, Bottom Right: Events only (blue: positive events, red: negative events).（中译：我们的状态估计管线结合事件、标准帧与惯性测量，提供鲁棒的状态估计，并能在算力有限的自主四旋翼上机载运行。下排左：标准帧；下排中：虚拟事件帧；下排右：纯事件（蓝为正事件，红为负事件）。）<br>
+          <b>怎么看这张图：</b>这张图把「混合路线」讲得比任何文字都清楚，请重点看下排三张图：<b>左</b>是标准相机拍的照片（有纹理、有灰度）；<b>中</b>是 IMU 运动补偿之后攒出来的虚拟事件帧——它已经像一张「边缘图」了；<b>右</b>是没做补偿的原始事件，蓝红相间地撒在运动轨迹上，糊成一片。三者的差别就是「虚拟事件帧」这个机关的全部价值。<br>
+          <b>要记住的一句话：</b>混合路线不是把三路数据并排放着，而是让 IMU 把事件「整治」成一张能被经典视觉算法吃下去的图。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">同一段飞行里，帧和事件各自在什么时候顶用</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">横轴是时间；上面一行是标准帧的表现，下面一行是事件的表现</text>
+          <rect x="60" y="92" width="780" height="46" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <rect x="60" y="92" width="260" height="46" rx="6" fill="#1d3a4f"/>
+          <rect x="320" y="92" width="260" height="46" fill="#4a3040"/>
+          <rect x="580" y="92" width="260" height="46" rx="6" fill="#3a3a52"/>
+          <text x="190" y="122" text-anchor="middle" fill="#cfe6ff" font-size="13" font-weight="700">静止 / 慢速段</text>
+          <text x="450" y="122" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">高速段</text>
+          <text x="710" y="122" text-anchor="middle" fill="#d8d8ff" font-size="13" font-weight="700">极暗段</text>
+          <text x="60" y="168" fill="#ffd166" font-size="13" font-weight="700">标准帧</text>
+          <rect x="60" y="178" width="780" height="76" rx="6" fill="#131a2e" stroke="#3a4a78"/>
+          <rect x="70" y="188" width="240" height="56" fill="#1b2440" stroke="#ffd166" stroke-width="2"/>
+          <text x="190" y="212" text-anchor="middle" fill="#ffe9a8" font-size="12">图像清晰、特征稳定</text>
+          <text x="190" y="232" text-anchor="middle" fill="#ffe9a8" font-size="12">这一段它是主力</text>
+          <rect x="330" y="188" width="240" height="56" fill="#1b2440" stroke="#ff5d73" stroke-width="2"/>
+          <text x="450" y="212" text-anchor="middle" fill="#ffd1d8" font-size="12">运动模糊，特征抓不住</text>
+          <text x="450" y="232" text-anchor="middle" fill="#ffd1d8" font-size="12">这一段它不可用</text>
+          <rect x="590" y="188" width="240" height="56" fill="#1b2440" stroke="#ff5d73" stroke-width="2"/>
+          <text x="710" y="212" text-anchor="middle" fill="#ffd1d8" font-size="12">严重欠曝，几乎全黑</text>
+          <text x="710" y="232" text-anchor="middle" fill="#ffd1d8" font-size="12">这一段它也不可用</text>
+          <text x="60" y="288" fill="#5cffb0" font-size="13" font-weight="700">事件</text>
+          <rect x="60" y="298" width="780" height="76" rx="6" fill="#131a2e" stroke="#3a4a78"/>
+          <rect x="70" y="308" width="240" height="56" fill="#1b2440" stroke="#ff5d73" stroke-width="2"/>
+          <text x="190" y="332" text-anchor="middle" fill="#ffd1d8" font-size="12">事件几乎为零</text>
+          <text x="190" y="352" text-anchor="middle" fill="#ffd1d8" font-size="12">这一段它帮不上忙</text>
+          <rect x="330" y="308" width="240" height="56" fill="#1b2440" stroke="#5cffb0" stroke-width="2"/>
+          <text x="450" y="332" text-anchor="middle" fill="#bfe" font-size="12">事件最密、且不糊</text>
+          <text x="450" y="352" text-anchor="middle" fill="#bfe" font-size="12">这一段它是主力</text>
+          <rect x="590" y="308" width="240" height="56" fill="#1b2440" stroke="#5cffb0" stroke-width="2"/>
+          <text x="710" y="332" text-anchor="middle" fill="#bfe" font-size="12">仍能感知明暗交界</text>
+          <text x="710" y="352" text-anchor="middle" fill="#bfe" font-size="12">这一段它还能顶</text>
+          <text x="450" y="404" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：两行红绿正好互补——没有哪一行能独自撑完全程</text>
+          <text x="450" y="426" text-anchor="middle" fill="#9fb4ff" font-size="12">这就是「混合」两个字最实在的含义</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把一段飞行分成三段（静止 / 慢速、高速、极暗），上排写标准帧在这一段能不能用，下排写事件在这一段能不能用。红色表示这一段该传感器不好使，绿色表示它正好顶用。<br>
+          <b>怎么看这张图：</b>① 竖着看每一列：<b>任何一列里，两行最多只有一行是绿的</b>——也就是说，每一种场合至少有一个传感器能扛住；② 横着看每一行：标准帧在高速和极暗两段都变红，事件在静止段变红，两行的红绿位置几乎完全错开；③ 这个「错开」就是混合路线的全部理由：<b>把两行的绿区拼起来，就得到一条全程可用的时间线。</b><br>
+          <b>要记住的一句话：</b>混合路线买的不是「更准」，而是「不中断」——它的价值体现在原本会彻底失败的时段里。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. EventTracking（2018）：事件 + 一张「已经给你的」深度图</h2>
+      <p>第三篇的角度完全不同，也最容易被误会，所以先把它的定位钉死：</p>
+      <div class="callout">
+        <h4>⚠️ 它的真实身份：这是「跟踪」，不是完整 SLAM</h4>
+        <p>这篇论文的完整标题是 <b>Event-Based, 6-DOF Camera Tracking from Photometric Depth Maps</b>——关键词是 <b>from Photometric Depth Maps</b>（从光度深度图出发）。它<b>不建图</b>：深度图是「已经给你」的——要么来自 RGB-D 相机（论文用的是 Intel RealSense R200），要么来自离线的稠密重建（DTAM / REMODE）。它做的事情只有一件：<b>给定这张深度图（强度 + 深度），逐事件更新相机的 6 自由度位姿。</b></p>
+        <p>所以把它和 0176 的 EVO、0178 的 ESVO 并列时，必须说清它们的层级不同：EVO / ESVO 要同时解决「地图长什么样」和「我在哪」；它只解决后者。它的优势也正来自这个简化——<b>可以做到几乎零延迟（微秒级）</b>。</p>
+      </div>
+      <p>它的技术核心是一个漂亮的观察。按 0175 讲的，事件产生的条件是「对数亮度变化跨过阈值」。那么反过来：<b>如果我知道这张参考图长什么样，也知道相机的位姿，我就能预测「这个事件应该对应多大的亮度变化」。</b>于是定义一个测量函数：</p>
+      <div class="formula-box">
+        $$ M \;:=\; \frac{\Delta \ln I}{C_{th}} \;-\; 1, \qquad
+           p(o_k \mid s_k) \;=\; \pi_m\,\mathcal{N}\!\left(M;\,0,\,\sigma_m^{2}\right) \;+\; (1-\pi_m)\,\mathcal{U}\!\left(M;\,M_{min},\,M_{max}\right) $$
+        <div class="flow-formula">输入：把事件 warp 到参考图上，在 t_k 与 t_k − Δt 两个时刻取对数亮度、相减得 Δln I → 处理：用它除以对比度阈值 C_th 再减 1，得到「跨阈值的倍数」M → 输出：M 接近 0 就说明位姿算对了，观测可信；M 离谱就说明这个事件是离群，交给均匀分布那一项吞掉</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「这个事件报出来的变化，跟位姿预测出来的变化，对得上吗」——若对得上，$\Delta \ln I$ 应该恰好等于阈值 $C_{th}$，于是 M 等于 0；② 为什么这样就能判对——位姿错了，事件被 warp 到参考图上的位置就错了，取到的两点亮度差就会乱掉，M 会成批地偏离 0；位姿对了，M 就聚在 0 附近，所以「让 M 尽量接近 0」就等于「让位姿尽量对」；③ 权重／核函数在这里非常关键：$\pi_m$ 是<b>内点比例</b>，$\sigma_m$ 是内点的噪声尺度；而那个均匀分布 $\mathcal{U}$ 是专门用来「兜住离群值」的——<b>当一个事件的 M 远离 0（比如场景里有别的运动、或深度图本身有错），正态项给的概率已经很小，均匀项却仍然给出一个大致恒定的概率，于是这个观测不会把位姿拽走。</b>这就是所谓的 normal-uniform 混合似然，它让这套方法在快速运动、深度有瑕疵时依然稳。每一轮更新都写成 EKF 的形式，卡尔曼增益 $K_k = P_k J_k^{\top}(J_k P_k J_k^{\top} + \sigma_m^{2})^{-1}$ 决定「这个事件能改多少位姿」。</p>
+      <p><b>成绩与代价</b>：在室内 DVS（128×128，注意这个分辨率有多低）的 rocks 序列上，位置 RMS 1.63 cm、朝向 RMS 2.21°；换算成相对量是 2.71%（相对 60 cm 的平均景深）。作为对照，一台 752×480、90 Hz 的<b>标准相机</b>做同样的事，位置 1.8%、朝向 1.04°——<b>事件法只略差一点，而它的分辨率低了约 20 倍</b>，这个对比很有说服力。更有说服力的是高速实验：标准相机在约 8.66 秒处因运动模糊彻底跟丢，事件法继续准确跟踪。</p>
+      <p>原文自述的局限必须照抄：<b>依赖已有的准确深度图（不是在线建图）</b>；DVS 空间分辨率低；<b>未优化的实现每事件要 32 ms，处理不了 1 M/s 的事件率</b>（需要优化，实测约 31k events/s）；并且假设恒定光照。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_EventTracking/48ffe8415206f5eafce3711297c93486ae02be7be1cfbb415f7d740188536d27.jpg" alt="High speed motion: blurred frame vs events and estimated poses">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>High-speed motion sequence. Top left: Image from a standard camera, suffering from blur due to high-speed motion. Top right: Set of asynchronous events from an event camera in an interval of 3 milliseconds, colored according to polarity. Bottom: estimated poses using our event-based (EB) approach, which provides low latency and high temporal resolution updates. Ground truth (GT) poses are …（中译：高速运动序列。左上：标准相机的图像，因高速运动而模糊；右上：事件相机在 3 毫秒区间内的异步事件，按极性着色；下：用本文事件方法估计的位姿，具有低延迟与高时间分辨率。）<br>
+          <b>怎么看这张图：</b>这是一张「一句话说明事件相机为什么值钱」的图。左上那张模糊的照片就是常规相机在高速下的全部下场——它已经没有任何可用信息；右上那堆红蓝点，是在同样的 3 毫秒里事件相机看到的东西，边缘清清楚楚。<br>
+          <b>要记住的一句话：</b>「3 毫秒」是这张图的题眼——常规相机一帧要 33 毫秒，事件相机用它的十分之一时间就给出了可用的信息。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_EventTracking/02b45b01363bc344d319284eafe1032acd562f67370fdb2df39f30f883da074d.jpg" alt="Computing the measurement function by transferring events to a reference image">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Computation of the contrast (measurement function) by transferring events from the event camera to a reference image. For each event, the predicted contrast (13), D ln I, used in the measurement function (7) is computed as the log-intensity difference (as in (1)) at two points on the reference image I^r: the points (12) corresponding to the same pixel on the event camera, at times of the event (t_k and t_k − Δt).（中译：把事件从事件相机搬到参考图上，以此计算对比度（测量函数）。对每个事件，测量函数里用到的预测对比度 Δln I 是这样得到的：在参考图 I^r 上取两个点——它们分别对应事件相机上同一像素在事件时刻 t_k 与 t_k − Δt 的位置——再算这两点的对数亮度差。）<br>
+          <b>怎么看这张图：</b>这张图就是上面那个公式的图解。盯住那个「同一像素、两个时刻」的构造：因为相机在动，同一个像素在不同时刻看向场景里不同的位置，而这两个位置在<b>参考图</b>上都有已知亮度；把它们相减，就得到「如果位姿正确，这个事件应该报出多大的亮度变化」。再把这个预测值和事件真的报了（跨过阈值）作比较，就得到残差 M。<br>
+          <b>要记住的一句话：</b>它把「事件」翻译成了「参考图上两点的亮度差」，于是又回到了亮度世界——<b>但这个亮度是从参考图借来的，不是事件相机测的</b>。这也正是它依赖那张现成深度图的原因。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. DEVO（2022）：事件 + 深度相机，深度只要 1 Hz</h2>
+      <p>第四篇把「借深度」这件事做得更彻底。<b>DEVO</b>（Nunes 等，ICRA 2022）的配置是<b>事件相机 + 深度相机</b>的混合立体系统：深度相机直接给出深度图，事件相机负责高频运动。它的中心思想是那句话——<b>既然深度相机能直接测出深度，为什么还要去估计它？</b></p>
+      <ul>
+        <li><b>事件的用法</b>：把事件攒成 <b>Time-Surface Map（TSM）</b>，再按一个阈值 δ 二值化，得到一张<b>边缘图</b>。</li>
+        <li><b>深度的用法</b>：深度相机给的点，配上参考帧的位姿，投影成一组带深度的三维点，再 <b>warp</b> 到当前时刻，得到「参考边缘图在当前视角下应该长什么样」。</li>
+        <li><b>优化</b>：用 forward compositional LK 最小化「当前 TSM 边缘」与「warp 过来的参考边缘」之间的对齐残差（含一个稳健损失 ρ）。</li>
+      </ul>
+      <div class="formula-box">
+        $$ \theta_{rel}^{*} \;=\; \arg\min_{\theta_{rel}}\ \sum_k \rho\!\left( \overline{\mathcal{T}}_{cur}\!\left( W(\mathbf{x}_k^{ref};\ \theta_{rel}) \right) \right)^{2} $$
+        <div class="flow-formula">输入：参考帧上被选中的边缘点集，以及当前的 TSM → 处理：用待求的相对位姿 θ_rel 把这些参考点 warp 到当前 TSM 上，取对应值求残差 → 输出：让所有残差最小的那个相对位姿</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「把参考帧的边缘按某个相对位姿挪过来，和当前这一刻的边缘图能不能重合」；② 为什么这样就能判对——边缘是由事件的<b>时间表面值</b>表达的（刚变过的位置值高），位姿正确时，warp 过来的参考边缘应该正好压在当前 TSM 的高值处，残差小；位姿偏了，两条边错开，残差变大；③ 权重／核函数在这里是稳健损失 ρ——<b>当某个点的残差特别大（深度图有噪声、边缘提取错了），ρ 会让它的权重降下来</b>，不让一个坏点拖偏整个位姿。这和 0176 里事件线 SLAM 用距离降权是同一类做法。</p>
+      <p><b>它最大的实用价值是一个数字：深度相机只要 1 Hz 就能跟踪。</b>原因很直白——深度是「慢变量」，房间里的墙和桌子不会每秒挪位置，所以低频测一次就够；而运动是「快变量」，交给事件相机去高频地跟。这个分工正好对上第 1 节那张分工表。<b>代价也很清楚</b>：它依赖深度相机，需要仔细标定事件相机与深度相机的外参；深度图有噪声或空洞时会退化；TSM 的二值化阈值 δ 很敏感；而且<b>它没有 IMU</b>，所以尺度与漂移的处理是缺失的。原文自述里也写了这些。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_DEVO/b3e1a265bd14eebfe755636fcbb82508c1f33064d808df81d1e72a4266c24b5b.jpg" alt="Reprojection comparison: ESVO vs DEVO">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Visualization of an image (top left) and TSM (top right) from sequence indoor flying2 and corresponding reprojections into a nearby frame for ESVO (bottom left) and DEVO (bottom right). The coloring indicates the depth of each point.（中译：indoor flying2 序列的一张图像（左上）与 TSM（右上），以及把它们重投影到邻近帧的结果——左下是 ESVO，右下是 DEVO。点的颜色表示深度。）<br>
+          <b>怎么看这张图：</b>这是本课最直观的一组对照。右上那张 TSM 就是「事件攒出来的边缘图」；下面两张是把它重投影到附近视角的结果：<b>左下是 ESVO（纯事件，深度由它自己估计），右下是 DEVO（直接用深度相机给出的深度）</b>。颜色表示深度值，所以两张图在深度着色上的差异，正是「自己估深度」与「直接拿深度」这两条路线的差异。<br>
+          <b>要记住的一句话：</b>「自己估深度」和「直接拿深度」的差别，在这张图上一眼可见——这也是原文敢说自己在暗光、高速场景下胜过 ESVO 的底气（请按原文正文的对比结果来读，不要只看这一张示意图下结论）。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 行星机器人（2022）：把 EKLT + xVIO 送到火星场景里</h2>
+      <p>最后一篇常被误会成「一篇对比综述」，这里要如实纠正：<b>它是一篇提出 pipeline 并在火星类比场景里做验证的方法论文</b>（Klenk 等，RA-L 2022），只不过它做的对比实验特别多。它把已有的两个零件拼起来：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>前端：EKLT（事件 + 帧）</h4><p>用 Harris 角点做种子，对每个角点维护一个亮度模板，<b>靠事件流与标准帧一起逐事件更新模板</b>（亮度增量对齐），输出异步的特征跟踪。</p></div>
+        <div class="mini-card"><h4>后端：xVIO（EKF）</h4><p>状态里含 IMU 误差状态与特征（MSCKF 式的滑窗 + <b>深度先验特征</b>），最小化 IMU 预积分残差 + 特征重投影残差；每 $n_e = 3200$ 个事件同步一次。</p></div>
+      </div>
+      <p>为什么这件事和行星探测扯上关系？因为火星车/火星直升机面对的光照条件极端：论文在 <b>JPL Mars Yard</b> 里测的是高动态（常规图像严重过曝到出伪影），在 <b>Wells Cave</b> 里测的是低光（常规图像严重欠曝）。而<b>从事件重建出来的 HDR 图像不受这两种伪影影响</b>，这正是方法能赢的原因。<b>结果</b>：在 Event-Camera Dataset 上平均 MPE <b>0.54%</b>，比次优方法低 <b>32%</b>；而且在一段<b>纯旋转</b>序列上，它成了<b>唯一收敛</b>的方法（靠 xVIO 后端加的深度先验顶住了退化）。</p>
+      <p>它的局限也很典型，正好呼应前两节：<b>EKLT 仍然需要初始 APS 帧</b>（因为事件不提供绝对亮度，模板要靠帧 bootstrap）；<b>DVXplorer 这类没有帧的机型压根用不了 EKLT 前端</b>；而且计算比较重（论文如实报告了它在处理事件率上的开销）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Exploring_Event_Camera-Based_Odometry_for_Planetary_Robo/8b366aa4acdd9e6847d5298d752d7d040d0b1c2b1ab9eee2559203e4402b8b40.jpg" alt="Mars Yard HDR and Wells Cave low light, with HDR images reconstructed from events">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>In the Mars Yard (a) we test HDR conditions which cause severe oversaturation artefacts in standard images (b). Instead in the Wells Cave (e) we study low light scenarios encountered in lava tubes, which cause undersaturation (f). HDR images reconstructed from events [39] (c,g) do not suffer from these artefacts, and are used by our method. As a result, we outperform existing frame-based approaches …（中译：在 Mars Yard (a) 我们测试高动态条件，它让标准图像 (b) 出现严重的过饱和伪影；在 Wells Cave (e) 测试熔岩管里的低光场景，它让图像 (f) 欠曝。由事件重建出的 HDR 图像 (c,g) 不受这些伪影影响，被我们的方法使用。）<br>
+          <b>怎么看这张图：</b>请把 (b) 和 (g) 并排看：<b>(b)</b> 是常规相机在火星类比场地拍的，亮部已经糊成一片白；(g) 是从事件重建出来的 HDR 表现，亮部暗部的细节都还在。这就是「高动态范围约 130–140 dB 对常规相机约 60 dB」这句数字背后的真实画面。<br>
+          <b>要记住的一句话：</b>行星探测正好落在事件相机最擅长的两种场景（高动态、低光）上——这类「极端光照 + 弱纹理」的场合，就是它最有说服力的舞台。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 四篇横向对照：谁补了哪一块</h2>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">论文</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">传感器组合</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">补的是哪块短板</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">代表数字</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">关键局限</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">Ultimate SLAM（2018）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件 + 帧 + IMU</td><td style="padding:.6rem;border:1px solid #3a4a78;">静止退化（靠帧）、初始化与高频（靠 IMU）</td><td style="padding:.6rem;border:1px solid #3a4a78;">比 E+I 准 85%、比 Fr+I 准 130%；每帧约 20000 事件；时间偏移 2.5 ms</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件分支参数敏感；静止 / 弱纹理时仍靠标准帧；时间偏移须细标</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">EventTracking（2018）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件 + <b>已有</b>深度图</td><td style="padding:.6rem;border:1px solid #3a4a78;">尺度（深度直接给出）；把 SLAM 降级成 tracking</td><td style="padding:.6rem;border:1px solid #3a4a78;">128×128 DVS：位置 2.71%、朝向 2.21°；标准相机对照 1.8% / 1.04°</td><td style="padding:.6rem;border:1px solid #3a4a78;"><b>不是 SLAM、不建图</b>；依赖已有准确深度图；未优化时每事件 32 ms</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">DEVO（2022）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件 + 深度相机</td><td style="padding:.6rem;border:1px solid #3a4a78;">尺度（深度相机直接测）</td><td style="padding:.6rem;border:1px solid #3a4a78;">深度相机 <b>1 Hz</b> 即可跟踪；Prophesee Gen3 640×480；R_rpe 0.30–0.53</td><td style="padding:.6rem;border:1px solid #3a4a78;">依赖深度相机与外参标定；TS 阈值敏感；无 IMU 故不处理尺度与漂移</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">行星机器人（2022）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件 + 帧 + IMU</td><td style="padding:.6rem;border:1px solid #3a4a78;">静止退化和纯旋转退化（深度先验）、初始化（IMU）</td><td style="padding:.6rem;border:1px solid #3a4a78;">平均 MPE 0.54%、比次优低 32%；每 3200 个事件同步一次</td><td style="padding:.6rem;border:1px solid #3a4a78;">EKLT 仍需初始 APS 帧；无帧机型（DVXplorer）不适用；计算较重</td></tr>
+        </tbody>
+      </table>
+      <p>最后补一句判断（<b>这是本课的归纳，不是原文自评</b>）：这四篇里，Ultimate SLAM 的「三路紧耦合」和 DEVO 的「深度低频、事件高频」最接近工程取用；EventTracking 的价值在于把「事件 + 已有深度」这条路走到了极致（微秒级延迟），但它的前提最苛刻；行星机器人那篇的贡献更多是「证明在极端光照 + 弱纹理下可行」，方法本身是 EKLT + xVIO 的组合。它们合起来把 0176 三篇的天花板补齐了——<b>但补的方式是加传感器，而不是让纯事件自己变强。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">事件和 IMU 是一对互相挑错的搭档</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">IMU 高频但会漂，事件不漂但只在有运动时才有输出</text>
+          <text x="330" y="168" text-anchor="middle" fill="#cdd6ff" font-size="12">真值</text>
+          <text x="560" y="168" text-anchor="middle" fill="#ff9f6b" font-size="12">IMU 积分（会漂）</text>
+          <text x="790" y="168" text-anchor="middle" fill="#5cffb0" font-size="12">事件估计</text>
+          <line x1="100" y1="340" x2="860" y2="340" stroke="#4a5a88"/>
+          <line x1="100" y1="190" x2="100" y2="340" stroke="#4a5a88"/>
+          <polyline points="100.0,258.2 112.7,246.8 125.3,236.0 138.0,226.1 150.7,217.6 163.3,210.9 176.0,206.3 188.7,203.9 201.3,203.9 214.0,206.3 226.7,210.9 239.3,217.6 252.0,226.1 264.7,236.0 277.3,246.8 290.0,258.2 302.7,269.5 315.3,280.4 328.0,290.2 340.7,298.7 353.3,305.4 366.0,310.1 378.7,312.4 391.3,312.4 404.0,310.1 416.7,305.4 429.3,298.7 442.0,290.2 454.7,280.4 467.3,269.5 480.0,258.2 492.7,246.8 505.3,236.0 518.0,226.1 530.7,217.6 543.3,210.9 556.0,206.3 568.7,203.9 581.3,203.9 594.0,206.3 606.7,210.9 619.3,217.6 632.0,226.1 644.7,236.0 657.3,246.8 670.0,258.2 682.7,269.5 695.3,280.4 708.0,290.2 720.7,298.7 733.3,305.4 746.0,310.1 758.7,312.4 771.3,312.4 784.0,310.1 796.7,305.4 809.3,298.7 822.0,290.2 834.7,280.4 847.3,269.5 860.0,258.2" fill="none" stroke="#cdd6ff" stroke-width="2" stroke-dasharray="6 5"/>
+          <polyline points="100.0,258.2 112.7,244.5 125.3,232.9 138.0,224.3 150.7,218.0 163.3,212.6 176.0,207.2 188.7,202.5 201.3,200.2 214.0,201.8 226.7,207.7 239.3,216.6 252.0,226.3 264.7,235.5 277.3,244.0 290.0,253.0 302.7,263.6 315.3,275.7 328.0,287.7 340.7,297.5 353.3,303.5 366.0,305.8 378.7,305.8 391.3,305.1 404.0,304.0 416.7,301.5 429.3,296.1 442.0,286.9 454.7,274.6 467.3,261.5 480.0,249.4 492.7,239.3 505.3,230.6 518.0,222.0 530.7,212.8 543.3,203.8 556.0,196.8 568.7,193.7 581.3,195.0 594.0,199.5 606.7,205.4 619.3,211.4 632.0,217.5 644.7,225.1 657.3,235.2 670.0,247.8 682.7,261.3 695.3,273.4 708.0,282.6 720.7,288.7 733.3,293.1 746.0,297.0 758.7,300.6 771.3,302.8 784.0,301.7 796.7,296.3 809.3,287.3 822.0,276.5 834.7,265.8 847.3,256.3 860.0,247.1" fill="none" stroke="#ff9f6b" stroke-width="2.4"/>
+          <polyline points="100.0,258.2 112.7,245.2 125.3,235.4 138.0,227.5 150.7,218.7 163.3,209.9 176.0,204.9 188.7,204.5 201.3,205.5 214.0,206.3 226.7,209.3 239.3,217.1 252.0,227.5 264.7,237.0 277.3,245.8 290.0,256.8 302.7,270.1 315.3,282.0 328.0,290.2 340.7,297.1 353.3,304.9 366.0,311.5 378.7,313.5 391.3,311.4 404.0,308.6 416.7,306.0 429.3,300.3 442.0,290.2 454.7,278.8 467.3,269.0 480.0,259.6 492.7,247.9 505.3,234.9 518.0,224.7 530.7,218.2 543.3,212.6 556.0,206.3 568.7,202.3 581.3,203.4 594.0,207.7 606.7,212.0 619.3,216.6 632.0,224.7 644.7,236.6 657.3,248.5 670.0,258.2 682.7,267.9 695.3,279.8 708.0,291.7 720.7,299.8 733.3,304.4 746.0,308.6 758.7,313.0 771.3,314.0 784.0,310.1 796.7,303.8 809.3,298.2 822.0,291.7 834.7,281.4 847.3,268.5 860.0,256.8" fill="none" stroke="#5cffb0" stroke-width="2.4"/>
+          <text x="92" y="196" text-anchor="end" fill="#9fb4ff" font-size="11">100</text>
+          <text x="92" y="344" text-anchor="end" fill="#9fb4ff" font-size="11">0</text>
+          <text x="80" y="266" text-anchor="end" fill="#9fb4ff" font-size="11">角速度</text>
+          <text x="80" y="282" text-anchor="end" fill="#9fb4ff" font-size="11">(°/s)</text>
+          <text x="100" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">0</text>
+          <text x="227" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">1</text>
+          <text x="353" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">2</text>
+          <text x="480" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">3</text>
+          <text x="607" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">4</text>
+          <text x="733" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">5</text>
+          <text x="860" y="358" text-anchor="middle" fill="#9fb4ff" font-size="11">6</text>
+          <text x="480" y="382" text-anchor="middle" fill="#9fb4ff" font-size="11">时间（秒）</text>
+          <text x="450" y="410" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：橙线越走越偏（漂移），但它把形状说对了；绿线形状略糙，却不漂</text>
+          <text x="450" y="432" text-anchor="middle" fill="#9fb4ff" font-size="12">两者放进同一个优化里，就同时拿到「高频」与「不漂」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条角速度曲线（单位：度每秒）在 6 秒内的演化。白色虚线是真值，橙色实线是 IMU 积分出来的角速度，绿色实线是用事件估计出来的角速度。<br>
+          <b>怎么看这张图：</b>① 先看橙线：它把「什么时候转得快、什么时候慢下来」的形状基本说对了，但整体<b>越往右越往上偏</b>——这就是积分漂移，IMU 的老毛病；② 再看绿线：它一直在白线附近晃，形状稍有抖动，但<b>始终没有系统性偏移</b>；③ 把两条线放在一起想：IMU 说「转多快」（高频、但会漂），事件说「转得对不对」（不漂、但只在有运动时才有输出）——把它们放进同一个优化里相互校准，就同时得到了高频与不漂。<br>
+          <b>要记住的一句话：</b>事件与 IMU 的互补是「无漂移」与「高频」的互补；这也是 0178 里 ESVIO、PL-EVIO 把二者做成 VIO 的核心理由。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Ultimate SLAM 里「虚拟事件帧」的作用是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：原始事件因为相机在动而散在运动轨迹上、糊成一片；用 IMU 预积分把事件运动补偿到参考时刻再累加，它们就重新聚回到物体边缘上，于是可以像普通图像一样做 FAST 角点检测与 KLT 跟踪。IMU 估计不准，这张图就是糊的。" onclick="lessonKit.answer(this,'q0177a')">把事件补偿成一张可跟踪的图</button>
+          <button data-correct="no" data-explanation="不对：它并不恢复绝对亮度，事件相机从来没有测过亮度；虚拟事件帧里每个像素存的是事件计数，不是灰度值。" onclick="lessonKit.answer(this,'q0177a')">把事件还原成真实灰度图像</button>
+        </div>
+        <div class="quiz-feedback" id="q0177a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>DEVO 为什么敢说「深度相机只要 1 Hz 就够」？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：深度是慢变量——墙、桌子这些结构不会每秒挪位置，所以低频测一次就够用；而运动是快变量，交给事件相机高频去跟。这个「慢变量低频测、快变量高频跟」的分工正是混合路线的核心思想。" onclick="lessonKit.answer(this,'q0177c')">深度变化慢而运动变化快</button>
+          <button data-correct="no" data-explanation="不对：DEVO 并没有用事件去估计深度，它恰恰是直接用深度相机给出的深度来做 warp，省掉了立体匹配与深度估计这一步。" onclick="lessonKit.answer(this,'q0177c')">事件能自己补出深度值</button>
+        </div>
+        <div class="quiz-feedback" id="q0177c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>事件、标准帧、深度、IMU 这四样各补哪一块短板？为什么说「双目 / 深度管尺度，帧 / IMU 管静止退化与初始化」？</li>
+        <li>Ultimate SLAM 的虚拟事件帧是怎么造出来的？它依赖什么？造得不好会怎样？</li>
+        <li>为什么说 EventTracking 是「跟踪」而不是「SLAM」？它依赖什么前提？</li>
+        <li>EventTracking 的测量函数 M 是什么意思？为什么让 M 接近 0 就等于位姿对？那个均匀分布用来干什么？</li>
+        <li>DEVO 为什么只要 1 Hz 的深度相机？它的分工和 IMU 路线有什么不同？</li>
+        <li>行星机器人那篇真实定位是什么？它在哪两种光照条件下验证、为什么这两种条件对事件相机有利？</li>
+        <li>这四篇合起来，补上了 0176 纯事件路线的哪些短板？用什么方式补的？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么「深度相机只要 1 Hz」在工程上是成立的？请用「快变量 / 慢变量」的概念解释。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为场景的几何结构（墙、桌子、地面）变化得很慢，房间里没有东西每秒挪一次位置，所以深度图低频获取一次就足以支撑后续的运动补偿；而相机自身的运动是快变量，必须高频跟上，这件事交给事件相机。DEVO 正是把深度相机的深度直接投影成三维点再 warp 成参考边缘图，省掉了立体匹配和深度估计，因此深度相机的帧率不再是瓶颈。</div></details>
+        </li>
+        <li>EventTracking 的测量函数 M 为什么要除以对比度阈值 C_th 再减 1？直接看 Δln I 不行吗？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不行。事件产生的条件就是 Δln I 跨过阈值 C_th（见 0175 的触发规则），所以「一个事件被触发」这件事本身就说明 Δln I 的量级应当在 C_th 附近。除以 C_th 再减 1，就把判据归一化成了「跨阈值的倍数」：M = 0 表示预测的变化恰好等于阈值，正是「这个事件符合预期」的状态；M 明显偏离 0 就说明位姿算错或这个事件是离群。这样处理后，残差的量纲与阈值无关，对不同传感器、不同光照更通用。</div></details>
+        </li>
+        <li>EventTracking 的似然函数里那个均匀分布项起了什么作用？没有它会怎样？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>它专门用来兜住离群观测。正态项 N(M; 0, σ_m²) 只在 M 接近 0 时给出较高概率，而均匀项 U(M; M_min, M_max) 在给定区间内给出大致恒定的概率。当某个事件的 M 远离 0（场景里有别的运动、深度图本身有错、或光照变化），正态项的概率已经很小，但均匀项仍然提供了一个「这种情况也可能发生」的解释，于是这个观测不会被当成强证据去拽偏位姿。若去掉它，少数坏事件会被当成可信观测，位姿就会被带偏——这正是 DSO 一类方法要额外引入稳健核函数的原因。</div></details>
+        </li>
+        <li>为什么说 Ultimate SLAM 的 85% / 130% 这两个数字必须带着对比基线来读？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它们是相对提升：比「事件 + IMU」（E+I）准 85%，比「帧 + IMU」（Fr+I）准 130%。脱离基线，读者会误以为它是某种绝对精度指标。另外本篇精读材料还提醒了一个疑点：表 I 标的「E+I」与表 II / 正文里的「Fr+I」口径需要核对，作者自述不同实验的参数也不同，引用应以正文叙述为准。这类百分比在事件相机文献里很常见（比如行星机器人那篇的「比次优低 32%」也同样需要基线）。</div></details>
+        </li>
+        <li>行星机器人那篇为什么属于「方法论文」而不是「对比综述」？它的方法由哪两个已有零件组成？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它提出了一条完整的 pipeline 并做了验证，只不过顺带做了很多对比实验（因此常被误认成综述）。它的前端是 EKLT（用 Harris 角点作种子、以事件 + 标准帧融合更新亮度模板，输出异步特征跟踪），后端是 xVIO（EKF，MSCKF 式滑窗加深度先验特征，每 3200 个事件同步一次）。代价是 EKLT 仍需要初始 APS 帧来 bootstrap 模板，因此没有帧的机型（如 DVXplorer）无法使用该前端。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0176-纯事件路线-时间表面与对比度最大化.html">← 上一课：纯事件路线</a>
+        <a class="next" href="0178-事件双目VIO与全季收官.html">下一课：事件双目 VIO 与全季收官 →</a>
+      </div>
+      <p class="foot-note">队友都到齐了，下一课把它们全部塞进一个系统，然后给整季收尾 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

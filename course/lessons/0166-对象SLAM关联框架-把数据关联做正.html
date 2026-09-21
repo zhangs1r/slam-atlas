@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>对象 SLAM 关联框架：把数据关联做正 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0166</div>
+      <h1>对象 SLAM 关联框架：把数据关联做正</h1>
+      <p class="subtitle">认出一个物体不难，难的是「每帧都认成同一个」——用统计检验替你投票 🗳️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：把数据关联做成一等公民的 2023 框架</span>
+        <span>👥 作者：Yanmin Wu、Yunzhou Zhang 等</span>
+        <span>📅 2023 · <i>An Object SLAM Framework for Association, Mapping, and High-Level Tasks (T-RO)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">关联做一等公民</a>
+        <a href="#b">集成多判据</a>
+        <a href="#c">为什么单IoU</a>
+        <a href="#d">物体参数化</a>
+        <a href="#e">拓扑与应用</a>
+        <a href="#f">数字与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 解释为什么「对象级关联」是语义建图最易出错的一环；② 讲清这篇 2023 框架的「集成数据关联」用哪些判据（M-IoU / NP 检验 / t 检验 / P-IoU / D-t 检验）汇成决策；③ 对比单 IoU 与集成关联的鲁棒性差异；④ 说明它的物体参数化（cube / quadric / cylinder）与拓扑地图扩展。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p><b>0160</b> 用几何+语义硬判、<b>0161</b> 用 IoU&gt;0.5 / EM 软关联——都只靠「单一或少数判据」。本课是它们的「升级收口」：<b>把关联本身做成模块</b>，用<b>统计检验替代单 IoU</b>，对遮挡 / 消失更鲁棒。物体参数化接 <b>0164</b> 的二次曲面思路并扩展到 cube / cylinder；应用场景（抓取 / 主动探索）又和 <b>0163</b> DSG 的「可行动」目标同向。</p></div>
+      </div>
+
+      <h2 id="b">1. 把「数据关联」做成一等公民</h2>
+      <p>前几篇里，关联（这个物体是不是上一帧那个）大多是「顺手做」的——0160 靠几何+语义硬判、0161 靠 IoU 或 EM。但对象 SLAM 最致命的错误往往就出在关联：一旦把同一个物体误判成两个（双杯问题）或把两个并成一个，后面的地图、位姿全歪。</p>
+      <p>这篇 2023 的 T-RO 框架（Wu、Zhang 等）主张：<b>关联不该是附属步骤，而是一等公民</b>。它专门设计一个「集成数据关联」模块，把多种判据汇总成一个稳健决策，并在 ORB-SLAM2 + YOLO 之上跑通，进一步延伸到拓扑地图、场景匹配、抓取、主动探索。</p>
+      <p>生活类比：认一个人，不能只看脸（单 IoU），还要看步态、声音、衣着一起判断——这篇框架就是给物体关联「多证据投票」，而不是「单看一张脸」。</p>
+
+      <h2 id="c">2. 集成数据关联：多判据汇总</h2>
+      <p>它的关联判据是一组「互补」的证据，覆盖不同失败模式：</p>
+      <ul>
+        <li><b>M-IoU</b>：基于运动预测的交并比；</li>
+        <li><b>NP 检验</b>：对点云做 <b>Wilcoxon 秩和检验</b>（Eq 1–4），判断两套点云是否来自同一物体；</li>
+        <li><b>S-t 检验</b>：对物体质心做高斯 t 检验（Eq 5–6）；</li>
+        <li><b>P-IoU</b>：投影到图像平面的 IoU；</li>
+        <li><b>D-t 检验</b>：用于「重复物体合并」的 t 检验（Eq 7–8）。</li>
+      </ul>
+      <p>这些判据各自可能误判，但<b>用统计检验替代单 IoU</b>，让「偶发不一致」不再轻易推翻关联——综合起来对遮挡、物体短暂消失都更稳。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="360" fill="#f5f7fa"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">多个判据「投票」，汇成更稳的关联决策</text>
+          <rect x="40" y="70" width="120" height="50" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="100" y="100" text-anchor="middle" font-size="12" fill="#7a5a00">M-IoU</text>
+          <rect x="40" y="140" width="120" height="50" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="100" y="170" text-anchor="middle" font-size="12" fill="#7a5a00">NP检验</text>
+          <rect x="40" y="210" width="120" height="50" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="100" y="240" text-anchor="middle" font-size="12" fill="#7a5a00">S-t检验</text>
+          <rect x="40" y="280" width="120" height="50" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="100" y="310" text-anchor="middle" font-size="12" fill="#7a5a00">P-IoU</text>
+          <rect x="220" y="280" width="120" height="50" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="280" y="310" text-anchor="middle" font-size="12" fill="#7a5a00">D-t检验</text>
+          <rect x="430" y="150" width="160" height="100" rx="10" fill="#eafaf0" stroke="#3a9d5d"/>
+          <text x="510" y="185" text-anchor="middle" font-size="14" font-weight="700" fill="#1d6b3c">集成决策</text>
+          <text x="510" y="212" text-anchor="middle" font-size="12" fill="#1d6b3c">统计检验汇总</text>
+          <text x="510" y="232" text-anchor="middle" font-size="12" fill="#1d6b3c">→ 是否同一物体</text>
+          <rect x="680" y="150" width="190" height="100" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="775" y="185" text-anchor="middle" font-size="13" fill="#33414f">稳健关联结果</text>
+          <text x="775" y="212" text-anchor="middle" font-size="12" fill="#2d6b3c">遮挡/消失也</text>
+          <text x="775" y="232" text-anchor="middle" font-size="12" fill="#2d6b3c">不易误判</text>
+          <line x1="160" y1="95" x2="425" y2="180" stroke="#9aa7b4" stroke-width="2"/>
+          <line x1="160" y1="165" x2="425" y2="185" stroke="#9aa7b4" stroke-width="2"/>
+          <line x1="160" y1="235" x2="425" y2="200" stroke="#9aa7b4" stroke-width="2"/>
+          <line x1="160" y1="305" x2="425" y2="215" stroke="#9aa7b4" stroke-width="2"/>
+          <line x1="340" y1="305" x2="425" y2="225" stroke="#9aa7b4" stroke-width="2"/>
+          <line x1="590" y1="200" x2="675" y2="200" stroke="#9aa7b4" stroke-width="2" marker-end="url(#f1)"/>
+          <defs><marker id="f1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa7b4"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边五个判据（M-IoU、NP 检验、S-t 检验、P-IoU、D-t 检验）分别给「是不是同一物体」投票，中间「集成决策」用统计检验汇总，右边输出一个对遮挡/消失都更不敏感的稳健关联。<br>
+          <b>怎么看这张图：</b>① 每个判据都只看一个侧面，单独可能错；② 集成让「多数证据一致才信」，个别误判被稀释；③ 这是相对 0160–0161 单/少判据路线的核心进步。<br>
+          <b>要记住的一句话：</b>把关联做成「多判据统计集成」，比单 IoU 抗噪得多。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2023_An_Object_SLAM_Framework_for_Association__Mapping__and_H/b752c6d0aeec42f0902a81069111c54ce687f42f87778a8fb4b1e4b86e2a9640.jpg" alt="Object-level data association pipeline">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Pipeline of object-level data association.<br>
+          <b>怎么看这张图：</b>这张图是对象级数据关联的流水线总览，把检测、参数化、各类检验、集成决策串起来。它和上面自绘的「多判据投票」图对应，是理解本课框架主干的官方图示。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 为什么单 IoU 不够：遮挡与消失</h2>
+      <p>单 IoU 关联的致命弱点是：物体一旦被<b>部分遮挡</b>，当前帧 mask 只剩一半，IoU 立刻暴跌，系统就误判「这是新物体」；物体<b>短暂消失</b>再出现，也会被判成两个。这篇框架的 Table I 给了硬数字：单纯 IoU / NP / t-test 各自的「冗余数」高达 <b>47–150</b>，而它的集成方法在 Fr3_office 把 GT 45 个关联做到 ours 42 个，显著更准。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_An_Object_SLAM_Framework_for_Association__Mapping__and_H/26af18ffd933189ea88673c64529123d0d23ce146a269617477f1f1d49f55533.jpg" alt="Qualitative comparison of data association results">
+        <figcaption>
+          <b>原图注（Fig. 10）：</b>Qualitative comparison of data association results. (a) IoU method. (b) IoU and NP test. (c) IoU and t-test. (d) Our ensemble method.<br>
+          <b>怎么看这张图：</b>四列对比：单纯 IoU（a）关联最乱，加 NP（b）、加 t-test（c）逐步改善，最右（d）集成方法关联最干净。它直观证明了「多判据集成」相对「单 IoU」的鲁棒性优势——这也是本课最核心的实验证据。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="330" fill="#f5f7fa"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">同一个杯子被手挡住一半，单 IoU 会误判成「新杯子」</text>
+          <rect x="60" y="70" width="360" height="220" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="240" y="98" text-anchor="middle" font-size="14" fill="#33414f">单 IoU 视角</text>
+          <path d="M150,260 L150,160 Q150,140 175,140 L205,140 Q230,140 230,160 L230,260 Z" fill="#cfe3f5" stroke="#4a90c2" stroke-width="2"/>
+          <rect x="180" y="150" width="70" height="50" fill="#f6c453" stroke="#d9a93a" opacity="0.85"/>
+          <text x="240" y="290" text-anchor="middle" font-size="12" fill="#a32617">只露出半截 → IoU 暴跌</text>
+          <text x="240" y="310" text-anchor="middle" font-size="12" fill="#a32617">误判为新物体</text>
+          <rect x="480" y="70" width="360" height="220" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="660" y="98" text-anchor="middle" font-size="14" fill="#33414f">集成判据视角</text>
+          <path d="M570,260 L570,160 Q570,140 595,140 L625,140 Q650,140 650,160 L650,260 Z" fill="#cfe3f5" stroke="#4a90c2" stroke-width="2"/>
+          <rect x="600" y="150" width="70" height="50" fill="#f6c453" stroke="#d9a93a" opacity="0.85"/>
+          <circle cx="660" cy="200" r="6" fill="#1d6b3c"/>
+          <text x="730" y="200" font-size="12" fill="#1d6b3c">NP/t检验</text>
+          <circle cx="660" cy="225" r="6" fill="#1d6b3c"/>
+          <text x="730" y="225" font-size="12" fill="#1d6b3c">质心一致</text>
+          <text x="660" y="290" text-anchor="middle" font-size="12" fill="#1d6b3c">多证据仍说「同一杯」</text>
+          <text x="660" y="310" text-anchor="middle" font-size="12" fill="#1d6b3c">不误判</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左：一个杯子被手挡住一半，单看 IoU 只有半截重合，系统误判成新物体（双杯问题）；右：集成判据除了形状，还看「点云 NP 检验、质心 t 检验」都一致，综合判定「还是刚才那个杯子」，不误判。<br>
+          <b>怎么看这张图：</b>① 单 IoU 只依赖形状重合，对遮挡零容忍；② 集成判据用多个独立证据互相背书，个别缺失不致命；③ 这正是 Table I 冗余数从 47–150 降到个位数级的原因。<br>
+          <b>要记住的一句话：</b>关联要抗遮挡，「多证据」比「单形状」稳。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 物体参数化：cube / quadric / cylinder</h2>
+      <p>关联稳了，物体怎么存？这篇框架用<b>紧凑参数化</b>：规则物体用 <b>cube</b>（估朝向 $θ_y$、位置 $t$、尺度 $s$），不规则物体用 <b>quadric（二次曲面）/ cylinder（圆柱）</b>（估位置 $t$、尺度 $s$）。这承接 0164 的二次曲面思路，并扩展到 cube / cylinder，覆盖面更广。</p>
+      <p>参数化前后还做了两件事：① <b>iForest 去离群</b>——对质心 / 尺度离群点（score &gt; 0.6）直接删除（Eq 11–12），抗噪；② <b>线对齐初始化朝向</b>——用 LSD 提线 + 30 角采样对齐（Eq 13–14），把物体朝向摆正（误差阈值 5°）。最后做联合优化（Eq 15）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_An_Object_SLAM_Framework_for_Association__Mapping__and_H/94cc15c844c1ccbff5b33c7951d3fd595e003ba849fa6b9b045077b65a61108a.jpg" alt="Proposed object SLAM framework overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Proposed object SLAM framework.<br>
+          <b>怎么看这张图：</b>这是整套框架的总览：从检测到物体参数化、数据关联、拓扑地图，再到高层任务（抓取 / 探索）。它把前面几节讲的「关联 + 参数化」放进一个完整闭环，看清各模块的上下关系。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="410" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" font-size="16.5" font-weight="700" fill="#9fb4ff">物体该用什么形状代表？三种参数化，各贴各的东西</text>
+
+          <!-- cube -->
+          <rect x="52" y="58" width="250" height="272" rx="12" fill="#16203a" stroke="#ffd166" stroke-width="1.8"/>
+          <text x="177" y="84" text-anchor="middle" font-size="13.5" font-weight="700" fill="#ffd166">① 立方体 cube</text>
+          <rect x="122" y="128" width="110" height="96" rx="4" fill="#b9803f" stroke="#8a5a26" stroke-width="1.6"/>
+          <line x1="122" y1="128" x2="146" y2="110" stroke="#8a5a26" stroke-width="1.4"/>
+          <line x1="232" y1="128" x2="256" y2="110" stroke="#8a5a26" stroke-width="1.4"/>
+          <line x1="232" y1="224" x2="256" y2="206" stroke="#8a5a26" stroke-width="1.4"/>
+          <line x1="146" y1="110" x2="256" y2="110" stroke="#8a5a26" stroke-width="1.4"/>
+          <line x1="256" y1="110" x2="256" y2="206" stroke="#8a5a26" stroke-width="1.4"/>
+          <text x="177" y="256" text-anchor="middle" font-size="11" fill="#ffd166">适合：箱子、柜子、机器</text>
+          <text x="177" y="276" text-anchor="middle" font-size="11" fill="#cdd6ff">9 自由度（中心＋朝向＋边长）</text>
+          <text x="177" y="298" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 最省，工程最常用</text>
+          <text x="177" y="318" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 圆的东西会被撑大</text>
+
+          <!-- quadric -->
+          <rect x="325" y="58" width="250" height="272" rx="12" fill="#16203a" stroke="#9b8cff" stroke-width="1.8"/>
+          <text x="450" y="84" text-anchor="middle" font-size="13.5" font-weight="700" fill="#9b8cff">② 椭球 quadric</text>
+          <rect x="418" y="150" width="64" height="10" rx="3" fill="#b9803f"/>
+          <rect x="424" y="160" width="8" height="46" fill="#b9803f"/>
+          <rect x="468" y="160" width="8" height="46" fill="#b9803f"/>
+          <rect x="424" y="204" width="52" height="9" rx="3" fill="#b9803f"/>
+          <ellipse cx="450" cy="176" rx="52" ry="42" fill="#9b8cff" fill-opacity="0.3"
+                   stroke="#9b8cff" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="450" y="256" text-anchor="middle" font-size="11" fill="#9b8cff">适合：椅子、瓶罐、树</text>
+          <text x="450" y="276" text-anchor="middle" font-size="11" fill="#cdd6ff">SO-SLAM 用的就是它</text>
+          <text x="450" y="298" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 旋转不变、数学友好</text>
+          <text x="450" y="318" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 细长物体包不住</text>
+
+          <!-- cylinder -->
+          <rect x="598" y="58" width="250" height="272" rx="12" fill="#16203a" stroke="#5cffb0" stroke-width="1.8"/>
+          <text x="723" y="84" text-anchor="middle" font-size="13.5" font-weight="700" fill="#5cffb0">③ 圆柱 cylinder</text>
+          <ellipse cx="723" cy="138" rx="34" ry="12" fill="#cdd6ff" stroke="#9fb4ff" stroke-width="1.5"/>
+          <rect x="689" y="138" width="68" height="88" fill="#cdd6ff" fill-opacity="0.6"/>
+          <ellipse cx="723" cy="226" rx="34" ry="12" fill="#cdd6ff" stroke="#9fb4ff" stroke-width="1.5"/>
+          <line x1="689" y1="138" x2="689" y2="226" stroke="#9fb4ff" stroke-width="1.2"/>
+          <line x1="757" y1="138" x2="757" y2="226" stroke="#9fb4ff" stroke-width="1.2"/>
+          <text x="723" y="256" text-anchor="middle" font-size="11" fill="#5cffb0">适合：柱子、管道、杆</text>
+          <text x="723" y="276" text-anchor="middle" font-size="11" fill="#cdd6ff">7 自由度（轴向＋半径＋长度）</text>
+          <text x="723" y="298" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 结构物拟合得极准</text>
+          <text x="723" y="318" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 只对特定形状有效</text>
+
+          <text x="450" y="358" text-anchor="middle" font-size="12.5" fill="#cdd6ff">没有万能的形状：挑参数化，本质是先假设「这类物体长什么样」</text>
+          <text x="450" y="382" text-anchor="middle" font-size="12" fill="#9fb4ff">这正是 2023 那篇把「关联 / 参数化 / 应用」拆成框架来讲的原因</text>
+          <text x="450" y="402" text-anchor="middle" font-size="11.5" fill="#ffd166">物体被搬走了怎么办？靠统计检验判「同一性」，而不是靠形状重合</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>对象级 SLAM 必须选一种「形状」来代表一个物体。图里三种并排：立方体、椭球、圆柱，各自贴着一个真实物体画，底下写明它适合谁、几个参数、换不来的代价。
+          <br>
+          <b>怎么看这张图：</b>① 每格先看被套住的实物——箱子、椅子、柱子，这决定了这个形状的适用对象；② 再看中间那行参数个数：立方体 9、圆柱 7、椭球 9，都远比「存一堆表面点」省；③ 关键看红色那行「✗」：立方体包不住圆的、椭球包不住细长的、圆柱只对管状有效——没有万能形状；④ 底部两句把这一节的主线接上了：正因为形状不能通吃，2023 那篇才把「关联 / 参数化 / 应用」拆成框架分别讨论。
+          <br>
+          <b>要记住的一句话：</b>选物体参数化，等于先替这个世界做了个形状假设——假设对了省到底，假设错了模型就包不住真实物体。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. 拓扑地图与高层应用</h2>
+      <p>物体建好后，框架进一步把它变成<b>语义拓扑地图</b>：节点 = 物体质心 $(l, t, θ, s)$，边 = 物体间距离 $d$ / 夹角 $α$（Eq 16）。还设计了<b>随机游走描述符</b>（一个 3D 矩阵，Eq 17）做场景匹配——同一场景不同视角下，这个描述符稳定，可用于重定位 / 回环。</p>
+      <p>因为物体被显式建模，框架能直接支撑高层任务：AR 交互、场景重定位、<b>抓取</b>、<b>主动探索</b>（用信息增益工具函数，Eq 18–22 决定「下一步看哪」）。这把「语义建图」从「画地图」推向「能做事」，和 0163 Kimera 的「可行动表示」目标同方向。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_An_Object_SLAM_Framework_for_Association__Mapping__and_H/0b9443fea16d69466a40b19f74acfd2c2468ae2456d583af1f9e6558dce817e7.jpg" alt="Different map representations including object-oriented map">
+        <figcaption>
+          <b>原图注（Fig. 13）：</b>Different map representations. (a) RGB images. (b) Sparse map. (c) Semidense map. (d) Our semidense semantic map. (e) Our lightweight and object-oriented map. (d) and (e) are built by the proposed method.<br>
+          <b>怎么看这张图：</b>从左到右对比：稀疏点图 → 半稠密图 → 本文的半稠密语义图 → 本文的轻量对象导向地图（e）。(e) 只用一堆带朝向/尺度的物体节点表示场景，最省、最「对象级」——正是本框架「对象导向」的直观体现。
+        </figcaption>
+      </figure>
+
+      <h2>6. 数字与局限</h2>
+      <p>数据关联在 TUM 多个序列验证：Fr1_desk GT16 / ours14、Fr2_desk GT25 / ours22、Fr3_office GT45 / ours42、Fr3_teddy GT7 / ours6，相比单 IoU / NP / t-test（冗余 47–150）明显更准。iForest 离群阈值 0.6，线对齐误差阈值 5°。</p>
+      <p><b>诚实标注（判断，非原文自评）</b>：① 正文未给系统级 FPS，方法偏后端优化，实时性应视为近实时 / 离线级，不像 0165 YOLO-SLAM 那样主打「无 GPU 可跑」；② 物体参数化依赖「物体与地平行」假设（$θ_r=θ_p=0$），对倾斜物体会失效；③ 它是<b>集成框架</b>而非单篇新方法，贡献在「把关联做成模块 + 多任务延伸」，新颖度应据此评估，不宜夸成「解决了对象 SLAM」。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>这篇框架用「统计检验（NP / t 检验）」替代单 IoU，主要想解决什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：单 IoU 对遮挡/消失极敏感（Table I 冗余 47–150），统计检验用多证据互相背书，偶发不一致不致命，关联更鲁棒。" onclick="lessonKit.answer(this,'q0166a')">它抗遮挡与消失</button>
+          <button data-correct="no" data-explanation="错：更省算力是 0165 YOLO-SLAM「只删点」的卖点；本框架反而加了多种检验，偏后端、未强调实时，目标是「更准」而非「更省」。" onclick="lessonKit.answer(this,'q0166a')">它为了更省算力</button>
+        </div>
+        <div class="quiz-feedback" id="q0166a"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>为什么说「对象级数据关联」是语义建图最易出错的一环？它连接着前面哪些课的关联手段？</li>
+        <li>这篇 2023 框架的「集成数据关联」用了哪些判据？统计检验相对单 IoU 好在哪？</li>
+        <li>单 IoU 在「遮挡 / 消失」时会出什么错？Fig. 10 的对比说明了什么？</li>
+        <li>它的物体参数化用了哪三种基元？iForest 和线对齐分别解决什么？</li>
+        <li>这篇框架把对象地图延伸到了哪些高层应用？我们应怎样客观评价它的「新颖度」？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用生活类比解释「为什么认物体不能只看 IoU（相当于只看脸）」。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>认人时只看脸（单 IoU）在逆光、戴口罩、侧脸时就会认错；但加上步态、声音、衣着（多个判据），即便脸看不清也能认出。这篇框架就是给物体关联装了「多证据」：形状 IoU 只是一方面，点云分布（NP 检验）、质心位置（t 检验）、投影重叠（P-IoU）一起投票，个别证据缺失也不至于误判。这就是为什么 Table I 里单 IoU 冗余 47–150，集成后只剩个位数级。</div></details>
+        </li>
+        <li>NP 检验用 Wilcoxon 秩和、S-t 检验用高斯质心，这两者分别在判断「同一个物体」的什么性质？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>NP 检验（Wilcoxon 秩和）作用在「点云」上，判断两套点云的深度/位置分布是否来自同一整体——侧重几何形状的一致性；S-t 检验作用在「质心」上，把质心当高斯分布，检验两帧估计的质心是否同分布——侧重整体位置的稳定性。一个看形状、一个看位置，互补：形状像但位置漂移大，或位置近但形状迥异，都能被揪出。这正是「多侧面投票」的意义。</div></details>
+        </li>
+        <li>这篇框架的物体参数化（cube / quadric / cylinder）和 0164 SO-SLAM 的椭球有什么关系？它扩展了什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>0164 只用「对偶二次曲面（椭球）」一种基元，对非椭圆物体失真。本框架把基元扩展成三种：规则物体用 cube（带朝向）、不规则用 quadric（二次曲面，含椭球）或 cylinder（圆柱），覆盖更全。它沿用了「紧凑参数化物体」这一路线（中心/朝向/尺度），只是基元库更丰富，并加了 iForest 去离群和线对齐初始化朝向，让参数化更准更稳。</div></details>
+        </li>
+        <li>为什么说这篇是「集成框架」而非「单篇新方法」？我们在写课时应如何客观评价它的新颖度？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>它的单个零件（YOLO 检测、IoU、t 检验、cube/quadric 参数化、随机游走描述符）大多不是首创，真正的贡献是「把关联做成一等公民模块 + 多任务延伸（拓扑/抓取/探索）」。所以评价时应说「它系统性地把已有判据集成进关联框架并验证了鲁棒性」，而不是「它提出了全新的关联算法」。这是判断而非原文自评，写课时须明确标注，避免夸大为「解决了对象 SLAM」。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0165-YOLO-SLAM-轻量工程路线.html">← 0165 YOLO-SLAM：轻量工程路线</a>
+        <a class="next" href="0167-语义块的收束-语义怎么反过来帮定位.html">0167 语义块的收束：语义怎么反过来帮定位 →</a>
+      </div>
+      <p class="foot-note">关联做正了，对象级 SLAM 才算站稳——最后一站看语义怎么「反哺」定位 🔁</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

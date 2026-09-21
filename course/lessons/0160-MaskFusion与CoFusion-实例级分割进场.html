@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Co-Fusion 与 MaskFusion：实例级分割进场 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0160</div>
+      <h1>Co-Fusion 与 MaskFusion：实例级分割进场</h1>
+      <p class="subtitle">认出「这是椅子」还不够，得数清「这是第几把椅子」🔢</p>
+      <div class="hero-meta">
+        <span>🎯 主题：从逐像素语义到实例级建图</span>
+        <span>👥 作者：Rünz、Agapito（UCL）</span>
+        <span>📅 2017 / 2018 · <i>Co-Fusion (ICRA) + MaskFusion</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">类别到实例</a>
+        <a href="#b">语义vs实例</a>
+        <a href="#c">Co-Fusion多模型</a>
+        <a href="#d">关联判据</a>
+        <a href="#e">MaskFusion升级</a>
+        <a href="#f">双杯问题</a>
+        <a href="#g">实时与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 区分「逐像素语义」与「实例级」这两个粒度；② 讲清 Co-Fusion 怎么用「多份独立 surfel + 运动+语义双线索」拆场景；③ 说明它的关联判据（离群像素 >3% 或 新语义 ID）；④ 理解 MaskFusion 如何用 Mask R-CNN 把实例级做得更稳，以及这套「每物体一个模型」路线仍有的代价。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p><b>0159</b> 的 SemanticFusion 停在「逐像素语义」——只给类别、不区分实例。本课正是补上「第几个」这一级，是语义粒度三档（像素→实例→全景）里的第二档。<b>0158</b> 提到动态检测靠「整类剔人」，而本课 MaskFusion 反过来——检测到人可以把人整个忽略掉（fr3 walking halfsphere），和 0158 的「可动先验」是同一思路的两面。<b>0147</b> 的 SAM 是现代实例分割零件，本课用的 SharpMask / Mask R-CNN 是它的早期前身。</p></div>
+      </div>
+
+      <h2 id="b">1. 从「类别」到「第几个」</h2>
+      <p>0159 的 SemanticFusion 给每个点贴了「椅子 / 墙」这类标签。但生活里这还不够：你让机器人「把那个杯子拿给我」，它面对桌上两个杯子，若只认得「这是杯子」，就分不清该拿哪一个。这就是<b>语义粒度</b>的升级——从「类别（class）」到「实例（instance）」。</p>
+      <p>Co-Fusion（2017）和 MaskFusion（2018）是同一作者（Rünz &amp; Agapito，UCL）的连续两作：Co-Fusion 第一次把场景拆成「背景 + 多个独立物体」各自建模、各自追踪；MaskFusion 再把实例分割网络（Mask R-CNN）接进来，让「第几个」的判断更可靠。它们都仍站在 ElasticFusion 的 surfel 肩膀上——只是从一个大地图，变成了「一堆小地图」。</p>
+
+      <h2 id="c">2. 语义 vs 实例：一张对照图</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#f5f7fa"/>
+          <rect x="30" y="40" width="400" height="340" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="72" text-anchor="middle" font-size="16" font-weight="700" fill="#1f3a5f">逐像素语义（0159）</text>
+          <rect x="90" y="120" width="120" height="80" rx="8" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="150" y="166" text-anchor="middle" font-size="13" fill="#7a5a00">杯子</text>
+          <rect x="250" y="120" width="120" height="80" rx="8" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="310" y="166" text-anchor="middle" font-size="13" fill="#7a5a00">杯子</text>
+          <rect x="170" y="230" width="120" height="80" rx="8" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="230" y="276" text-anchor="middle" font-size="13" fill="#1d6b3c">书</text>
+          <text x="230" y="345" text-anchor="middle" font-size="13" fill="#6b7785">两个杯子都叫「杯子」</text>
+          <text x="230" y="368" text-anchor="middle" font-size="13" fill="#6b7785">分不清谁是谁</text>
+          <rect x="470" y="40" width="400" height="340" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="72" text-anchor="middle" font-size="16" font-weight="700" fill="#1f3a5f">实例级（本课）</text>
+          <rect x="530" y="120" width="120" height="80" rx="8" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="590" y="160" text-anchor="middle" font-size="13" fill="#7a5a00">杯子 ①</text>
+          <text x="590" y="180" text-anchor="middle" font-size="13" fill="#7a5a00">（右）</text>
+          <rect x="690" y="120" width="120" height="80" rx="8" fill="#f6c453" stroke="#d9a93a"/>
+          <text x="750" y="160" text-anchor="middle" font-size="13" fill="#7a5a00">杯子 ②</text>
+          <text x="750" y="180" text-anchor="middle" font-size="13" fill="#7a5a00">（左）</text>
+          <rect x="610" y="230" width="120" height="80" rx="8" fill="#b7e0a8" stroke="#5aa86a"/>
+          <text x="670" y="276" text-anchor="middle" font-size="13" fill="#1d6b3c">书</text>
+          <text x="670" y="345" text-anchor="middle" font-size="13" fill="#2d6b3c">每个物体有独立编号</text>
+          <text x="670" y="368" text-anchor="middle" font-size="13" fill="#2d6b3c">可单独追踪/拿取</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是逐像素语义——桌上两个杯子和一本书都被标了颜色，但两个杯子都只叫「杯子」，无法区分；右图是实例级——两个杯子分别编为 ① 和 ②，书本单独编号，每个都能被单独追踪。<br>
+          <b>怎么看这张图：</b>① 区别只在「是否给同类物体分配不同 ID」；② 实例级让「拿第几个」成为可能；③ 这正是 Co-Fusion / MaskFusion 相对 0159 的核心进步。<br>
+          <b>要记住的一句话：</b>语义告诉你「是什么」，实例告诉你「是哪一个」——后者才能支撑「物体级」交互。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. Co-Fusion：多模型 surfel 与双线索分割</h2>
+      <p>Co-Fusion 的做法很直接：不再维护「一张大 surfel 地图」，而是给<b>背景一份模型、每个物体各一份独立 surfel 模型</b>，总共至多 N 个（原文最多 5 个）。这样每个物体都能独立追踪位姿、独立重建。</p>
+      <p>怎么决定「哪些 surfel 属于同一个物体」？它用了<b>两条线索一起判</b>：① <b>运动线索</b>——用几何运动分割（SLIC 超像素 + 全连接 CRF，unary 是 ICP 残差），看哪些点「动得一致」；② <b>语义线索</b>——用 SharpMask 实例分割（COCO 预训练）给的实例标签。两条都对得上，才归为一个模型。</p>
+      <figure class="figure">
+        <img src="../../md/images/2017_Co-Fusion/540b0fa195498d23d812a7328e5b719450cb3e313dbdf9f77f434f25dc854a1f.jpg" alt="Co-Fusion dynamic SLAM sequence with sequential object segmentation">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>A sequence demonstrating our dynamic SLAM system. Three objects were sequentially placed on a table: first a small bin (blue label), a flask (yellow) and a teddy bear (green). The results show that all objects were successfully segmented, tracked and modeled.<br>
+          <b>怎么看这张图：</b>三件物体被依次放到桌上，分别被标成蓝（小盒）、黄（烧瓶）、绿（泰迪熊），且各自被分割、追踪、重建。它直观展示了 Co-Fusion「每个物体一份独立模型」的核心设计——这正是相对 0159「单一大地图」的最大结构变化。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2017_Co-Fusion/fc7e0fa042101ad3056087a6563354846fc5b0a4a14a5c9ccd27f88eed38d17a.jpg" alt="Co-Fusion handover sequence: teddy bear handed between two people">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>In this handover sequence a toy teddy bear is handed from one person to another. Co-Fusion can correctly segment and model four bodies: The background, the teddy-bear and two arms. At the start, the left arm and teddy are represented by the same model, since they move together. When the handover occurs, however, the arm becomes separated from the teddy and all four objects are tracked independently.<br>
+          <b>怎么看这张图：</b>这是「双线索分割」威力的最佳例证：起初左手和泰迪一起动，被归为同一模型；交接发生时，运动线索变了，系统把它们拆成两个独立模型继续追踪。它说明 Co-Fusion 的关联是「几何+语义联合判定」，不是死记硬背。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 关联判据：什么时候算「新物体」</h2>
+      <p>「第几个」的稳定性，取决于「这一帧的点到底属于已有物体，还是新物体」这个判断。Co-Fusion 的判据很朴素：先做几何运动分割，若某区域里<b>离群像素（outlier）占比超过 3%</b>，就认为出现了现有模型解释不了的东西，开一个新模型；同时用语义实例 ID 辅助——SharpMask 给了不同 ID，就更容易判定「这是另一个物体」。</p>
+      <p>注意它<b>不做跨帧的匈牙利匹配 / IoU 匹配</b>，而是靠「几何残差 + 语义 ID」当场联合判定。好处是简单、实时；代价是容错较弱——一旦分割抖动，就可能把同一个物体误判成两个，或把两个并成一个。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Co-Fusion 判断「出现一个新物体、要开新模型」的主要几何判据是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：它的几何运动分割里，若离群像素（ICP 残差大的点）占比超过 3%，就认为现有模型解释不了，开新模型。" onclick="lessonKit.answer(this,'q0160a')">离群像素超百分之三</button>
+          <button data-correct="no" data-explanation="错：跨帧 IoU / 匈牙利匹配是后面 MID-Fusion、PanopticFusion 的做法；Co-Fusion 用的是「几何残差+语义ID」当场判定，没有这套全局匹配。" onclick="lessonKit.answer(this,'q0160a')">跨帧IoU匹配失败</button>
+        </div>
+        <div class="quiz-feedback" id="q0160a"></div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" font-size="16.5" font-weight="700" fill="#9fb4ff">同一个杯子，两帧里的「重叠度」决定它算不算新物体</text>
+
+          <!-- 帧 A -->
+          <rect x="52" y="60" width="330" height="230" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="1.6"/>
+          <text x="217" y="82" text-anchor="middle" font-size="12.5" fill="#5cffb0">第 t 帧</text>
+          <rect x="80" y="176" width="274" height="12" rx="3" fill="#b9803f"/>
+          <text x="100" y="170" font-size="10.5" fill="#b9803f">桌面</text>
+          <ellipse cx="150" cy="150" rx="26" ry="18" fill="#ffd1d8" stroke="#ffd166" stroke-width="2"/>
+          <text x="150" y="154" text-anchor="middle" font-size="10" fill="#0f1424">杯子</text>
+          <text x="150" y="122" text-anchor="middle" font-size="10.5" fill="#ffd166">实例 #7</text>
+          <circle cx="270" cy="152" r="15" fill="#cdd6ff" stroke="#9fb4ff" stroke-width="2"/>
+          <text x="270" y="156" text-anchor="middle" font-size="9.5" fill="#0f1424">书</text>
+          <text x="217" y="276" text-anchor="middle" font-size="11" fill="#cdd6ff">地图里已登记：杯子 #7（占一块区域）</text>
+
+          <!-- 帧 B -->
+          <rect x="518" y="60" width="330" height="230" rx="10" fill="#16203a" stroke="#ffd166" stroke-width="1.6"/>
+          <text x="683" y="82" text-anchor="middle" font-size="12.5" fill="#ffd166">第 t+1 帧</text>
+          <rect x="546" y="176" width="274" height="12" rx="3" fill="#b9803f"/>
+          <text x="566" y="170" font-size="10.5" fill="#b9803f">桌面</text>
+          <ellipse cx="632" cy="146" rx="26" ry="18" fill="#ffd1d8" stroke="#ffd166" stroke-width="2"/>
+          <text x="632" y="150" text-anchor="middle" font-size="10" fill="#0f1424">杯子</text>
+          <text x="632" y="118" text-anchor="middle" font-size="10.5" fill="#ffd166">新观测</text>
+          <circle cx="740" cy="160" r="15" fill="#cdd6ff" stroke="#9fb4ff" stroke-width="2"/>
+          <text x="740" y="164" text-anchor="middle" font-size="9.5" fill="#0f1424">书</text>
+          <text x="683" y="276" text-anchor="middle" font-size="11" fill="#cdd6ff">这一帧又切出一个「杯子」掩码</text>
+
+          <!-- 中间的 IoU 判定 -->
+          <circle cx="450" cy="150" r="52" fill="#1d6b3c" fill-opacity="0.35" stroke="#5cffb0" stroke-width="2.2"/>
+          <text x="450" y="140" text-anchor="middle" font-size="15" font-weight="700" fill="#5cffb0">IoU</text>
+          <text x="450" y="162" text-anchor="middle" font-size="13" fill="#5cffb0">≥ 0.5 ?</text>
+          <text x="450" y="222" text-anchor="middle" font-size="10.5" fill="#5cffb0">重叠够大 → 同一个</text>
+          <text x="450" y="240" text-anchor="middle" font-size="10.5" fill="#ffd1d8">重叠太小 → 当新的</text>
+          <text x="450" y="308" text-anchor="middle" font-size="11" fill="#9fb4ff">判据就这一条阈值</text>
+          <text x="450" y="330" text-anchor="middle" font-size="11" fill="#ffd166">但它对「遮挡后重现」很脆弱</text>
+
+          <text x="450" y="372" text-anchor="middle" font-size="12.5" fill="#cdd6ff">两帧的掩码一叠，重叠比例过线就认成同一个物体——这就是实例级数据关联</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>实例级 SLAM 必须回答「这一帧看到的杯子，是不是上一帧那个杯子」。图里画了同一个桌面在两帧的样子：左边第 t 帧切出一个杯子掩码、登记成实例 #7；右边第 t+1 帧又切出一个杯子掩码；中间那个圆判断的就是两块的「重叠度（IoU）」。
+          <br>
+          <b>怎么看这张图：</b>① 先看左右两帧里杯子的位置变了，但都还在桌面上；② 中间圆圈写的是判据——IoU 到了阈值（MID-Fusion 用 0.5）就判为同一个物体，低于阈值就新建一个；③ 注意底部两行小字：这条判据简单有效，但它有个致命弱点——物体被挡住再出现时，两帧掩码毫无重叠，于是会被当成新物体。
+          <br>
+          <b>要记住的一句话：</b>从「语义」走到「实例」，多出来的不是分割精度，而是这个「同一性判断」——它判错一次，地图里就会多出一个重复的物体。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. MaskFusion：把实例分割网络接进来</h2>
+      <p>MaskFusion（2018）是 Co-Fusion 的实例级升级。它把 <b>Mask R-CNN</b> 实例分割接到 SLAM 后端：每一帧先得到每个「thing（具体物体）」的掩码和 ID，再结合几何线索，把每个物体建为独立模型。背景单独一份，前景每个物体单独一份。</p>
+      <p>关键收益有两点：一是实例 ID 更稳，不容易把同一个物体拆成两个；二是它能<b>检测并忽略「人」</b>——在 fr3 walking halfsphere 这类动态场景里，把走动的人整块排除，只重建静止部分。这正好和 0158 讲的「动态检测靠整类剔人」是同一思路，只是 MaskFusion 把它做进了语义建图本身。</p>
+      <figure class="figure">
+        <img src="../../md/images/2018_MaskFusion/578fab79dab66b346c47532a397ffbd4f87cff7b18a60c863bb3310893fa0435.jpg" alt="MaskFusion recognition, tracking and mapping of multiple objects">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>A series of 3 frames illustrating the recognition, tracking and mapping capabilities of MaskFusion. The first row highlights the system's output: A reconstruction of the background (white), keyboard (orange), clock (yellow), sports ball (blue), teddy-bear (green) and spray-bottle (brown). While the camera was in motion during the whole sequence, the bottle and the teddy started moving fr...<br>
+          <b>怎么看这张图：</b>背景（白）、键盘（橙）、钟（黄）、球（蓝）、泰迪（绿）、喷瓶（棕）分别被独立识别、追踪、建图。注意即便相机在动、物体也在动，每个实例仍保持自己的 ID 与模型——这就是「实例级建图」的样子。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2018_MaskFusion/2715a75553902721298e3aafa0e3158137ec10196267dc295c9a1d19c3672277.jpg" alt="MaskFusion high-level overview of SLAM back-end and masking network">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>High-level overview of the SLAM back-end and masking network, and their interaction.<br>
+          <b>怎么看这张图：</b>这张总览把「SLAM 后端」和「masking 网络」并列，并画出两者怎么交互：分割网络产出掩码，SLAM 后端据此把不同物体分给不同模型。它是理解 MaskFusion 数据流最该看的一张图。
+        </figcaption>
+      </figure>
+
+      <h2 id="g">6. 关联判错：双杯问题</h2>
+      <p>「每物体一个模型」听着干净，但关联一旦出错，地图上就会出现怪现象。最典型的是<b>双杯问题</b>：同一个杯子，本帧被误判成「新物体」，系统就又开了一份模型——于是地图里凭空出现「两个杯子」，其实只有一个。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#f5f7fa"/>
+          <text x="450" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">关联判错 → 地图里凭空多出一个杯子</text>
+          <rect x="40" y="70" width="380" height="290" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">真实世界</text>
+          <path d="M150,330 L150,200 Q150,170 185,170 L215,170 Q250,170 250,200 L250,330 Z" fill="#cfe3f5" stroke="#4a90c2" stroke-width="2"/>
+          <text x="200" y="300" text-anchor="middle" font-size="13" fill="#0b4f7a">只有一个杯子</text>
+          <rect x="480" y="70" width="380" height="290" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">地图里（判错后）</text>
+          <path d="M560,330 L560,210 Q560,185 588,185 L612,185 Q640,185 640,210 L640,330 Z" fill="#cfe3f5" stroke="#4a90c2" stroke-width="2"/>
+          <path d="M720,330 L720,215 Q720,192 745,192 L767,192 Q792,192 792,215 L792,330 Z" fill="#f6d6d0" stroke="#e0533d" stroke-width="2"/>
+          <text x="600" y="358" text-anchor="middle" font-size="12" fill="#0b4f7a">杯子 ①</text>
+          <text x="756" y="358" text-anchor="middle" font-size="12" fill="#a32617">杯子 ②（误判）</text>
+          <text x="670" y="160" text-anchor="middle" font-size="13" fill="#a32617">✗ 同一个杯子被当成两个</text>
+          <path d="M250,180 C380,150 470,150 560,180" stroke="#9aa7b4" stroke-width="2" fill="none" marker-end="url(#a2)"/>
+          <defs><marker id="a2" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa7b4"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边真实世界里只有一个杯子；右边地图里因为某一帧把杯子误判成新物体，系统又开了一份模型，于是出现「杯子 ①」和「杯子 ②」两个看似独立的物体。<br>
+          <b>怎么看这张图：</b>① 这是「每物体一个模型」路线最易踩的坑——关联是脆弱的；② 后面 MID-Fusion / PanopticFusion 改用 IoU / 地图参考来稳关联，正是为了治这个病；③ 诚实标注：Co-Fusion / MaskFusion 的关联并非百分百可靠。<br>
+          <b>要记住的一句话：</b>实例级建图好不好，七分看「关联稳不稳」，双杯问题就是关联失败的代价。
+        </figcaption>
+      </figure>
+
+      <h2>7. 实时性与局限</h2>
+      <p>双篇的实时性账很清楚：Co-Fusion 的<b>非语义版（纯几何运动分割）约 12 FPS，实时</b>；但一旦换成 <b>SharpMask 语义实例版，就不实时了</b>——实例分割网络太重。MaskFusion 用 Mask R-CNN 同样面临这个问题，它靠「几何实时、分割降频」维持可用。它们都仍用 surfel，所以也继承了 0159 说的短板：<b>没有自由空间、不存物体内部</b>，做不到导航级抽象。</p>
+      <p>另外作者自陈两个局限：语义实例版达不到实时；超像素运动分割会<b>过分割</b>（把一个物体切成几块）。这些都为后面的体素 / 图路线（0161–0163）留出了改进空间。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 Co-Fusion / MaskFusion 与 SemanticFusion（0159）的地图表示，下面哪句对？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：三篇都基于 ElasticFusion 的 surfel，只是 Co/MaskFusion 把它拆成「每物体一份独立模型」；它们都不存体素、没有自由空间。" onclick="lessonKit.answer(this,'q0160b')">它们都用surfel</button>
+          <button data-correct="no" data-explanation="错：TSDF / 体素是 0161（MID-Fusion）起才进场；本课的 Co/MaskFusion 仍是 surfel，没有自由空间信息。" onclick="lessonKit.answer(this,'q0160b')">它们用TSDF体素</button>
+        </div>
+        <div class="quiz-feedback" id="q0160b"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>「逐像素语义」和「实例级」差在哪？为什么后者才能支撑「拿第几个杯子」？</li>
+        <li>Co-Fusion 怎么把场景拆开？它的「双线索分割」是哪两条线索？</li>
+        <li>Co-Fusion 判定「出现新物体」的几何判据是什么？它做不做跨帧 IoU / 匈牙利匹配？</li>
+        <li>MaskFusion 相对 Co-Fusion 升级了什么？它为什么能「忽略走动的人」？</li>
+        <li>双杯问题是怎么产生的？这套「每物体一个模型」路线继承了 0159 的哪些短板？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用生活类比解释「实例级」为什么比「逐像素语义」更适合做物体抓取。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>逐像素语义像在一张照片上给每个像素涂「这是什么类」的颜色——桌上两个杯子都涂成「杯子色」，机器人看不出区别。实例级则像给每个物体贴了编号①、②，机器人能明确「拿 ② 号」。抓取任务必须指定「哪一个」，所以实例级是物体交互的最低门槛。Co-Fusion / MaskFusion 就是把这层「编号」做进了 SLAM 地图。</div></details>
+        </li>
+        <li>Co-Fusion 用「离群像素 >3% 开新模型」这个判据，有什么潜在误判风险？举一个会让它误开新模型的例子。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>风险在于：只要某区域里和现有模型对不上的点超过 3%，就开新模型。例如一个物体正在被快速转动、或被部分遮挡、或光照突变导致 ICP 残差骤增，都会被误判成「新物体」，于是同一个物体被拆成多份（类似双杯问题）。反之若两个不同物体始终贴在一起动，又可能并成一个模型。这解释了为什么后面方法要引入更稳的 IoU / 地图参考关联。</div></details>
+        </li>
+        <li>为什么 Co-Fusion 的非语义版能实时（12 FPS），语义实例版却不行？这和 0159 的「每 10 帧跑 CNN」是同一类取舍吗？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为 SharpMask 实例分割网络本身很重，每帧跑它超出实时预算；非语义版只用几何运动分割（超像素+CRF），轻得多，所以能 12 FPS。这和 0159「CNN 每 10 帧才跑」是同一类取舍：都是「几何实时、语义/分割降频」来保在线。区别是 0159 用降频，Co-Fusion 直接拆成「实时几何版 / 非实时语义版」两档。</div></details>
+        </li>
+        <li>MaskFusion「检测到人就把人忽略」和 0158 动态块「整类剔人」有什么联系？它比单纯动态剔除多了什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两者是同一思路的两面：都靠「人是可动类」这个语义先验，把人整块排除。区别在于立场——0158 是从「动态检测」角度借语义当先验去保位姿；MaskFusion 是从「语义建图」角度，把人当成不该建图的动态物体直接忽略（fr3 walking halfsphere 只剩静态部分）。它比单纯剔点多了「物体级」的整齐处理：不是删零散特征点，而是删掉整个人这个实例模型。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0159-SemanticFusion2017-语义建图的开端.html">← 0159 SemanticFusion：语义建图的开端</a>
+        <a class="next" href="0161-体素对象级-八叉树与EM关联.html">0161 MID-Fusion 与 EM-Fusion：体素对象级 →</a>
+      </div>
+      <p class="foot-note">能数清「第几个」了，下一步我们换一种更会「装空间」的地图：体素 📦</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

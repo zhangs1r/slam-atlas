@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DynaSLAM 与 DS-SLAM · 动态 SLAM 的开山 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态环境）/ Lesson 0153</div>
+      <h1>DynaSLAM 与 DS-SLAM · 动态 SLAM 的开山</h1>
+      <p class="subtitle">两篇同年（2018）的奠基作，第一次把「几何 + 语义」双通道拧进 ORB-SLAM2 🧱</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态怎么判定（结合路线）· 命名区分</span>
+        <span>👥 作者：Bescos 等 / Yu 等</span>
+        <span>📅 2018 · RA-L+IROS / IROS</span>
+      </div>
+      <div class="toc">
+        <a href="#a">两条路线同框</a>
+        <a href="#b">DynaSLAM 双通道</a>
+        <a href="#c">深度一致性阈值</a>
+        <a href="#d">DS-SLAM 五线程</a>
+        <a href="#e">代价账</a>
+        <a href="#f">读完之后</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 分清楚 <b>DynaSLAM(2018)</b> 与 <b>DS-SLAM(2018)</b> 这两个只差一个空格的名字；② 说清「结合路线」是怎么用几何与语义两条通道互相纠偏的；③ 背出深度一致性阈值 τ_z = 0.4 m 的物理意义；④ 说出 DS-SLAM 五线程里「独立语义线程」为什么关键；⑤ 记住两种「判错」代价（误删静止可动物体 vs 漏判真动物体）。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>两篇都<b>建在第三季 0043–0045 的 ORB-SLAM2 之上</b>——做法是「在 ORB-SLAM2 外面套一层动态剔除」，这类「打补丁」的结构性代价本节要讲清。动态这件事<b>第一季 0005（SW-NDT 激光侧）</b>就碰过，本节是<b>视觉侧</b>的系统做法，要点名对照两条路线。<b>第七季 0147</b> 的 SAM 分割，正是本季「语义当零件」的现成例子——但 2018 年它们用的是更早的 Mask R-CNN / SegNet。</p>
+        </div>
+      </div>
+
+      <h2>1. 先拆一个命名坑：DynaSLAM 还是 DS-SLAM？</h2>
+      <p>本季动态块有四个名字两两易混，第一篇就先排雷。今天这两位是：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>DynaSLAM（2018）</h4>
+          <p>Bescos、Civera、Neira 等。系统名写成 <b>DynaSLAM</b>（一个词，无空格）。做法：<b>几何（多视角深度一致性）+ 语义（Mask R-CNN）</b>双通道，判定后把动态物体删掉，并对被遮挡背景做 inpainting。</p>
+        </div>
+        <div class="mini-card">
+          <h4>DS-SLAM（2018）</h4>
+          <p>Yu、Liu 等。系统名写成 <b>DS-SLAM</b>（有空格，D 和 S 之间）。做法：<b>5 线程并行</b>，语义用 SegNet（只把「人」默认当动态），几何用对极约束运动一致性，并输出稠密语义 octo-tree 地图。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <p><b>记忆口诀</b>：<b>Dyna</b>SLAM 是「Dynamic 的缩写、没空格、靠 Mask R-CNN + 深度一致性 + inpaint」；<b>DS</b>-SLAM 是「有空格、靠 SegNet 只剔人 + 五线程 + 稠密语义地图」。后面还会出现 <b>DynaSLAM II（2021，追踪而非删除）</b>、<b>Dynamic SLAM（Wen 2023，室外）</b>、<b>Dynam-SLAM（Yin 2023，VISLAM）</b>——写课时一律用「全称 + 第一作者 + 年份」锚定，避免念混。</p>
+      </div>
+      <p>两者共同的身份是：<b>动态 SLAM 结合路线（几何 + 语义）的开山之作</b>。下面分别拆。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. DynaSLAM：把「几何」和「语义」两条通道拧在一起</h2>
+      <p>生活类比：你要判断教室里哪张椅子「其实被人搬动过」。一个办法是<b>看照片</b>——如果有人坐着，就假定这张椅子可能动（语义先验）；另一个办法是<b>量尺寸</b>——把昨天和今天同一处的深度对一对，差太多就说明它动了（几何证据）。DynaSLAM 两个都用，再取并集/交集。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>语义通道</h4>
+          <p>Mask R-CNN（MS COCO 18 类 movable 物体：人、车…）逐像素出实例 mask。这些类直接<b>假定为潜在动态</b>——这是「先验」，不是「此刻在动」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>几何通道</h4>
+          <p>多视角深度一致性：把已有地图点投影到新帧，比较「投影深度」与「实测深度」。差太多就判动态。<b>不依赖训练数据</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h4>怎么合</h4>
+          <p>论文给出 N（纯几何）、G（纯语义）、N+G（结合）三种组合。结合模式互相纠偏：语义能补低纹理处的几何失效，几何能<b>保留停着的车</b>（语义会误删）。</p>
+        </div>
+        <div class="mini-card">
+          <h4>删完干嘛</h4>
+          <p>判出的动态区域被 mask 掉，只用静态点做跟踪/建图；被遮挡背景用前 20 个关键帧信息做 inpainting，得到可长期使用的静态地图。</p>
+        </div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">语义先验只说「类别」，不说「此刻动没动」</tspan></text>
+
+          <!-- 街景一排 -->
+          <rect x="40" y="60" width="820" height="240" rx="6" fill="#eef3f8" stroke="#cdd7e2"/>
+          <rect x="60" y="230" width="800" height="60" fill="#dfe6ee"/>
+          <!-- 人 -->
+          <circle cx="160" cy="120" r="20" fill="#f1c7b0"/>
+          <rect x="144" y="140" width="32" height="70" rx="9" fill="#4a6fa5"/>
+          <!-- 车（停着） -->
+          <rect x="360" y="150" width="150" height="70" rx="12" fill="#7d8794"/>
+          <rect x="378" y="135" width="110" height="34" rx="10" fill="#7d8794"/>
+          <circle cx="392" cy="222" r="12" fill="#3a4a5a"/>
+          <circle cx="488" cy="222" r="12" fill="#3a4a5a"/>
+          <!-- 椅子（停着） -->
+          <rect x="640" y="170" width="70" height="50" rx="6" fill="#b8945a"/>
+          <rect x="646" y="140" width="58" height="34" rx="8" fill="#b8945a"/>
+          <!-- 树 -->
+          <circle cx="800" cy="120" r="26" fill="#5a8a5a"/>
+          <rect x="792" y="146" width="16" height="74" fill="#8a6f3a"/>
+
+          <!-- 语义刷色：人=红，车=黄，椅子=黄，树=绿（静态类） -->
+          <rect x="140" y="90" width="40" height="120" rx="8" fill="#e0533d" opacity="0.22"/>
+          <rect x="358" y="120" width="154" height="100" rx="12" fill="#e0b53d" opacity="0.22"/>
+          <rect x="638" y="130" width="74" height="90" rx="8" fill="#e0b53d" opacity="0.22"/>
+          <rect x="774" y="94" width="52" height="126" rx="8" fill="#5a8a5a" opacity="0.18"/>
+
+          <text x="160" y="276" text-anchor="middle" font-size="11" fill="#9a2b1c"><tspan font-weight="700">人 → 红：默认动态</tspan></text>
+          <text x="435" y="276" text-anchor="middle" font-size="11" fill="#8a6a1a"><tspan font-weight="700">车 → 黄：可动类</tspan></text>
+          <text x="675" y="276" text-anchor="middle" font-size="11" fill="#8a6a1a"><tspan font-weight="700">椅 → 黄：可动类</tspan></text>
+          <text x="800" y="276" text-anchor="middle" font-size="11" fill="#3a6a3a"><tspan font-weight="700">树 → 绿：静态类</tspan></text>
+
+          <rect x="60" y="316" width="780" height="92" rx="8" fill="#fff7ef" stroke="#e0b48f"/>
+          <text x="80" y="342" font-size="12" fill="#7a4630"><tspan font-weight="700">问题：语义只回答「它是哪一类」</tspan></text>
+          <text x="80" y="364" font-size="11" fill="#7a4630">· 红框的人若站着不动，语义仍会判它「动态」→ 误删（损失静态特征）</text>
+          <text x="80" y="386" font-size="11" fill="#7a4630">· 黄框的停驶车，其实对定位有用，却被「可动类」先验误删</text>
+          <text x="80" y="406" font-size="11" fill="#7a4630">→ 所以需要几何通道（深度一致性）来「保住其实没动的车」</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>一条街景，下面用颜色标出语义分割给每类打的标签：人=红（默认动态）、车/椅子=黄（可动类）、树=绿（静态类）。</p>
+          <p><b>怎么看这张图：</b>① 注意<b>红色和黄色只代表「类别」，不代表「此刻在动」</b>——这是语义先验最粗的地方；② 站在原地的「人」、停在路边的「车」都会被先验判成「可能动」，于是被删，但它们其实是好用的静态特征；③ 这正是结合路线存在的理由：<b>用几何通道把「其实没动的可动物体」救回来</b>。④ 图下方橙框点明了两种误删。</p>
+          <p><b>要记住的一句话：</b>语义先验只说「它是哪一类」，不说「它现在动没动」——这是所有语义派动态 SLAM 的原罪。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_DynaSLAM/db72f9faf4bfdf43dfa2d48281e9e1201d4983fc0ae1e568183366cd5f39ff0a.jpg" alt="Detection and segmentation of dynamic objects using multi-view geometry, deep learning, and combination">
+        <figcaption>
+          <p><b>原图注（DynaSLAM Fig. 4）：</b>Detection and segmentation of dynamic objects using multi-view geometry (left), deep learning (middle), and a combination of both geometric and learning methods (right). Notice that Fig. 4(a) cannot detect the person behind the desk, Fig. 4(b) cannot segment the book carried by the person, and the combination of the two (Fig. 4c) is the best performing.</p>
+          <p><b>怎么看这张图：</b>这是结合路线最直观的证据。左图（纯几何）漏掉了桌子后面的人——因为低纹理/遮挡处几何失效；中图（纯语义）认出了人却漏掉了人手里拿的书——语义分割的实例边界不够细；右图（结合）把人和书都找全了。它说明<b>两条通道不是简单叠加，而是互补短板</b>。结合模式（N+G）也是论文精度最高的配置（walking_xyz 上 ATE 0.015 vs ORB-SLAM2 0.459，提升 96.73%）。</p>
+          <p><b>要记住的一句话：</b>纯几何漏遮挡人、纯语义漏手中书，结合才最准——这是「几何+语义」成为动态 SLAM 主流范式的根本理由。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 几何通道的核心：深度一致性阈值 τ_z = 0.4 m</h2>
+      <p>DynaSLAM 几何通道的判断非常具体。它把一个地图点从关键帧投影到当前帧，算出「投影深度 z_proj」和「当前帧实测深度 z′」，两者之差超过阈值就判动态：</p>
+      <div class="formula-box"><div class="flow-formula">$$\Delta z = z_{\mathrm{proj}} - z' > \tau_z,\qquad \tau_z = 0.4\ \mathrm{m}$$</div></div>
+      <p><b>这句话在说什么</b>：它在算「同一个点，上一帧我估计它在哪、这一帧实测它在哪，差了多远」。如果差的深度超过 0.4 米，就说明这个点不是同一个静止点（它移动了，或者我的位姿错了）。0.4 m 不是拍脑袋——论文用 30 张人工标注的 TUM 图，最大化「0.7×准确率 + 0.3×召回率」选出来的。另外，视差角大于 30° 的匹配会被忽略，且只用与当前帧重叠 ≥5 个关键帧的点，避免早期不稳定地图点。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">同一块地砖，两帧深度差超过 0.4 m 就判「动了」</tspan></text>
+
+          <!-- 帧A -->
+          <rect x="60" y="60" width="340" height="220" rx="8" fill="#eef3f8" stroke="#cdd7e2"/>
+          <text x="230" y="84" text-anchor="middle" font-size="12.5" fill="#3a4a5a"><tspan font-weight="700">关键帧 A</tspan></text>
+          <rect x="180" y="150" width="100" height="40" rx="4" fill="#cdb892"/>
+          <text x="230" y="175" text-anchor="middle" font-size="11" fill="#5b4a2a">地砖</text>
+          <text x="230" y="232" text-anchor="middle" font-size="12" fill="#2b6cb0"><tspan font-weight="700">实测深度 z′ = 3.0 m</tspan></text>
+          <text x="230" y="256" text-anchor="middle" font-size="11" fill="#5b6472">（这一块没动）</text>
+
+          <!-- 帧B -->
+          <rect x="500" y="60" width="340" height="220" rx="8" fill="#eef3f8" stroke="#cdd7e2"/>
+          <text x="670" y="84" text-anchor="middle" font-size="12.5" fill="#3a4a5a"><tspan font-weight="700">当前帧 B</tspan></text>
+          <rect x="620" y="150" width="100" height="40" rx="4" fill="#cdb892"/>
+          <text x="670" y="175" text-anchor="middle" font-size="11" fill="#5b4a2a">地砖</text>
+          <text x="670" y="232" text-anchor="middle" font-size="12" fill="#2b6cb0"><tspan font-weight="700">投影深度 z_proj = 3.1 m</tspan></text>
+          <text x="670" y="256" text-anchor="middle" font-size="11" fill="#5b6472">（错位 0.1 m，远小于 0.4）</text>
+
+          <!-- 阈值带 -->
+          <line x1="60" y1="320" x2="840" y2="320" stroke="#b9c4d2" stroke-width="2"/>
+          <rect x="300" y="306" width="160" height="28" rx="6" fill="#e0f0e6" stroke="#8fbf8f"/>
+          <text x="380" y="325" text-anchor="middle" font-size="11" fill="#2f7a45"><tspan font-weight="700">容忍带 ±0.4 m</tspan></text>
+          <text x="520" y="338" font-size="11" fill="#5b6472">差 0.1 m → 落在带内 → 判静态</text>
+
+          <!-- 对比：一个真动点 -->
+          <rect x="620" y="360" width="220" height="40" rx="6" fill="#fdeaea" stroke="#e0533d"/>
+          <text x="730" y="385" text-anchor="middle" font-size="11" fill="#9a2b1c"><tspan font-weight="700">若差 = 0.9 m → 超出带 → 判动态</tspan></text>
+          <text x="450" y="412" text-anchor="middle" font-size="11.5" fill="#34415a"><tspan font-weight="700">τ_z = 0.4 m：数据驱动选出，不是经验值</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边是上一帧（关键帧 A）里一块地砖的实测深度 3.0 m；右边是当前帧 B 里同一块的投影深度 3.1 m。中间一条「容忍带 ±0.4 m」。</p>
+          <p><b>怎么看这张图：</b>① 两帧差 0.1 m，<b>落在绿带内</b>，所以判「这块没动」（静态）；② 下方红框演示一个真动点：差 0.9 m，<b>超出带</b>，判动态；③ 关键不是「差多少」，而是「差是否超过 0.4 m 这个门槛」——这个门槛是论文用 30 张人工标注图调出来的，目的在平衡「别漏真动」和「别误删静止」。</p>
+          <p><b>要记住的一句话：</b>深度一致性阈值 τ_z = 0.4 m 是 DynaSLAM 几何通道的「判动开关」，且是数据驱动选定的。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_DynaSLAM/d71f0bc622bac9fb2e34757fd0f7bca27420e2402b560e0a8238a507ec19fd0a.jpg" alt="Keypoint projected into current frame, depth consistency threshold tau_z">
+        <figcaption>
+          <p><b>原图注（DynaSLAM Fig. 3）：</b>Keypoint x from the Key Frame (KF) is projected into the Current Frame (CF) using its depth and camera pose, resulting in point x′ with depth z′. The projected depth z_proj is then computed. A pixel is labeled as dynamic if the difference Δz = z_proj − z′ is greater than a threshold τ_z.</p>
+          <p><b>怎么看这张图：</b>这张就是上面那张自绘图的论文原版：它画的是把关键帧里的特征点 x 用深度和位姿投影到当前帧，得到投影深度 z_proj，再和实测 z′ 比。差超过 τ_z 就标红（动态）。注意它标的是「单像素级」的判断——<b>粒度是逐像素 + 实例级</b>，比纯几何的「点级」更细。</p>
+          <p><b>要记住的一句话：</b>原图 Fig. 3 正是 τ_z = 0.4 m 这个公式的几何来源，自绘图把它翻译成了「地砖深度差」的日常画面。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. DS-SLAM：把语义做成「独立实时线程」</h2>
+      <p>DS-SLAM 和 DynaSLAM 同年，思路相似（也是几何+语义），但工程上更强调「<b>实时</b>」。它的做法是 5 个并行线程：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>跟踪 / 局部建图 / 回环</h4>
+          <p>这三线程与 ORB-SLAM2 基本一致，是「地基」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>语义分割线程（独立）</h4>
+          <p>SegNet（PASCAL VOC 20 类）<b>独立并行</b>跑，不阻塞主流程——这是它能 ~16.8 fps 的关键。</p>
+        </div>
+        <div class="mini-card">
+          <h4>运动一致性检查</h4>
+          <p>对极约束：对每对匹配点算到极线的距离，超过阈值判动态。和语义互为二次确认。</p>
+        </div>
+        <div class="mini-card">
+          <h4>稠密语义 octo-tree 地图</h4>
+          <p>用 log-odds 占据概率维护每个点的动静状态，回环时把分割结果融进地图。</p>
+        </div>
+      </div>
+      <p>几何通道的对极距离判据是：</p>
+      <div class="formula-box"><div class="flow-formula">$$D = \frac{\,|p_2^{\top} F p_1|\,}{\sqrt{\|X\|^2 + \|Y\|^2}} > \text{阈值} \;\Rightarrow\; \text{动态}$$</div></div>
+      <p><b>这句话在说什么</b>：对于一对匹配点，它算「这个点偏离对极线多远」（分母是归一化项，避免极线长短不一带来的尺度偏差）。偏离越远，说明它不满足「静态场景的对极约束」，越可能是动态点。语义线程先把「人」区域标记出来，几何线程再用这个对极距离二次确认，两者联合降低单通道误判。</p>
+      <div class="callout">
+        <p><b>DS-SLAM 的一个局限（也是语义先验过窄的代价）</b>：它<b>默认只把「人(person)」当动态</b>。如果场景里动态物体主要是车，收益就有限——这是和 DynaSLAM（18 类 movable）不同的取舍。另外它要为每个回环重建 octo-tree 语义地图，计算更复杂。</p>
+      </div>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_DS-SLAM__A_Semantic_Visual_SLAM_towards_Dynamic_Environm/56a35bd69b4c9cfc71ac3dce85bc41bb666f349c49d088eb57558556e500be76.jpg" alt="The overview of DS-SLAM">
+        <figcaption>
+          <p><b>原图注（DS-SLAM Fig. 1）：</b>The overview of DS-SLAM. The raw RGB image is utilized to semantic segmentation and moving consistency check simultaneously. Then remove outliers and estimate pose. Semantic octo-tree map is built in an independent thread based on the pose, depth image, and semantic segmentation results.</p>
+          <p><b>怎么看这张图：</b>它把「RGB 进 → 语义分割 + 运动一致性检查同时做 → 剔除离群点 → 估计位姿」这条主链画得很清楚，右下角还有独立的语义 octo-tree 地图线程。重点看「<b>independent thread</b>」——语义分割是和跟踪并行的，所以不拖慢主帧率。这是 DS-SLAM 相对 DynaSLAM「串行跑 Mask R-CNN」在实时性上的结构差异。</p>
+          <p><b>要记住的一句话：</b>DS-SLAM 的卖点是「独立语义线程 + 五线程并行」，使它约 16.8 fps，接近实时。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2018_DS-SLAM__A_Semantic_Visual_SLAM_towards_Dynamic_Environm/6fe5de3c9a78db277b033f5f71d5a0ae79700af391bf60b41bcb90ead75baad4.jpg" alt="Dense 3D semantic octo-tree map">
+        <figcaption>
+          <p><b>原图注（DS-SLAM Fig. 6）：</b>Dense 3D semantic octo-tree map.</p>
+          <p><b>怎么看这张图：</b>这是 DS-SLAM 的「额外产出」——不只是一张贴好标签的语义图，而是一张<b>稠密的三维语义八叉树地图</b>。每个体素用 log-odds 占据概率维护「这里有没有东西、是静是动」。这一点比 DynaSLAM（只出静态彩色图）往前走了一步：它把语义和几何真正融进了同一个可查询的地图结构，可供上层任务（如导航避障）直接用。</p>
+          <p><b>要记住的一句话：</b>DS-SLAM 不只「剔除动态」，还顺手建出一张带语义标签的稠密三维地图——这是它相对 DynaSLAM 的增量贡献。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动一：DynaSLAM 的几何通道，阈值 τ_z 调得过大（比如 2 m）会怎样？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0153a')">更易漏判真动物体</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0153b')">更易误删静止车</button></p>
+        <p class="quiz-feedback" id="q0153a" hidden>正确。τ_z 是「判动的门槛」：门槛越高，越多的真动点（深度差小于 2 m 的）会被当成「没动」而漏掉，污染 BA——这正是精读材料说的「漏检的崩盘」。反之门槛太低才会把静止车误删（保守删除的亏本）。所以 τ_z 本质是「漏检 vs 误删」的旋钮。</p>
+        <p class="quiz-feedback" id="q0153b" hidden>不对。把 τ_z 调大，是「更容易放过动点」，不会「更易误删静止车」。误删静止车来自「门槛太低 + 语义先验过宽」——静止车深度差很小，门槛低时也会被当成动。门槛大反而会让静止车更安全（更不容易被判动）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 代价账：结合路线亏在了哪</h2>
+      <p>结合路线很强，但「代价账」必须算清。两篇共同的亏法，以及各自的特例：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(204,120,92,.35)">代价项</th>
+            <th style="text-align:left;padding:.6rem">DynaSLAM（N+G）</th>
+            <th style="text-align:left;padding:.6rem">DS-SLAM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">实时性</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">高精 N+G 模式需 Mask R-CNN(195ms)+几何(333ms)+inpaint(208ms)，远非实时；仅纯几何 Low-Cost 接近实时</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">主线程 ~59.4 ms/帧（≈16.8 fps），靠语义线程独立并行</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">静态场景略亏</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">作者指出静态序列上略逊 ORB-SLAM2：语义通道会删掉「可动类」特征（即便它没动）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">同样存在把静止的人误删的风险</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">语义边界</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">Mask R-CNN 18 类 movable</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">SegNet 仅 20 类，且动态<b>只取 person</b></td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;font-weight:700">高层输出</td>
+            <td style="padding:.5rem .6rem">inpainting 出静态地图，不追踪动态物体</td>
+            <td style="padding:.5rem .6rem">稠密语义 octo-tree 地图（额外产出）</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>两种判错的代价（本项目铁律）</b>：① <b>误删静止可动物体</b>（停驶车、站着的人）——损失本可用于定位的静态特征，DynaSLAM/DS-SLAM 在静止可动物体场景会略降；② <b>漏判真动物体</b>——污染 BA，使整张地图崩。结合路线用「几何保住静止车」缓解①、用「语义缩小搜索范围」压制②，但<b>实时性</b>始终是结合路线最贵的那笔账。</p>
+      </div>
+      <div class="interactive-card">
+        <h4>互动二：为什么 DynaSLAM/DS-SLAM 都「不改 SLAM 内核，只在外面加一层」？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0153c')">内核太稳不想动</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0153d')">补丁法最快见效</button></p>
+        <p class="quiz-feedback" id="q0153c" hidden>正确，但说法不完整——更准的说法是「补丁法最快见效」。ORB-SLAM2 的 BA、回环已经很成熟，2018 年最务实的做法是「在外层把动点识别出来、喂干净的数据给内核」，而不是重写优化器。这也带来结构性代价：动态处理的好坏完全取决于外层补丁，内核对动态一无所知。</p>
+        <p class="quiz-feedback" id="q0153d" hidden>更准确。2018 年的两篇都是「把动态剔除做成一个外层模块，只对 ORB-SLAM2 喂干净点」。原因不是内核完美，而是「在成熟内核外包一层」是当时最快出成果的路。代价是：动态判断与位姿优化是脱耦的两段，无法像后来 DynaSLAM II 那样「让动态物体反过来帮定位」。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <figure class="figure">
+        <svg viewBox="0 0 900 436" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="436" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" font-size="16.5" font-weight="700" fill="#ffd166">一帧画面要花掉多少毫秒：这条流水线的账单</text>
+
+          <!-- 横轴 -->
+          <line x1="196" y1="86" x2="836" y2="86" stroke="#4a5568" stroke-width="1.5"/>
+          <text x="196" y="78" text-anchor="middle" font-size="10" fill="#6b7785">0</text>
+          <text x="336" y="78" text-anchor="middle" font-size="10" fill="#6b7785">100</text>
+          <text x="476" y="78" text-anchor="middle" font-size="10" fill="#6b7785">200</text>
+          <text x="616" y="78" text-anchor="middle" font-size="10" fill="#6b7785">300</text>
+          <text x="756" y="78" text-anchor="middle" font-size="10" fill="#6b7785">400 ms</text>
+          <g stroke="#2d3748" stroke-width="0.9">
+            <line x1="336" y1="86" x2="336" y2="330"/><line x1="476" y1="86" x2="476" y2="330"/>
+            <line x1="616" y1="86" x2="616" y2="330"/><line x1="756" y1="86" x2="756" y2="330"/>
+          </g>
+
+          <!-- 语义分割 -->
+          <text x="186" y="112" text-anchor="end" font-size="11.5" fill="#ffd1d8">语义分割（Mask R-CNN）</text>
+          <rect x="196" y="100" width="273" height="18" rx="3" fill="#a32617"/>
+          <text x="484" y="114" font-size="12" font-weight="700" fill="#ffd1d8">195 ms</text>
+
+          <!-- 多视图几何 -->
+          <text x="186" y="152" text-anchor="end" font-size="11.5" fill="#9fb4ff">多视图几何检查</text>
+          <rect x="196" y="140" width="467" height="18" rx="3" fill="#9fb4ff"/>
+          <text x="678" y="154" font-size="12" font-weight="700" fill="#9fb4ff">333.68 ms</text>
+
+          <!-- inpainting -->
+          <text x="186" y="192" text-anchor="end" font-size="11.5" fill="#9b8cff">背景修补（inpainting）</text>
+          <rect x="196" y="180" width="291" height="18" rx="3" fill="#9b8cff"/>
+          <text x="502" y="194" font-size="12" font-weight="700" fill="#9b8cff">208.09 ms</text>
+
+          <!-- Low-Cost -->
+          <text x="186" y="232" text-anchor="end" font-size="11.5" fill="#5cffb0">仅几何的轻量模式</text>
+          <rect x="196" y="220" width="3" height="18" rx="1.5" fill="#5cffb0"/>
+          <text x="214" y="234" font-size="12" font-weight="700" fill="#5cffb0">1.69 ms（几乎免费）</text>
+
+          <!-- ORB-SLAM2 实时线 -->
+          <line x1="212" y1="90" x2="212" y2="330" stroke="#ffd166" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="222" y="322" font-size="11" fill="#ffd166">33 ms ≈ 实时上限（30 FPS）</text>
+
+          <text x="450" y="272" text-anchor="middle" font-size="12" fill="#cdd6ff">高精度的「几何＋语义＋修补」三件套加起来约 737 ms/帧 —— 离实时差了 20 多倍</text>
+          <text x="450" y="296" text-anchor="middle" font-size="12" fill="#5cffb0">想实时只能退到「只用几何」的 1.69 ms 档，精度就跟着降</text>
+          <text x="450" y="352" text-anchor="middle" font-size="12" fill="#ffd166">这就是作者自己列的未来工作：实时化、用更轻的运动检测器、更快的修补</text>
+          <text x="450" y="378" text-anchor="middle" font-size="12" fill="#9fb4ff">安静场景里的亏本：即使画面里没人，语义那 195 ms 也照样要付</text>
+          <text x="450" y="404" text-anchor="middle" font-size="11.5" fill="#ffd1d8">实测在静态序列上，DynaSLAM 反而略逊于原来的 ORB-SLAM2</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>把 DynaSLAM 一帧里干的三件重活按真实耗时画成条形图：语义分割 195 毫秒、多视图几何 333.68 毫秒、背景修补 208.09 毫秒；而它那个「只用几何」的轻量档只要 1.69 毫秒。
+          <br>
+          <b>怎么看这张图：</b>① 先看黄色虚线——那是 33 毫秒的实时门槛；三条长条全部远远越过它；② 逐条读右边标出的毫秒数，这就是这一节的「代价账」；③ 注意最下面那条最短的绿条（1.69 ms），它说明精度与速度是同一张账单上的两栏，想实时就得退档；④ 再读底部两行：即使画面里根本没有运动物体，语义那 195 毫秒照样要付——所以作者实测发现静态序列上它反而略输给原版 ORB-SLAM2。
+          <br>
+          <b>要记住的一句话：</b>动态处理不是「白拿的鲁棒性」，它的价钱写在每帧的毫秒数里，而且在安静场景里是净亏。
+        </figcaption>
+      </figure>
+
+      <h2>6. 读完你应该能回答</h2>
+      <ul>
+        <li>DynaSLAM(2018) 与 DS-SLAM(2018) 名字差在哪？各自靠什么语义网络、默认把哪类当动态？</li>
+        <li>「结合路线」是怎么用几何与语义两条通道互相纠偏的？纯几何和纯语义各自漏什么？</li>
+        <li>深度一致性阈值 τ_z = 0.4 m 在算什么？为什么它必须是数据驱动选出的？</li>
+        <li>DS-SLAM 的「独立语义线程 + 五线程并行」解决了什么、又留下了什么局限？</li>
+        <li>结合路线的两种「判错代价」分别是什么？为什么实时性是它最贵的一笔账？</li>
+        <li>这两篇为什么都「不改 SLAM 内核、只在外面加一层动态剔除」？这种结构有什么代价？</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>为什么说「语义先验只说类别、不说此刻动没动」是结合路线存在的根本理由？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为语义分割只能回答「这是人/车（可动类）」，回答不了「这个人此刻站着没动、这辆车停着」。如果只靠语义，会把站着的人和停着的车都删掉，损失对定位有用的静态特征。所以必须再引入几何通道（深度一致性/对极约束）来判断「它到底动没动」，把其实没动的可动物体救回来。两条通道互补，才长成「结合路线」。</p>
+            </div></details>
+          </li>
+          <li>DS-SLAM 默认只把「人」当动态，这在什么场景下会吃亏？请举一个具体例子。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>在动态物体主要是「车」而非「人」的场景会吃亏。例如停车场里一辆行驶中的汽车，DS-SLAM 的语义通道默认不把它当动态（只有 person 被默认动态），于是几何通道要单独扛「判这辆车在动」的任务；若该车纹理少、几何证据弱，就可能被漏判，污染 BA。这是它相对 DynaSLAM（18 类 movable）的取舍代价。</p>
+            </div></details>
+          </li>
+          <li>如果让你把 τ_z 从 0.4 m 改成 0.1 m，对「停着的车」和「真在走的人」分别会有什么影响？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>τ_z 调小 = 判动门槛更严。停着的车：深度差本就很小（接近 0），仍会判静态，不受影响（反而更安全）；真在走的人：若其深度差在 0.1–0.4 m 之间（慢速/远距），原来判动、现在判静态 → 被漏判，污染 BA。所以调小 τ_z 是「宁可误删、不可漏检」的取向，会加剧「漏检崩盘」风险，对慢速动态物体不友好。</p>
+            </div></details>
+          </li>
+          <li>对比 DynaSLAM 与 DS-SLAM 的「额外产出」：一个做 inpainting，一个建 octo-tree 语义地图，两者对下游任务的意义有何不同？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>DynaSLAM 的 inpainting 是为了「补出被动态物体遮挡的背景」，得到一张干净的、可长期使用的静态地图——它服务的是「定位/建图本身的长期一致性」。DS-SLAM 的 octo-tree 语义地图则把「语义标签 + 占据概率」存进三维结构，下游导航/避障可以直接查询「前方法是椅子还是墙、是静是动」。前者是「让地图更干净」，后者是「让地图更可用」，方向不同。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0152-导览-第八季开场-三个不成立的假设.html">← 上一课：0152 三个不成立的假设</a>
+        <a class="next" href="0154-纯几何路线-不靠语义也能判动态.html">下一课：0154 纯几何路线 · 不靠语义也能判动态 →</a>
+      </div>
+      <p class="foot-note">2018 这两篇把「几何+语义」拧进 ORB-SLAM2，奠定了动态 SLAM 的结合路线。下一节看「不打语义牌」的纯几何派 🧱</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

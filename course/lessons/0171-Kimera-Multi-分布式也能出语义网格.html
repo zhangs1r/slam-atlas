@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kimera-Multi：分布式也能出语义网格 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0171</div>
+      <h1>Kimera-Multi：分布式也能出语义网格</h1>
+      <p class="subtitle">分布式还不算难，难的是分布式还出「度量 + 语义」网格。🧊 这一节看 MIT 怎么把语义网格也做分布了。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：完全分布式度量-语义多机 SLAM 与 D-GNC</span>
+        <span>👥 作者：Tian、Chang、Carlone 等（MIT，2022）</span>
+        <span>📅 年份 · <i>Kimera-Multi: Robust, Distributed, Dense Metric-Semantic SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：分布式 + 语义网格</a>
+        <a href="#b">系统结构</a>
+        <a href="#c">D-GNC 鲁棒后端</a>
+        <a href="#d">权重曲线</a>
+        <a href="#e">度量-语义网格合并</a>
+        <a href="#f">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Kimera-Multi 为什么是「完全分布式 + 度量语义」；用自己的话解释 D-GNC（GNC 初始化 + RBCD 分布式求解）；看懂 GNC 权重曲线怎么把 outlier 权重降到 0；理解它相比 PCM 为什么保 recall。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 它复用了<b>0163 Kimera 的 DSG（场景图五层）</b>这套表示体系——Kimera-Multi 把前者的「度量-语义网格」做成分布式的。★ 但<b>诚实标注</b>：Kimera 主论文（即 0163 那篇）<b>并未提及 Kimera-Multi</b>，所以只能说「两者同属 MIT-SPARK 团队、同一 DSG 表示体系的延续」——这是推断，不是原文结论。★ 鲁棒后端仍是位姿图上的事，回链<b>第二季 0018 / 0019</b>；假回环回链<b>0140 铁律</b>。★ 它把 0169 的 GNC 推进成「分布式版」。</p></div>
+      </div>
+
+      <h2 id="b">1. 先说人话：分布式 + 语义网格，难在哪</h2>
+      <p>前面 0169 / 0170 解决的是「多机怎么把轨迹对齐」。Kimera-Multi 在此基础上多要一样东西：<b>不只对齐轨迹，还要合出一张带语义的 3D 网格</b>（哪面是墙、哪块是桌子、哪个人站在哪间房里）。难点在于——网格是「稠密」的，比轨迹重得多，还要在<b>没有服务器</b>的前提下，让每台机器人本地的语义网格最终拼成一张一致的全局网格。</p>
+      <p>Kimera-Multi（MIT，Tian、Chang、Carlone 等，ICRA 2021 会议 + 2022 期刊扩展）的答案是：每台机器人本地跑 Kimera 出语义网格，机器人之间只交换<b>回环 + 位姿</b>，后端用 <b>D-GNC</b>（分布式 GNC）做鲁棒 PGO，最后用 <b>LMO（网格变形图）</b>把各自网格校正到一致。它比中心化精度相当、通信降 70%。</p>
+      <p>★ <b>关于血脉的诚实说明（重要，遵守规范 §八①）</b>：Kimera 主论文（0163 那篇）<b>原文并没有提到 Kimera-Multi</b>。所以本节不声称「Kimera 是 Kimera-Multi 的前身」，只客观说：<b>两者同属 MIT-SPARK 团队、共用 DSG 这套场景图表示体系</b>，Kimera-Multi 可看作「同一表示体系下、把单机的 Kimera 改成分布式版本」的延续——这是基于团队与表示的<b>推断</b>，不是原文写死的结论。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Kimera-Multi/d61d2ac2e9f258f943997a183dff677e568c8491e3d32ab9093f08410293deb2.jpg" alt="Kimera-Multi demonstration at Medfield">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Demonstration of Kimera-Multi in a three-robot collaborative SLAM dataset at Medfield… (a) Kimera-VIO drift; (b) Kimera-Multi accurate estimation; (c) also produces a 3-D metric-semantic mesh.<br>
+          <b>怎么看这张图：</b>(a) 单机 VIO 漂得乱七八糟；(b) Kimera-Multi 三机协作后轨迹对齐；(c) 它还直接产出带语义的 3D 网格。这就是「分布式 + 语义网格」的招牌结果。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Kimera-Multi/c113a55f20dd079604c7e29e75d723547486663a4f158b84ec6d92b10ed6f91a.jpg" alt="Kimera-Multi system architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Kimera-Multi: system architecture. Each robot runs Kimera to estimate local trajectory and mesh. Robots communicate to perform distributed loop closure detection and robust distributed PGO.<br>
+          <b>怎么看这张图：</b>每台机器人本地跑完整 Kimera（含 Kimera-VIO 与 Kimera-Semantics）出轨迹 + 网格；机器人之间只通信做「分布式回环检测 + 鲁棒分布式 PGO」，没有中心节点。注意它复用的是 0163 那套 Kimera 模块与 DSG 表示。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. D-GNC：把 GNC 做成分布式的两阶段</h2>
+      <p>Kimera-Multi 的后端叫 <b>D-GNC</b>，分两阶段：</p>
+      <ul>
+        <li><b>① 鲁棒初始化（GNC 初始化参考帧）</b>：对每对机器人用 GNC（TLS 代价）解它们之间的参考帧变换，错的回环在这一步就被权重降到 0；</li>
+        <li><b>② RBCD 分布式求解（Riemannian Block-Coordinate Descent）</b>：把 PGO 拆成各机器人本地的子问题，rank 松弛 = 5，每个变量更新默认 15 次迭代，轮流优化直到收敛。</li>
+      </ul>
+      <p>它相对 DOOR-SLAM 的 PCM 最大优势是<b>保 recall</b>：PCM 求最大团会误杀真回环（低 recall），GNC 让错的边自己退出、真的边留着。原文 Fig.8 在 70% outlier 下，GNC 的 ATE ≈ 0.003 m，而 PCM 是 2.24 m。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Kimera-Multi/bc5a63853a6c191447176c560a94b50f1fa4ad67d1c195240a913471b84917f2.jpg" alt="PCM vs GNC under 70 percent outlier">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>Comparing final trajectory estimates under 70% outlier loop closures. (a) PCM (ATE = 2.24 m). (b) GNC (naïve init) (ATE = 11.59 m). (c) PCM + GNC (ATE = 0.09 m). (d) GNC (ATE = 0.003 m).<br>
+          <b>怎么看这张图：</b>70% 的回环都是假的，极度恶劣。PCM（a）还歪着；GNC 配好初始化（d）几乎完美（ATE 0.003 m）。这直观证明「GNC 保真」远强于「PCM 漏真」——本块「PCM 漏真、GNC 保真」转折的旗舰证据。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. D-GNC 的权重更新：残差越大，权重越趋 0</h2>
+      <p>D-GNC 给每条边算一个权重 wᵢ，由残差 r̂ᵢ 决定。下面用「控制参数 μ = 10、残差尺度 c̄ = 1」这个<b>示例参数</b>把精确的分段函数画出来（函数形式取自 Kimera-Multi 的 D-GNC 权重更新）：</p>
+      <div class="formula-box">
+        $$ w_i = \begin{cases} 0 & \hat r_i^2 \in [(\mu+1)/\mu\,\bar c^2,\ \infty) \\[4pt] \dfrac{\bar c}{\hat r_i}\sqrt{\mu(\mu+1)} - \mu & \hat r_i^2 \in [\mu/(\mu+1)\,\bar c^2,\ (\mu+1)/\mu\,\bar c^2] \\[4pt] 1 & \hat r_i^2 \in [0,\ \mu/(\mu+1)\,\bar c^2] \end{cases} $$
+        <div class="flow-formula">输入：每条边的归一化残差 r̂ᵢ　→　处理：小残差→权重 1（全信），中残差→线性降到 0，大残差→权重 0（不信）　→　输出：每条边的可信度</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「每条机间回环该被相信多少」；② 为什么这样就能判对——残差小的回环（和里程计闭得上）给满权重，残差大的（假回环）权重直接归零，优化时它再也拽不动解；③ 权重 / 核函数什么时候把观测当回事：r̂ᵢ² 在 [0, μ/(μ+1)·c̄²]（本例 ≈ 0.909）内全信，超过 (μ+1)/μ·c̄²（本例 = 1.1）直接不信，中间线性过渡。μ 越小越「狠」（更早把可疑边归零）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">D-GNC 权重曲线（示例 μ=10, c̄=1）：残差越大权重越趋 0</text>
+          <!-- 坐标轴 -->
+          <line x1="120" y1="320" x2="800" y2="320" stroke="#7c8bbf" stroke-width="2"/>
+          <line x1="120" y1="90" x2="120" y2="320" stroke="#7c8bbf" stroke-width="2"/>
+          <text x="110" y="128" text-anchor="end" fill="#cdd6ff" font-size="12">w=1</text>
+          <text x="110" y="324" text-anchor="end" fill="#cdd6ff" font-size="12">w=0</text>
+          <text x="800" y="344" text-anchor="end" fill="#cdd6ff" font-size="12">残差 r̂ᵢ →</text>
+          <text x="80" y="70" text-anchor="middle" fill="#cdd6ff" font-size="12">权重 w</text>
+          <!-- 区域底色 -->
+          <rect x="120" y="128" width="286" height="192" fill="#14301f" opacity="0.5"/>
+          <rect x="406" y="128" width="29" height="192" fill="#33301a" opacity="0.6"/>
+          <rect x="435" y="128" width="365" height="192" fill="#301818" opacity="0.5"/>
+          <!-- 曲线 -->
+          <polyline points="120,128 406,128 420,226 435,320 800,320" fill="none" stroke="#5cffb0" stroke-width="4"/>
+          <!-- 关键点 -->
+          <circle cx="406" cy="128" r="5" fill="#ffd166"/>
+          <circle cx="435" cy="320" r="5" fill="#ffd166"/>
+          <text x="406" y="118" text-anchor="middle" fill="#ffd166" font-size="11">r²=0.909</text>
+          <text x="445" y="312" text-anchor="start" fill="#ffd166" font-size="11">r²=1.1</text>
+          <text x="265" y="176" text-anchor="middle" fill="#bfe" font-size="12">全信（绿区）</text>
+          <text x="600" y="176" text-anchor="middle" fill="#ffd1d8" font-size="12">不信（红区，outlier）</text>
+          <text x="450" y="384" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：权重曲线一旦落到红区，这条回环就被「静音」→ 假回环自己退出</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>横轴是归一化残差 r̂ᵢ，纵轴是权重 wᵢ；绿区（小残差）权重恒为 1，红区（大残差）权重恒为 0，中间黄色过渡段线性下降。曲线用示例参数 μ=10、c̄=1 由公式精确算出。<br>
+          <b>怎么看这张图：</b>① 看绿区：残差小（和里程计闭得上）的回环被完全信任；② 看红区：残差超过阈值的假回环权重直接归零，优化时它不再拖累；③ 过渡段的斜率由 μ 控制，μ 越小越「早下手」。<br>
+          <b>要记住的一句话：</b>这条权重曲线就是 GNC「让错的边自己退出」的数学实现——也是它比 PCM 保 recall 的原因。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 分布式鲁棒初始化：GNC 怎么拒掉错误的参考帧</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">分布式鲁棒初始化：inlier 回环给一致参考帧，outlier 被 GNC 拒掉</text>
+          <!-- 两机器人参考帧 -->
+          <circle cx="150" cy="150" r="20" fill="#5cffb0"/><text x="150" y="156" text-anchor="middle" fill="#062" font-size="12">A</text>
+          <circle cx="400" cy="150" r="20" fill="#ff9f6b"/><text x="400" y="156" text-anchor="middle" fill="#311" font-size="12">B</text>
+          <circle cx="700" cy="150" r="20" fill="#9b8cff"/><text x="700" y="156" text-anchor="middle" fill="#fff" font-size="12">D</text>
+          <!-- inlier 回环 实线一致 -->
+          <line x1="170" y1="150" x2="380" y2="150" stroke="#5cffb0" stroke-width="3"/>
+          <text x="275" y="140" text-anchor="middle" fill="#5cffb0" font-size="12">inlier 回环 —→ 一致帧</text>
+          <line x1="420" y1="150" x2="680" y2="150" stroke="#5cffb0" stroke-width="3"/>
+          <text x="550" y="140" text-anchor="middle" fill="#5cffb0" font-size="12">inlier 回环 —→ 一致帧</text>
+          <!-- outlier 回环 被拒 -->
+          <line x1="170" y1="220" x2="380" y2="300" stroke="#ff5d73" stroke-width="3" stroke-dasharray="7 5"/>
+          <text x="275" y="262" text-anchor="middle" fill="#ffd1d8" font-size="12">outlier 回环（错帧）</text>
+          <circle cx="275" cy="262" r="13" fill="none" stroke="#ff5d73" stroke-width="3"/>
+          <text x="275" y="226" text-anchor="middle" fill="#ff5d73" font-size="16" font-weight="700">✕</text>
+          <line x1="420" y1="220" x2="680" y2="300" stroke="#ff5d73" stroke-width="3" stroke-dasharray="7 5"/>
+          <text x="550" y="262" text-anchor="middle" fill="#ffd1d8" font-size="12">outlier 回环（错帧）</text>
+          <circle cx="550" cy="262" r="13" fill="none" stroke="#ff5d73" stroke-width="3"/>
+          <text x="550" y="226" text-anchor="middle" fill="#ff5d73" font-size="16" font-weight="700">✕</text>
+          <text x="450" y="356" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：GNC 初始化阶段就把「错帧」的 outlier 回环权重归零，只留 inlier 算参考帧</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三台机器人 A / B / D 各有本地参考帧；绿色实线是 inlier 回环，给出一致的帧对齐；红色虚线是 outlier 回环，给出错误帧，被 GNC 打上红叉（权重归零）。<br>
+          <b>怎么看这张图：</b>① 绿色实线：真回环让两台机器人的参考帧「对得上」；② 红色虚线：假回环会算出错误帧，GNC 在初始化阶段就识别并静音它；③ 只有 inlier 参与最终参考帧求解。<br>
+          <b>要记住的一句话：</b>「先鲁棒初始化、再分布式求解」是 D-GNC 相对 PCM 的关键改进——初始化干净，后面 RBCD 才收敛得快。
+        </figcaption>
+      </figure>
+
+      <h2>5. 度量-语义网格合并：LMO 把各机网格校正到一致</h2>
+      <p>轨迹对齐后，Kimera-Multi 还有一步：用 <b>LMO（网格变形图）</b>把每台机器人本地的语义网格，按优化好的位姿「拉」到同一张全局网格上。变形图的节点是网格顶点（violet）与关键帧（red），边连接相邻网格顶点、以及网格顶点与它被观测到的关键帧。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">度量-语义网格合并：各机本地网格 → LMO 变形 → 一致全局网格</text>
+          <!-- 三台本地网格 -->
+          <g font-size="12" text-anchor="middle">
+            <rect x="40" y="70" width="240" height="200" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="160" y="92" fill="#5cffb0" font-size="13" font-weight="700">机器人 A 本地网格</text>
+            <g stroke="#9b8cff" stroke-width="2" fill="none"><path d="M70,140 L130,120 L190,150 L160,200 L90,190 Z"/><path d="M130,120 L160,200"/><path d="M70,140 L160,200"/></g>
+            <rect x="330" y="70" width="240" height="200" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="450" y="92" fill="#ff9f6b" font-size="13" font-weight="700">机器人 B 本地网格</text>
+            <g stroke="#9b8cff" stroke-width="2" fill="none"><path d="M360,150 L420,130 L480,160 L450,210 L380,200 Z"/><path d="M420,130 L450,210"/><path d="M360,150 L450,210"/></g>
+            <rect x="620" y="70" width="240" height="200" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="740" y="92" fill="#9b8cff" font-size="13" font-weight="700">机器人 D 本地网格</text>
+            <g stroke="#9b8cff" stroke-width="2" fill="none"><path d="M650,140 L710,120 L770,150 L740,200 L670,190 Z"/><path d="M710,120 L740,200"/><path d="M650,140 L740,200"/></g>
+          </g>
+          <!-- 箭头到全局 -->
+          <line x1="160" y1="270" x2="450" y2="320" stroke="#ffd166" stroke-width="3" marker-end="url(#g1)"/>
+          <line x1="450" y1="270" x2="450" y2="320" stroke="#ffd166" stroke-width="3" marker-end="url(#g1)"/>
+          <line x1="740" y1="270" x2="450" y2="320" stroke="#ffd166" stroke-width="3" marker-end="url(#g1)"/>
+          <defs><marker id="g1" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ffd166"/></marker></defs>
+          <!-- 全局网格 -->
+          <rect x="330" y="318" width="240" height="60" rx="10" fill="#14301f" stroke="#5cffb0"/>
+          <text x="450" y="356" text-anchor="middle" fill="#bfe" font-size="13" font-weight="700">一致全局语义网格（LMO 校正后）</text>
+          <text x="450" y="396" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：分布式不只对齐轨迹，还把「稠密语义网格」也拼成一张</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面三块是 A / B / D 各自本地的语义网格（线框），下面一块是经 LMO 变形校正后的「一致全局语义网格」。<br>
+          <b>怎么看这张图：</b>① 三块本地网格原本各自在小坐标系里；② 黄色箭头表示「用优化好的位姿把网格顶点搬过去」；③ LMO 变形图保证相邻网格顶点被一起拉动，接缝平滑。<br>
+          <b>要记住的一句话：</b>Kimera-Multi 的独特性 = 分布式 + 还出「稠密度量-语义网格」，而不只是稀疏轨迹。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Kimera-Multi/4de2fcf564662287ca79392297ff23b15df6e4c3759745aaa3cd7ff4042566f1.jpg" alt="Dense metric-semantic mesh Camp">
+        <figcaption>
+          <b>原图注（Fig. 11）：</b>Dense metric-semantic 3-D mesh model generated by Kimera-Multi with three robots in the simulated Camp scene.<br>
+          <b>怎么看这张图：</b>这就是上一节那张抽象图「落地」的样子——三机协作产出的带语义（颜色 = 类别）的稠密 3D 网格。它证明分布式多机不只是对齐轨迹，还能合出和单机 Kimera 同样丰富的语义场景表示。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Kimera-Multi 的 D-GNC 相比 DOOR-SLAM 的 PCM，最大优势是？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：PCM 求最大团会误杀真回环（低 recall），GNC 让错的边自己退出、真的边留着，保 recall。Fig.8 在 70% outlier 下 GNC 的 ATE 仅 0.003 m。" onclick="lessonKit.answer(this,'q0171a')">保 recall、不误杀真回环</button>
+          <button data-correct="no" data-explanation="不对：实现简单正是 PCM 的优点，GNC 需要权重更新 + RBCD 迭代，反而更复杂。" onclick="lessonKit.answer(this,'q0171a')">实现更简单</button>
+        </div>
+        <div class="quiz-feedback" id="q0171a"></div>
+      </div>
+    </main>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>Kimera-Multi 相对前面课程（0163 Kimera）能多产出什么？为什么不能断言它是 Kimera 的「前身」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>Kimera-Multi 在单机 Kimera 的「度量-语义网格 / DSG 表示」基础上，把它做成多机分布式版本，还能合出一致全局语义网格。但不能断言 Kimera 是其前身，因为 Kimera 主论文（0163 那篇）原文并未提及 Kimera-Multi；只能说同属 MIT-SPARK 团队、同一表示体系的延续——这是推断而非原文结论（规范 §八①）。</div></details>
+        </li>
+        <li>D-GNC 的两阶段分别做什么？为什么需要「先鲁棒初始化」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>① GNC 初始化：对每对机器人用 GNC 解参考帧变换，把 outlier 回环权重归零；② RBCD 分布式求解：把 PGO 拆成各机子问题轮流优化。先初始化是因为初始参考帧如果含错帧，后面 RBCD 收敛慢甚至不收敛——干净初始化让它又快又准。</div></details>
+        </li>
+        <li>用 D-GNC 权重曲线解释：为什么 μ 越小，系统越「敢」扔掉可疑回环？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>权重曲线的过渡段边界由 μ 决定：μ/(μ+1)·c̄² 与 (μ+1)/μ·c̄²。μ 越小，这两个边界越往小残差方向移动，意味着更多回环被划入「权重趋 0」的红区，所以更早、更大胆地把可疑边静音。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="f">
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" font-size="16.5" font-weight="700" fill="#9fb4ff">两代拒假回环的思路：PCM「要么全信要么全扔」，GNC「逐步降低信任」</text>
+
+          <!-- 左：PCM -->
+          <rect x="46" y="52" width="380" height="280" rx="12" fill="#16203a" stroke="#ffd166" stroke-width="1.8"/>
+          <text x="236" y="78" text-anchor="middle" font-size="13.5" font-weight="700" fill="#ffd166">PCM：找最大一致子集</text>
+          <!-- 候选回环卡片 -->
+          <rect x="76" y="98" width="72" height="46" rx="6" fill="#1d6b3c" stroke="#5cffb0" stroke-width="1.6"/>
+          <text x="112" y="118" text-anchor="middle" font-size="10" fill="#5cffb0">回环 a</text>
+          <text x="112" y="134" text-anchor="middle" font-size="10" fill="#5cffb0">✓ 真</text>
+          <rect x="160" y="98" width="72" height="46" rx="6" fill="#1d6b3c" stroke="#5cffb0" stroke-width="1.6"/>
+          <text x="196" y="118" text-anchor="middle" font-size="10" fill="#5cffb0">回环 b</text>
+          <text x="196" y="134" text-anchor="middle" font-size="10" fill="#5cffb0">✓ 真</text>
+          <rect x="244" y="98" width="72" height="46" rx="6" fill="#4a1f1a" stroke="#a32617" stroke-width="1.6"/>
+          <text x="280" y="118" text-anchor="middle" font-size="10" fill="#ffd1d8">回环 c</text>
+          <text x="280" y="134" text-anchor="middle" font-size="10" fill="#ffd1d8">✗ 假</text>
+          <rect x="328" y="98" width="72" height="46" rx="6" fill="#4a1f1a" stroke="#a32617" stroke-width="1.6"/>
+          <text x="364" y="118" text-anchor="middle" font-size="10" fill="#ffd1d8">回环 d</text>
+          <text x="364" y="134" text-anchor="middle" font-size="10" fill="#ffd1d8">✗ 假</text>
+          <!-- 矛盾连线 -->
+          <line x1="148" y1="121" x2="160" y2="121" stroke="#5cffb0" stroke-width="2"/>
+          <path d="M 232 121 L 244 121" stroke="#a32617" stroke-width="2"/>
+          <text x="238" y="112" text-anchor="middle" font-size="9" fill="#ffd1d8">×</text>
+          <!-- 最大团框住 a,b -->
+          <rect x="70" y="92" width="168" height="58" rx="8" fill="none" stroke="#5cffb0" stroke-width="2.6" stroke-dasharray="7 4"/>
+          <text x="154" y="168" text-anchor="middle" font-size="10.5" fill="#5cffb0">互相不矛盾的，圈成最大一堆</text>
+          <text x="236" y="200" text-anchor="middle" font-size="11" fill="#cdd6ff">放进优化里的只有 a、b</text>
+          <text x="236" y="222" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 绝不会被假回环拉歪</text>
+          <text x="236" y="246" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 大图要枚举，算得慢</text>
+          <text x="236" y="268" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 有些真的回环也被一起扔掉（recall 低）</text>
+          <text x="236" y="296" text-anchor="middle" font-size="10.5" fill="#ffd166">批式、简单、保险，但「宁可错过」</text>
+          <text x="236" y="318" text-anchor="middle" font-size="10.5" fill="#9fb4ff">DOOR / DiSCo / DCL / D²SLAM 远场用这一族</text>
+
+          <!-- 右：GNC -->
+          <rect x="474" y="52" width="380" height="280" rx="12" fill="#16203a" stroke="#5cffb0" stroke-width="1.8"/>
+          <text x="664" y="78" text-anchor="middle" font-size="13.5" font-weight="700" fill="#5cffb0">GNC：残差大的自动降权</text>
+          <!-- 三轮迭代 -->
+          <text x="500" y="102" font-size="10.5" fill="#cdd6ff">第 1 轮（μ 小，都很软）</text>
+          <rect x="500" y="108" width="150" height="14" rx="4" fill="#5cffb0" fill-opacity="0.75"/>
+          <rect x="656" y="108" width="150" height="14" rx="4" fill="#ffd1d8" fill-opacity="0.75"/>
+          <text x="814" y="120" font-size="9.5" fill="#cdd6ff">真 / 假难分</text>
+          <text x="500" y="150" font-size="10.5" fill="#cdd6ff">第 2 轮（μ 变大，开始分化）</text>
+          <rect x="500" y="156" width="150" height="14" rx="4" fill="#5cffb0" fill-opacity="0.9"/>
+          <rect x="656" y="156" width="86" height="14" rx="4" fill="#ffd1d8" fill-opacity="0.6"/>
+          <text x="752" y="168" font-size="9.5" fill="#ffd1d8">假回环权重被压低</text>
+          <text x="500" y="198" font-size="10.5" fill="#cdd6ff">第 3 轮（μ 大，接近硬判定）</text>
+          <rect x="500" y="204" width="150" height="14" rx="4" fill="#5cffb0"/>
+          <rect x="656" y="204" width="18" height="14" rx="4" fill="#a32617"/>
+          <text x="686" y="216" font-size="9.5" fill="#ffd1d8">假回环几乎归零</text>
+          <text x="664" y="250" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 真的回环一直留着（recall 高）</text>
+          <text x="664" y="272" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 在线可跑，不用枚举</text>
+          <text x="664" y="296" text-anchor="middle" font-size="10.5" fill="#ffd166">要自己调「降温」节奏，参数不直观</text>
+          <text x="664" y="318" text-anchor="middle" font-size="10.5" fill="#9fb4ff">LAMP 2.0 / Swarm-SLAM / Kimera-Multi 用这一族</text>
+
+          <text x="450" y="356" text-anchor="middle" font-size="12.5" fill="#cdd6ff">PCM 保「不出错」，GNC 保「尽量别漏」——这个取舍就是 2020 → 2022 的关键转折</text>
+          <text x="450" y="382" text-anchor="middle" font-size="12" fill="#9fb4ff">多机比单机更需要它：一次假回环会把两台机器人的地图一起缝歪</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>多机协同拒假回环的两代做法画成左右对照。左边是 PCM：把候选的机间回环摆出来，找出「互相之间不矛盾」的最大一堆，只把那一堆放进优化——图里的回环 c、d 因为和 a、b 矛盾被直接丢掉。右边是 GNC：不丢任何一条，而是逐步「降温」，残差大的边权重越来越小，假回环自己就被压没了。
+          <br>
+          <b>怎么看这张图：</b>① 左边先看那个绿色虚线大圈——它圈住的 a、b 就是「最大一致子集」，圈外的 c、d 被排除；② 注意左下的红色「✗」两行：这法子保险，但要枚举（大图慢），而且有些真的回环也一起被扔了；③ 右边要看三轮：三根彩色条的对比一次比一次悬殊，到第三轮假回环（红条）几乎归零，真的（绿条）始终不动——这就是「保 recall」；④ 两边底部都写了哪些系统属于这一族。
+          <br>
+          <b>要记住的一句话：</b>PCM 是「宁可错过也不出错」，GNC 是「尽量都留下、让数据自己淘汰错的」——多机场景里后者更受欢迎，因为漏掉真回环的代价同样很高。
+        </figcaption>
+      </figure>
+
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>Kimera-Multi 为什么是「完全分布式 + 度量语义」？它比中心化多出什么？</li>
+        <li>D-GNC 的两阶段（GNC 初始化 + RBCD）各做什么？</li>
+        <li>D-GNC 权重曲线怎么把 outlier 的权重降到 0？为什么它保 recall？</li>
+        <li>为什么不能断言「Kimera 是 Kimera-Multi 的前身」？（规范 §八①）</li>
+        <li>LMO 网格变形图在合并语义网格时起什么作用？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0170-分布式激光-描述子当机间通用语言.html">← 上一课：分布式激光</a>
+        <a class="next" href="0172-Swarm-SLAM-去中心化与稀疏化.html">下一课：Swarm-SLAM →</a>
+      </div>
+      <p class="foot-note">分布式也能出语义网格了，下一节看「去中心化 + 稀疏化」怎么把带宽压到极致 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

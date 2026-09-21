@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>事件双目 VIO 与全季收官 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0178</div>
+      <h1>事件双目 VIO 与全季收官</h1>
+      <p class="subtitle">队友都到齐了：这一课看四篇把「双目 + 帧 + IMU」全部塞进一个系统的事件论文，再用一个统一基准验一验它们到底行不行。🏁 最后，本季四个块合起来，把前七季的三个假设拆成了什么样。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：事件双目 VIO 的完整形态 + 第八季全季收官</span>
+        <span>👥 作者：Zhou 等（ESVO，2021）＋ Chen 等（ESVIO，2023）＋ Guan 等（PL-EVIO，2024）＋ Gao 等（VECtor，2022）</span>
+        <span>📅 年份 · <i>Event-Based Stereo Visual Odometry / ESVIO: Event-Based Stereo Visual Inertial Odometry / PL-EVIO: Robust Monocular Event-Based VIO With Point and Line Features / VECtor: A Versatile Event-Centric Benchmark for Multi-Sensor SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：把棋盘上所有棋子都用上</a>
+        <a href="#b">ESVO：逆深度与立体时空一致</a>
+        <a href="#c">ESVIO：第一个事件双目 VIO</a>
+        <a href="#d">PL-EVIO：点、线、帧、IMU 与回环</a>
+        <a href="#e">VECtor：统一基准，也是照妖镜</a>
+        <a href="#f">收官一：事件块和前三块什么关系</a>
+        <a href="#g">收官二：拆掉了哪三个假设，还剩什么</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 ESVO 为什么要用逆深度、以及它和左右眼「时空一致性」的关系；解释 ESVIO 的四路残差各自管什么、运动补偿为什么必须做；说清 PL-EVIO 加点特征、线特征、回环各自补了什么；用 VECtor 的结论说清「现有事件方法到底行不行」；最后把第八季四个块合起来讲：它们分别拆掉了前七季的哪个隐含假设，各自又还剩哪一块没拆干净。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本节的系统本质上是 <b>第三季 0057 / 0058 VINS-Mono</b> 那套「滑窗 + IMU 预积分 + 视觉重投影」的事件版；区别只是视觉那一项从「帧上的特征点」换成了「时间表面上的事件角点」。★ 「逆深度 + 概率融合」这条路直接接 <b>第三季 0050 SVO 的半直接法与概率深度滤波</b>、以及 <b>0047 LSD-SLAM 的半稠密与尺度漂移</b>——ESVO 的产物同样是半稠密深度图。★ PL-EVIO 的线特征接 <b>第三季 0069 / 0070「线特征与光照鲁棒」</b>：那两节讲点线融合，这一节是它的事件版，连「线的最小长度按图像尺寸取比例」这种工程细节都对得上。★ 回环那一环回链 <b>第七季 0140「回环假阳性铁律」</b>：事件 VIO 加了回环也逃不过假阳性这道关。★ 最后收官部分回链 <b>0152 导览课</b>那张「三个不成立的假设」表，逐条结算。</p></div>
+      </div>
+
+      <h2>1. 开场：把棋盘上所有棋子都用上</h2>
+      <p>回顾一下这一块走过的路。0175 把机理讲清；0176 看了「什么队友都不带」的纯事件路线（EVO、事件线 SLAM、CMax-SLAM），它们的共同天花板是：一静止就失明，而且单目拿不到尺度；0177 看了四种「一对一补短板」的配对（事件 + 帧 + IMU、事件 + 已有深度、事件 + 深度相机）。</p>
+      <p>这一节要看的，是<b>把所有棋子一起用上</b>的形态：<b>事件双目 VIO</b>。骨架是三个问题各自找对了负责人：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>尺度：交给双目</h4><p>两台事件相机有固定基线，左右眼看到同一条边的视差直接给出深度——单目事件拿不到的那个量，靠基线一次解决。</p></div>
+        <div class="mini-card"><h4>静止退化：交给标准帧</h4><p>场景不动时事件为零，但同芯片的标准帧照样有纹理，特征照样能提。</p></div>
+        <div class="mini-card"><h4>高频与初始化：交给 IMU</h4><p>IMU 不依赖场景，能先给出运动预测；而且它顺带负责把事件「补偿」到同一时刻。</p></div>
+      </div>
+      <p>而这一节的第四篇（VECtor）角色不一样——它是<b>一把尺子</b>：把事件、标准帧、深度、LiDAR、IMU 全部硬件同步地录下来，附上高精度真值，让所有人用同一种口径比。它的结论很不好看，但非常重要，第 5 节会讲。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. ESVO（2021）：第一个事件双目 VO，靠「左右眼时空一致」估逆深度</h2>
+      <p><b>ESVO</b>（Zhou 等，IEEE T-RO 2021）是第一个<b>事件 + 双目</b>的视觉里程计。它的输入是两台标定好的事件相机（论文自制的支架，两台 DAVIS346，水平基线 <b>7.5 cm</b>），输出是相机位姿加一张<b>半稠密的三维边缘点云</b>；跟踪与建图两条线程并行，可以在标准 CPU 上实时，代码开源。</p>
+      <p>它的核心工具在 0176 已经见过：<b>时间表面</b>（$\mathcal{T}(\mathbf{x},t)=\exp(-(t-t_{last})/\eta)$，取 η = 30 ms，以 100 Hz 更新）。ESVO 的创新在于：<b>它不问「这个事件对应哪个三维点」，而是问「哪个深度值，能让左右两只眼看到的时间表面一致」。</b></p>
+      <p>换句话说，对左眼某个像素上的一条视线，沿它取一个候选逆深度 ρ，就能算出它投影到右眼的哪个像素；如果 ρ 是真值，那么左右两眼在那两个像素上的时间表面读数应该差不多（因为它们是同一个三维边缘在同一时刻的痕迹）。于是代价函数就是：</p>
+      <div class="formula-box">
+        $$ C(\rho) \;=\; \sum_i r_i^{2}, \qquad r_i \;=\; \mathcal{T}_{\text{left}}\big(\pi_l(\rho)\big) \;-\; \mathcal{T}_{\text{right}}\big(\pi_r(\rho)\big) $$
+        <div class="flow-formula">输入：左眼一个事件的像素位置，以及一个候选逆深度 ρ → 处理：把 ρ 投影成右眼对应的像素，取左右两张时间表面在那两个位置的值，相减 → 输出：这个 ρ 假设下左右眼的「不一致程度」，越小说明 ρ 越接近真值</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「如果我猜这个点离我 1/ρ 米远，左右两只眼看到的东西对得上吗」；② 为什么这样就能判对——因为左右眼看到的是<b>同一条三维边</b>，同一个时刻它在两张时间表面上的痕迹必然位置对应；猜错了深度，投到右眼的像素就偏了，两边的读数就对不上，残差 r 就会变大；所以「让残差最小」就等于「让深度最准」；③ 权重／核函数在这里的角色由<b>概率分布</b>承担：论文发现这些残差并不服从高斯，而是拖着长长的尾巴（因为场景里有遮挡、有误投影），所以它用 <b>Student's t 分布</b>去融合逆深度（用 IRLS 求解），t 分布的重尾让少数离谱的观测不至于把深度估计带飞——这与 0177 里 EventTracking 用 normal-uniform 混合似然是同一个目的（都是「别让离群值说话」），只是换了一种分布。</p>
+      <p>另外两个工程细节值得记：融合时每像素用最近 <b>M+1 = 20 个立体观测</b>；初始逆深度是用改进的 SGM 块匹配得到的（比暴力搜索高效），这也解释了它对初始化为什么敏感。跟踪那一侧，则把参考帧的时间表面当作一张「各向异性距离场」，最小化三维点投影与当前时间表面的 3D-2D 对齐误差——本质上还是 0176 讲的「对齐派」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">一个事件只知道「方向」，不知道「多远」；观测多了，那个「多远」才慢慢收窄</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">左边是射线上的不确定范围，右边是它对应的概率分布</text>
+          <rect x="40" y="76" width="430" height="280" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="255" y="100" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">一面墙 + 一扇门：从相机射出一条射线</text>
+          <rect x="330" y="120" width="110" height="200" fill="#1b2440" stroke="#33406b"/>
+          <rect x="300" y="140" width="30" height="160" fill="none" stroke="#6f86c9" stroke-width="2"/>
+          <line x1="300" y1="140" x2="300" y2="300" stroke="#ffd166" stroke-width="3"/>
+          <text x="385" y="330" text-anchor="middle" fill="#9fb4ff" font-size="11">墙</text>
+          <rect x="76" y="238" width="40" height="30" rx="4" fill="#9b8cff"/>
+          <circle cx="116" cy="253" r="7" fill="#cdd6ff"/>
+          <text x="96" y="290" text-anchor="middle" fill="#cdbcff" font-size="11">事件相机</text>
+          <line x1="122" y1="248" x2="400" y2="176" stroke="#5cffb0" stroke-width="1.6" stroke-dasharray="6 4"/>
+          <line x1="196" y1="228" x2="336" y2="199" stroke="#ff5d73" stroke-width="10" opacity="0.3"/>
+          <line x1="272" y1="212" x2="326" y2="200" stroke="#ffd166" stroke-width="10" opacity="0.35"/>
+          <line x1="306" y1="206" x2="322" y2="203" stroke="#5cffb0" stroke-width="10" opacity="0.75"/>
+          <text x="200" y="180" fill="#ffd1d8" font-size="11">1 次观测：几乎整条射线都可能</text>
+          <text x="250" y="160" fill="#ffe9a8" font-size="11">5 次观测：收窄一截</text>
+          <text x="288" y="140" fill="#5cffb0" font-size="11">20 次观测</text>
+          <text x="255" y="344" text-anchor="middle" fill="#bfe" font-size="11">射线方向是确定的，不确定的只有「沿这条线走多远」</text>
+          <rect x="500" y="76" width="370" height="280" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="685" y="100" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">逆深度上的概率分布（Student's t）</text>
+          <line x1="500" y1="300" x2="860" y2="300" stroke="#4a5a88"/>
+          <line x1="500" y1="130" x2="500" y2="300" stroke="#4a5a88"/>
+          <line x1="680" y1="130" x2="680" y2="300" stroke="#ffd166" stroke-width="1.4" stroke-dasharray="6 5"/>
+          <polyline points="500.0,292.9 505.5,292.5 511.1,292.1 516.6,291.7 522.2,291.3 527.7,290.9 533.2,290.5 538.8,290.0 544.3,289.5 549.8,289.0 555.4,288.5 560.9,288.0 566.5,287.5 572.0,286.9 577.5,286.4 583.1,285.9 588.6,285.3 594.2,284.8 599.7,284.2 605.2,283.7 610.8,283.2 616.3,282.7 621.8,282.3 627.4,281.8 632.9,281.4 638.5,281.0 644.0,280.7 649.5,280.4 655.1,280.1 660.6,279.9 666.2,279.7 671.7,279.6 677.2,279.6 682.8,279.6 688.3,279.6 693.8,279.7 699.4,279.9 704.9,280.1 710.5,280.4 716.0,280.7 721.5,281.0 727.1,281.4 732.6,281.8 738.2,282.3 743.7,282.7 749.2,283.2 754.8,283.7 760.3,284.2 765.8,284.8 771.4,285.3 776.9,285.9 782.5,286.4 788.0,286.9 793.5,287.5 799.1,288.0 804.6,288.5 810.2,289.0 815.7,289.5 821.2,290.0 826.8,290.5 832.3,290.9 837.8,291.3 843.4,291.7 848.9,292.1 854.5,292.5 860.0,292.9" fill="none" stroke="#ff9f6b" stroke-width="2.2"/>
+          <polyline points="500.0,297.3 505.5,297.0 511.1,296.7 516.6,296.4 522.2,296.0 527.7,295.6 533.2,295.1 538.8,294.6 544.3,294.1 549.8,293.4 555.4,292.7 560.9,291.9 566.5,291.0 572.0,290.0 577.5,288.9 583.1,287.7 588.6,286.4 594.2,284.9 599.7,283.3 605.2,281.5 610.8,279.6 616.3,277.6 621.8,275.4 627.4,273.2 632.9,270.9 638.5,268.7 644.0,266.5 649.5,264.4 655.1,262.5 660.6,260.9 666.2,259.6 671.7,258.7 677.2,258.3 682.8,258.3 688.3,258.7 693.8,259.6 699.4,260.9 704.9,262.5 710.5,264.4 716.0,266.5 721.5,268.7 727.1,270.9 732.6,273.2 738.2,275.4 743.7,277.6 749.2,279.6 754.8,281.5 760.3,283.3 765.8,284.9 771.4,286.4 776.9,287.7 782.5,288.9 788.0,290.0 793.5,291.0 799.1,291.9 804.6,292.7 810.2,293.4 815.7,294.1 821.2,294.6 826.8,295.1 832.3,295.6 837.8,296.0 843.4,296.4 848.9,296.7 854.5,297.0 860.0,297.3" fill="none" stroke="#ffd166" stroke-width="2.2"/>
+          <polyline points="500.0,299.6 505.5,299.5 511.1,299.5 516.6,299.4 522.2,299.3 527.7,299.3 533.2,299.1 538.8,299.0 544.3,298.9 549.8,298.7 555.4,298.5 560.9,298.2 566.5,297.9 572.0,297.5 577.5,297.0 583.1,296.4 588.6,295.7 594.2,294.8 599.7,293.6 605.2,292.2 610.8,290.3 616.3,288.0 621.8,284.9 627.4,281.1 632.9,276.2 638.5,270.0 644.0,262.4 649.5,253.3 655.1,243.0 660.6,232.1 666.2,221.7 671.7,213.4 677.2,208.7 682.8,208.7 688.3,213.4 693.8,221.7 699.4,232.1 704.9,243.0 710.5,253.3 716.0,262.4 721.5,270.0 727.1,276.2 732.6,281.1 738.2,284.9 743.7,288.0 749.2,290.3 754.8,292.2 760.3,293.6 765.8,294.8 771.4,295.7 776.9,296.4 782.5,297.0 788.0,297.5 793.5,297.9 799.1,298.2 804.6,298.5 810.2,298.7 815.7,298.9 821.2,299.0 826.8,299.1 832.3,299.3 837.8,299.3 843.4,299.4 848.9,299.5 854.5,299.5 860.0,299.6" fill="none" stroke="#5cffb0" stroke-width="2.6"/>
+          <text x="512" y="140" fill="#bfe" font-size="11">1 次 / 5 次 / 20 次观测，越攒越窄</text>
+          <text x="680" y="124" text-anchor="middle" fill="#ffd166" font-size="11">真值 ρ*</text>
+          <text x="513" y="318" text-anchor="middle" fill="#9fb4ff" font-size="11">近</text>
+          <text x="680" y="318" text-anchor="middle" fill="#9fb4ff" font-size="11">逆深度 ρ</text>
+          <text x="846" y="318" text-anchor="middle" fill="#9fb4ff" font-size="11">远</text>
+          <text x="685" y="342" text-anchor="middle" fill="#bfe" font-size="11">曲线越窄 = 越有把握；曲线很扁 = 几乎不知道多远</text>
+          <text x="450" y="400" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：一个事件只能给出一条射线，深度是「攒观测」攒出来的</text>
+          <text x="450" y="424" text-anchor="middle" fill="#9fb4ff" font-size="12">用逆深度而不是深度，是因为远处的深度几乎发散，逆深度才收得拢</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边：相机射出一条穿过门框边的射线，射线上叠着三段不同长度的粗带，分别代表「只看 1 次观测」「攒了 5 次」「攒了 20 次」时深度可能出现的范围——它们一节比一节短。右边：同一个不确定性的另一种画法，三条 Student's t 分布曲线分别是 1 次、5 次、20 次观测后的逆深度概率，越窄表示越有把握，横轴虚线是真实逆深度 ρ*。<br>
+          <b>怎么看这张图：</b>① 先看左边三段带子：<b>方向从头到尾都没变</b>（射线是同一条），收窄的只有「沿这条线走多远」；② 再对比右边三条曲线：橙色（1 次）又矮又扁，几乎铺满整个范围；绿色（20 次）又高又尖，基本钉在真值附近；③ 于是「一个事件能提供什么」就清楚了：它给的是一条<b>射线</b>，不是<b>一个点</b>；距离是靠很多次观测的乘积式融合逐步收窄的。<br>
+          <b>要记住的一句话：</b>事件式的深度估计天生是「概率式的」：不是求一个数，而是维护一个分布，随着观测越来越多把它收窄。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Event-Based_Stereo_Visual_Odometry/03e06641d98ef7076f4dcc19d3f64c02d8bb38072d0d7e4211e0184e18ec6a61.jpg" alt="Inverse depth geometry along the viewing ray">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Mapping. Geometry of (inverse) depth estimation. Three-dimensional points compatible with an event e = (x, t−ε, p) on the left camera are parametrized by inverse depth ρ on the viewing ray through pixel x at time t−ε. The true location of the 3D-point that triggered the event corresponds to the value ρ* that maximizes the temporal consistency across the stereo observation (T_left(·,t), T_right(·,t)). A search interval [ρ_min, ρ_max] is defined to bound the optimization along the viewing ray.（中译：建图——逆深度估计的几何。与左相机上的事件 e 相容的三维点，被参数化为视线上的逆深度 ρ；真正触发该事件的三维点位置，对应着那个使左右两眼的立体观测时间一致性最大的 ρ*；沿视线还定义了一个搜索区间 [ρ_min, ρ_max] 来限定优化范围。）<br>
+          <b>怎么看这张图：</b>这就是上一张自绘图在论文里的原版：视线还是那条线，被搜索的东西是沿线的逆深度 ρ，而判据是「左右眼的时间一致性」。图注最后一句「定义了一个搜索区间」很重要——它说明优化是<b>有界的</b>（不能无限远也不能在相机里面），这也解释了为什么初始化给得不好时会不稳。<br>
+          <b>要记住的一句话：</b>ESVO 把「深度估计」翻译成了「沿一条线找一个让左右眼对得上的数」；这个范式被 0178 这一整节的系统沿用。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_Event-Based_Stereo_Visual_Odometry/a8ea3bdef44a1dd0350d947ecbb8315a26304047cb5603abc37ecd3961848bde.jpg" alt="ESVO system: stereo events in, motion and semidense map out">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Proposed system takes as input the asynchronous data acquired by a pair of event cameras in stereo configuration (Left) and recovers the motion of the cameras as well as a semidense map of the scene (Right). It exploits spatio-temporal consistency of the events across the image planes of the cameras to solve both localization (i.e., 6-DoF tracking) and mapping (i.e., depth estimation) subproblems of visual odometry (Middle). The system runs in real time on a standard CPU.（中译：系统输入一对立体配置的事件相机采集的异步数据（左），恢复相机运动与场景的半稠密地图（右）；它利用事件在左右像平面之间的时空一致性，同时求解定位（6 自由度跟踪）与建图（深度估计）两个子问题；系统可在标准 CPU 上实时运行。）<br>
+          <b>怎么看这张图：</b>请注意输入与输出的两端：<b>输入只有两路原始事件</b>（没有帧、没有 IMU、没有深度相机），<b>输出是位姿 + 半稠密地图</b>。中间那句「利用时空一致性同时解决定位与建图」就是上一节整段公式的来源。也要注意「半稠密」这个词——地图上只有边缘，没有平面。<br>
+          <b>要记住的一句话：</b>ESVO 证明了一件事：<b>加上双目基线，纯事件也能拿到尺度</b>。但它自己承认在 DAVIS346 上几乎做不到实时，而且纯事件在静止、弱纹理时会退化——这正是下一节 ESVIO 要补的洞。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ESVIO（2023）：第一个事件双目 VIO，四路残差紧耦合</h2>
+      <p><b>ESVIO</b>（Chen 等，RA-L 2023）的定位写得很清楚：<b>第一个事件双目视觉惯性里程计</b>。它有两个版本——<b>ESIO</b> 只用事件 + IMU，<b>ESVIO</b> 再加上标准帧；两者共用同一套滑窗图优化后端。作者团队自建的挑战数据集（HKU）里有暗光、高动态、激进运动等场景。</p>
+      <p>先说它最重要的一步：<b>运动补偿</b>。事件是在相机运动过程中陆续产生的，直接叠在一起是一团糊（0177 的虚拟事件帧也是为了解决这个问题）。ESVIO 的做法是用 <b>IMU 的角速度 + 后端估计出的线速度</b>，把每个事件 warp 到同一个时刻，于是事件流从「弯的」变成「直的」，再转成正负两张 SAE / 时间表面。这一步做得好不好，直接决定后面能不能提出干净的特征。</p>
+      <p>接下来前端在时间表面上用改进的 <b>Arc*</b> 提事件角点（每帧 100–200 个），用 LK 光流做<b>左右（空间）</b>与<b>前后（时间）</b>两种数据关联，再用 RANSAC + 三角化得到逆深度。后端是一个滑窗非线性优化，四路残差同时约束：</p>
+      <div class="formula-box">
+        $$ \min_{\boldsymbol{\chi}} \sum_{k\in\mathcal{B}}\|\mathbf{r}_b\|^{2}_{\Omega_b}
+           + \sum_{(l,k)\in es}\|\mathbf{r}_{es}\|^{2}_{\Omega_{es}}
+           + \sum_{(l,k)\in et}\|\mathbf{r}_{et}\|^{2}_{\Omega_{et}}
+           + \sum_{(l,k)\in c}\|\mathbf{r}_c\|^{2}_{\Omega_c} $$
+        <div class="flow-formula">输入：IMU 预积分、事件角点的左右关联、事件角点的前后关联、标准帧上特征的重投影 → 处理：四类残差各自按信息矩阵加权求和 → 输出：一个统一的代价函数，一起解出位姿、速度、偏置与逆深度</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「四路证据合起来矛盾有多大」：$\mathbf{r}_b$ 是 IMU 预积分残差（两帧之间 IMU 说走了多少 vs 位姿说走了多少），$\mathbf{r}_{es}$ 是同一个事件角点在<b>左右眼</b>必须投到同一条三维边上，$\mathbf{r}_{et}$ 是同一个角点在<b>前后帧</b>必须落在同一条边上，$\mathbf{r}_c$ 是标准帧上特征的重投影；② 为什么四路一起就能判对——双目那一项负责<b>尺度</b>，前后那一项负责<b>时间连续</b>，帧那一项在事件稀少的时刻<b>顶上</b>，IMU 那一项在短暂无特征时<b>扛住</b>；任何一路变差，剩下的仍然把解拉住；③ 权重什么时候把观测当回事——每个残差前面的 $\Omega$ 是信息矩阵：在事件角点被跟踪得很稳、视差充足的地方，事件项权重自然高；当场景静止、事件稀疏时，帧项与 IMU 项就接管话语权。这就是「紧耦合」的实质：<b>四路不是各算各的再平均，而是在同一个优化里互相牵制。</b></p>
+      <p><b>成绩单</b>（都请带着对比基线与数据集来读）：平均 MRE，ESVIO <b>0.033°/m</b>，对比 ORB-SLAM3 的 0.12°/m；平均 MPE，ESIO+ <b>0.66%</b> 对比纯事件版 ESIO 的 0.89%；高动态下四旋翼机载飞行的 ATE RMSE <b>0.17 m</b>（轨迹 56 m），激进运动下 <b>0.26 m</b>；大规模校园场景跑了 <b>1.8 km / 34.9 分钟</b>。耗时方面，346×260 分辨率下前端 10.44 ms、后端 19.30 ms；640×480 下前端 35.69 ms、后端 35.59 ms。</p>
+      <p><b>局限</b>也要如实写：低纹理环境（比如论文里的 units-dolly、scooter 序列）视觉方法容易退化或误匹配；参数是固定的、没有细调；而且它自己报告了一个很有信息量的现象——<b>纯事件方法（EVO、ESVO）在团队自建的数据集上几乎全失败</b>，原因是它们的初始化太严格。这句话很值得记住：<b>「某方法在别人数据集上全挂」很多时候是初始化问题，不等于方法本身无效。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">运动补偿：相机一边转，事件一边被拉弯；补偿就是把它们「捋直」</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">左边是没有补偿的事件累积，右边是用 IMU 角速度补偿之后的结果</text>
+          <rect x="40" y="76" width="420" height="254" rx="10" fill="#16203a" stroke="#ff9f6b" stroke-width="2"/>
+          <text x="250" y="100" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">未补偿：一条边被拉成波浪</text>
+          <polyline points="70.0,170.0 80.0,176.2 90.0,181.6 100.0,185.6 110.0,187.7 120.0,187.7 130.0,185.6 140.0,181.6 150.0,176.2 160.0,170.0 170.0,163.8 180.0,158.4 190.0,154.4 200.0,152.3 210.0,152.3 220.0,154.4 230.0,158.4 240.0,163.8 250.0,170.0 260.0,176.2 270.0,181.6 280.0,185.6 290.0,187.7 300.0,187.7 310.0,185.6 320.0,181.6 330.0,176.2 340.0,170.0 350.0,163.8 360.0,158.4 370.0,154.4 380.0,152.3 390.0,152.3 400.0,154.4 410.0,158.4 420.0,163.8 430.0,170.0" fill="none" stroke="#5cffb0" stroke-width="3"/>
+          <polyline points="70.0,215.0 80.0,221.2 90.0,226.6 100.0,230.6 110.0,232.7 120.0,232.7 130.0,230.6 140.0,226.6 150.0,221.2 160.0,215.0 170.0,208.8 180.0,203.4 190.0,199.4 200.0,197.3 210.0,197.3 220.0,199.4 230.0,203.4 240.0,208.8 250.0,215.0 260.0,221.2 270.0,226.6 280.0,230.6 290.0,232.7 300.0,232.7 310.0,230.6 320.0,226.6 330.0,221.2 340.0,215.0 350.0,208.8 360.0,203.4 370.0,199.4 380.0,197.3 390.0,197.3 400.0,199.4 410.0,203.4 420.0,208.8 430.0,215.0" fill="none" stroke="#ff5d73" stroke-width="3"/>
+          <polyline points="70.0,260.0 80.0,266.2 90.0,271.6 100.0,275.6 110.0,277.7 120.0,277.7 130.0,275.6 140.0,271.6 150.0,266.2 160.0,260.0 170.0,253.8 180.0,248.4 190.0,244.4 200.0,242.3 210.0,242.3 220.0,244.4 230.0,248.4 240.0,253.8 250.0,260.0 260.0,266.2 270.0,271.6 280.0,275.6 290.0,277.7 300.0,277.7 310.0,275.6 320.0,271.6 330.0,266.2 340.0,260.0 350.0,253.8 360.0,248.4 370.0,244.4 380.0,242.3 390.0,242.3 400.0,244.4 410.0,248.4 420.0,253.8 430.0,260.0" fill="none" stroke="#ffd166" stroke-width="3"/>
+          <text x="250" y="312" text-anchor="middle" fill="#ffd1d8" font-size="11">一根直边被拉成了波浪：后面的特征提取会一团糟</text>
+          <line x1="468" y1="203" x2="500" y2="203" stroke="#9fb4ff" stroke-width="3"/>
+          <path d="M500 203 l-9 -5 l0 10 z" fill="#9fb4ff"/>
+          <text x="484" y="188" text-anchor="middle" fill="#cdd6ff" font-size="11">warp</text>
+          <rect x="510" y="76" width="360" height="254" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="690" y="100" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">补偿后：恢复成三条直边</text>
+          <line x1="540" y1="170" x2="830" y2="170" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="540" y1="215" x2="830" y2="215" stroke="#ff5d73" stroke-width="3"/>
+          <line x1="540" y1="260" x2="830" y2="260" stroke="#ffd166" stroke-width="3"/>
+          <text x="690" y="312" text-anchor="middle" fill="#bfe" font-size="11">边回到该在的位置，角点也就提得干净了</text>
+          <text x="450" y="376" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：补偿用的是「IMU 角速度 + 后端线速度」，两样缺一不可</text>
+          <text x="450" y="400" text-anchor="middle" fill="#9fb4ff" font-size="12">只转不平移时角速度就够；一旦有平移，还得靠后端估出的线速度</text>
+          <text x="450" y="424" text-anchor="middle" fill="#9fb4ff" font-size="12">这也解释了为什么 PL-EVIO 报告：激进运动下 IMU 偏置会让补偿收益打折</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是同一面墙上的三条横边在「相机一边转、事件一边产生」的情况下攒出来的样子：它们都被拉成了波浪（这是示意图，弯的形状是相机转动带来的假象）；右边是用 IMU 角速度与后端线速度把每个事件 warp 回同一时刻之后的结果——三条边回到该在的位置，变成三条直线。<br>
+          <b>怎么看这张图：</b>① 先看左边：波浪越宽，说明运动越快、事件跨度越长，直接拿去提角点会一团糟；② 再看中间那个 warp 箭头：这一步的输入是<b>角速度（IMU 给）与线速度（后端估）</b>；③ 最后看右边：边捋直之后，角点自然干净，后面的左右匹配、前后匹配才有意义。<br>
+          <b>要记住的一句话：</b>事件相机不是「不会糊」，而是「可以靠运动补偿恢复」——前提是你得先知道相机怎么动的，而这正是 IMU 的位置。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_ESVIO/a3d55cb929a663b4e419d7f7d360dbd68831f1b242305b9236632b2a3ace1851.jpg" alt="Event streams without and with motion compensation">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>The event streams without and with motion compensation.（中译：未做运动补偿与做了运动补偿的事件流。）<br>
+          <b>怎么看这张图：</b>这是上一张自绘图在论文里的真实版本：<b>左半边是原始事件流，右半边是补偿之后的事件流</b>。请对照着看同一段运动在两边留下的痕迹——补偿前事件散开、连不成线；补偿后它们聚拢到边缘上。论文把这个差别当作整套系统的第一块基石。<br>
+          <b>要记住的一句话：</b>「先补偿、再提特征」是事件视觉惯性系统的标准工序；本块里 ESVIO、PL-EVIO 都这么做。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. PL-EVIO（2024）：点、线、帧、IMU 与回环，全都上</h2>
+      <p>最后一篇把「能加的都加上」。<b>PL-EVIO</b>（Guan 等，IEEE T-ASE 2024）是<b>单目</b>事件 VIO——注意与 ESVIO 的双目不同，它靠 IMU 与 SfM 初始化来拿尺度。它的名字里 P 和 L 指的是<b>点特征与线特征</b>，而且这两类特征各有「事件版」与「帧版」：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>事件角点（P）</h4><p>在带极性的时间表面上用 Arc* 提取，用双向 LK 跟踪，维持 150–250 个；极性当掩码还能让角点分布更均匀。</p></div>
+        <div class="mini-card"><h4>事件线特征（L）</h4><p>用 LSD 提线、LBD 描述子匹配；线的最小长度取 $L_{min}=\eta\cdot\min(W,H)$，其中 η = 0.125——太短的线不要，免得引入噪声。</p></div>
+        <div class="mini-card"><h4>标准帧特征</h4><p>同一芯片 APS 帧上的点特征，进入后端一起优化（这就是 PL-EVIO 里那个 E 与 I 的区别）。</p></div>
+        <div class="mini-card"><h4>回环</h4><p>用归一化的时间表面生成描述子，BRIEF 描述、Hamming 距离 16–25 作阈值，闭环修正漂移。</p></div>
+      </div>
+      <p>后端是滑窗图优化（关键帧窗口 K = 10，关键帧的选择条件是平均视差大于 10 或跟踪到的角点少于 20），把四类残差再加上边缘化项与回环项一起解：</p>
+      <div class="formula-box">
+        $$ J(\chi) \;=\; \sum \|e_{event}\|^{2} + \sum \|e_{line}\|^{2} + \sum \|e_{imu}\|^{2} + \sum \|e_{image}\|^{2} + \|e_m\|^{2} + \|e_r\|^{2} $$
+        <div class="flow-formula">输入：事件点重投影、事件线重投影（用 Plücker 四参数正交表示）、IMU 预积分、标准帧点重投影 → 处理：再加上边缘化先验 e_m 与回环约束 e_r，一起求和 → 输出：一个统一的代价函数，滑窗内整体求解</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「六类约束合起来有多矛盾」；② 为什么加线和回环能让它更稳——<b>线提供结构</b>：在楼道、走廊这类地方点特征稀少但直线很多，线约束能在点不够时继续拉住位姿（这就是第三季 0069 / 0070 讲过的点线融合理由，只是换到事件上）；<b>回环提供全局修正</b>：前端再准也会漂，回环是唯一能把累计漂移拉回来的手段；③ 权重／核函数在这里最重要的角色是 $e_m$（边缘化先验）：滑窗要往前挪，被移出窗口的状态不能就这么丢了，而是把它携带的信息压缩成一个先验留在代价函数里——这正是 <b>第三季 0049 VI-DSO「动态边缘化」</b>与 <b>0063 DM-VIO「延迟边缘化」</b>反复讨论的那件事，做得不好会让估计变得过度自信。另外线特征用的是 Plücker 直线加四参数正交表示，是为了在优化中避免参数退化。</p>
+      <p><b>成绩与代价</b>：在用 VICON 做真值的 vicon_aggressive_hdr 等序列上，MPE 低到 <b>0.11%–0.19%</b>；事件流 60 Hz（DAVIS346，346×260）/ 50 Hz（DVXplorer，640×480）；在笔记本（i7-11800H）上实时；完成了四旋翼的<b>翻转飞行</b>；初始化走 SfM + IMU 对齐，<b>不需要平面或标记</b>。</p>
+      <p>它的局限里有一条特别值得记住：<b>在激进运动下，事件 + IMU 的运动补偿因为 IMU 偏置的存在，收益有限</b>（论文里纯事件版 PL-EIO+ 相对 PL-EIO 的提升并不显著）；<b>在低光下，加了图像反而可能不如纯事件</b>——因为此时图像上的点特征已经退化了，等于往系统里塞了一条坏证据。此外低纹理与纯旋转仍然是挑战，而且它<b>依赖 DAVIS 这种同芯片的帧—事件标定</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024_PL-EVIO__Robust_Monocular_Event-Based_Visual_Inertial_Od/4b593c581d6803c6724c67c5246980ee71df8fe8ace821a68d6871d1eb90fbc6.jpg" alt="Three kinds of features: event corner, event line, image point">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Three different kinds of features in our PL-EVIO framework: event-corner features, event-based line features, and image-based point features.（中译：我们 PL-EVIO 框架里的三类特征：事件角点特征、基于事件的线特征、以及基于图像的点特征。）<br>
+          <b>怎么看这张图：</b>一张图解释清楚「PL-EVIO」这个缩写：<b>P</b> 是事件角点，<b>L</b> 是事件线特征，而最后的 <b>VIO</b> 里还混着标准帧上的点特征。请留意它们<b>各来自哪一种数据</b>——前两类来自事件流（不糊、能扛高速），第三类来自标准帧（在事件为零时顶上）。这就是 0177 里那张「分工表」在一个真实系统里的落地形态。<br>
+          <b>要记住的一句话：</b>到了 2024 年，事件 VIO 的形态已经和普通 VIO 长得很像了——区别只在于「多了一路不糊、不断线的证据」，而这一路仍然要和帧、IMU 放在一起才够用。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. VECtor（2022）：一把尺子，也是一面照妖镜</h2>
+      <p>最后这篇不是方法论文，是<b>数据集与评测基准</b>。它要解决一个很实际的问题：前面这些方法各用各的数据、各用各的指标（MPE、MRE、RPE、ATE、RMSE 混着来），谁都很难跟谁比。</p>
+      <p><b>VECtor</b>（Gao 等，RA-L 2022）的贡献是一套「全硬件同步 + 高精度真值」的多传感器平台：以<b>事件双目</b>为中心，同时装上标准双目、RGB-D、LiDAR 与 IMU，全部由 MCU 硬件触发同步（<b>亚微秒级</b>）；小尺度场景用 MoCap（120 Hz）经手眼标定提供真值，大尺度场景用 FARO 激光扫描点云与 LiDAR 扫描做 ICP 配准提供真值；评测统一用 EVO 工具算 RPE / ATE。论文还用一个红外滤光片（IR690）压掉 MoCap 850 nm 频闪带来的噪声，并给出不同光照下的 bias 参数表。</p>
+      <p><b>它最重要的结论其实是负面的</b>：作者自述<b>当前的事件 SLAM 方法仍不成熟</b>——基准网站上的结果显示事件方法的表现有限。换句话说，把大家放到同一把尺子上之后，那些「在自家数据上很好看」的成绩并没有全部兑现。这正好印证了本块的硬结论：<b>事件相机的真实优势只在高速 / 高动态 / 低光时才兑现，且几乎每篇都靠帧或 IMU 兜底。</b></p>
+      <p>还有两条边界要如实标注：这份数据里 <b>RGB-D 与 LiDAR 不同时使用</b>；而且有部分序列被留作秘密测试集，只用于排行榜。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">一个支架上挂满传感器：VECtor 想给事件 SLAM 一把统一的尺子</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">全部硬件同源同步，真值来自动捕与激光扫描，于是所有方法可以在同一套数据上比</text>
+          <path d="M120 320 L120 250 A 90 90 0 0 1 300 250 L300 320 Z" fill="#1b2440" stroke="#6f86c9"/>
+          <path d="M135 268 A 76 76 0 0 1 285 268" fill="none" stroke="#33406b"/>
+          <rect x="90" y="150" width="240" height="12" rx="3" fill="#4a5a88"/>
+          <rect x="98" y="122" width="26" height="26" rx="3" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <rect x="130" y="122" width="26" height="26" rx="3" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <rect x="172" y="122" width="26" height="26" rx="3" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <rect x="204" y="122" width="26" height="26" rx="3" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <rect x="238" y="124" width="32" height="22" rx="3" fill="#16203a" stroke="#9b8cff" stroke-width="2"/>
+          <rect x="278" y="108" width="34" height="40" rx="4" fill="#16203a" stroke="#ff9f6b" stroke-width="2"/>
+          <ellipse cx="295" cy="110" rx="17" ry="6" fill="#2b3a63" stroke="#ff9f6b" stroke-width="2"/>
+          <rect x="132" y="196" width="36" height="22" rx="3" fill="#16203a" stroke="#8fd4ff" stroke-width="2"/>
+          <text x="111" y="118" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">①</text>
+          <text x="185" y="118" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">②</text>
+          <text x="254" y="118" text-anchor="middle" fill="#cdbcff" font-size="13" font-weight="700">③</text>
+          <text x="295" y="102" text-anchor="middle" fill="#ff9f6b" font-size="13" font-weight="700">④</text>
+          <text x="150" y="240" text-anchor="middle" fill="#8fd4ff" font-size="13" font-weight="700">⑤</text>
+          <text x="210" y="360" text-anchor="middle" fill="#9fb4ff" font-size="11">支架可装到头盔或三脚架上（示意）</text>
+          <rect x="500" y="90" width="370" height="254" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="685" y="114" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">这套平台到底装了什么</text>
+          <text x="516" y="144" fill="#bfe" font-size="11">① 事件立体 640×480，基线 17 cm</text>
+          <text x="516" y="170" fill="#ffe9a8" font-size="11">② 标准立体 1224×1024，基线 17 cm</text>
+          <text x="516" y="196" fill="#cdbcff" font-size="11">③ RGB-D 深度 640×576</text>
+          <text x="516" y="222" fill="#ffd1d8" font-size="11">④ LiDAR Ouster OS0-128（128×2048）</text>
+          <text x="516" y="248" fill="#cfe6ff" font-size="11">⑤ IMU 200 Hz；真值动捕 120 Hz</text>
+          <text x="516" y="284" fill="#9fb4ff" font-size="11">全部传感器硬件同源同步，误差小于 1 微秒</text>
+          <text x="516" y="308" fill="#9fb4ff" font-size="11">事件率范围 0.54–13.09 M events/s</text>
+          <text x="516" y="332" fill="#9fb4ff" font-size="11">大尺度场景最远到 244 m</text>
+          <text x="450" y="380" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：这把尺子量出的结论是负面的——现有事件方法仍不成熟</text>
+          <text x="450" y="404" text-anchor="middle" fill="#9fb4ff" font-size="12">作者自述：基准网站上的事件方法表现有限</text>
+          <text x="450" y="428" text-anchor="middle" fill="#9fb4ff" font-size="12">同一条数据里，RGB-D 与 LiDAR 并不同时使用；部分序列留作秘密测试集</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是 VECtor 的传感器支架（示意）：一根横杆上从左到右装着事件双目（①绿）、标准双目（②黄）、中间的 RGB-D（③紫），顶上架着 LiDAR（④橙），侧面挂着 IMU（⑤蓝），整个支架可以装到头盔或三脚架上。右边列出这套平台的规格与真值来源。<br>
+          <b>怎么看这张图：</b>① 先看「一套支架上有五类传感器」这件事本身——它意味着<b>同一时刻、同一场景，五种数据都对齐着录下来</b>；② 再看右边倒数第三行的硬件同步误差「小于 1 微秒」——这是不同传感器数据能放在一起比较的前提；③ 最后看底部那句结论：作者自己说现有事件方法仍不成熟。这才是这份基准最值钱的地方——<b>它让「谁更强」这件事从宣传语变成了可复核的数字</b>。<br>
+          <b>要记住的一句话：</b>一个领域成熟的标志之一，是有人愿意做公平的尺子；而尺子量出来的第一次成绩，通常不好看。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_VECtor__A_Versatile_Event-Centric_Benchmark_for_Multi-Se/48df005962897f6351e1fc9513252b99190ca2d5e311be7101bc2b49f82ceba6.jpg" alt="VECtor sensor rig on helmet and tripod">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>We present a comprehensive set of data sequences which is recorded by a rich sensor setup placed on a versatile 3D-printed holder. It is centered around an event-based stereo camera, and further contains a regular stereo camera, an RGB-D sensor in the center, a LiDAR mounted on the top, and an IMU at the rear. The holder can be mounted on various platforms, such as a helmet as shown on the left (front view), or on a tripod as shown on the right (side view).（中译：我们用一套装在通用 3D 打印支架上的丰富传感器记录了一系列完整数据。它以事件双目为中心，还包含一个标准双目、中央一个 RGB-D 传感器、顶部一个 LiDAR、后部一个 IMU。支架可安装到多种平台上，例如左侧所示头盔（前视）或右侧所示三脚架（侧视）。）<br>
+          <b>怎么看这张图：</b>这是上一张自绘图的原版。请确认三件事：<b>中心是事件双目</b>（所以这套数据是「以事件为中心」的）、周围那些传感器<b>都是为了给事件方法提供参照与真值</b>、支架是可换平台的（头盔 / 三脚架）。<br>
+          <b>要记住的一句话：</b>事件相机在很长一段时间里缺少公认的评测标准，VECtor 是把这个空白填上的那类工作——它不提出新方法，但改变了「怎么判断方法好不好」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 收官（一）：四篇合起来，把 0176 的洞补成了什么样</h2>
+      <p>把本节四篇和 0176 的三篇放在一张表里，第八季的事件块就完整了：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">系统</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">配置</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">补上了 0176 的哪一个洞</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">还带着什么毛病</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">ESVO（2021）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件双目</td><td style="padding:.6rem;border:1px solid #3a4a78;"><b>尺度</b>（靠 7.5 cm 基线）；深度变成有分布的估计</td><td style="padding:.6rem;border:1px solid #3a4a78;">在 DAVIS346 上几乎不能实时；初始化严格；纯事件在静止 / 弱纹理退化</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">ESVIO（2023）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件双目 + 帧 + IMU</td><td style="padding:.6rem;border:1px solid #3a4a78;"><b>静止退化与初始化</b>（帧 + IMU），并做出激动机动与 1.8 km 大规模</td><td style="padding:.6rem;border:1px solid #3a4a78;">低纹理易退化 / 误匹配；参数固定未细调；纯事件法在其自建集上几乎全失败</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">PL-EVIO（2024）</td><td style="padding:.6rem;border:1px solid #3a4a78;">事件单目 + 帧 + IMU + 回环</td><td style="padding:.6rem;border:1px solid #3a4a78;"><b>结构信息</b>（线特征）与<b>全局漂移</b>（回环）</td><td style="padding:.6rem;border:1px solid #3a4a78;">激进运动下 IMU 偏置让补偿收益有限；低光下加图像反而不如纯事件；依赖同芯片帧—事件标定</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">VECtor（2022）</td><td style="padding:.6rem;border:1px solid #3a4a78;">数据集 / 基准</td><td style="padding:.6rem;border:1px solid #3a4a78;"><b>评测口径</b>（统一数据、统一指标）</td><td style="padding:.6rem;border:1px solid #3a4a78;">它测出来的结论是负面的：现有事件方法仍不成熟</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">第八季四个块：各自拆掉了前七季的哪一个假设</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">上排是它拆掉的那条隐含前提，下排是拆完之后仍然没解决的部分</text>
+          <rect x="40" y="80" width="200" height="34" rx="6" fill="#1d3a4f" stroke="#8fd4ff"/>
+          <rect x="250" y="80" width="200" height="34" rx="6" fill="#14301f" stroke="#5cffb0"/>
+          <rect x="460" y="80" width="200" height="34" rx="6" fill="#2b2440" stroke="#9b8cff"/>
+          <rect x="670" y="80" width="200" height="34" rx="6" fill="#3a3020" stroke="#ffd166"/>
+          <text x="140" y="103" text-anchor="middle" fill="#cfe6ff" font-size="13" font-weight="700">动态环境 0152–0158</text>
+          <text x="350" y="103" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">语义建图 0159–0167</text>
+          <text x="560" y="103" text-anchor="middle" fill="#cdbcff" font-size="13" font-weight="700">多机协同 0168–0174</text>
+          <text x="770" y="103" text-anchor="middle" fill="#ffe9a8" font-size="13" font-weight="700">事件相机 0175–0178</text>
+          <rect x="40" y="122" width="200" height="58" rx="6" fill="#131a2e" stroke="#33406b"/>
+          <rect x="250" y="122" width="200" height="58" rx="6" fill="#131a2e" stroke="#33406b"/>
+          <rect x="460" y="122" width="200" height="58" rx="6" fill="#131a2e" stroke="#33406b"/>
+          <rect x="670" y="122" width="200" height="58" rx="6" fill="#131a2e" stroke="#33406b"/>
+          <text x="140" y="146" text-anchor="middle" fill="#bfe" font-size="11">拆掉：环境是静止的</text>
+          <text x="140" y="166" text-anchor="middle" fill="#9fb4ff" font-size="11">（第一季 0005 的激光版）</text>
+          <text x="350" y="146" text-anchor="middle" fill="#bfe" font-size="11">拆掉：地图只是几何</text>
+          <text x="350" y="166" text-anchor="middle" fill="#9fb4ff" font-size="11">（点与面之外还要挂标签）</text>
+          <text x="560" y="146" text-anchor="middle" fill="#bfe" font-size="11">拆掉：只有一台机器人</text>
+          <text x="560" y="166" text-anchor="middle" fill="#9fb4ff" font-size="11">（多主体共图）</text>
+          <text x="770" y="146" text-anchor="middle" fill="#bfe" font-size="11">拆掉：相机是快门式的</text>
+          <text x="770" y="166" text-anchor="middle" fill="#9fb4ff" font-size="11">（不曝光、只报变化）</text>
+          <rect x="40" y="190" width="200" height="150" rx="6" fill="#16203a" stroke="#ff5d73"/>
+          <rect x="250" y="190" width="200" height="150" rx="6" fill="#16203a" stroke="#ff5d73"/>
+          <rect x="460" y="190" width="200" height="150" rx="6" fill="#16203a" stroke="#ff5d73"/>
+          <rect x="670" y="190" width="200" height="150" rx="6" fill="#16203a" stroke="#ff5d73"/>
+          <text x="140" y="214" text-anchor="middle" fill="#ffd1d8" font-size="11">还剩：多是在 ORB-SLAM</text>
+          <text x="140" y="232" text-anchor="middle" fill="#ffd1d8" font-size="11">外面加一层补丁</text>
+          <text x="140" y="258" text-anchor="middle" fill="#9fb4ff" font-size="11">内核没改，代价留着</text>
+          <text x="140" y="284" text-anchor="middle" fill="#9fb4ff" font-size="11">「停着的车」仍难判</text>
+          <text x="140" y="310" text-anchor="middle" fill="#9fb4ff" font-size="11">缓慢变化的场景也难</text>
+          <text x="350" y="214" text-anchor="middle" fill="#ffd1d8" font-size="11">还剩：标签全靠外部的</text>
+          <text x="350" y="232" text-anchor="middle" fill="#ffd1d8" font-size="11">分割网络供给</text>
+          <text x="350" y="258" text-anchor="middle" fill="#9fb4ff" font-size="11">跨帧认成同一物体仍脆</text>
+          <text x="350" y="284" text-anchor="middle" fill="#9fb4ff" font-size="11">物体被搬走时地图难更新</text>
+          <text x="350" y="310" text-anchor="middle" fill="#9fb4ff" font-size="11">（0166 才刚把关联做正）</text>
+          <text x="560" y="214" text-anchor="middle" fill="#ffd1d8" font-size="11">还剩：通信受限下的</text>
+          <text x="560" y="232" text-anchor="middle" fill="#ffd1d8" font-size="11">全局一致没能真正解决</text>
+          <text x="560" y="258" text-anchor="middle" fill="#9fb4ff" font-size="11">假回环仍要靠鲁棒后端</text>
+          <text x="560" y="284" text-anchor="middle" fill="#9fb4ff" font-size="11">0174 的两条路线是「绕开」</text>
+          <text x="560" y="310" text-anchor="middle" fill="#9fb4ff" font-size="11">而不是解决</text>
+          <text x="770" y="214" text-anchor="middle" fill="#ffd1d8" font-size="11">还剩：几乎每一篇最后</text>
+          <text x="770" y="232" text-anchor="middle" fill="#ffd1d8" font-size="11">都要靠帧或 IMU 兜底</text>
+          <text x="770" y="258" text-anchor="middle" fill="#9fb4ff" font-size="11">静止 / 弱纹理 / 大规模退化</text>
+          <text x="770" y="284" text-anchor="middle" fill="#9fb4ff" font-size="11">VECtor 基准显示</text>
+          <text x="770" y="310" text-anchor="middle" fill="#9fb4ff" font-size="11">现有事件法仍不成熟</text>
+          <text x="450" y="378" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：三个假设都被戳破了，但没有一条是「拆干净」的</text>
+          <text x="450" y="404" text-anchor="middle" fill="#9fb4ff" font-size="12">四个块共同的收获是「知道自己不知道」；共同的代价是都得靠一层外部零件兜底</text>
+          <text x="450" y="432" text-anchor="middle" fill="#9fb4ff" font-size="12">四块之间还有横向接口：动态借用语义的分割；事件与高速天然互补</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>第八季四个块并排放在一起。每一列从上到下是三件事：这个块叫什么、它拆掉了前七季的哪一条隐含假设（蓝框）、以及拆完之后仍然没解决的部分（红框）。<br>
+          <b>怎么看这张图：</b>① 先横着读蓝框那一行：<b>四个块分别拆掉了「环境静止」「地图只有几何」「只有一台机器人」「相机是快门式的」</b>——这正是导览课 0152 开场时承诺过的那件事；② 再竖着读红框：<b>每一列的「还剩」都不比「拆掉」短</b>，这是本季最重要的自我批评；③ 最后看底部那两行：第一行是总判断，第二行提醒你这四块之间还有横向接口（动态 ↔ 语义、事件 ↔ 高速），它们不是四个孤岛。<br>
+          <b>要记住的一句话：</b>第八季真正的内容不是「又学了四类论文」，而是「知道了前七季的结论是<b>有前提</b>的」——而前提被揭开之后，暴露出来的问题比解决掉的还多。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 收官（二）：还剩哪些没拆干净</h2>
+      <p>把上一张图的红框说透。四个块各留下了一个没解决的核心问题，它们恰好可以和本季的横向关系对上：</p>
+      <div class="grid-2">
+        <div class="mini-card"><h4>动态块：打补丁的代价</h4><p>本块绝大多数方法都是在 <b>0043–0045 ORB-SLAM</b> 外面加一层动态剔除，没有改内核。于是「判断哪些点/像素在动」本身始终是个可能出错的前置步骤，而<b>判错的代价</b>（把静止的路标删掉、把动态的留下）一直没有被系统地量化。0156 那句「别把停着的车删掉」就是这个洞的最直白表达。</p></div>
+        <div class="mini-card"><h4>语义块：标签是借来的</h4><p>本块的语义几乎全部来自外部的分割/识别网络（回链 <b>第六季 0114 / 第七季 0147 的 SAM / DINOv2</b>）。地图有了标签，但「同一物体跨帧被认成同一个」这件数据关联的事直到 <b>0166</b> 才被当作一等公民来对待；物体被搬走之后地图怎么更新，仍然是开放的。</p></div>
+        <div class="mini-card"><h4>多机块：一致性与通信量是死结</h4><p>从中心化（<b>0169 COVINS / LAMP 2.0</b>）到分布式（<b>0170</b>）再到去中心化（<b>0172 Swarm-SLAM</b>），做的都是「在带宽约束下尽量保持全局一致」；而 <b>0174</b> 的两条替代路线（只传拓扑、UWB 量距）是<b>绕开</b>问题而不是解决问题。假回环这条铁律（<b>第七季 0140</b>）仍然要靠 PCM / GNC 这类鲁棒后端兜。</p></div>
+        <div class="mini-card"><h4>事件块：优势是「补位」而不是「替代」</h4><p>本块十一篇里，<b>纯事件的三篇都要靠运动才能工作</b>，其余八篇都要帧 / IMU / 深度兜底。VECtor 用统一基准再次确认了这一点。<b>事件相机真正兑现的优势，是在常规相机失效的那一小段里</b>——它的定位是补位选手。</p></div>
+      </div>
+      <p>还有一件事值得留一句话：本季拆掉的三条假设都还是「关于外部世界和传感器配置」的假设。如果你要问「下一个还没被碰过的前提是什么」，一个很自然的候选是<b>「传感器给出的数据是可信的」</b>——本季没有一个块处理观测被欺骗、被污染或标定失效的情况。这只是一句留给读者的开放提示（<b>属于本课的判断，不是任何一篇原文的结论</b>），但它大概就是下一季会去撞的墙。</p>
+      <p>最后回到事件块本身，用三句话收尾：</p>
+      <ul>
+        <li><b>它改变了「什么时候能看清」</b>：高速、高动态、低光——常规相机最难看的时候，它给出可用的边缘。</li>
+        <li><b>它没有改变「什么才算看清」</b>：没有绝对亮度、没有完整图像、静止时没有信息，这三条从 0175 到 0178 一步都没变。</li>
+        <li><b>它把「表示」这件事重新推到了台前</b>：事件累积图、时间表面、IWE——整块论文的真正战场在「怎么把流水账攒成能算的东西」上，而不在优化器上。</li>
+      </ul>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>ESVIO 的四路残差里，哪一路负责解决「单目事件拿不到尺度」这个问题？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：同一事件角点在左右两眼的关联残差（r_es）来自已知基线，基线一出场尺度就定了；前后时间关联（r_et）负责时间连续，IMU 项负责短时高频，标准帧项在事件稀少时顶上。" onclick="lessonKit.answer(this,'q0178a')">左右眼关联的那一路</button>
+          <button data-correct="no" data-explanation="不对：IMU 预积分会漂，单靠它无法长期钉住尺度；标准帧项只在事件稀少时顶上，也不直接给尺度。尺度来自双目基线与左右关联。" onclick="lessonKit.answer(this,'q0178a')">IMU 预积分的那一路</button>
+        </div>
+        <div class="quiz-feedback" id="q0178a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>VECtor 这篇论文最重要的贡献是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：它本身不提出新的 SLAM 方法，而是提供了第一套同时含事件立体、标准立体、RGB-D、LiDAR、IMU 且全硬件同步、带精确真值的基准，让所有方法能在同一口径下比较；它得出的结论是现有事件方法仍不成熟。" onclick="lessonKit.answer(this,'q0178c')">给出统一口径的评测基准</button>
+          <button data-correct="no" data-explanation="不对：它没有提出新的事件 SLAM 算法，也没有宣称事件方法已经可以替代帧方法；恰恰相反，作者自述当前事件 SLAM 方法仍不成熟。" onclick="lessonKit.answer(this,'q0178c')">提出新的事件SLAM算法</button>
+        </div>
+        <div class="quiz-feedback" id="q0178c"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>ESVO 为什么用「逆深度」而不是深度？它的代价函数在比较什么？</li>
+        <li>为什么 ESVO 要用 Student's t 分布来融合深度观测？这和 0177 里 EventTracking 的做法是同一个目的吗？</li>
+        <li>ESVIO 的四路残差分别管什么？运动补偿需要哪两样东西？</li>
+        <li>PL-EVIO 加点特征、线特征、回环分别补了什么？它自述的局限里哪一条最出人意料？</li>
+        <li>VECtor 相比其他数据集的关键差别是什么？它得出的结论对事件 SLAM 是好消息还是坏消息？</li>
+        <li>第八季四个块分别拆掉了前七季的哪一个隐含假设？</li>
+        <li>这四个块各自还剩哪一块没拆干净？横向接口在哪几处？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么事件式的深度估计天然是「概率式」的？直接用一次观测定深度会怎样？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为一个事件只给出「这条视线上的某个位置发生了亮度变化」，也就是一条射线，它没有任何关于距离的信息（方向确定、深度完全未知）。只有把同一条射线在不同时刻、不同视角下的多次观测融合起来，深度才逐步收窄。所以做法是维护一个概率分布（ESVO 用 Student's t 分布融合最近 M+1 = 20 个立体观测），而不是解一个数。用一次观测定深度，结果几乎完全不可用——这也是 ESVO 被批评「初始化严格」的根源。</div></details>
+        </li>
+        <li>ESVIO 的运动补偿为什么需要「IMU 角速度」和「后端线速度」两样东西？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为把事件 warp 到同一时刻，需要知道相机在每个事件时刻的位姿变化。纯旋转时，角速度一项就足以描述运动；但一旦相机同时有平移，同一个三维点在不同时刻的投影位置还受平移影响，这时就需要后端估计出的线速度来补上平移那一部分。两者缺一不可——只补旋转的话，平移带来的偏移仍然留在事件流里。这也解释了 PL-EVIO 报告的现象：激进运动下 IMU 偏置较大时，补偿的收益会被打折（所以它引入了带偏置的估计与图像兜底）。</div></details>
+        </li>
+        <li>ESVIO 自述「纯事件方法（EVO、ESVO）在自己数据集上几乎全失败」，这句话应该怎么理解？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>不能直接理解成「EVO / ESVO 无效」。原文给出的原因是它们的<b>初始化过于严格</b>——EVO 需要场景在传感器前方近似平面地持续运动数秒才能 bootstrap，ESVO 对初始逆深度与搜索区间也很敏感。而在 ESVIO 自建的 HKU 数据集（含暗光、高动态、激进运动）上，这种初始化前提往往不成立，于是它们在还没跑起来时就失败了。这正是本块硬结论里提醒的那句：数据/评测口径要统一后才能比较，「在别人数据集上全失败」很多时候是初始化问题而非方法无效。</div></details>
+        </li>
+        <li>PL-EVIO 的滑窗图优化里，边缘化项 e_m 起什么作用？做不好会怎样？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>滑窗必须不断向前推进，被移出窗口的旧状态不能直接丢弃，否则历史信息全没了；边缘化项的作用就是把这些旧状态携带的信息压缩成一个先验，留在代价函数里继续约束当前状态，从而在不扩大计算量的前提下保留历史。做不好会让估计变得过度自信（先验被当成确定的信息，实际上它带着误差），这正是 0049 VI-DSO 与 0063 DM-VIO 反复讨论的核心问题。</div></details>
+        </li>
+        <li>用一句话概括第八季「拆掉三个假设」的结果。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>三个假设确实都被戳破了——动态块拆「环境静止」、语义块拆「地图只有几何」、多机块拆「只有一台机器人」、事件块拆「相机是快门式的」（四块对应三条假设外加一条传感器层面的假设），但每一条都只拆掉了一部分：动态方法多在 ORB-SLAM 外面打补丁、语义标签全靠外部分割网络、多机在通信受限下只能绕开全局一致、事件系统几乎都要靠帧或 IMU 兜底。所以本季真正的收获是「知道了前七季的结论是有前提的」，而暴露出来的问题比解决掉的更多。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0177-混合路线-事件加帧加深度加IMU.html">← 上一课：混合路线 事件加帧加深度加 IMU</a>
+        <a class="next" href="../index.html">第八季完 · 返回课程馆 →</a>
+      </div>
+      <p class="foot-note">第八季（阶段 H 专题支线）到此结束。这一季读的不是一条技术主线，而是<b>前七季那三个「默认成立」的前提被逐条揭开的过程</b>——动态、语义、多机、事件，四个块都是从这个动作里长出来的。账结了，但很不好看：每一条假设都只拆掉了一部分，剩下的部分反而更清楚地看着我们 📚</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

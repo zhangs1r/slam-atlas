@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SO-SLAM：对象级尺度与方向 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0164</div>
+      <h1>SO-SLAM：对象级尺度与方向</h1>
+      <p class="subtitle">不建稠密网格了，给每个物体套一个「椭球」就够了 🔮</p>
+      <div class="hero-meta">
+        <span>🎯 主题：单目二次曲面对象 SLAM 的三类语义约束</span>
+        <span>👥 作者：Liao、Hu、Zhang 等</span>
+        <span>📅 2022 · <i>SO-SLAM (IEEE RA-L)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">椭球表示</a>
+        <a href="#b">对偶二次曲面</a>
+        <a href="#c">三类约束</a>
+        <a href="#d">初始化与朝向</a>
+        <a href="#e">对比与数字</a>
+        <a href="#f">局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 说清 SO-SLAM 用「对偶二次曲面 Q*」怎么紧凑表示一个物体（9 自由度）；② 讲出它引入的三类语义空间约束——尺度比例、对称纹理、支撑平面——各自在约束什么；③ 说明单帧初始化与朝向优化如何利用这些约束；④ 对照 CubeSLAM 等，理解它在「单目对象级」上的改进与局限。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>前面 0159–0163 的对象表示是「surfel / 体素 / 包围盒（DSG 的物体层）」——都偏稠密或轴对齐。<b>0163</b> 的 DSG 物体层用「位姿 + 包围盒」，本课换成更紧凑的<b>椭球</b>，是对象表示的另一条路线（和综述里的 CubeSLAM / QuadricSLAM 同族）。<b>0166</b> 的 2023 框架会进一步用 cube / quadric / cylinder 混合参数化，本课是这条「紧凑对象模型」线的先声。<b>0147</b> 的检测零件在这里变成 YOLOv3 出框。</p></div>
+      </div>
+
+      <h2 id="b">1. 物体用「椭球」表示</h2>
+      <p>稠密建图（0159–0162）给每个点都存信息，代价是内存和算力。SO-SLAM 走另一条极简路线：<b>每个物体只用一个椭球套住</b>——中心、朝向、大小都含在里面，几十个物体也只占几十个椭球参数。这比体素省得多，代价是丢了表面细节（你只知道「这里有个大致这么大、这么朝的物体」）。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#f5f7fa"/>
+          <text x="450" y="36" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">一把真实的椅子，外面套一个半透明椭球</text>
+          <g>
+            <rect x="360" y="150" width="200" height="22" rx="4" fill="#b9803f" stroke="#8a5a26"/>
+            <rect x="372" y="172" width="14" height="150" fill="#b9803f" stroke="#8a5a26"/>
+            <rect x="534" y="172" width="14" height="150" fill="#b9803f" stroke="#8a5a26"/>
+            <rect x="372" y="300" width="176" height="18" rx="4" fill="#b9803f" stroke="#8a5a26"/>
+            <rect x="372" y="320" width="60" height="22" rx="3" fill="#b9803f" stroke="#8a5a26"/>
+            <rect x="488" y="320" width="60" height="22" rx="3" fill="#b9803f" stroke="#8a5a26"/>
+          </g>
+          <ellipse cx="450" cy="250" rx="170" ry="130" fill="#7ec4f0" fill-opacity="0.28" stroke="#4a90c2" stroke-width="2.5" stroke-dasharray="7 4"/>
+          <line x1="450" y1="120" x2="450" y2="380" stroke="#4a90c2" stroke-width="1.5"/>
+          <line x1="280" y1="250" x2="620" y2="250" stroke="#4a90c2" stroke-width="1.5"/>
+          <text x="450" y="108" text-anchor="middle" font-size="12" fill="#0b4f7a">中心</text>
+          <text x="640" y="255" font-size="12" fill="#0b4f7a">长轴(大小)</text>
+          <text x="450" y="395" text-anchor="middle" font-size="13" fill="#0b4f7a">椭球用 9 个参数描述：中心3 + 朝向3 + 轴长3</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一把真实椅子被一个半透明蓝色椭球套住；椭球中心和椅子中心重合，长轴和椅子大小一致。这个椭球就是 SO-SLAM 存「这个物体」的全部——不用存表面点。<br>
+          <b>怎么看这张图：</b>① 椭球 = 物体的「紧凑包围」表示，比体素省内存；② 它用 9 个自由度（中心 3 + 朝向 3 + 三轴长 3）描述一个物体；③ 代价是丢了形状细节（椅子腿、靠背都看不见了），只保留「占位 + 姿态」。<br>
+          <b>要记住的一句话：</b>SO-SLAM 的对象表示 = 一个对偶二次曲面椭球，9 个参数搞定一个物体。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#faf6f1"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#3d2a22">同一型号的两把椅子，一近一远：单目为什么会看糊涂，语义先验怎么救</text>
+          <rect x="30" y="66" width="410" height="274" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="235" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#4a342c">病态：一个框，两种解释</text>
+          <rect x="52" y="190" width="44" height="36" rx="7" fill="#3d2a22"/>
+          <circle cx="100" cy="208" r="10" fill="#7ec4f0"/>
+          <text x="74" y="180" text-anchor="middle" font-size="11" fill="#6b5b53">相机</text>
+          <line x1="104" y1="208" x2="330" y2="168" stroke="#b89b78" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <line x1="104" y1="208" x2="330" y2="272" stroke="#b89b78" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <rect x="118" y="170" width="14" height="90" fill="#dceaf5" stroke="#4a90c2"/>
+          <rect x="120" y="196" width="10" height="40" fill="#cc785c" fill-opacity="0.55" stroke="#c0563d"/>
+          <text x="150" y="150" font-size="11" fill="#4a342c">同一个框</text>
+          <rect x="172" y="200" width="4" height="20" fill="#cc9a6a" stroke="#8a5a26"/>
+          <rect x="172" y="216" width="26" height="5" rx="2" fill="#cc9a6a" stroke="#8a5a26"/>
+          <rect x="174" y="221" width="3" height="9" fill="#8a5a26"/>
+          <rect x="193" y="221" width="3" height="9" fill="#8a5a26"/>
+          <text x="185" y="252" text-anchor="middle" font-size="11" fill="#6b5b53">近处小椅</text>
+          <rect x="270" y="180" width="7" height="30" fill="#cc9a6a" stroke="#8a5a26"/>
+          <rect x="270" y="210" width="54" height="8" rx="2" fill="#cc9a6a" stroke="#8a5a26"/>
+          <rect x="276" y="218" width="5" height="26" fill="#8a5a26"/>
+          <rect x="312" y="218" width="5" height="26" fill="#8a5a26"/>
+          <text x="300" y="290" text-anchor="middle" font-size="11" fill="#6b5b53">远处大椅</text>
+          <text x="235" y="310" text-anchor="middle" font-size="12" fill="#8a756a">两把椅子投影到同一个框，深度完全自由</text>
+          <rect x="460" y="66" width="410" height="274" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="665" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#4a342c">语义先验：查一张尺度比例表</text>
+          <rect x="500" y="116" width="330" height="30" rx="6" fill="#f3eafc" stroke="#8a5fb0"/>
+          <text x="665" y="136" text-anchor="middle" font-size="12" font-weight="700" fill="#6a3aa0">SemTable：每类物体大致的三轴比例</text>
+          <rect x="500" y="152" width="330" height="44" rx="6" fill="#ffffff" stroke="#e0d5c8"/>
+          <text x="520" y="178" font-size="12" fill="#4a342c">椅子：高 ＞ 宽 ≈ 深</text>
+          <rect x="500" y="204" width="330" height="44" rx="6" fill="#ffffff" stroke="#e0d5c8"/>
+          <text x="520" y="230" font-size="12" fill="#4a342c">杯子：三轴差不多长</text>
+          <rect x="500" y="256" width="330" height="44" rx="6" fill="#ffffff" stroke="#e0d5c8"/>
+          <text x="520" y="282" font-size="12" fill="#4a342c">瓶子：高 ＞＞ 宽 ≈ 深</text>
+          <text x="665" y="310" text-anchor="middle" font-size="12" fill="#8a756a">查表得到 r = [a/c, b/c]，管比例不管大小</text>
+          <rect x="30" y="352" width="840" height="118" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="450" y="378" text-anchor="middle" font-size="13" font-weight="700" fill="#4a342c">尺度比例约束解决的到底是什么</text>
+          <text x="450" y="404" text-anchor="middle" font-size="12" fill="#6b5b53">单目只有一个框，深度是自由的：近处小椅和远处大椅，投影出来的框可以一模一样</text>
+          <text x="450" y="428" text-anchor="middle" font-size="12" fill="#6b5b53">一旦认出类别、又知道这类物体「高宽深大概什么比例」，椭球三轴就被按比例锁死</text>
+          <text x="450" y="454" text-anchor="middle" font-size="12" fill="#6a3aa0">但它只管「比例」不管「绝对大小」——绝对尺度还得靠支撑平面（放在地上）来补</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是一个真实的观察场景：相机从左边看出去，两道虚线夹出一个锥形视野，视野里近处摆着一把小椅子、远处摆着一把同型号的大椅子——它们在画面上落进的是同一个框（左边浅蓝色小条上那格橙色框）。右边是一张「尺度比例表（SemTable）」：认出类别后去查这类物体的三轴大致比例（椅子高大于宽，杯子三轴差不多，瓶子又细又高）。<br>
+          <b>怎么看这张图：</b>① 先盯左边那格「同一个框」——同一个投影框对应无穷多种三维解释，这就是单目病态的根；② 再看右边的表，它是「生活常识」而不是精确测量，所以叫先验；③ 最后把两者接起来看底部三行：先验把「三轴之间的比例」锁死，三轴不能乱长；但比例不等于大小，绝对尺度要另找证据（支撑平面）。<br>
+          <b>要记住的一句话：</b>尺度比例约束锁的是「这把椅子高瘦还是矮胖」，不是「它离你几米」——单目缺的深度，得靠支撑平面那类线索另外补。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. 对偶二次曲面 Q*：9 自由度的紧凑物体</h2>
+      <p>数学上，这个椭球叫<b>对偶二次曲面（dual quadric）Q*</b>。它用 9 个自由度同时编码物体的<b>中心、朝向、占据空间</b>，是一个对称矩阵表示的几何基元。建好之后，它会被放进<b>位姿图</b>当成一个节点，和相机的位姿节点一起做后端优化（用 Huber 核抗离群）。</p>
+      <p>注意它的「语义来源」很轻：用的是 <b>YOLOv3 目标检测</b>（每 5 帧取一次 bounding box），类别用来查一张<b>尺度比例表（SemTable）</b>——比如「已知这是椅子，椅子大概多高多宽」。它是<b>实例级检测</b>，不做逐像素语义，更不做稠密重建。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_SO-SLAM__Semantic_Object_SLAM_With_Scale_Proportional_an/05c6f65b89f78d3f268789019549e25afe3f130ad18f6eac771ca0a78eacb99d.jpg" alt="SO-SLAM object map with center orientation occupied space">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Object SLAM. It can build a map with objects including center, orientation and occupied space, to help robots understand object-oriented instructions from human.<br>
+          <b>怎么看这张图：</b>这张图点明 SO-SLAM 的目标——建出「含物体中心、朝向、占据空间的地图」，从而让机器人能理解「以物体为中心」的人类指令（如「把左边的杯子拿给我」）。它展示的就是用椭球/物体节点拼出的语义地图，而非稠密点云。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 三类语义空间约束</h2>
+      <p>单目（只有一个相机、没有深度真值）下要从一个 2D 框恢复出 3D 椭球，是个病态问题——信息不够。SO-SLAM 的巧思是引入<b>三类语义空间约束</b>，把「物体长什么样、怎么摆」的先验补进来：</p>
+      <ul>
+        <li><b>① 尺度比例约束（Scale Proportional Constraint, SPC）</b>：根据检测类别查 SemTable，知道「这类物体大致的长宽高比例 $r = [a/c,\; b/c]$」，约束椭球三轴不能乱长。</li>
+        <li><b>② 对称纹理约束（Symmetrical Texture）</b>：很多物体（杯子、瓶子）绕对称轴转一下看起来一样；用对称投影不变描述符（灰度 / BRIEF / 距离变换）约束物体的<b>朝向</b>。</li>
+        <li><b>③ 支撑平面约束（Supporting Plane）</b>：物体通常「放在地上 / 桌上」，用支撑面约束椭球底部的高度与姿态。</li>
+      </ul>
+      <p>这三类约束和检测框的切线约束一起，构成一个可解的优化问题（LM 求解）。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_SO-SLAM__Semantic_Object_SLAM_With_Scale_Proportional_an/4091b7df8cb15c86dcfd398e7f024a9574d60b39032c597740042a2c3306c3bd.jpg" alt="SO-SLAM single-frame quadrics initialization">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Single-frame quadrics initiliazation. The tangent planes from the back projection of the object detection bounding box and the object supporting plane will jointly constrain the ellipsoid. The depth uncertainty along the observation direction will be further constrained by the scale propotional constraint.<br>
+          <b>怎么看这张图：</b>这张图展示单帧初始化：检测框反投影出的切线平面、物体支撑面、尺度比例约束三者「 jointly constrain the ellipsoid（共同约束椭球）」。它把第 3 节说的三类约束在几何上落了地——框的切线决定椭球大小，支撑面决定底部，尺度比例决定轴长比例。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 单帧初始化与朝向优化</h2>
+      <p><b>单帧初始化</b>：用检测框切线约束 $f_{bbox}$（Eq 2–4）+ 支撑平面约束 $f_{sup}$（Eq 5–8）+ 尺度比例约束 $f_{ssc}$（Eq 9–11）联立，LM 求解出初始椭球——<b>只要一帧</b>就能给物体一个合理初值，不必等它动起来。</p>
+      <p><b>朝向优化</b>：靠对称纹理。关键工具是<b>改进的三维距离变换（3D-DT）</b>：对称物体在距离变换下有「投影不变」的性质，据此构造对称代价 $f_{sym}$（Eq 21–24），再做一轮 LM 优化，把椭球的朝向掰正。这是 SO-SLAM 相对同类方法（如 CubeSLAM）在「朝向准」上的主要增量。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_SO-SLAM__Semantic_Object_SLAM_With_Scale_Proportional_an/2a9fe19ac83182344cb950e15227ca5c3ba580e1aa9ca63a07b30d36b06dae1f.jpg" alt="SO-SLAM examples of object initialization and trajectory estimation">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Examples of object initialization and trajectory estimation.<br>
+          <b>怎么看这张图：</b>展示物体初始化与相机轨迹估计的实例结果。你可以看到椭球如何被初始化到物体上、并随相机运动保持一致——这正是「单帧给初值 + 后端位姿图优化」合起来的效果。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#faf6f1"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#3d2a22">一张真实桌子加一个真实杯子：朝向是怎么被钉住的</text>
+          <rect x="30" y="66" width="410" height="274" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="235" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#4a342c">线索一：桌面法向 ≈ 重力的反方向</text>
+          <polygon points="120,212 380,182 392,200 132,230" fill="#e9d9c3" stroke="#b89b78" stroke-width="2"/>
+          <line x1="150" y1="224" x2="150" y2="300" stroke="#8a5a26" stroke-width="5"/>
+          <line x1="360" y1="196" x2="360" y2="272" stroke="#8a5a26" stroke-width="5"/>
+          <text x="200" y="216" text-anchor="middle" font-size="11" fill="#6b5b53">桌面</text>
+          <line x1="256" y1="205" x2="256" y2="124" stroke="#3f6f9c" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#o1)"/>
+          <line x1="256" y1="205" x2="256" y2="290" stroke="#c0563d" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#o2)"/>
+          <text x="268" y="136" font-size="12" fill="#3f6f9c">桌面法向（朝上）</text>
+          <text x="268" y="278" font-size="12" fill="#c0563d">重力（朝下）</text>
+          <text x="150" y="312" text-anchor="middle" font-size="11" fill="#6b5b53">桌腿竖直</text>
+          <text x="235" y="332" text-anchor="middle" font-size="12" fill="#8a756a">桌子只能平放，所以椭球的「竖直」方向被钉住</text>
+          <rect x="460" y="66" width="410" height="274" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="665" y="92" text-anchor="middle" font-size="14" font-weight="700" fill="#4a342c">线索二：对称纹理决定「绕轴转到哪」</text>
+          <path d="M596,166 A 70 26 0 0 1 704,166" fill="none" stroke="#cc785c" stroke-width="2" marker-end="url(#o3)"/>
+          <text x="716" y="160" font-size="12" fill="#cc785c">转多少？</text>
+          <line x1="648" y1="136" x2="648" y2="322" stroke="#8a5fb0" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="630" y="146" text-anchor="end" font-size="12" fill="#8a5fb0">对称轴</text>
+          <path d="M620,196 L620,262 Q620,286 648,286 Q676,286 676,262 L676,196 Z" fill="#dceaf5" stroke="#4a90c2" stroke-width="2"/>
+          <ellipse cx="648" cy="196" rx="28" ry="8" fill="#cfe3f5" stroke="#4a90c2" stroke-width="2"/>
+          <text x="600" y="300" text-anchor="end" font-size="11" fill="#6b5b53">杯子</text>
+          <text x="760" y="220" font-size="11" fill="#6b5b53">绕轴转，轮廓不变</text>
+          <text x="665" y="332" text-anchor="middle" font-size="12" fill="#8a756a">这种「转多少都一样」的性质，正是定朝向的抓手</text>
+          <rect x="30" y="356" width="840" height="114" rx="12" fill="#fffdfa" stroke="#e0d5c8"/>
+          <text x="450" y="382" text-anchor="middle" font-size="13" font-weight="700" fill="#4a342c">方向一致性：单目凭什么能把朝向定下来</text>
+          <text x="450" y="408" text-anchor="middle" font-size="12" fill="#6b5b53">重力给的是「竖直」这根轴，对称纹理给的是「绕这根轴转了多少」</text>
+          <text x="450" y="434" text-anchor="middle" font-size="12" fill="#6b5b53">两条线索合起来，椭球的 3 个朝向自由度就被约束住，朝向不再随便转</text>
+          <text x="450" y="458" text-anchor="middle" font-size="12" fill="#6a3aa0">对照数字：纯 SVD 平均 IoU 只有 0.083，加全语义先验的 InitP 达 0.218</text>
+          <defs>
+            <marker id="o1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#3f6f9c"/></marker>
+            <marker id="o2" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#c0563d"/></marker>
+            <marker id="o3" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#cc785c"/></marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边画一张真实的桌子（能看到桌面和两条腿），从桌面正中射出两条虚线箭头：朝上的蓝色是「桌面法向」，朝下的红色是「重力」——两者正好反向。右边画一个真实杯子，中间一条紫色虚线是它的对称轴，上面一道橙色圆弧加问号，表示「绕这根轴转多少」这个自由度。<br>
+          <b>怎么看这张图：</b>① 左图看两根箭头的关系——桌子不会斜过来放，所以桌面法向几乎就是重力的反方向，这就替物体定下了一根轴；② 右图看杯子绕轴转：圆柱形的杯子转 30 度还是 90 度，轮廓看上去差不多，这个「分不清」就是朝向里的模糊；③ 底部三行说明这两条线索合起来怎么把 3 个朝向自由度收干净，并给出 InitP 相对纯 SVD 的 IoU 提升。<br>
+          <b>要记住的一句话：</b>单目能定朝向，靠的不是深度，而是「重力告诉你哪根轴竖直、对称纹理告诉你绕轴转了多少」这两条生活常识。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. 对比与数字</h2>
+      <p>用 IoU（椭球和真值物体的重合度）衡量。平均 IoU：纯 SVD 基线只有 0.083，加一类约束的 Init1-1 为 0.163，<b>加全语义先验的 InitP 达 0.218</b>。在 ICL room2 上，CubeSLAM 0.33 vs 本文 InitP <b>0.484</b>（本课更准）；但 Fr3_cabinet 上 CubeSLAM 0.46 vs 本文 0.345（略逊）。真实机器人（Turtlebot3 + Kinect）上，SVD 仅 0.005，本文 0.228——说明语义先验在真机上收益很大。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SO-SLAM 的「尺度比例约束」靠什么知道物体大概多大？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：它用 YOLOv3 检测出类别后，去查一张「尺度比例表（SemTable）」，据此约束椭球三轴的比例，这正是单目缺深度时的关键先验。" onclick="lessonKit.answer(this,'q0164a')">它查类别尺度比例表</button>
+          <button data-correct="no" data-explanation="错：深度-RANSAC 是 0165 YOLO-SLAM 用来滤动态特征的几何手段；SO-SLAM 的尺度先验来自 SemTable 查表，不是逐点深度统计。" onclick="lessonKit.answer(this,'q0164a')">它用深度RANSAC</button>
+        </div>
+        <div class="quiz-feedback" id="q0164a"></div>
+      </div>
+
+      <h2>6. 局限</h2>
+      <p>作者自陈两个主要局限：① <b>椭球假设对高度非椭圆物体不友好</b>——长条形的扫帚、凹形的椅子，套个椭球会失真；② <b>支撑平面在实验中由人工标注真值</b>给出，真机上需要额外的平面 SLAM 去提取，否则这条约束无从谈起。</p>
+      <p>另外它没有给系统级 FPS，单帧初始化与朝向优化属于离线 / 近实时级（LM 迭代）。和前面稠密路线比，它赢在「省、轻、直接给物体语义」，输在「没有几何细节、对形状敏感」。这也是 0166 的 2023 框架要用 cube / quadric / cylinder 混合、并对齐线来补「朝向」的原因。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>SO-SLAM 的对象表示和 0163 Kimera 的 DSG 物体层（包围盒）相比，主要差别是？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：SO-SLAM 用「椭球（对偶二次曲面）」紧凑表示物体的中心/朝向/占据；DSG 物体层用「位姿+包围盒」。二者都是轻量对象模型，但基元不同，SO-SLAM 更连续、DSG 更轴对齐。" onclick="lessonKit.answer(this,'q0164b')">它用椭球而非包围盒</button>
+          <button data-correct="no" data-explanation="错：SO-SLAM 是轻量椭球参数化，不做稠密重建；反而是 0159–0162 的体素/网格路线才存稠密几何。" onclick="lessonKit.answer(this,'q0164b')">它做稠密重建</button>
+        </div>
+        <div class="quiz-feedback" id="q0164b"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>SO-SLAM 用「对偶二次曲面 Q*」怎么表示一个物体？它有几个自由度、各管什么？</li>
+        <li>单目下从 2D 框恢复 3D 椭球是病态的，SO-SLAM 靠哪三类语义约束补信息？各约束什么？</li>
+        <li>单帧初始化和朝向优化分别用了什么关键工具（提示：3D-DT）？</li>
+        <li>InitP 的平均 IoU 是多少？和 CubeSLAM 比它赢在哪、输在哪？</li>
+        <li>SO-SLAM 的椭球表示和 0163 DSG 的物体层（包围盒）各有什么利弊？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用生活类比解释「为什么单目下从 2D 框恢复 3D 椭球是病态问题，需要语义先验来救」。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>想象你隔着玻璃看一个纸箱，只看到一个长方形轮廓——它可能是近处的小盒，也可能是远处的大柜。这就是「深度不确定」的病态：同一个 2D 框对应无数种 3D 可能。SO-SLAM 的语义先验像「你认出那是椅子，而椅子通常高约 1 米、深约 0.6 米」——用 SemTable 的比例把无数可能砍到「就这一种合理大小」，问题才变得可解。尺度比例、对称、支撑面三约束都是这类「用常识收窄可能性」的招。</div></details>
+        </li>
+        <li>尺度比例约束 $r = [a/c,\; b/c]$ 这个表达式在约束什么？如果某类物体「又高又瘦」，$r$ 会怎么取值？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>$a,b,c$ 是椭球三个半轴长，$r=[a/c, b/c]$ 是「相对第三轴的比例」，约束的是三轴之间的相对长短，而非绝对大小（绝对大小由框的切线和深度决定）。对「又高又瘦」的物体，比如高对应轴 $a$、宽和深对应 $b,c$，则 $a/c$ 和 $a/b$ 都很大（远大于 1），SemTable 查到这个比例后，椭球就不会被初始化成一个接近球的东西，而是被拉成细高条。这就是尺度比例约束的物理意义。</div></details>
+        </li>
+        <li>为什么「对称纹理约束」能帮着定物体的朝向？举一个对称、一个非对称的物体说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>对称物体（如圆柱杯、花瓶）绕其对称轴旋转时，投影轮廓 / 纹理变化有「不变性」——SO-SLAM 用 3D-DT 距离变换抓住这种不变性，据此反推对称轴朝向，把椭球转正。非对称物体（如带把手的马克杯、椅子）本身不对称，对称约束用不上或很弱，朝向就只能靠别的线索（如支撑面法向、运动）去定，这也是为什么 SO-SLAM 对椅子这类非对称物体效果有时不如 CubeSLAM。</div></details>
+        </li>
+        <li>SO-SLAM 用了 YOLOv3 每 5 帧检测一次。如果某个物体连续 10 帧没被检测到（被遮挡），它的椭球会怎样？这暴露了什么短板？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>SO-SLAM 靠检测框提供约束，一旦 10 帧没检测，那段时间就没有新的框切线 / 尺度约束喂进来，椭球只能靠后端位姿图「惯性」维持，若期间相机或物体有运动，椭球可能漂掉或形变失准。它不像 0161 EM-Fusion 那样有「存在概率 + 软关联」去平滑处理短暂消失。这暴露了「检测驱动」对象 SLAM 的通病：检测一断，对象就盲——也正是 0166 的框架要用统计检验做更鲁棒关联的理由之一。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0163-Kimera与DSG-场景图的五层.html">← 0163 Kimera 与 DSG：场景图的五层</a>
+        <a class="next" href="0165-YOLO-SLAM-轻量工程路线.html">0165 YOLO-SLAM：轻量工程路线 →</a>
+      </div>
+      <p class="foot-note">物体可以只是一个椭球——下一站看最容易被复现的轻量派怎么干 🪶</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

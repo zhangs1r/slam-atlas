@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>中心化路线能做到多大：COVINS 与 LAMP 2.0 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0169</div>
+      <h1>中心化路线能做到多大：COVINS 与 LAMP 2.0</h1>
+      <p class="subtitle">「一台服务器统管全场」简单又可靠，但它到底能撑多少台机器人？⚙️ 这一节把中心化的天花板量出来。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：中心化协作 SLAM 的规模与瓶颈</span>
+        <span>👥 作者：Schmuck 等（COVINS，ETH，2021）＋ CARLONE / CoSTAR（LAMP 2.0，2022）</span>
+        <span>📅 年份 · <i>COVINS / LAMP 2.0: Orchestrated Multi-Robot Mapping</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：中心化的天花板</a>
+        <a href="#b">COVINS：12 台的量级</a>
+        <a href="#c">LAMP 2.0：地下环境</a>
+        <a href="#d">GNC 渐进非凸</a>
+        <a href="#e">带宽瓶颈</a>
+        <a href="#f">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 COVINS 与 LAMP 2.0 的中心化结构；讲出它们各自用什么鲁棒后端（Cauchy / GNC+ICM）；用「带宽水管」解释中心化为什么撞墙；理解为什么中心化「简单但迟早撞墙」。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 鲁棒后端建在<b>位姿图</b>上，要回链<b>第二季 0018 / 0019 的 Schur 消元与位姿图优化</b>——中心化的「全局 BA」就是把所有机器人的轨迹塞进同一张位姿图里消元。★ 假回环仍是核心敌人，回链<b>第七季 0140 铁律</b>。★ 上一节 0168 已铺好「中心化→分布式→去中心化」主线，本节是这条线的第一档。</p></div>
+      </div>
+
+      <h2 id="b">1. 先说人话：中心化为什么「简单但撞墙」</h2>
+      <p>中心化就像「一个班长统管全班」：每台机器人只负责自己眼前那点事，所有「要不要用这条回环」「全局地图长啥样」都交给服务器拍板。好处是逻辑简单、全局最优容易保证；坏处是——<b>班长只有一个，他既可能累死（计算瓶颈），也可能一断网全班散（单点故障），还是带宽咽喉</b>。本节把这两套系统（COVINS、LAMP 2.0）的天花板量出来。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">中心化的瓶颈：一台服务器是带宽与计算的咽喉</text>
+          <circle cx="450" cy="150" r="34" fill="#ff5d73"/><text x="450" y="156" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">服务器</text>
+          <g fill="#5cffb0">
+            <circle cx="120" cy="90" r="16"/><circle cx="220" cy="70" r="16"/><circle cx="320" cy="100" r="16"/>
+            <circle cx="120" cy="220" r="16"/><circle cx="230" cy="250" r="16"/><circle cx="330" cy="220" r="16"/>
+            <circle cx="600" cy="90" r="16"/><circle cx="700" cy="70" r="16"/><circle cx="800" cy="100" r="16"/>
+            <circle cx="600" cy="220" r="16"/><circle cx="700" cy="250" r="16"/><circle cx="780" cy="220" r="16"/>
+          </g>
+          <g stroke="#7c8bbf" stroke-width="2">
+            <line x1="450" y1="150" x2="120" y2="90"/><line x1="450" y1="150" x2="220" y2="70"/><line x1="450" y1="150" x2="320" y2="100"/>
+            <line x1="450" y1="150" x2="120" y2="220"/><line x1="450" y1="150" x2="230" y2="250"/><line x1="450" y1="150" x2="330" y2="220"/>
+            <line x1="450" y1="150" x2="600" y2="90"/><line x1="450" y1="150" x2="700" y2="70"/><line x1="450" y1="150" x2="800" y2="100"/>
+            <line x1="450" y1="150" x2="600" y2="220"/><line x1="450" y1="150" x2="700" y2="250"/><line x1="450" y1="150" x2="780" y2="220"/>
+          </g>
+          <!-- 咽喉高亮 -->
+          <rect x="430" y="110" width="40" height="40" rx="6" fill="none" stroke="#ffd166" stroke-width="3" stroke-dasharray="6 4"/>
+          <text x="450" y="300" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">所有通信都挤过这一根「咽喉」</text>
+          <text x="450" y="330" text-anchor="middle" fill="#cdd6ff" font-size="13">① 服务器算所有机器人的全局 BA → 计算随规模线性涨</text>
+          <text x="450" y="352" text-anchor="middle" fill="#cdd6ff" font-size="13">② 服务器一断 → 全场失联（单点故障）</text>
+          <text x="450" y="384" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：中心化「简单可靠」，但天花板由这台服务器决定</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>12 台机器人（绿点）全部连到中间一台红色服务器；黄色虚线框标出「所有通信必经的咽喉」。<br>
+          <b>怎么看这张图：</b>① 每台机只和服务器说话，彼此不直接通信；② 服务器要解「所有机器人叠在一起」的全局 BA，机器人越多它越累；③ 若网络断了，整队失去全局一致性。<br>
+          <b>要记住的一句话：</b>中心化的天花板，就是这台服务器的计算与带宽——规模一大，「班长」先撑不住。
+        </figcaption>
+      </figure>
+
+      <h2 id="c">2. 论文一：COVINS（2021）——中心化做到 12 台</h2>
+      <p>COVINS 是 ETH Schmuck / Chli 团队（也就是 0168 那支 MultiUAV 血脉）把中心化做到成熟的版本。它的定位很清晰：</p>
+      <ul>
+        <li><b>前端无关</b>：每台 agent 跑 ORB-SLAM3 产关键帧 + 观测，服务器不管你用什么前端；</li>
+        <li><b>中心服务器做 PGO + 全局 BA</b>，用 <b>Cauchy 鲁棒核</b>在 BA 内抑制 outlier（这是「软」鲁棒，不是 PCM 式硬剔除）；</li>
+        <li><b>冗余关键帧剪枝</b>：用 φ 函数按「被观测次数」τ 丢掉冗余关键帧，直接砍通信与计算；</li>
+        <li>演示了 <b>12 台 agent</b>、500 m² 区域、1750 m 轨迹、3200 关键帧、20 万路标，ATE 仅 0.050 m，且完整开源。</li>
+      </ul>
+      <p>它最值得记的数字是<b>通信极不对称</b>：agent→server 493 kB/s（5 Hz，传关键帧 + 特征），server→agent 仅 2.31 kB/s（2 Hz，只回传位姿 / 地图更新）。单个关键帧 full 约 97 kB、update 约 273 B。这种「上行重、下行轻」正是中心化的典型特征。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_COVINS/b7d5231b8b043a06416e56b2a909195bc8cae8b4ca4f5e68e0bb423e11455f4d.jpg" alt="Collaborative SLAM estimate from 12 drones">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Collaborative SLAM estimate from 12 drones flying over a village scenery covering approx. 500 m² with 1750 m total trajectory length. Red lines indicate inter-trajectory constraints.<br>
+          <b>怎么看这张图：</b>12 条轨迹（红线是机间约束）叠在一张全局图里——这就是中心化「全班共用一张图」的样子。注意轨迹之间没有明显的错位，说明 12 台规模下服务器仍能保持全局一致（ATE 0.050 m）。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2021_COVINS/fa95919b6e309ace6f6e5c204dca8c714c632809d28a898a7fd7b9282a48e3ca.jpg" alt="COVINS system architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Overview of the COVINS system architecture.<br>
+          <b>怎么看这张图：</b>左边多个 agent（ORB-SLAM3 前端）只负责产关键帧 + 特征，通过 TCP 连到右边 server；server 做 map merging、redundancy pruning（φ 函数）、PGO、GBA。前端 / 后端解耦，所以「换前端不影响后端」——这是它工程上很聪明的一点。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 论文二：LAMP 2.0（2022）——地下环境的中心化激光</h2>
+      <p>LAMP 2.0（CARLONE / CoSTAR，IEEE RA-L 2022，DARPA 地下挑战赛 SubT）把中心化搬到了<b>激光 + 退化地下环境</b>。它的结构：每台机器人本地建图（LOCUS / Hovermap 里程计），把<b>回环候选和位姿发往 base station</b>，由 base station 统一做 PGO 与合并。它最大的技术亮点是后端用了 <b>GNC + ICM（增量一致最大化）</b>——这正是「鲁棒后端从离线 PCM 走向在线 GNC」的代表。</p>
+      <ul>
+        <li>回环生成用 <b>ScanContext 类描述子</b>（呼应 0168 那张带宽光谱，也呼应后面 0170），再用 TEASER++ / GICP 几何验证；</li>
+        <li><b>回环优先级排序</b>：用可观测性 + GNN + RSSI（信号强度）给候选打分，先验证「最值得信」的；</li>
+        <li>实测：最多 4 机器人、KU 数据集 6 km 合并轨迹、ATE &lt; 2 m、地图误差 &lt; 4 m，且开源 + 有数据集。</li>
+      </ul>
+      <p>★ 注意：LAMP 2.0 的 GNC+ICM 是「<b>GNC 族</b>」在协作 SLAM 的首次系统落地，比 Kimera-Multi 的 D-GNC 还早。它和 COVINS 的 Cauchy 不同——Cauchy 是「软」权重，GNC 是「渐进非凸、能直接把 outlier 权重降到 0」。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LAMP2/38d1fd66a897d7fe5fe1fe71f84bbf02b9ec58cca8ab115adfe70403fa456910.jpg" alt="LAMP 2.0 architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Architecture of LAMP 2.0, consisting of a single-robot front-end, a multi-robot front-end for loop closure detection, and a multi-robot back-end for outlier-resilient pose graph optimization and map generation.<br>
+          <b>怎么看这张图：</b>仍然是「各机器人本地前端 → base station 后端」的中心化形态，但后端明确写着 outlier-resilient PGO（抗 outlier 的位姿图优化）。和 COVINS 的区别：COVINS 靠 Cauchy 软权重，LAMP 2.0 靠 GNC+ICM 在线拒 outlier。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_LAMP2/ce46500c96544ea0350e25191892673fc192fa4b32d48241af7d40a33d48e576.jpg" alt="ATE for ICM and GNC">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Comparison of trajectory ATE for ICM and GNC compared to the cases with no loop closure or no outlier rejection.<br>
+          <b>怎么看这张图：</b>横轴是「有没有回环 / 有没有拒 outlier」，纵轴是 ATE（越低越好）。GNC（蓝）明显比 ICM（橙）和「不拒 outlier」低——这就是 GNC 族比早期一致集方法（ICM / PCM）强的直观证据，也预示了本块后面的「PCM 漏真、GNC 保真」转折。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. GNC 渐进非凸：让错的边在「变硬」中自己被推开</h2>
+      <p>GNC（Graduated Non-Convexity，渐进非凸）是本节最硬的概念，也是本块的主角之一。用生活类比：把位姿图的每条边想成一根<b>弹簧</b>。一开始所有弹簧都很「软」（几乎不影响解），优化器先在「软」的状态下大致摆好位姿；然后逐步把弹簧「拧紧变硬」，错的边因为残差大，在变硬过程中会被「撑开 / 推开」，最后被直接赋予权重 0——也就是被扔掉。</p>
+      <p>数学上它优化一个<b>截断最小二乘（TLS）代价</b>：残差小的边正常贡献，残差超过阈值 c 的边被「截断」，不再贡献平方惩罚。</p>
+      <div class="formula-box">
+        $$ \rho(r) = \begin{cases} \dfrac12 r^2 & |r| \le c \\[4pt] \dfrac12 c^2 & |r| > c \end{cases} $$
+        <div class="flow-formula">输入：每条边的残差 r　→　处理：小残差正常算 1/2 r²，大残差封顶到 1/2 c²　→　输出：错的边贡献被「封顶」，权重趋 0</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「每条边对总误差的贡献」；② 为什么这样就能判对——普通最小二乘会让大残差边「平方爆炸」拖累整个解，TLS 把大残差封顶，错的边再也拽不动整体；③ 权重 / 核函数什么时候把观测当回事：|r| ≤ c 时正常当回事，|r| &gt; c 时不再当回事（权重趋 0）。GNC 再从凸代理逐步把控制参数放松到 TLS，自动完成「软→硬」的过程。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 410" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="410" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">渐进非凸（GNC）：弹簧由软变硬，错的边被自己推开</text>
+          <!-- 三步 -->
+          <g font-size="13" text-anchor="middle">
+            <!-- 步1 -->
+            <rect x="40" y="60" width="250" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="165" y="84" fill="#ffd166" font-size="15" font-weight="700">① 初始：全软</text>
+            <line x1="80" y1="300" x2="250" y2="160" stroke="#5cffb0" stroke-width="2"/>
+            <line x1="80" y1="300" x2="250" y2="200" stroke="#ff5d73" stroke-width="2" stroke-dasharray="5 4"/>
+            <circle cx="80" cy="300" r="9" fill="#9b8cff"/><circle cx="250" cy="160" r="9" fill="#9b8cff"/><circle cx="250" cy="200" r="9" fill="#9b8cff"/>
+            <text x="165" y="296" fill="#cdd6ff" font-size="12">两机位置，边很软</text>
+            <!-- 步2 -->
+            <rect x="325" y="60" width="250" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="450" y="84" fill="#ffd166" font-size="15" font-weight="700">② 逐步变硬</text>
+            <line x1="365" y1="300" x2="535" y2="150" stroke="#5cffb0" stroke-width="5"/>
+            <line x1="365" y1="300" x2="535" y2="210" stroke="#ff5d73" stroke-width="5" stroke-dasharray="5 4"/>
+            <circle cx="365" cy="300" r="9" fill="#9b8cff"/><circle cx="535" cy="150" r="9" fill="#9b8cff"/><circle cx="535" cy="210" r="9" fill="#9b8cff"/>
+            <text x="450" y="296" fill="#cdd6ff" font-size="12">对的边绷紧</text>
+            <!-- 步3 -->
+            <rect x="610" y="60" width="250" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="735" y="84" fill="#ffd166" font-size="15" font-weight="700">③ 错的边被推开</text>
+            <line x1="650" y1="300" x2="820" y2="150" stroke="#5cffb0" stroke-width="6"/>
+            <line x1="650" y1="300" x2="820" y2="250" stroke="#ff5d73" stroke-width="2" stroke-dasharray="3 5" opacity="0.5"/>
+            <circle cx="650" cy="300" r="9" fill="#9b8cff"/><circle cx="820" cy="150" r="9" fill="#9b8cff"/><circle cx="820" cy="250" r="9" fill="#9b8cff"/>
+            <text x="735" y="296" fill="#cdd6ff" font-size="12">错的边权重趋 0</text>
+          </g>
+          <text x="165" y="332" text-anchor="middle" fill="#ffd1d8" font-size="12">红边：假回环（开始还连着）</text>
+          <text x="735" y="332" text-anchor="middle" fill="#ffd1d8" font-size="12">红边：被推开、几乎消失</text>
+          <text x="450" y="384" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：GNC 不「选最大团」，而是让错的边自己「变硬后被弹开」→ 保 recall</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三步连环画：① 初始时两机之间的两条边（绿=真回环、红虚线=假回环）都很软；② 逐步变硬，绿边绷紧、红边也还连着；③ 最终错的红边被推开、几乎消失（权重趋 0）。<br>
+          <b>怎么看这张图：</b>① 盯住红色虚线：它在第 ③ 步变细、变淡，表示「不再被当回事」；② 绿边始终绷紧，真回环被保留；③ 对比 0168 的 PCM——PCM 是「先选定最大团再扔其余」，GNC 是「让错的自己退出」。<br>
+          <b>要记住的一句话：</b>GNC 保 recall（不像 PCM 误杀真回环），这是 2020→2022 鲁棒后端的关键转折。
+        </figcaption>
+      </figure>
+
+      <h2>5. 带宽瓶颈：中心化的咽喉到底多细</h2>
+      <p>中心化撞墙，最直接的表现就是带宽。COVINS 的 493 kB/s 上行 vs 2.31 kB/s 下行，是个极端不对称——因为所有原始感知信息都要先汇总到服务器。LAMP 2.0 虽然只在机器人间传回环候选 + 子地图，但 base station 仍是汇聚点。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="380" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">通信量预算：中心化的「上行粗、下行细」</text>
+          <!-- agent -> server 粗 -->
+          <text x="200" y="80" text-anchor="middle" fill="#5cffb0" font-size="15" font-weight="700">agent → server（上行）</text>
+          <rect x="80" y="100" width="240" height="120" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <line x1="100" y1="160" x2="300" y2="160" stroke="#5cffb0" stroke-width="34" marker-end="url(#up)"/>
+          <text x="200" y="246" text-anchor="middle" fill="#cfe" font-size="14">493 kB/s（5 Hz）传关键帧 + 特征</text>
+          <text x="200" y="270" text-anchor="middle" fill="#9fb4ff" font-size="12">每 KF full ≈ 97 kB</text>
+          <!-- server -> agent 细 -->
+          <text x="700" y="80" text-anchor="middle" fill="#9b8cff" font-size="15" font-weight="700">server → agent（下行）</text>
+          <rect x="580" y="100" width="240" height="120" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <line x1="600" y1="160" x2="800" y2="160" stroke="#9b8cff" stroke-width="3" marker-end="url(#dn)"/>
+          <text x="700" y="246" text-anchor="middle" fill="#cdbcff" font-size="14">2.31 kB/s（2 Hz）只回传位姿</text>
+          <text x="700" y="270" text-anchor="middle" fill="#9fb4ff" font-size="12">KF update ≈ 273 B</text>
+          <defs>
+            <marker id="up" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#5cffb0"/></marker>
+            <marker id="dn" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#9b8cff"/></marker>
+          </defs>
+          <text x="450" y="330" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">不对称比 ≈ 493 : 2.31 ≈ 213 : 1</text>
+          <text x="450" y="362" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：上行越粗，服务器越像咽喉 → 规模一大就撞墙</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左箭头（粗绿）是 agent 往服务器上传感知数据，右箭头（细紫）是服务器回传位姿。<br>
+          <b>怎么看这张图：</b>① 上行 34 px 粗、下行 3 px 粗，比例约 213:1；② 之所以上行这么重，是因为所有关键帧 + 特征都要先汇总到服务器才能做全局 BA；③ 一旦机器人变多，这根上行管先撑爆。<br>
+          <b>要记住的一句话：</b>中心化的带宽瓶颈在上行——这倒逼后面的分布式系统「只在机器人间传描述子 / 拓扑」。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>相比 0168 的 PCM（选最大一致集），LAMP 2.0 用的 GNC 最大区别是？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：GNC 让错的边在变硬过程中自己被推开、权重趋 0，不误杀真回环，保 recall；PCM 求最大团，容易漏真回环。" onclick="lessonKit.answer(this,'q0169a')">保 recall、不误杀真回环</button>
+          <button data-correct="no" data-explanation="不对：选最大团正是 PCM 的做法，GNC 不这么干。" onclick="lessonKit.answer(this,'q0169a')">先选最大团再扔其余</button>
+        </div>
+        <div class="quiz-feedback" id="q0169a"></div>
+      </div>
+
+      <h2>6. 小结：中心化「能做到多大」与「为什么撞墙」</h2>
+      <p>把两篇放在一起看：COVINS 用 Cauchy 软权重把中心化推到 12 台、ATE 0.05 m；LAMP 2.0 用 GNC+ICM 把中心化推到地下退化环境、ATE &lt; 2 m。它们证明<b>中心化确实能工作、且简单可靠</b>。但共同短板也清楚：<b>服务器是计算与带宽咽喉、有单点故障、依赖可靠网络</b>。本块下一节就转向「把服务器拆掉」的分布式路线。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 360" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="360" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">一致集思路的两代：PCM（硬剔除）vs GNC（软推开）</text>
+          <g font-size="13" text-anchor="middle">
+            <!-- PCM -->
+            <rect x="60" y="60" width="360" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="240" y="86" fill="#ffd166" font-size="15" font-weight="700">PCM 族（0168 / DiSCo / DCL）</text>
+            <text x="240" y="120" fill="#cdd6ff" font-size="13">先假定「所有候选」，再求最大一致集</text>
+            <text x="240" y="150" fill="#cdd6ff" font-size="13">→ 圈外的一律硬剔除</text>
+            <text x="240" y="200" fill="#ffd1d8" font-size="14" font-weight="700">优点：简单、实现容易</text>
+            <text x="240" y="228" fill="#ffd1d8" font-size="14" font-weight="700">缺点：低 recall（误杀真回环）</text>
+            <text x="240" y="270" fill="#9fb4ff" font-size="12">代表：DOOR / DiSCo / DCL / D²SLAM远场</text>
+            <!-- GNC -->
+            <rect x="480" y="60" width="360" height="250" rx="10" fill="#16203a" stroke="#3a4a78"/>
+            <text x="660" y="86" fill="#ffd166" font-size="15" font-weight="700">GNC 族（LAMP2 / Swarm / Kimera）</text>
+            <text x="660" y="120" fill="#cdd6ff" font-size="13">从软到硬逐步松弛，错边自己退出</text>
+            <text x="660" y="150" fill="#cdd6ff" font-size="13">→ outlier 权重渐变到 0</text>
+            <text x="660" y="200" fill="#bfe" font-size="14" font-weight="700">优点：在线、保 recall</text>
+            <text x="660" y="228" fill="#bfe" font-size="14" font-weight="700">缺点：需迭代、权重更新</text>
+            <text x="660" y="270" fill="#9fb4ff" font-size="12">代表：LAMP2 / Swarm / Kimera-Multi</text>
+          </g>
+          <text x="450" y="344" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：2020→2022 的转折 = PCM 漏真 → GNC 保真</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两块对照 PCM 族与 GNC 族的做法与利弊。<br>
+          <b>怎么看这张图：</b>① 左块「硬剔除」：先定最大团，团外全扔，容易误杀；② 右块「软推开」：错边权重渐变到 0，真回环留着；③ 下方代表系统列出了本块各篇的归属。<br>
+          <b>要记住的一句话：</b>「PCM 漏真、GNC 保真」是整块鲁棒后端的主线，后面每篇都落在这两族之一。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>COVINS 的「通信不对称」具体指什么？为什么中心化必然这样？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>agent→server 上行 493 kB/s（传关键帧 + 特征），server→agent 下行仅 2.31 kB/s（只回传位姿）。中心化必然如此，因为所有感知数据要先汇总到服务器做全局 BA，上行是瓶颈；而服务器只需把算好的位姿发回，所以下行极轻。</div></details>
+        </li>
+        <li>GNC 的 TLS 代价函数，为什么能让假回环「不再拖累」整个解？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>普通最小二乘里大残差会平方爆炸、拖累全局；TLS 把残差封顶到 1/2 c²，超过阈值 c 的边不再贡献额外惩罚，其权重趋 0。GNC 再从凸代理逐步放松控制参数到 TLS，让错的边在变硬过程中自己被推开。</div></details>
+        </li>
+        <li>中心化路线「简单但撞墙」，撞的是哪三面墙？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>① 计算墙：服务器要解所有机器人叠在一起的全局 BA，随规模线性增长；② 带宽墙：上行管是咽喉，机器人一多先撑爆；③ 容错墙：服务器一断或网络中断，全场失去全局一致性（单点故障）。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>COVINS 与 LAMP 2.0 的中心化结构分别由哪几部分组成？</li>
+        <li>COVINS 的 Cauchy 核与 LAMP 2.0 的 GNC+ICM，鲁棒思路有何不同？</li>
+        <li>GNC 的「渐进非凸」用弹簧类比怎么讲？为什么它保 recall？</li>
+        <li>中心化的带宽瓶颈为什么是「上行」而不是「下行」？</li>
+        <li>为什么中心化「简单但撞墙」，撞的是哪三面墙？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0168-多机为什么难-假回环会毁掉两台地图.html">← 上一课：多机为什么难</a>
+        <a class="next" href="0170-分布式激光-描述子当机间通用语言.html">下一课：分布式激光 →</a>
+      </div>
+      <p class="foot-note">中心化把天花板量出来了，下一节把服务器拆掉，看分布式激光怎么玩 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

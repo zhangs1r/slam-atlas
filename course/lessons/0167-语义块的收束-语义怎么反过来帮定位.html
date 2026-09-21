@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>语义块的收束：语义怎么反过来帮定位 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0167</div>
+      <h1>语义块的收束：语义怎么反过来帮定位</h1>
+      <p class="subtitle">建图不是为了看图，而是为了让「我在哪」算得更准 🎯</p>
+      <div class="hero-meta">
+        <span>🎯 主题：语义建图块小结 + 2023 综述视角</span>
+        <span>👥 作者：Huayan Pu、Jun Luo 等</span>
+        <span>📅 2023 · <i>Visual SLAM Integration With Semantic Segmentation and Deep Learning: A Review</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">块收束</a>
+        <a href="#b">语义反哺定位</a>
+        <a href="#c">综述贡献</a>
+        <a href="#d">粒度回顾</a>
+        <a href="#e">表示对照</a>
+        <a href="#f">诚实收尾</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 用一条主线串起 0159–0166（surfel → 体素 → 场景图，三档粒度，四类关联，实时代价）；② 解释「语义怎么反过来帮定位」——在前端剔动态、后端加物体约束、回环用语义描述子；③ 用 2023 综述的视角评价 DL 融入 SLAM 的得与失；④ 复述本块最该记住的纠正（CRF ≠ 回环）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>本块 <b>0159–0166</b> 全部是这篇综述归纳的对象：SemanticFusion / Co-Fusion / MaskFusion / EM-Fusion / SO-SLAM 等都被它归入门类。它还是 <b>0158</b> 点过的「CRF = 回环」误读的源头（§V-A），本课在收束处正式了结。<b>0153</b> 的动态剔除、<b>0043–0045</b> 的 ORB-SLAM2、<b>0147</b> 的 SAM / DINOv2 都是语义反哺定位的上下游；下一站 <b>0168</b> 进入多机块，Kimera 的 DSG 会在那里以分布式形态再现。</p></div>
+      </div>
+
+      <h2 id="b">1. 语义块的收束：一条主线</h2>
+      <p>九节课走下来，语义建图块其实只讲了「地图该怎么装语义」这一件事，但答案沿着表示能力一路升级：</p>
+      <ul>
+        <li><b>表示</b>：surfel（0159 / 0160）→ octree / TSDF 体素（0161 / 0162）→ 动态场景图 DSG 五层（0163）；</li>
+        <li><b>粒度</b>：逐像素语义（0159）→ 实例级（0160 / 0161）→ 全景 stuff+things（0162）；</li>
+        <li><b>关联</b>：几何+语义硬判（0160）→ IoU / EM（0161）→ 地图参考 + 统计集成（0162 / 0166）；</li>
+        <li><b>物体模型</b>：从稠密 / 体素（0161–0162）到紧凑椭球 / cube-quadric（0164 / 0166）；</li>
+        <li><b>代价</b>：实时性始终是瓶颈，来源各异（CNN 降频、GPU 对象重建、检测频率）。</li>
+      </ul>
+      <p>这篇 2023 综述（Pu、Luo 等）恰好是按「DL 融入 SLAM 的前 / 后端与回环」来系统梳理的，是给本块收束的天然透镜。</p>
+
+      <h2 id="c">2. 语义怎么「反过来」帮定位</h2>
+      <p>本块标题问的是：建语义图，到底对「定位」有什么用？答案是语义不只是「地图的装饰」，它会<b>反哺位姿估计</b>，在三个地方介入：</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#f5f7fa"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">语义在 SLAM 三处介入，让「我在哪」算得更准</text>
+          <rect x="40" y="70" width="230" height="110" rx="10" fill="#e9f7ef" stroke="#3a9d5d"/>
+          <text x="155" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#1d6b3c">前端 Frontend</text>
+          <text x="155" y="128" text-anchor="middle" font-size="12" fill="#1d6b3c">语义剔动态点</text>
+          <text x="155" y="148" text-anchor="middle" font-size="12" fill="#1d6b3c">（人/车框内删）</text>
+          <rect x="335" y="70" width="230" height="110" rx="10" fill="#eaf2fb" stroke="#4a90c2"/>
+          <text x="450" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#0b4f7a">后端 Backend</text>
+          <text x="450" y="128" text-anchor="middle" font-size="12" fill="#0b4f7a">物体/平面约束</text>
+          <text x="450" y="148" text-anchor="middle" font-size="12" fill="#0b4f7a">（椭球进位姿图）</text>
+          <rect x="630" y="70" width="230" height="110" rx="10" fill="#f3e8ff" stroke="#9b6dd6"/>
+          <text x="745" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#6a3aa0">回环 Loop</text>
+          <text x="745" y="128" text-anchor="middle" font-size="12" fill="#6a3aa0">语义描述子</text>
+          <text x="745" y="148" text-anchor="middle" font-size="12" fill="#6a3aa0">（同场景更稳匹配）</text>
+          <rect x="300" y="260" width="300" height="90" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="450" y="295" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">更准的位姿估计</text>
+          <text x="450" y="322" text-anchor="middle" font-size="12" fill="#6b7785">动态点不拖后腿 · 结构约束更紧 · 回环更可靠</text>
+          <line x1="155" y1="180" x2="450" y2="258" stroke="#9aa7b4" stroke-width="2" marker-end="url(#c1)"/>
+          <line x1="450" y1="180" x2="450" y2="258" stroke="#9aa7b4" stroke-width="2" marker-end="url(#c1)"/>
+          <line x1="745" y1="180" x2="450" y2="258" stroke="#9aa7b4" stroke-width="2" marker-end="url(#c1)"/>
+          <defs><marker id="c1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#9aa7b4"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>语义在 SLAM 三个模块里分别介入——前端用语义剔掉动态特征点、后端把物体 / 平面当约束加进位姿图、回环用语义描述子做更稳的匹配；三者共同汇入「更准的位姿估计」。<br>
+          <b>怎么看这张图：</b>① 前端对应 0153 / 0165 的动态剔除（语义当可动先验）；② 后端对应 0164 / 0166 的物体进位姿图；③ 回环节是综述强调的「语义感知回环」方向，本块未深讲但点到了。<br>
+          <b>要记住的一句话：</b>语义建图不是「画好看的图」，而是「让定位更准」的增值信息。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 460" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="460" fill="#0f1424"/>
+          <text x="450" y="34" text-anchor="middle" font-size="17" font-weight="700" fill="#9fb4ff">语义不是「贴在地图上的标签」，它会绕回来帮定位</text>
+
+          <!-- ① 相机拍到场景 -->
+          <rect x="60" y="70" width="310" height="140" rx="12" fill="#16203a" stroke="#9fb4ff" stroke-width="2"/>
+          <rect x="88" y="100" width="52" height="38" rx="6" fill="#cdd6ff"/>
+          <polygon points="140,106 162,96 162,142 140,132" fill="#cdd6ff"/>
+          <circle cx="114" cy="119" r="11" fill="#0f1424"/>
+          <text x="88" y="216" font-size="13" fill="#cdd6ff">相机</text>
+          <!-- 场景里的人和墙 -->
+          <rect x="196" y="112" width="150" height="8" rx="3" fill="#5cffb0"/>
+          <text x="271" y="104" text-anchor="middle" font-size="11" fill="#5cffb0">墙（静止）</text>
+          <circle cx="238" cy="140" r="9" fill="#ffd1d8"/>
+          <rect x="230" y="150" width="16" height="30" rx="5" fill="#ffd1d8"/>
+          <text x="238" y="196" text-anchor="middle" font-size="11" fill="#ffd1d8">走过的人</text>
+          <text x="215" y="228" text-anchor="middle" font-size="12.5" fill="#9fb4ff">① 拍到场景</text>
+
+          <!-- ② 分割出动态 -->
+          <rect x="530" y="70" width="310" height="140" rx="12" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <rect x="562" y="112" width="150" height="8" rx="3" fill="#5cffb0"/>
+          <text x="637" y="104" text-anchor="middle" font-size="11" fill="#5cffb0">墙：保留</text>
+          <circle cx="604" cy="140" r="10" fill="#a32617"/>
+          <rect x="596" y="150" width="16" height="30" rx="5" fill="#a32617"/>
+          <text x="604" y="196" text-anchor="middle" font-size="11" fill="#ffd1d8">人：剔掉</text>
+          <text x="685" y="228" text-anchor="middle" font-size="12.5" fill="#ffd166">② 语义分割出「人」</text>
+
+          <!-- ③ 剔掉动态点 -->
+          <rect x="530" y="270" width="310" height="140" rx="12" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <circle cx="580" cy="318" r="3.5" fill="#5cffb0"/><circle cx="606" cy="306" r="3.5" fill="#5cffb0"/>
+          <circle cx="634" cy="322" r="3.5" fill="#5cffb0"/><circle cx="662" cy="304" r="3.5" fill="#5cffb0"/>
+          <circle cx="690" cy="318" r="3.5" fill="#5cffb0"/><circle cx="718" cy="308" r="3.5" fill="#5cffb0"/>
+          <line x1="580" y1="318" x2="718" y2="308" stroke="#2f7a45" stroke-width="1.5"/>
+          <text x="685" y="272" text-anchor="middle" font-size="11" fill="#5cffb0">只剩静态特征</text>
+          <text x="685" y="380" text-anchor="middle" font-size="12.5" fill="#5cffb0">③ 用静态点做跟踪建图</text>
+
+          <!-- ④ 位姿更准 -->
+          <rect x="60" y="270" width="310" height="140" rx="12" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <path d="M 92 388 C 150 340, 240 330, 330 300" fill="none" stroke="#ffd166" stroke-width="3"/>
+          <circle cx="92" cy="388" r="5" fill="#ffd166"/>
+          <circle cx="330" cy="300" r="5" fill="#ffd166"/>
+          <text x="150" y="322" font-size="11" fill="#ffd166">轨迹不再被拽歪</text>
+          <text x="215" y="380" text-anchor="middle" font-size="12.5" fill="#ffd166">④ 位姿更准</text>
+
+          <!-- 闭环箭头 -->
+          <path d="M 374 140 L 524 140" stroke="#9fb4ff" stroke-width="2.5" fill="none" marker-end="url(#ar)"/>
+          <path d="M 685 214 L 685 264" stroke="#9fb4ff" stroke-width="2.5" fill="none" marker-end="url(#ar)"/>
+          <path d="M 524 340 L 376 340" stroke="#9fb4ff" stroke-width="2.5" fill="none" marker-end="url(#ar)"/>
+          <path d="M 215 264 L 215 216" stroke="#9fb4ff" stroke-width="2.5" fill="none" marker-end="url(#ar)"/>
+          <text x="450" y="132" text-anchor="middle" font-size="11" fill="#9fb4ff">分割</text>
+          <text x="700" y="244" font-size="11" fill="#9fb4ff">剔点</text>
+          <text x="450" y="360" text-anchor="middle" font-size="11" fill="#9fb4ff">估计</text>
+          <text x="230" y="244" font-size="11" fill="#9fb4ff">回馈</text>
+
+          <text x="450" y="440" text-anchor="middle" font-size="13" fill="#ffd166">闭环：定位越准 → 分割越准 → 剔得越干净 → 定位更准</text>
+          <defs>
+            <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+              <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#9fb4ff"/>
+            </marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>这一节要讲的「反过来帮定位」，画成一个环：相机拍到场景 → 语义分割认出「人」→ 把人身上的特征点剔掉 → 只用静态点估计位姿 → 位姿更准又让下一帧的分割与投影更准，回到第一步。
+          <br>
+          <b>怎么看这张图：</b>顺着四条带箭头的连线走一圈。左上「拍」、右上「分」、右下「剔」、左下「估」，最后一条箭头从「估」绕回「拍」，这就是「反哺」。注意右侧两格：静态特征（绿点）被保留、人（红块）被剔除——干净与否，直接决定左下那条轨迹会不会被拽歪。
+          <br>
+          <b>要记住的一句话：</b>语义与定位不是单向流水线，而是一个互相校正的闭环——这是语义 SLAM 相对「建完图再贴标签」的根本区别。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 综述的贡献：DL 融入 SLAM 的得与失</h2>
+      <p>这篇综述把「深度学习（尤其语义分割）融入视觉 SLAM」按模块拆开：前端（特征 / 语义）、后端（鲁棒优化）、回环（语义描述子），并系统整理了动态环境方法。它给出两张关键表：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h3>Table I：前端 DL 方法对比</h3>
+          <p>横向列出各系统的语义来源网络、粒度、是否实时，是 0159–0166 各篇的横向索引。</p>
+        </div>
+        <div class="mini-card">
+          <h3>Table II：DL vs 传统 SLAM 模块</h3>
+          <p>结论很清醒：DL 在<b>鲁棒性 / 准确性</b>上更强，但<b>数据量更大、实时性更弱</b>；DXSLAM 是首个无 GPU 实时的特征法 SLAM（CPU 实时）。</p>
+        </div>
+      </div>
+      <p>这正是本块反复出现的代价账的「官方总结」：语义越强，算力越贵。YOLO-SLAM（0165）用「只删点不建模」、Kimera（0163）用「嵌入式多线程」各自在实时性上找平衡，但都未根本解决。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_Visual_SLAM_Integration_With_Semantic_Segmentation_and_D/4b41de122defc5c37ab5a0d05a589c97cf8b86e00e940935eef7845d4cea00dc.jpg" alt="Timeline of recent developments in semantic SLAM">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Recent developments in semantic SLAM. The figure is expanded as a time line. At each time node, some classic works on semantic segmentation and SLAM are presented, such as SLAM++, DS-SLAM, DSPSLAM, and so on.<br>
+          <b>怎么看这张图：</b>这是语义 SLAM 的发展时间线，把本块覆盖的 SemanticFusion、Co-Fusion、MaskFusion、EM-Fusion、SO-SLAM 等都标在轴上。它直观告诉我们：这些论文不是孤立的，而是一条沿着「粒度更细、表示更优、关联更稳」推进的时间线，正是本块主线的历史印证。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 粒度回顾：语义 vs 实例</h2>
+      <p>综述用一张图讲清了本块最核心的粒度区分，正好收束 0159 → 0160 → 0162 的进阶：</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_Visual_SLAM_Integration_With_Semantic_Segmentation_and_D/7c96ea65ddf6489114c13c5b43a064108a6cbaf722adafbccd9cfde4fc37438a.jpg" alt="Semantic vs instance segmentation results">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Some presentation of segmentation results. (a) Original picture. (b) Semantic segmentation result of (a) after fully convolutional network (FCN). (c) Result of instance segmentation. It can clearly see that instance segmentation can distinguish between individuals in the same class of objects.<br>
+          <b>怎么看这张图：</b>(b) 语义分割把所有同类涂成同色（认得「是椅子」），(c) 实例分割把同类的不同个体分开（认得「第几把椅子」）。这正对应 0159 的逐像素语义与 0160 的实例级——综述用一张图把本块最关键的粒度跃迁点透了。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. 地图表示全景对照</h2>
+      <p>综述归纳的表示谱系，和本块的演进完全吻合，这里一次性对照：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h3>surfel</h3><p>SemanticFusion / Co-Fusion：表面小面片，无自由空间（0159 / 0160）。</p></div>
+        <div class="mini-card"><h3>octree / 体素 TSDF</h3><p>MID / EM-Fusion、PanopticFusion：能装自由空间（0161 / 0162）。</p></div>
+        <div class="mini-card"><h3>cube / quadric</h3><p>CubeSLAM、QuadricSLAM、SO-SLAM：紧凑对象参数化（0164 / 0166）。</p></div>
+        <div class="mini-card"><h3>稀疏点</h3><p>DSP-SLAM 等：在 ORB-SLAM2 点上挂语义，最轻（呼应 0165）。</p></div>
+      </div>
+      <p>值得点明：本块主线「surfel → 体素 → 场景图」就是「地图表示决定能力上限」的活标本——越往后的表示，越能回答「可达性 / 物体关系 / 房间结构」这类高层问题（0163 的 DSG 是天花板）。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>2023 综述的 Table II 对「DL 融入 SLAM」给出的最主要结论是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：Table II 结论很清醒——DL 在鲁棒/准确上更强，但数据量更大、实时性更弱；DXSLAM 是首个无 GPU 实时的特征法 SLAM。这正呼应本块的实时性代价账。" onclick="lessonKit.answer(this,'q0167a')">DL更准但实时更弱</button>
+          <button data-correct="no" data-explanation="错：综述并未说 DL 全面优于传统；恰恰强调实时性更弱，且需要更多数据，是「有得有失」的权衡而非碾压。" onclick="lessonKit.answer(this,'q0167a')">DL全面碾压传统</button>
+        </div>
+        <div class="quiz-feedback" id="q0167a"></div>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 980 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="980" height="430" fill="#0f1424"/>
+          <text x="490" y="32" text-anchor="middle" font-size="17" font-weight="700" fill="#9fb4ff">同一把椅子，四种存法——表示方式决定了地图能干什么</text>
+
+          <!-- 面板 1：surfel -->
+          <rect x="24" y="52" width="222" height="300" rx="12" fill="#16203a" stroke="#9fb4ff" stroke-width="1.8"/>
+          <text x="135" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#9fb4ff">① surfel 面元</text>
+          <rect x="76" y="132" width="118" height="14" rx="3" fill="#b9803f"/>
+          <rect x="84" y="146" width="10" height="86" fill="#b9803f"/>
+          <rect x="176" y="146" width="10" height="86" fill="#b9803f"/>
+          <rect x="84" y="222" width="102" height="12" rx="3" fill="#b9803f"/>
+          <ellipse cx="100" cy="138" rx="8" ry="5" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="135" cy="138" rx="8" ry="5" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="170" cy="138" rx="8" ry="5" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="89" cy="180" rx="6" ry="7" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="89" cy="216" rx="6" ry="7" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="181" cy="180" rx="6" ry="7" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="181" cy="216" rx="6" ry="7" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="120" cy="228" rx="8" ry="5" fill="#ffd166" fill-opacity="0.85"/>
+          <ellipse cx="150" cy="228" rx="8" ry="5" fill="#ffd166" fill-opacity="0.85"/>
+          <text x="135" y="276" text-anchor="middle" font-size="11" fill="#ffd166">表面贴满「小圆片」</text>
+          <text x="135" y="296" text-anchor="middle" font-size="11" fill="#cdd6ff">每片记：位置＋法向＋颜色</text>
+          <text x="135" y="324" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 做不了「自由空间」</text>
+          <text x="135" y="342" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 导航级可达性无从谈起</text>
+
+          <!-- 面板 2：体素 -->
+          <rect x="262" y="52" width="222" height="300" rx="12" fill="#16203a" stroke="#5cffb0" stroke-width="1.8"/>
+          <text x="373" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#5cffb0">② 体素 / TSDF</text>
+          <g stroke="#2f7a45" stroke-width="1">
+            <rect x="296" y="104" width="154" height="154" fill="none"/>
+            <line x1="296" y1="142" x2="450" y2="142"/><line x1="296" y1="180" x2="450" y2="180"/>
+            <line x1="296" y1="218" x2="450" y2="218"/>
+            <line x1="334" y1="104" x2="334" y2="258"/><line x1="372" y1="104" x2="372" y2="258"/>
+            <line x1="410" y1="104" x2="410" y2="258"/>
+          </g>
+          <rect x="334" y="180" width="38" height="38" fill="#5cffb0" fill-opacity="0.55"/>
+          <rect x="372" y="180" width="38" height="38" fill="#5cffb0" fill-opacity="0.55"/>
+          <rect x="334" y="218" width="38" height="38" fill="#5cffb0" fill-opacity="0.35"/>
+          <text x="373" y="204" text-anchor="middle" font-size="9" fill="#0f1424">椅</text>
+          <text x="373" y="284" text-anchor="middle" font-size="11" fill="#5cffb0">房间切成小立方体</text>
+          <text x="373" y="302" text-anchor="middle" font-size="11" fill="#cdd6ff">有东西的格子才挂语义</text>
+          <text x="373" y="324" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 有自由空间（空格子）</text>
+          <text x="373" y="342" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 能抽网格、能做导航</text>
+
+          <!-- 面板 3：quadric -->
+          <rect x="500" y="52" width="222" height="300" rx="12" fill="#16203a" stroke="#9b8cff" stroke-width="1.8"/>
+          <text x="611" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#9b8cff">③ 椭球 quadric</text>
+          <rect x="566" y="152" width="86" height="11" rx="3" fill="#b9803f"/>
+          <rect x="572" y="163" width="9" height="62" fill="#b9803f"/>
+          <rect x="637" y="163" width="9" height="62" fill="#b9803f"/>
+          <rect x="572" y="218" width="74" height="10" rx="3" fill="#b9803f"/>
+          <ellipse cx="609" cy="188" rx="62" ry="48" fill="#9b8cff" fill-opacity="0.3"
+                   stroke="#9b8cff" stroke-width="2" stroke-dasharray="6 4"/>
+          <line x1="609" y1="140" x2="609" y2="238" stroke="#9b8cff" stroke-width="1.2"/>
+          <line x1="545" y1="188" x2="673" y2="188" stroke="#9b8cff" stroke-width="1.2"/>
+          <text x="609" y="284" text-anchor="middle" font-size="11" fill="#9b8cff">不存表面，只存一个椭球</text>
+          <text x="609" y="302" text-anchor="middle" font-size="11" fill="#cdd6ff">9 个参数 = 中心3＋朝向3＋轴长3</text>
+          <text x="609" y="324" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 极省内存</text>
+          <text x="609" y="342" text-anchor="middle" font-size="11" fill="#ffd1d8">✗ 丢掉形状细节</text>
+
+          <!-- 面板 4：稀疏点 / 场景图 -->
+          <rect x="738" y="52" width="222" height="300" rx="12" fill="#16203a" stroke="#ffd166" stroke-width="1.8"/>
+          <text x="849" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#ffd166">④ 场景图 DSG</text>
+          <rect x="806" y="100" width="86" height="142" rx="6" fill="none" stroke="#ffd166" stroke-width="2"/>
+          <text x="849" y="118" text-anchor="middle" font-size="10.5" fill="#ffd166">整栋楼</text>
+          <rect x="818" y="126" width="62" height="106" rx="4" fill="none" stroke="#9fb4ff" stroke-width="1.6"/>
+          <text x="849" y="142" text-anchor="middle" font-size="10" fill="#9fb4ff">房间</text>
+          <ellipse cx="834" cy="196" rx="9" ry="6" fill="#b9803f"/>
+          <circle cx="866" cy="204" r="7" fill="#ffd1d8"/>
+          <text x="834" y="216" text-anchor="middle" font-size="9" fill="#ffd166">椅子</text>
+          <text x="866" y="224" text-anchor="middle" font-size="9" fill="#ffd1d8">人</text>
+          <line x1="849" y1="180" x2="866" y2="200" stroke="#5cffb0" stroke-width="1.4" stroke-dasharray="3 3"/>
+          <text x="849" y="260" text-anchor="middle" font-size="11" fill="#ffd166">分层：楼→层→房间→物体→网格</text>
+          <text x="849" y="286" text-anchor="middle" font-size="11" fill="#cdd6ff">边 = 空间/逻辑关系</text>
+          <text x="849" y="304" text-anchor="middle" font-size="11" fill="#5cffb0">✓ 可行动的抽象</text>
+          <text x="849" y="330" text-anchor="middle" font-size="11" fill="#ffd166">「人在房间里」是一条边</text>
+
+          <text x="490" y="392" text-anchor="middle" font-size="13" fill="#cdd6ff">同一把椅子：面元只会「糊表面」，体素多了「空的地方」，椭球省到 9 个数，场景图会「指路」</text>
+          <text x="490" y="414" text-anchor="middle" font-size="12" fill="#9fb4ff">表示方式不是实现细节，它直接决定地图能回答什么问题</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>把语义建图这一块走过的四种地图表示，用「同一把椅子」并排画出来，让你一眼看出它们存的东西根本不同：面元存表面小片、体素存一格一格的占有与标签、椭球只存一个 9 参数的包围体、场景图把整个建筑分成五层挂上关系。
+          <br>
+          <b>怎么看这张图：</b>① 先横着看四格的标题，从左到右正好是这一块的演进顺序；② 再比较每一格底下两行小字——绿色的「✓」是它多出来的能力，红色的「✗」是它换不来的东西；③ 重点看第 ② 格：空格子代表「这地方什么都没有」，正是导航需要的自由空间，而面元路线（第 ① 格）根本没有这个概念；④ 最后看第 ④ 格那条虚线边，它表示「人在房间里」这层关系——这是前面三种表示都表达不了的。
+          <br>
+          <b>要记住的一句话：</b>地图表示决定能力上限：选了面元就等于放弃自由空间，选了体素才谈得上导航，而场景图把「能指路」这件事变成了地图自带的本事。
+        </figcaption>
+      </figure>
+
+      <h2>6. 诚实收尾：本块最该记住的纠正</h2>
+      <div class="callout" style="border-left:4px solid #e0533d;">
+        <h4>⚠️ 把「CRF = 回环」这个误读正式了结</h4>
+        <p>这篇 2023 综述的 §V-A 写道：SemanticFusion「employs a fully connected conditional random field (CRF) ... enabling loop detection」。这是<b>错的</b>。<b>0158</b> 与 <b>0159</b> 已核实：SemanticFusion 的 CRF 只用于<b>标签空间平滑</b>（让邻域像素更像同一类），和回环检测毫无关系。本块在此正式了结这个误读——引用综述时请勿采信，应回到原文判断。</p>
+      </div>
+      <p>另外诚实标注综述自身的局限（也是本块的代价账）：① 语义分割网络<b>类别有限、算力消耗大</b>；② 多数动态方法<b>删除动态物体导致特征损失</b>（这正是 0155 DynaSLAM II 要「留 + 追踪」的动机）；③ 深度可靠性影响实例重建质量。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面关于 SemanticFusion 的 CRF 的说法，哪个对本块结论是错的？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：这正是 2023 综述 §V-A 的误读，本块已核实——CRF 在 SemanticFusion 只做标签平滑，与回环无关。选它等于采信了误读。" onclick="lessonKit.answer(this,'q0167b')">CRF促成回环检测</button>
+          <button data-correct="yes" data-explanation="对：CRF 的真实用途是标签空间平滑（修分割锯齿），回环是位姿图层面的事；综述说它 enabling loop detection 是错的，本块已纠正。" onclick="lessonKit.answer(this,'q0167b')">CRF只做标签平滑</button>
+        </div>
+        <div class="quiz-feedback" id="q0167b"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>用一条主线串起 0159–0166：表示、粒度、关联、物体模型、代价各是怎么演进的？</li>
+        <li>语义怎么「反过来」帮定位？在前端 / 后端 / 回环三处各起到什么作用？</li>
+        <li>2023 综述 Table II 对「DL 融入 SLAM」的主要结论是什么？它和本块的实时性代价账如何呼应？</li>
+        <li>综述 Fig.6 的「语义 vs 实例」对应本块哪两节课的粒度跃迁？</li>
+        <li>本块最该记住的纠正是什么（CRF 与回环）？为什么引用综述时要谨慎？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用一句话说明「语义建图」和「定位」的关系——为什么建语义图最终是为了定位更准？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>语义不是地图的装饰，而是「增值约束」：前端用语义剔掉动态点（不让走动的人把位姿带偏，见 0153/0165），后端把物体/平面当几何约束加进位姿图（见 0164/0166），回环用语义描述子做更稳的同源场景匹配。三者都让「我在哪」算得更准。所以建语义图的目的，最终是反哺定位——这也是本课标题「语义怎么反过来帮定位」的含义。</div></details>
+        </li>
+        <li>综述说「DL 鲁棒准确但实时更弱」。用本块至少两个具体系统的取舍来证明这句话。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>例一：MID-Fusion / EM-Fusion（0161）做对象级体素重建必须 GPU，且实时性随物体数骤降——准确（能建物体模型）但慢。例二：YOLO-SLAM（0165）为了实时，放弃实例分割和物体模型、只用轻量 YOLO 出框删点，在 Intel 无 GPU 笔记本可跑，但只识别「人」一类、精度上限低。两者正好印证「准」与「快」的权衡——DL 强在准、弱在快。</div></details>
+        </li>
+        <li>为什么综述 Fig.6 的「语义 vs 实例」区分，是本块最关键的粒度跃迁？它对应哪两节课？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>语义分割只告诉「这是椅子类」，无法区分同类个体；实例分割把同类不同个体分开，才能支持「拿第②把椅子」这类物体级交互。这正是 0159（逐像素语义，只给类）到 0160（实例级，给编号）的跃迁，综述用一张图把这次跃迁点透了。后续 0162 的全景（stuff+things）是把两者统一，0164/0166 的对象参数化则建立在这之上。</div></details>
+        </li>
+        <li>为什么本块要在收束处特别纠正「CRF = 回环」这个误读？写课时我们是怎么处理的？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为这个误读出自一篇 2023 综述的 §V-A，而综述容易被当权威引用；若照搬，会把「标签平滑」错当成「回环检测」，误导读者。我们核实原文（0158/0159 已查）后确认：SemanticFusion 的 CRF 只做标签空间平滑，与回环无关。处理方式是在 0158、0159 点出，并在本收束课（0167）正式了结，明确标注「引用综述时请勿采信，应回到原文判断」——这是硬规范「诚实标注不确定性 / 纠正 OCR 与文献误读」的要求。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0166-对象SLAM关联框架-把数据关联做正.html">← 0166 对象 SLAM 关联框架：把数据关联做正</a>
+        <a class="next" href="0168-多机为什么难-假回环会毁掉两台地图.html">0168 多机为什么难：假回环会毁掉两台地图 →</a>
+      </div>
+      <p class="foot-note">语义块收束——地图会「认东西」了，下一站多机块看两台机器人怎么共享这张图 🔗</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

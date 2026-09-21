@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>纯几何路线 · 不靠语义也能判动态 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态环境）/ Lesson 0154</div>
+      <h1>纯几何路线 · 不靠语义也能判动态</h1>
+      <p class="subtitle">不打语义牌：用点相关性图与长时一致性，把动点从静态里「裂」出来 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：纯几何判动态 · 最大连通分量 · 长时 CRF</span>
+        <span>👥 作者：Dai 等 / Du 等</span>
+        <span>📅 2022 · RA-L / TVCG</span>
+      </div>
+      <div class="toc">
+        <a href="#a">为什么需要纯几何派</a>
+        <a href="#b">DSLAM 点相关图</a>
+        <a href="#c">最大连通分量</a>
+        <a href="#d">CRF 长时一致</a>
+        <a href="#e">代价账</a>
+        <a href="#f">读完之后</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清「纯几何派」为什么不需要语义分割（适合无 GPU/无训练数据平台）；② 讲出 DSLAM 用 Delaunay 点相关性图 + 最大连通分量判静态的原理；③ 讲出 CRF 长时一致性怎么用「跨多帧的统计」分离动静；④ 背出两篇的关键数字（30.65 ms / ATE 0.030 m）；⑤ 记住纯几何派的命门：动态占比过高会退化。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>两篇都<b>在第三季 0043–0045 的 ORB-SLAM2 前端/后端上改造</b>，和 0153 一样是「打补丁」，但补丁<b>完全不碰语义网络</b>。动态这件事<b>第一季 0005（SW-NDT 激光侧）</b>也是「不靠语义、靠几何残差」的思路——本节是<b>视觉侧</b>的纯几何答案，正好和 0153 的语义结合路线对照。注意 <b>第七季 0147</b> 的 SAM 在这里完全没用上，说明「纯几何」是一条独立于「语义零件」的路线。</p>
+        </div>
+      </div>
+
+      <h2>1. 先排雷：DSLAM（无空格）≠ DS-SLAM（2018）</h2>
+      <div class="callout">
+        <p><b>命名坑</b>：本节第一篇系统名是 <b>DSLAM</b>（<b>没有空格</b>，D-S-L-A-M），作者 Dai 等，2022；而上节的 <b>DS-SLAM</b>（<b>有空格</b>）是 Yu 等，2018。一个空格之差，方法完全不同——前者是纯几何点相关性图，后者是语义+几何五线程。写课时一律用「全称 + 作者 + 年份」锚定，避免念混。</p>
+      </div>
+      <p>为什么要有「纯几何派」？因为语义分割有两个硬门槛：<b>要 GPU、要训练数据</b>。在嵌入式机器人、无网络的设备上跑不了 Mask R-CNN。纯几何派的意思是：<b>只看「点与点之间的相对位置随时间是否一致」，就能判断谁在动</b>——连「这是人还是车」都不需要知道。</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>DSLAM（2022）</h4>
+          <p>Delaunay 三角化建「点相关性图」；相对位置跨时间一致 → 同刚体（静态或同动）；剔除不一致边后，<b>最大连通分量</b>判为静态。30.65 ms/帧，无需 GPU。</p>
+        </div>
+        <div class="mini-card">
+          <h4>CRF 长时一致（2022）</h4>
+          <p>先用 GC-RANSAC 初标动静，再用「长时一致性条件随机场（LC-CRF）」给每个 landmark 打动静标签。不看语义，靠<b>跨多帧的统计</b>：动态点观测更不一致、重投影误差更大。</p>
+        </div>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. DSLAM：用「点相关性图」判断谁和谁一起动</h2>
+      <p>生活类比：你蒙着眼睛待在房间里，只许摸「相邻两点的相对位置」。如果一组点之间相对位置<b>几秒钟都不变</b>，它们多半钉在同一块静止背景上（或同一个刚体一起动）；如果某几个点相对位置<b>老在变</b>，它们就是动态物体上的点。DSLAM 就是把这种「相对位置一致性」变成图。</p>
+      <p>它维护每个点相对邻居的历史位置差，定义为点相关性测量：</p>
+      <div class="formula-box"><div class="flow-formula">$$z_{ijk} = y_{ik} - y_{jk}$$</div></div>
+      <p><b>这句话在说什么</b>：取点 i 相对点 j、点 k 的位置差。<b>如果跨时间这个差都稳定</b>，说明 i、j、k 属于同一个刚体（一起静止或一起运动），它们「相关」；<b>若差经常跳变</b>，说明其中有点在动，它们「不相关」。最终优化目标同时包含 ORB-SLAM2 的投影误差项 J_p 和新加的相关性约束项 J_ba，把不相关边剔除后，残图自然裂成「静态大块」和「若干动态小块」，<b>最大（体积）连通分量被判为静态场景点</b>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">Delaunay 点相关图：最大连通分量 = 静态场景</tspan></text>
+
+          <!-- 静态区（左大块，绿） -->
+          <g>
+            <circle cx="120" cy="150" r="7" fill="#2f7a45"/>
+            <circle cx="180" cy="130" r="7" fill="#2f7a45"/>
+            <circle cx="150" cy="200" r="7" fill="#2f7a45"/>
+            <circle cx="220" cy="190" r="7" fill="#2f7a45"/>
+            <circle cx="170" cy="250" r="7" fill="#2f7a45"/>
+            <circle cx="240" cy="260" r="7" fill="#2f7a45"/>
+            <circle cx="110" cy="240" r="7" fill="#2f7a45"/>
+            <line x1="120" y1="150" x2="180" y2="130" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="120" y1="150" x2="150" y2="200" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="180" y1="130" x2="220" y2="190" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="150" y1="200" x2="220" y2="190" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="150" y1="200" x2="170" y2="250" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="170" y1="250" x2="240" y2="260" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="110" y1="240" x2="150" y2="200" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="110" y1="240" x2="170" y2="250" stroke="#8fbf8f" stroke-width="2"/>
+          </g>
+          <text x="170" y="300" text-anchor="middle" font-size="11.5" fill="#2f7a45"><tspan font-weight="700">绿色大块 = 静态（最大连通分量）</tspan></text>
+
+          <!-- 动态区（右小块，红，被割裂） -->
+          <g>
+            <circle cx="640" cy="160" r="7" fill="#c0392b"/>
+            <circle cx="700" cy="140" r="7" fill="#c0392b"/>
+            <circle cx="670" cy="210" r="7" fill="#c0392b"/>
+            <line x1="640" y1="160" x2="700" y2="140" stroke="#e0968f" stroke-width="2" stroke-dasharray="4 3"/>
+            <line x1="640" y1="160" x2="670" y2="210" stroke="#e0968f" stroke-width="2" stroke-dasharray="4 3"/>
+          </g>
+          <text x="670" y="250" text-anchor="middle" font-size="11.5" fill="#9a2b1c"><tspan font-weight="700">红色小块 = 动态（被剔除）</tspan></text>
+
+          <!-- 跨区不一致边（断裂） -->
+          <line x1="240" y1="260" x2="640" y2="160" stroke="#bbbbbb" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="440" y="200" text-anchor="middle" font-size="10.5" fill="#8a93a0">不一致边 ✂ 被剪断</text>
+
+          <rect x="360" y="320" width="500" height="92" rx="8" fill="#fff7ef" stroke="#e0b48f"/>
+          <text x="378" y="346" font-size="12" fill="#7a4630"><tspan font-weight="700">为什么最大连通分量 = 静态？</tspan></text>
+          <text x="378" y="368" font-size="11" fill="#7a4630">· 先验假设：静态结构占场景多数（背景墙、地大面积）</text>
+          <text x="378" y="390" font-size="11" fill="#7a4630">· 动态物体只是若干小簇，相对位置老变 → 边被剪 → 自成小连通块</text>
+          <text x="378" y="410" font-size="11" fill="#7a4630">· 所以「剩下来最大那块」最可能是静态</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边一片绿点是静态背景上的地图点，彼此用 Delaunay 边连成密密的大块；右边一小簇红点是动态物体上的点，相对位置老变，边被画成虚线（将被剪断）；中间一条灰虚线是跨区的「不一致边」，也被剪。</p>
+          <p><b>怎么看这张图：</b>① 绿色区域是一个<b>连通的大图</b>，因为静态点之间相对位置长期一致，边都保留；② 红色区域点之间相对位置跳动，边被标虚线（表示「不相关」），最终被剔除；③ 核心逻辑是<b>「最大连通分量 ≈ 静态」</b>——它依赖「静态结构占多数」这个先验。④ 下方橙框点明：这不是语义，纯粹是「谁和谁相对位置稳」。</p>
+          <p><b>要记住的一句话：</b>纯几何派不认「人/车」，只认「点相关性」；最大连通分量就是它的「静态判据」。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_RGB-D_SLAM_in_Dynamic_Environments_Using_Point_Correlati/eacde7d1bc429835cafc694e551bee8f189f498d5eade39cdbf3b80652355b29.jpg" alt="Two-dimensional example of the segmentation method using point correlations">
+        <figcaption>
+          <p><b>原图注（DSLAM Fig. 4）：</b>Two-dimensional example of the segmentation method using point correlations: (a) current frame; (b) reference frame; (c) structure graph of the matched feature points in the reference frame created by Delaunay triangulation; (d) graph after removing inconsistent edges; (e) extracted largest region, which belongs to the static scene; and (f) moving object region separated from the static scene.</p>
+          <p><b>怎么看这张图：</b>这就是上面自绘图的论文六联图版。(a)(b) 是当前帧与参考帧；(c) 用 Delaunay 把匹配点连成结构图；(d) 去掉不一致边；(e) 提取出最大的静态区域；(f) 分离出的动态物体区域。它一步步展示了「图怎么裂成静态大块和动态小块」的全过程，和自绘图一一对应。</p>
+          <p><b>要记住的一句话：</b>Fig. 4 是 DSLAM 方法的可视化总览，(e) 的「largest region」就是自绘图里那块绿色静态大块。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_RGB-D_SLAM_in_Dynamic_Environments_Using_Point_Correlati/19105a2db765510883c56b1dc907ecf7f17745b3eb85e43690aa0f84cb610637.jpg" alt="Overview of the proposed segmentation method">
+        <figcaption>
+          <p><b>原图注（DSLAM Fig. 3）：</b>Overview of the proposed segmentation method, which comprises three steps to divide the point cloud into different components with different motion patterns: graph initialization, inconsistent edge culling, and point graph segmentation.</p>
+          <p><b>怎么看这张图：</b>它把方法拆成三步：① 图初始化（Delaunay 连边）、② 不一致边剔除、③ 点图分割（取最大连通分量）。这正是公式 z_{ijk} 与最大连通分量判据的工程落地。注意它标的是「different motion patterns」——纯几何能区分的是「运动模式不同」，<b>不是「物体类别不同」</b>。</p>
+          <p><b>要记住的一句话：</b>DSLAM 三步流水线 = 建图 → 剪边 → 取最大连通分量，全程不碰语义。</p>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 纯几何派的命门：动态占比过高会退化</h2>
+      <p>「最大连通分量 = 静态」这个先验，有个显而易见的反例：<b>如果场景里大部分都是动的</b>（比如拥挤的行人通道），静态点反而成了少数，最大连通分量可能误把动态点包进去。这是纯几何法的通病。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 330" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="330" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">当动态点占多数：最大连通分量失效</tspan></text>
+
+          <!-- 失效场景 -->
+          <rect x="40" y="56" width="400" height="240" rx="8" fill="#fdf0ee" stroke="#e0a08f"/>
+          <text x="240" y="80" text-anchor="middle" font-size="12.5" fill="#9a2b1c"><tspan font-weight="700">退化场景（动态占多数）</tspan></text>
+          <g>
+            <circle cx="120" cy="140" r="7" fill="#c0392b"/>
+            <circle cx="170" cy="120" r="7" fill="#c0392b"/>
+            <circle cx="150" cy="175" r="7" fill="#c0392b"/>
+            <circle cx="210" cy="160" r="7" fill="#c0392b"/>
+            <circle cx="180" cy="210" r="7" fill="#c0392b"/>
+            <circle cx="260" cy="150" r="7" fill="#c0392b"/>
+            <circle cx="300" cy="190" r="7" fill="#c0392b"/>
+            <circle cx="330" cy="140" r="7" fill="#c0392b"/>
+            <line x1="120" y1="140" x2="170" y2="120" stroke="#e0968f" stroke-width="2"/>
+            <line x1="170" y1="120" x2="210" y2="160" stroke="#e0968f" stroke-width="2"/>
+            <line x1="150" y1="175" x2="210" y2="160" stroke="#e0968f" stroke-width="2"/>
+            <line x1="210" y1="160" x2="260" y2="150" stroke="#e0968f" stroke-width="2"/>
+            <line x1="180" y1="210" x2="260" y2="150" stroke="#e0968f" stroke-width="2"/>
+            <line x1="260" y1="150" x2="300" y2="190" stroke="#e0968f" stroke-width="2"/>
+            <line x1="300" y1="190" x2="330" y2="140" stroke="#e0968f" stroke-width="2"/>
+          </g>
+          <circle cx="380" cy="240" r="7" fill="#2f7a45"/>
+          <text x="240" y="285" text-anchor="middle" font-size="11" fill="#9a2b1c"><tspan font-weight="700">红块反而最大 → 误判静态 ✗</tspan></text>
+
+          <!-- 正常场景 -->
+          <rect x="470" y="56" width="390" height="240" rx="8" fill="#eef7ee" stroke="#8fbf8f"/>
+          <text x="665" y="80" text-anchor="middle" font-size="12.5" fill="#2f7a45"><tspan font-weight="700">正常场景（静态占多数）</tspan></text>
+          <g>
+            <circle cx="520" cy="140" r="7" fill="#2f7a45"/>
+            <circle cx="580" cy="120" r="7" fill="#2f7a45"/>
+            <circle cx="560" cy="180" r="7" fill="#2f7a45"/>
+            <circle cx="620" cy="160" r="7" fill="#2f7a45"/>
+            <circle cx="590" cy="220" r="7" fill="#2f7a45"/>
+            <circle cx="660" cy="200" r="7" fill="#2f7a45"/>
+            <line x1="520" y1="140" x2="580" y2="120" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="580" y1="120" x2="620" y2="160" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="560" y1="180" x2="620" y2="160" stroke="#8fbf8f" stroke-width="2"/>
+            <line x1="590" y1="220" x2="660" y2="200" stroke="#8fbf8f" stroke-width="2"/>
+          </g>
+          <circle cx="760" cy="150" r="7" fill="#c0392b"/>
+          <circle cx="790" cy="200" r="7" fill="#c0392b"/>
+          <text x="665" y="285" text-anchor="middle" font-size="11" fill="#2f7a45"><tspan font-weight="700">绿块最大 → 判静态正确 ✓</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左右两个对照。左边动态点占多数，结果红色（动态）连通块最大，被误判成静态；右边静态占多数，绿色大块正确判静态。</p>
+          <p><b>怎么看这张图：</b>① 左图说明「最大连通分量」这个判据<b>反过来的时候就崩</b>——它默认「静态是多数」；② 右图是 DSLAM 设计时的正常前提；③ 结论：<b>纯几何法在「动态主导」场景鲁棒性有限</b>，作者虽未在表里给「动态占多数失败」的数字，但方法假设本身就决定了这个弱点。</p>
+          <p><b>要记住的一句话：</b>「最大连通分量 = 静态」依赖「静态占多数」；动态占满画面时，纯几何派会退化。</p>
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <p><b>纯几何派的另一面（优势）</b>：正因为不删任何「可动类」先验特征，<b>静态场景里它几乎不亏本</b>——速度和精度都和 ORB-SLAM2 相当（30.65 ms vs 31.34 ms，比 DynaSLAM 的 738.46 ms 快约 24 倍，且无需 GPU）。这是它相对 DynaSLAM/DS-SLAM 语义派的最大卖点：<b>没有「误删静止可动物体」的代价</b>。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. CRF 长时一致性：用「跨多帧的统计」判动静</h2>
+      <p>CRF 这篇（Du 等，2022）也是纯几何、无语义，但思路不同：它认为<b>「只看连续几帧」不可靠</b>，要用<b>整个序列的长时统计</b>。核心思想：动态点的观测更不一致、重投影误差更大、被观测次数更少。</p>
+      <p>它分两步：① 用 GC-RANSAC 对当前帧与参考帧（取前第 10 帧）做 2D-2D 匹配，估计基础矩阵，把 inlier/outlier 当静/动初标；② 用 LC-CRF 给每个 landmark 打最终标签。CRF 的 unary 势由三个静态似然等权平均：</p>
+      <div class="formula-box"><div class="flow-formula">$$P_i^{s} = \frac{P_i^{\alpha} + P_i^{\beta} + P_i^{\gamma}}{3},\qquad \alpha=\beta=\gamma=\tfrac13$$</div></div>
+      <p><b>这句话在说什么</b>：对每个 landmark，综合三项证据——P_i^α（平均重投影误差越小越静）、P_i^β（被观测次数越多越静）、P_i^γ（极线距离越小越静）——三项等权求平均，得到它「是静态」的概率。pairwise 势再用两个核奖励「重投影误差/观测次数相近的点」同标签、邻近 3D 点更可能同属一刚体。均值场近似求解。<b>关键是它用了「全序列每帧累积」的似然</b>，而不是单帧快照。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="16" fill="#2b6cb0"><tspan font-weight="700">长时一致性：静态点被观测更久、误差更稳</tspan></text>
+
+          <!-- 静态点 S -->
+          <text x="150" y="70" text-anchor="middle" font-size="12.5" fill="#2f7a45"><tspan font-weight="700">静态点 S</tspan></text>
+          <g>
+            <circle cx="80" cy="120" r="7" fill="#2f7a45"/>
+            <circle cx="130" cy="120" r="7" fill="#2f7a45"/>
+            <circle cx="180" cy="120" r="7" fill="#2f7a45"/>
+            <circle cx="230" cy="120" r="7" fill="#2f7a45"/>
+            <circle cx="110" cy="150" r="7" fill="#2f7a45"/>
+            <circle cx="160" cy="150" r="7" fill="#2f7a45"/>
+            <circle cx="210" cy="150" r="7" fill="#2f7a45"/>
+          </g>
+          <text x="150" y="182" text-anchor="middle" font-size="11" fill="#2f7a45">多帧都在这 → 观测次数多</text>
+          <!-- 重投影误差小：短竖线 -->
+          <line x1="80" y1="200" x2="80" y2="232" stroke="#2f7a45" stroke-width="6"/>
+          <line x1="130" y1="200" x2="130" y2="228" stroke="#2f7a45" stroke-width="6"/>
+          <line x1="180" y1="200" x2="180" y2="230" stroke="#2f7a45" stroke-width="6"/>
+          <line x1="230" y1="200" x2="230" y2="226" stroke="#2f7a45" stroke-width="6"/>
+          <text x="150" y="258" text-anchor="middle" font-size="11" fill="#2f7a45">重投影误差小且稳</text>
+
+          <!-- 动态点 M -->
+          <text x="650" y="70" text-anchor="middle" font-size="12.5" fill="#9a2b1c"><tspan font-weight="700">动态点 M</tspan></text>
+          <g>
+            <circle cx="560" cy="120" r="7" fill="#c0392b"/>
+            <circle cx="640" cy="118" r="7" fill="#c0392b"/>
+            <circle cx="720" cy="124" r="7" fill="#c0392b"/>
+            <circle cx="600" cy="150" r="7" fill="#c0392b"/>
+            <circle cx="690" cy="152" r="7" fill="#c0392b"/>
+          </g>
+          <text x="650" y="182" text-anchor="middle" font-size="11" fill="#9a2b1c">只少数帧在这 → 观测次数少</text>
+          <!-- 重投影误差大且跳：长短不一 -->
+          <line x1="560" y1="200" x2="560" y2="270" stroke="#c0392b" stroke-width="6"/>
+          <line x1="640" y1="200" x2="640" y2="218" stroke="#c0392b" stroke-width="6"/>
+          <line x1="720" y1="200" x2="720" y2="256" stroke="#c0392b" stroke-width="6"/>
+          <line x1="600" y1="200" x2="600" y2="226" stroke="#c0392b" stroke-width="6"/>
+          <line x1="690" y1="200" x2="690" y2="240" stroke="#c0392b" stroke-width="6"/>
+          <text x="650" y="300" text-anchor="middle" font-size="11" fill="#9a2b1c">重投影误差大且乱跳</text>
+
+          <line x1="300" y1="120" x2="500" y2="120" stroke="#b9c4d2" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="400" y="108" text-anchor="middle" font-size="10.5" fill="#8a93a0">长时统计对比</text>
+
+          <rect x="80" y="330" width="740" height="68" rx="8" fill="#fff7ef" stroke="#e0b48f"/>
+          <text x="100" y="356" font-size="11.5" fill="#7a4630"><tspan font-weight="700">CRF 判据：</tspan>静态似然 =（平均重投影误差 + 观测次数 + 极线距离）三项等权</text>
+          <text x="100" y="380" font-size="11" fill="#7a4630">动态点「观测少、误差大、跳得欢」→ 三项都低 → 判动态；静态点反之。跨多帧才可靠。</text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左边静态点 S 在多帧里都稳定出现在同一处，重投影误差短且齐；右边动态点 M 只在少数帧出现、重投影误差长且乱跳。</p>
+          <p><b>怎么看这张图：</b>① 左图 S 的竖线<b>短且整齐</b> = 重投影误差小且稳定，且被很多帧观测到；② 右图 M 的竖线<b>长短不一</b> = 重投影误差大且跳，且只在少数帧出现；③ CRF 把「观测次数、误差大小、极线距离」三项合成一个静态概率，<b>跨整个序列累积</b>，所以比只看两三帧稳。④ 这就是它叫「长时（Long-Term）一致性」的原因。</p>
+          <p><b>要记住的一句话：</b>动态点「观测少、误差大、跳得欢」；CRF 用跨帧统计把这种不一致放大成判据。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Accurate_Dynamic_SLAM_Using_CRF-Based_Long-Term_Consiste/92987e632b9d4baffa5817ec4eb57d81ed1f1002430433ab382896884eeff766.jpg" alt="A static landmark has more consistent observations than a dynamic one">
+        <figcaption>
+          <p><b>原图注（CRF Fig. 3）：</b>A static landmark has more consistent observations than a dynamic one. M is a dynamic landmark which moves from M to M4 quickly; just a few frames observe the same location. Static landmark S stays at the same location and is seen at the same position in more frames...</p>
+          <p><b>怎么看这张图：</b>论文原话直接说出了上面自绘图的核心：静态 landmark S 在更多帧里被看到、位置一致；动态 landmark M 很快从一处移到另一处，只有少数帧观测到同一位置。它用重投影点是否「三角化到一致 landmark」来区分动静——这正是 CRF 三个似然的物理来源。</p>
+          <p><b>要记住的一句话：</b>Fig. 3 是 CRF 长时一致性思想的几何直观，自绘图把它翻译成了「竖线长短对比」。</p>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Accurate_Dynamic_SLAM_Using_CRF-Based_Long-Term_Consiste/34d1bf5dfd2513c084a261699583658d228aa25876dbbaeecddfd2aae9765f5d.jpg" alt="Landmark detection in dynamic scenes">
+        <figcaption>
+          <p><b>原图注（CRF Fig. 6）：</b>Landmark detection in dynamic scenes (a,b) and a static scene (c). Left: Initial static/dynamic labeling. Right: final dynamic 3D landmark detection results after LC-CRF optimization. Green: Static points; Red: Dynamic points.</p>
+          <p><b>怎么看这张图：</b>左列是 GC-RANSAC 的初标（有错），右列是 LC-CRF 优化后的最终结果（绿=静态、红=动态），明显更干净。它证明了「初标不准没关系，长时 CRF 能纠回来」——这也是作者说 CRF 比单帧方法强的地方。注意 (c) 静态场景里 CRF 几乎不误删，呼应「纯几何派静态场景不亏本」。</p>
+          <p><b>要记住的一句话：</b>Fig. 6 展示 GC-RANSAC 初标 → LC-CRF 精修的两阶段，是 CRF 方法的招牌图。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动一：纯几何派相比 0153 的语义结合路线，最大优势是什么？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0154a')">静态场景不亏本</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0154b')">动态更准</button></p>
+        <p class="quiz-feedback" id="q0154a" hidden>正确。语义结合路线（DynaSLAM/DS-SLAM）在静止可动物体场景会「误删可动类特征」，略逊 ORB-SLAM2；而纯几何派（DSLAM/CRF）不删任何「可动类」先验特征，静态场景速度与精度都和 ORB-SLAM2 相当，且无需 GPU。代价是动态主导场景会退化、且不输出语义/轨迹。所以「静态场景不亏本 + 无需 GPU」是它相对语义派的最大卖点。</p>
+        <p class="quiz-feedback" id="q0154b" hidden>不对。在「动态检测的绝对精度」上，结合路线（用语义缩小搜索范围）通常更强，尤其对低纹理/遮挡处。纯几何派的优势不在「动态更准」，而在「静态场景不亏本、不需要 GPU/训练数据、动态主导时会退化」。把优势说成「动态更准」正好说反了。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" font-size="16.5" font-weight="700" fill="#5cffb0">一帧判错不算数：CRF 用「跨多帧的一致性」把抖动压回去</text>
+
+          <!-- 帧轴 -->
+          <line x1="120" y1="330" x2="820" y2="330" stroke="#4a5568" stroke-width="1.6"/>
+          <text x="106" y="334" text-anchor="end" font-size="11" fill="#6b7785">帧</text>
+          <g font-size="10.5" fill="#cdd6ff" text-anchor="middle">
+            <text x="160" y="350">t1</text><text x="260" y="350">t2</text><text x="360" y="350">t3</text>
+            <text x="460" y="350">t4</text><text x="560" y="350">t5</text><text x="660" y="350">t6</text>
+            <text x="760" y="350">t7</text>
+          </g>
+
+          <!-- 单帧独立判断（抖动） -->
+          <text x="140" y="96" font-size="12" font-weight="700" fill="#ffd1d8">只看单帧：判定会抖</text>
+          <g stroke="#ffd1d8" stroke-width="1.4">
+            <line x1="160" y1="180" x2="160" y2="300"/><line x1="260" y1="180" x2="260" y2="300"/>
+            <line x1="360" y1="180" x2="360" y2="300"/><line x1="460" y1="180" x2="460" y2="300"/>
+            <line x1="560" y1="180" x2="560" y2="300"/><line x1="660" y1="180" x2="660" y2="300"/>
+            <line x1="760" y1="180" x2="760" y2="300"/>
+          </g>
+          <circle cx="160" cy="240" r="9" fill="#2f7a45"/><text x="160" y="244" text-anchor="middle" font-size="9" fill="#fff">静</text>
+          <circle cx="260" cy="240" r="9" fill="#2f7a45"/><text x="260" y="244" text-anchor="middle" font-size="9" fill="#fff">静</text>
+          <circle cx="360" cy="240" r="9" fill="#a32617"/><text x="360" y="244" text-anchor="middle" font-size="9" fill="#fff">动</text>
+          <circle cx="460" cy="240" r="9" fill="#2f7a45"/><text x="460" y="244" text-anchor="middle" font-size="9" fill="#fff">静</text>
+          <circle cx="560" cy="240" r="9" fill="#a32617"/><text x="560" y="244" text-anchor="middle" font-size="9" fill="#fff">动</text>
+          <circle cx="660" cy="240" r="9" fill="#2f7a45"/><text x="660" y="244" text-anchor="middle" font-size="9" fill="#fff">静</text>
+          <circle cx="760" cy="240" r="9" fill="#2f7a45"/><text x="760" y="244" text-anchor="middle" font-size="9" fill="#fff">静</text>
+          <text x="560" y="196" text-anchor="middle" font-size="10.5" fill="#ffd1d8">t3、t5 被判成「动」</text>
+
+          <!-- CRF 之后 -->
+          <text x="140" y="180" font-size="12" font-weight="700" fill="#5cffb0">CRF 平滑后</text>
+          <line x1="160" y1="224" x2="160" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="260" y1="224" x2="260" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="360" y1="224" x2="360" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="460" y1="224" x2="460" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="560" y1="224" x2="560" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="660" y1="224" x2="660" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <line x1="760" y1="224" x2="760" y2="256" stroke="#5cffb0" stroke-width="3"/>
+          <text x="360" y="214" text-anchor="middle" font-size="10.5" fill="#5cffb0">全段一致判「静」——那个孤立的错判被邻居票压回去</text>
+
+          <text x="450" y="276" text-anchor="middle" font-size="12" fill="#cdd6ff">判据不再只看这一帧的残差，而是问「周围帧怎么说」</text>
+          <text x="450" y="300" text-anchor="middle" font-size="12" fill="#9fb4ff">CRF 的职责：把「偶然的抖动」与「真的运动」区分开</text>
+          <text x="450" y="378" text-anchor="middle" font-size="12" fill="#ffd166">代价：要等一段时间的观测才能下结论 —— 长时一致性换来了稳定，但也换来了延迟</text>
+          <text x="450" y="396" text-anchor="middle" font-size="11.5" fill="#5cffb0">好处：纯几何、不用语义、无需 GPU</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>上半排是「只看单帧」的判定结果：从 t1 到 t7 共 7 帧，绝大多数判成静止（绿），但 t3、t5 两帧因为残差偶然超阈值被判成「动」（红）。下半排是加了 CRF 之后的同一串判定：那两处孤立错判被相邻帧「投票」压了回去，整段恢复一致。
+          <br>
+          <b>怎么看这张图：</b>① 先看上半排圆点的颜色跳变——这正是单帧判据的毛病：它分不清「真的动了」和「这一帧算错了」；② 再看下半排那条连续的绿线，它比单个圆点更「稳」；③ 中间那句小字点明 CRF 在干什么：判据不再只看这一帧的残差，而是问「周围的帧怎么说」；④ 最后看底下两行：好处是纯几何、不用语义、无需 GPU；代价是得等一段时间的观测才能下结论。
+          <br>
+          <b>要记住的一句话：</b>长时一致性是用「延迟」换「稳定」——它把孤立错判压下去，靠的是不肯只信一帧。
+        </figcaption>
+      </figure>
+
+      <h2>5. 代价账：纯几何派的取舍</h2>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem">
+        <thead>
+          <tr style="background:rgba(204,120,92,.1)">
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(204,120,92,.35)">代价项</th>
+            <th style="text-align:left;padding:.6rem">DSLAM（点相关图）</th>
+            <th style="text-align:left;padding:.6rem">CRF 长时一致</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">实时性</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">30.65 ms/帧（≈ORB-SLAM2 速度，远快于 DynaSLAM）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">CPU 无 GPU，TUM ~16–18 fps、Bonn ~11–17 fps，近实时</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">静态场景</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">几乎不亏本（无语义先验误删）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">略亏（几乎静态场景 GC-RANSAC 会误删少量静态点）</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700">动态主导</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">最大连通分量失效（退化）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">高动态且静态点不足时错标</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;font-weight:700">高层输出</td>
+            <td style="padding:.5rem .6rem">只分离动静，不追踪、不建动态轨迹</td>
+            <td style="padding:.5rem .6rem">只判动静，不输出动态轨迹/地图</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>本课小结</b>：纯几何派用「点相关性图（DSLAM）」或「长时统计（CRF）」把动点从静态里裂出来，<b>不依赖语义分割、无需 GPU</b>，静态场景几乎不亏本。但它有两个命门：① <b>动态占比过高会退化</b>（最大连通分量/统计被反转）；② <b>不输出语义、不追踪动态物体</b>，只做「过滤/分离」。下一节看一条更激进的路线——<b>不删，而是把动态物体当路标追踪</b>。</p>
+      </div>
+      <div class="interactive-card">
+        <h4>互动二：CRF 为什么强调「长时」一致性，而不只看连续两三帧？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0154c')">短时会误判</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0154d')">长时更快</button></p>
+        <p class="quiz-feedback" id="q0154c" hidden>正确。只看连续几帧，动态点偶尔「凑巧」静止（如挥手间停顿）或静态点偶尔被遮挡，都会让单帧判据翻车。CRF 把「平均重投影误差、观测次数、极线距离」在整个序列上累积，用统计把偶发噪声平均掉——动态点「观测少、误差大、跳得欢」的长时特征才显现。所以「长时」是为了抗短时的偶发误判，不是为了更快（其实更慢）。</p>
+        <p class="quiz-feedback" id="q0154d" hidden>不对。「长时」是拿计算换可靠——跨多帧累积似然比只看两三帧更稳，但更慢而非更快。CRF 强调长时，是因为短时窗口里动态点可能偶发静止、静态点可能偶发被遮挡，单帧判据会翻车；长时统计把这种噪声平均掉。把「长时」理解成「更快」正好说反了它的取舍。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 读完你应该能回答</h2>
+      <ul>
+        <li>纯几何派为什么不需要语义分割？它适合什么平台？</li>
+        <li>DSLAM 的「点相关性图」是什么？为什么「最大连通分量」能当静态判据？它依赖什么先验？</li>
+        <li>CRF 长时一致性的三个静态似然是什么？为什么「跨多帧」比单帧可靠？</li>
+        <li>两篇的关键数字（DSLAM 30.65 ms、CRF ATE 0.030 m）分别说明什么？</li>
+        <li>纯几何派的命门是什么？为什么它在静态场景反而几乎不亏本？</li>
+        <li>DSLAM（无空格）与 DS-SLAM（2018）名字差在哪、方法差在哪？</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>如果场景里 80% 都是走动的人，DSLAM 的最大连通分量判据会发生什么？请解释。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>最大连通分量判据依赖「静态结构占场景多数」。当 80% 都是走动的人，静态点反而成了少数，那些人（动态点）之间相对位置虽然彼此跳动，但若它们整体形成最大连通块，就会被误判为静态——于是 BA 用了一堆真动点，地图崩。这就是纯几何派「动态主导场景退化」的弱点，作者虽没给失败数字，但方法假设本身就决定它。</p>
+            </div></details>
+          </li>
+          <li>CRF 的 unary 势 P_i^s 用了三个似然等权平均。如果某个场景极暗、极线距离这项很不可靠，等权设计会有什么问题？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>等权（各 1/3）意味着即使极线距离这项在该场景下噪声很大，它仍占 1/3 权重，可能把可靠的「重投影误差」和「观测次数」两项带偏。更稳的做法是按可靠性加权（但论文用交叉验证固定等权，简单且多数场景够用）。这题想说明：等权是「偷懒但通用」的取舍，不是最优——在极线不可靠的场景它可能不是最佳组合。</p>
+            </div></details>
+          </li>
+          <li>对比 0153 与本节：语义结合路线和纯几何路线，各自在「静态场景」和「动态主导场景」的盈亏如何反转？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>静态场景（如停着的车很多）：语义结合路线因「可动类先验」误删静止特征，略逊 ORB-SLAM2；纯几何路线不删先验特征，几乎不亏本——<b>纯几何赢</b>。动态主导场景：语义结合路线用先验缩小搜索范围、更准；纯几何路线最大连通分量/统计被反转、退化——<b>语义结合赢</b>。所以两条路线是「互补」而非「谁压倒谁」，取决于场景动态占比。</p>
+            </div></details>
+          </li>
+          <li>为什么纯几何派「不输出动态物体轨迹」也被视为一种代价（而非优点）？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>因为很多上层任务（如机器人避让人、预测车流向、AR 遮挡处理）需要「那个动态物体在哪、往哪去」。纯几何派只做「把动点剔掉别污染 BA」，等于把动态信息当垃圾扔了——定位是准了，但下游什么也用不上。下一节 DynaSLAM II 正是要解决这个问题：不删，而是把动态物体追踪成路标，反而帮定位。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0153-DynaSLAM与DSS-SLAM-动态SLAM的开山.html">← 上一课：0153 DynaSLAM 与 DS-SLAM</a>
+        <a class="next" href="0155-不删而是跟踪-动态物体变成路标.html">下一课：0155 不删而是跟踪 · 动态物体变成路标 →</a>
+      </div>
+      <p class="foot-note">纯几何派不靠语义、无需 GPU，静态场景几乎不亏本；但动态占满画面时会退化。下一节看「不删而是追踪」的范式跃迁 🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

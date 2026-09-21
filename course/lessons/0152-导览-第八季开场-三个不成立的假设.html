@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>导览：第八季开场 · 三个不成立的假设 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0152</div>
+      <h1>导览：第八季开场 · 三个不成立的假设</h1>
+      <p class="subtitle">前七季都悄悄默认了三件事，这一季把它们逐个拆掉。先看清「专题支线」是什么 🧭</p>
+      <div class="hero-meta">
+        <span>🎯 主题：为什么本季横切前七季 · 三个不成立的假设</span>
+        <span>👥 覆盖：本季总览（无新论文）</span>
+        <span>📅 2024 · 第八季导览</span>
+      </div>
+      <div class="toc">
+        <a href="#a">为什么是专题支线</a>
+        <a href="#b">三个不成立的假设</a>
+        <a href="#c">四个块的地图</a>
+        <a href="#d">全季课表</a>
+        <a href="#e">横向联系预告</a>
+        <a href="#f">读完之后</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清「专题支线」和「按技术主线的前七季」有什么不同；② 背出前七季默认的三个假设，并各举一个「现实里它怎么破」的例子；③ 说出本季四个块各自解决什么问题、最抽象的点在哪；④ 看懂全季 27 节课的排布；⑤ 知道四块之间哪几处会互相串门。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>本季是<b>第七季 0151 收官课</b>之后接上的，但<b>不是顺着第七季往下走，而是横切回去拆前面的地基</b>。它要拆掉的最底层假设，其实在<b>第一季 0005</b>（第一次碰动态环境的激光 SLAM）、<b>第三季 0043–0045</b>（ORB-SLAM，本季动态块几乎全建在它上面）、<b>第三季 0040</b>（尺度暗线）就埋下了；而「语义当零件」又回扣<b>第六季 0114 / 0121</b> 与 <b>第七季 0147</b>（SAM / DINOv2）。</p>
+        </div>
+      </div>
+
+      <h2>1. 为什么本季叫「专题支线」，而不接在第七季后面</h2>
+      <p>前七季是<b>按技术主线往下走</b>的：第一季打地基、第三季视觉主干、第四季激光、第五季融合、第六季神经隐式、第七季学习式方法。你读完会觉得「SLAM 是一条河，越往下游越宽」。</p>
+      <p>但有一个不安的事实：前七季在绝大多数时候，都<b>偷偷默认了三件事</b>。默认到什么程度？连论文标题都不屑于提，直接写在前提里。这三件事是：</p>
+      <div class="grid-3">
+        <div class="mini-card">
+          <h4>假设一 · 环境静止</h4>
+          <p>地图是由「不动的东西」构成的。世界在你采集时基本是冻结的——人、车、宠物最好都别动。</p>
+        </div>
+        <div class="mini-card">
+          <h4>假设二 · 地图只是几何</h4>
+          <p>地图就是一堆点和面，计算机知道「这里有面墙」，但不知道「这是墙、那是椅子」。</p>
+        </div>
+        <div class="mini-card">
+          <h4>假设三 · 一台快门相机</h4>
+          <p>一台机器人、一个主体；相机每隔 1/30 秒「咔嚓」拍一张完整照片，靠这种快门图像工作。</p>
+        </div>
+      </div>
+      <p>本季（阶段 H）做的，就是<b>把这三个假设当成靶子，逐个拆掉</b>。所以它不是「第八个主线」，而是<b>四条横切进前七季的支线</b>：动态环境拆「静止」，语义建图拆「地图只是几何」，多机协同拆「只有一台」，事件相机拆「快门式」。这就是它叫「专题支线」的原因。</p>
+      <div class="callout">
+        <p><b>一句话定位</b>：前七季都在「假设成立」的前提下把算法做到极致；本季问的是「假设不成立时怎么办」。所以你会在本季反复看到同一句话——<b>前提没变，只是被补丁绕过了</b>。</p>
+      </div>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 三个不成立的假设：画一个真实的机器人场景</h2>
+      <p>下面这张图是一个最普通的室内场景：一台扫地大小的机器人，正前方有个人在走路，墙角放着一把椅子。请你盯着它看，然后看三个假设是怎么一个个被戳破的。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#fbfcfe"/>
+          <text x="450" y="30" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">同一个房间：三个「理所当然」的假设，被现实逐个戳破</tspan></text>
+
+          <!-- 房间 -->
+          <rect x="40" y="70" width="820" height="300" rx="6" fill="#f3f6fa" stroke="#cdd7e2"/>
+          <rect x="40" y="350" width="820" height="20" fill="#e3e9f0"/>
+          <!-- 地板线 -->
+          <line x1="40" y1="370" x2="860" y2="370" stroke="#b9c4d2" stroke-width="2"/>
+
+          <!-- 假设1 环境静止：走路的人 -->
+          <circle cx="470" cy="205" r="22" fill="#f1c7b0"/>
+          <rect x="452" y="227" width="36" height="80" rx="10" fill="#5b8bd0"/>
+          <line x1="470" y1="307" x2="470" y2="350" stroke="#3a4a5a" stroke-width="6"/>
+          <line x1="470" y1="307" x2="448" y2="350" stroke="#3a4a5a" stroke-width="6"/>
+          <path d="M 440 200 q -22 -10 -34 6" stroke="#e0533d" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+          <path d="M 500 200 q 22 -10 34 6" stroke="#e0533d" stroke-width="3" fill="none" marker-end="url(#arrow)"/>
+          <text x="470" y="388" text-anchor="middle" font-size="11.5" fill="#9a4a33"><tspan font-weight="700">人在走 → 环境不静止</tspan></text>
+
+          <!-- 假设2 地图只有几何：椅子带语义标签 -->
+          <rect x="720" y="300" width="70" height="50" rx="6" fill="#c9a36a"/>
+          <rect x="726" y="270" width="58" height="36" rx="8" fill="#c9a36a"/>
+          <line x1="734" y1="350" x2="734" y2="370" stroke="#8a6f3a" stroke-width="5"/>
+          <line x1="776" y1="350" x2="776" y2="370" stroke="#8a6f3a" stroke-width="5"/>
+          <rect x="704" y="252" width="102" height="20" rx="10" fill="#fff3d6" stroke="#d9b25a"/>
+          <text x="755" y="266" text-anchor="middle" font-size="11" fill="#8a6f3a"><tspan font-weight="700">标签：椅子（语义）</tspan></text>
+
+          <!-- 机器人 -->
+          <rect x="120" y="312" width="86" height="42" rx="8" fill="#6c7a89"/>
+          <rect x="150" y="296" width="26" height="18" rx="4" fill="#2b3a4a"/>
+          <circle cx="142" cy="356" r="11" fill="#3a4a5a"/>
+          <circle cx="186" cy="356" r="11" fill="#3a4a5a"/>
+          <text x="163" y="388" text-anchor="middle" font-size="11.5" fill="#34415a"><tspan font-weight="700">一台机器人，一个相机</tspan></text>
+
+          <!-- 假设3 一台快门相机：并排两个成像 -->
+          <rect x="300" y="120" width="86" height="60" rx="6" fill="#ffffff" stroke="#b9c4d2"/>
+          <text x="343" y="138" text-anchor="middle" font-size="10.5" fill="#5b6472">快门帧 t</text>
+          <circle cx="343" cy="162" r="8" fill="#5b8bd0"/>
+          <rect x="400" y="120" width="86" height="60" rx="6" fill="#ffffff" stroke="#b9c4d2"/>
+          <text x="443" y="138" text-anchor="middle" font-size="10.5" fill="#5b6472">快门帧 t+1</text>
+          <circle cx="455" cy="172" r="8" fill="#e0533d"/>
+          <line x1="343" y1="162" x2="455" y2="172" stroke="#e0533d" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="395" y="200" text-anchor="middle" font-size="11" fill="#9a4a33"><tspan font-weight="700">同一物两帧位移 → 单快门不够</tspan></text>
+
+          <!-- 三个被划掉的假设条 -->
+          <rect x="40" y="92" width="250" height="34" rx="6" fill="#fdeaea" stroke="#e0533d"/>
+          <text x="56" y="114" font-size="12" fill="#9a2b1c"><tspan font-weight="700">假设一：环境是静止的</tspan> ✗</text>
+          <line x1="56" y1="108" x2="278" y2="108" stroke="#e0533d" stroke-width="2"/>
+
+          <rect x="320" y="92" width="270" height="34" rx="6" fill="#fdeaea" stroke="#e0533d"/>
+          <text x="336" y="114" font-size="12" fill="#9a2b1c"><tspan font-weight="700">假设二：地图只是几何（点/面）</tspan> ✗</text>
+          <line x1="336" y1="108" x2="574" y2="108" stroke="#e0533d" stroke-width="2"/>
+
+          <rect x="612" y="92" width="248" height="34" rx="6" fill="#fdeaea" stroke="#e0533d"/>
+          <text x="628" y="114" font-size="12" fill="#9a2b1c"><tspan font-weight="700">假设三：只有一台快门相机</tspan> ✗</text>
+          <line x1="628" y1="108" x2="844" y2="108" stroke="#e0533d" stroke-width="2"/>
+
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#e0533d"/>
+            </marker>
+          </defs>
+          <text x="450" y="456" text-anchor="middle" font-size="12.5" fill="#34415a"><tspan font-weight="700">拆掉这三个假设，就长出了本季的四块：动态 / 语义 / 多机 / 事件</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>左下一个房间里，一台机器人正对着一个走路的人，墙角有把椅子。上方三条红框是「被推翻的假设」，下方每个场景元素对应戳破它的现实。</p>
+          <p><b>怎么看这张图：</b>① <b>假设一</b>被「走路的人」戳破——人一动，原本用来定位的特征点就飘了；② <b>假设二</b>被「带『椅子』标签的方块」戳破——如果你只知道「这里是点」不知道「这是椅子」，就分不清「停着的椅子」和「在动的人」；③ <b>假设三</b>被「同一物体在两帧快门图里的位移」戳破——单靠隔 1/30 秒一张的快门图，很多高速/多体场景信息都丢了。④ 注意：这三个假设不是「错」，而是「太理想」；本季的每一块，都是在<b>不推翻 SLAM 内核</b>的前提下，给这些理想加补丁。</p>
+          <p><b>要记住的一句话：</b>前七季默认三个假设；本季把它们拆掉，于是横向长出四块专题支线。</p>
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h4>互动一：前七季默认「环境静止」，下面哪个场景最直接戳破它？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0152a')">行人走过镜头</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0152b')">光照变暗</button></p>
+        <p class="quiz-feedback" id="q0152a" hidden>正确。行人走过镜头，意味着地图里大量特征点本身在运动，BA 用的「同一三维点在不同帧投影一致」这个前提被直接破坏——这正是动态块要解决的核心。光照变暗只是让特征更难提取，并不破坏「静止」假设，所以不算拆假设。</p>
+        <p class="quiz-feedback" id="q0152b" hidden>不对。光照变暗会让特征更难提取、匹配更不准，但它没有改变「场景里的东西没动」这个前提，所以不拆「环境静止」的假设。真正戳破它的是「场景里有东西在动」，比如行人、车辆。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 四个块的地图：每块解决什么、最抽象的点在哪</h2>
+      <p>本季 27 节课分成四块。下面先用一张总览图告诉你每块「拆的是哪个假设、最难啃的地方是什么」，再给阅读建议。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#fbfcfe"/>
+          <text x="450" y="28" text-anchor="middle" font-size="17" fill="#2b6cb0"><tspan font-weight="700">四块专题支线：拆哪个假设 · 最抽象处 · 建议阅读顺序</tspan></text>
+
+          <rect x="30" y="56" width="410" height="160" rx="10" fill="#eef4fb" stroke="#9bb6d8"/>
+          <text x="50" y="84" font-size="13.5" fill="#2b6cb0"><tspan font-weight="700">① 动态环境（0152–0158）</tspan></text>
+          <text x="50" y="110" font-size="11" fill="#3a4a5a">拆：环境静止</text>
+          <text x="50" y="132" font-size="11" fill="#3a4a5a">问题：哪些点/像素在动？判错会怎样？</text>
+          <text x="50" y="154" font-size="11" fill="#9a4a33">最抽象：鲁棒阈值 / 权重如何定</text>
+          <text x="50" y="176" font-size="11" fill="#5b6472">读序：先 0153 开山，后 0157 小结</text>
+          <text x="50" y="200" font-size="11" fill="#5b6472">路线：几何 vs 语义 vs 结合</text>
+
+          <rect x="460" y="56" width="410" height="160" rx="10" fill="#f3eefb" stroke="#b79bd8"/>
+          <text x="480" y="84" font-size="13.5" fill="#6b3fa0"><tspan font-weight="700">② 语义建图（0159–0167）</tspan></text>
+          <text x="480" y="110" font-size="11" fill="#3a4a5a">拆：地图只是几何</text>
+          <text x="480" y="132" font-size="11" fill="#3a4a5a">问题：标签从哪来？同一物体跨帧认成同一个？</text>
+          <text x="480" y="154" font-size="11" fill="#9a4a33">最抽象：场景图 DSG 五层结构</text>
+          <text x="480" y="176" font-size="11" fill="#5b6472">读序：先 0159 开端，后 0167 收束</text>
+          <text x="480" y="200" font-size="11" fill="#5b6472">关键：实例级 vs 语义级</text>
+
+          <rect x="30" y="236" width="410" height="160" rx="10" fill="#eefbf1" stroke="#9bd8ad"/>
+          <text x="50" y="264" font-size="13.5" fill="#2f7a45"><tspan font-weight="700">③ 多机协同（0168–0174）</tspan></text>
+          <text x="50" y="290" font-size="11" fill="#3a4a5a">拆：只有一台机器人</text>
+          <text x="50" y="312" font-size="11" fill="#3a4a5a">问题：谁是中心？假回环怎么毁两图？</text>
+          <text x="50" y="334" font-size="11" fill="#9a4a33">最抽象：一致集最大化 / 渐进非凸</text>
+          <text x="50" y="356" font-size="11" fill="#5b6472">读序：先 0168 为什么难，后 0174 替代</text>
+          <text x="50" y="380" font-size="11" fill="#5b6472">铁律：回环假阳性（见 0140）</text>
+
+          <rect x="460" y="236" width="410" height="160" rx="10" fill="#fbf6ee" stroke="#d8c89b"/>
+          <text x="480" y="264" font-size="13.5" fill="#9a7a2f"><tspan font-weight="700">④ 事件相机（0175–0178）</tspan></text>
+          <text x="480" y="290" font-size="11" fill="#3a4a5a">拆：相机是快门式</text>
+          <text x="480" y="312" font-size="11" fill="#3a4a5a">问题：没有绝对亮度/完整图，怎么定位？</text>
+          <text x="480" y="334" font-size="11" fill="#9a4a33">最抽象：对比度最大化 / 逆深度</text>
+          <text x="480" y="356" font-size="11" fill="#5b6472">读序：先 0175 物理机理，后 0178 收官</text>
+          <text x="480" y="380" font-size="11" fill="#5b6472">互补：事件 ↔ 动态/高速</text>
+
+          <text x="450" y="420" text-anchor="middle" font-size="12" fill="#34415a"><tspan font-weight="700">四块不是孤岛：动态↔语义、语义↔多机、动态↔多机、事件↔高速 都会互链</tspan></text>
+        </svg>
+        <figcaption>
+          <p><b>这张图在画什么：</b>四个彩色块，每块标了「拆哪个假设、解决什么问题、最抽象的点、建议阅读顺序」。</p>
+          <p><b>怎么看这张图：</b>① 颜色对应四块，左上动态、右上语义、左下多机、右下事件；② 每块第一行是「拆的假设」，第二行是「核心问题」，第三行红字是<b>本块最难懂的抽象点</b>（本季图最多的就是这些抽象点）；③ 第四、五行是阅读顺序提示。④ 最下面一句话提醒你：四块会互相串门（见第 5 节）。</p>
+          <p><b>要记住的一句话：</b>每一块 = 拆一个假设 + 一个最难啃的抽象点；读的时候带着「它到底在补哪个漏洞」去看。</p>
+        </figcaption>
+      </figure>
+      <div class="callout">
+        <p><b>本块（动态环境）的阅读顺序建议</b>：<b>0153</b> 用 DynaSLAM + DS-SLAM 打地基（几何+语义双通道）→ <b>0154</b> 看纯几何路线（不靠语义也能判动态）→ <b>0155</b> 看「不删而是跟踪」的范式跃迁 → <b>0156</b> 看室外与「别把停着的车删掉」→ <b>0157</b> 小结（代价账与验收）→ <b>0158</b> 补充（激光侧与语义侧对照）。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 全季课表（0152–0178，27 节 / 42 篇）</h2>
+      <p>下面把全季 27 节课一次列全，方便你建立全局地图。本块（动态环境）是 0152–0158，已用底色标出。</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;font-size:.88rem">
+        <thead>
+          <tr style="background:rgba(43,108,176,.1)">
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(43,108,176,.35)">块</th>
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(43,108,176,.35)">课号</th>
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(43,108,176,.35)">主题</th>
+            <th style="text-align:left;padding:.55rem .6rem;border-bottom:2px solid rgba(43,108,176,.35)">覆盖论文</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700" rowspan="7">动态环境</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee"><b>0152</b></td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">导览：三个不成立的假设</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">—</td>
+          </tr>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee"><b>0153</b></td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">DynaSLAM + DS-SLAM：动态 SLAM 开山</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">DynaSLAM 2018；DS-SLAM 2018</td>
+          </tr>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee"><b>0154</b></td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">纯几何路线：不靠语义也能判动态</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">Point Correlations 2022；CRF 长时一致 2022</td>
+          </tr>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee"><b>0155</b></td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">不删而是跟踪：动态物体变路标</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">DynaSLAM II 2021；Dynam-SLAM 2023</td>
+          </tr>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee"><b>0156</b></td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">别把停着的车删掉：语义动态 ≠ 当前真在动</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">室外动态 2023；WF-SLAM 2022</td>
+          </tr>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee"><b>0157</b></td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">动态块小结：代价账与验收</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">—</td>
+          </tr>
+          <tr style="background:rgba(43,108,176,.06)">
+            <td style="padding:.5rem .6rem"><b>0158</b></td>
+            <td style="padding:.5rem .6rem">动态环境补充：激光侧与语义侧</td>
+            <td style="padding:.5rem .6rem">SemanticFusion 2017</td>
+          </tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700" rowspan="9">语义建图</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">0159–0167</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">语义建图（9 节）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">SemanticFusion；Co/MaskFusion；MID/EM-Fusion；Panoptic；Kimera；SO；YOLO；对象框架；收束</td>
+          </tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee" colspan="3" style="color:#8a93a0">（详见语义建图块导览 0159）</td></tr>
+          <tr>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee;font-weight:700" rowspan="7">多机协同</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">0168–0174</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">多机协同（7 节）</td>
+            <td style="padding:.5rem .6rem;border-bottom:1px solid #eee">MultiUAV；DOOR；COVINS；LAMP2；DiSCo；Kimera-Multi；Swarm；D²SLAM；MR-Topo</td>
+          </tr>
+          <tr><td style="padding:.5rem .6rem;border-bottom:1px solid #eee" colspan="3" style="color:#8a93a0">（详见多机块导览 0168）</td></tr>
+          <tr>
+            <td style="padding:.5rem .6rem;font-weight:700" rowspan="5">事件相机</td>
+            <td style="padding:.5rem .6rem">0175–0178</td>
+            <td style="padding:.5rem .6rem">事件相机（5 节）</td>
+            <td style="padding:.5rem .6rem">EVO；Event-Line；CMax；Ultimate；EventTracking；DEVO；ESVO；ESVIO；PL-EVIO；VECtor</td>
+          </tr>
+          <tr><td style="padding:.5rem .6rem" colspan="3" style="color:#8a93a0">（详见事件块导览 0175）</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <p><b>关于数字</b>：全季 42 篇论文，落位到 27 节课。其中导览（0152、0159、0168、0175）与收束（0157、0167、0174、0178）不覆盖新论文，其余为「一课一篇」或「组课（一课两篇）」。本表只把动态块逐节展开，其余三块在各自导览课里细讲。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 横向联系预告：四块不是四个孤岛</h2>
+      <p>写「和前面课程怎么接」时，不能只接前七季，还要接本季的另外三块。下面四处交叉是最该记住的：</p>
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h4>动态 ↔ 语义</h4>
+          <p>判断「动」最省力的办法就是用语义分割把「人」整类剔掉。<b>0153</b> 与 <b>0160</b> 都要点名对方：语义是动态剔除的现成零件。</p>
+        </div>
+        <div class="mini-card">
+          <h4>语义 ↔ 多机</h4>
+          <p>Kimera 家族的 DSG（<b>0163</b>）与 Kimera-Multi（<b>0171</b>）同一血脉，后者把前者的「度量-语义网格」做成了分布式。</p>
+        </div>
+        <div class="mini-card">
+          <h4>动态 ↔ 多机</h4>
+          <p>多机场景里，别的机器人本身就是「动态物体」。<b>0173</b> 附近的 D²SLAM 专门处理「近场另一个机器人」的精确相对状态。</p>
+        </div>
+        <div class="mini-card">
+          <h4>事件 ↔ 高速</h4>
+          <p>事件相机最强在<b>高速运动</b>（不产生运动模糊），与动态块天然互补——这点在 <b>0175</b> 物理机理课会回扣。</p>
+        </div>
+      </div>
+      <div class="callout">
+        <p><b>读的时候请记住</b>：本季每节课的「和前面课程怎么接」都会同时做两件事——<b>往回接前七季</b>（如 0005、0043–0045、0140、0147），<b>往旁接本季其他块</b>（如上面的四组）。这样你读到最后，四块会织成一张网，而不是四条平行线。</p>
+      </div>
+      <div class="interactive-card">
+        <h4>互动二：判断「动」最省力的办法，依据是哪一块的交叉？</h4>
+        <p>下面哪句最准？<button class="quiz-options" onclick="lessonKit.answer(this,'q0152c')">动态与语义交叉</button><button class="quiz-options" onclick="lessonKit.answer(this,'q0152d')">多机与事件交叉</button></p>
+        <p class="quiz-feedback" id="q0152c" hidden>正确。动态块要把「在动的东西」找出来，最省力的捷径就是用语义分割直接把「人/车」这类可动类整类剔除——这正是动态↔语义的交叉（0153 与 0160 互链）。多机↔事件的交叉讲的是「别的机器人是动态物体」与「事件相机补高速」，和「怎么判动」不是一回事。</p>
+        <p class="quiz-feedback" id="q0152d" hidden>不对。多机↔事件的交叉，讲的是「多机场景里别的机器人本身就是动态物体」（0173 的 D²SLAM）以及「事件相机擅长高速」（0175）。但「判断动最省力 = 用语义整类剔」是动态块与语义块的交叉，不是多机与事件的交叉。</p>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 读完你应该能回答</h2>
+      <ul>
+        <li>为什么本季叫「专题支线」，而不是「第八个技术主线」？它和前七季的写法有什么本质不同？</li>
+        <li>前七季默认的三个假设分别是什么？各举一个现实场景说明它怎么被戳破。</li>
+        <li>本季四个块各自拆的是哪个假设？每块「最抽象的点」是什么？</li>
+        <li>动态环境块（0152–0158）建议的阅读顺序是什么？为什么 0153 适合当开山？</li>
+        <li>四块之间有哪四处横向联系？分别由哪几节课互链？</li>
+        <li>「和前面课程怎么接」在本季为什么要同时接前七季和本季其他块？</li>
+      </ul>
+      <section class="exercise-box">
+        <h3>课后练习（答案收起，点开看解析）</h3>
+        <ol>
+          <li>用不超过 150 字，向一个没读过 SLAM 的人解释：为什么「环境静止」这个假设对建图那么重要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>建图的本质，是把「不同时间拍到的同一处」对应到「空间里的同一个点」。这件事成立的前提是：那个点本身没动。如果场景里有人、车在走，同一个像素在前后两帧对应的是两个不同位置的三维点，SLAM 就会误以为「相机移动了很大一段」，把整张地图拉歪。所以「环境静止」不是吹毛求疵，而是 BA（光束法平差）能成立的根。</p>
+            </div></details>
+          </li>
+          <li>有人说「本季的四块是四个独立的新方向，互不相关」。这个说法哪里不对？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>不对。四块都源自「拆掉前七季的某个默认假设」，而且彼此交叉：动态靠语义分割整类剔「人」（动态↔语义）；Kimera 的语义网格被 Kimera-Multi 做成分布式（语义↔多机）；多机里别的机器人就是动态物体（动态↔多机）；事件相机最擅长高速场景（事件↔动态/高速）。第 5 节列的这四组互链，会在具体课里反复出现。</p>
+            </div></details>
+          </li>
+          <li>如果你要设计一个「能用在真实厨房里的扫地机器人 SLAM」，三个假设里你最该先拆哪一个？为什么？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>最该先拆「环境静止」——厨房里有人走动、冰箱门开关、宠物乱跑，动态物体占比高且不可预测。拆掉另外两个（地图加语义、多机/事件）对单机扫地机器人是锦上添花，但「会动的环境」是它每帧都要面对的真问题。这也正是本块 0153 起要系统讲的内容：先学会「把动点找出来并正确处理」，再谈更高级的语义与多机。</p>
+            </div></details>
+          </li>
+          <li>本季的「代价账」思想（后面每节课都会用）是什么意思？为什么导览就要先立它？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>
+              <p>「代价账」是本项目一贯的读法：每讲一个方法，不只说它「解决了什么」，还要说「为了这个解法，它亏了什么」（实时性、静态场景精度、是否需要 GPU/训练数据、是否输出高层信息）。动态块尤其典型——删动态点会误删停着的车（亏静态特征），保留动态点又会污染 BA（崩盘风险）。导览先立这个思想，是因为本季八篇论文几乎都在「两种亏法之间取舍」，不带着代价账去读，很容易只记住漂亮的数字、忽略适用边界。</p>
+            </div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0151-收官-学习式方法的能与不能.html">← 上一课：0151 学习式方法的能与不能</a>
+        <a class="next" href="0153-DynaSLAM与DSS-SLAM-动态SLAM的开山.html">下一课：0153 DynaSLAM 与 DS-SLAM · 动态 SLAM 的开山 →</a>
+      </div>
+      <p class="foot-note">第八季（阶段 H 专题支线）从这一节开场。记住一句话：前七季默认三个假设，本季把它们拆掉，于是横向长出动态、语义、多机、事件四条支线 🧭</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

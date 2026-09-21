@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MID-Fusion 与 EM-Fusion：体素对象级与 EM 关联 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0161</div>
+      <h1>MID-Fusion 与 EM-Fusion：体素对象级与 EM 关联</h1>
+      <p class="subtitle">把「每物体一份模型」从 surfel 换成能装空间的体素，再把关联做成概率 🎲</p>
+      <div class="hero-meta">
+        <span>🎯 主题：octree / TSDF 对象级与概率数据关联</span>
+        <span>👥 作者：Xu 等（帝国理工）/ Strecke、Stückler（MPI）</span>
+        <span>📅 2019 · <i>MID-Fusion (AAAI) + EM-Fusion (ICRA)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">为什么换体素</a>
+        <a href="#b">体素挂语义</a>
+        <a href="#c">MID-Fusion</a>
+        <a href="#d">IoU关联</a>
+        <a href="#e">EM-Fusion</a>
+        <a href="#f">软关联</a>
+        <a href="#g">实时与局限</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 解释为什么对象级 SLAM 要从 surfel 换到 octree / TSDF 体素（自由空间）；② 讲清 MID-Fusion 怎么用 Mask R-CNN + 几何 + 运动三线索检测并独立追踪物体，关联靠 IoU&gt;0.5；③ 讲清 EM-Fusion 怎么用 EM 把「像素属于哪个物体」做成概率、用存在概率删物体；④ 对照两篇的实时性代价（2–3 Hz vs 100+ ms）。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p><b>0159</b> 结尾点过 surfel「没有自由空间」的天花板，本课是第一次真正换表示来补它——octree / TSDF 体素能存自由空间与连通性。<b>0160</b> 的「每物体一个模型、关联靠几何+语义」在这里升级为「体素对象级 + IoU/EM 关联」。<b>0005</b> 用 NDT 看「对不上」、<b>0153</b> 起的动态块用运动残差判动——MID-Fusion 的前景检测同样混用了「运动残差」，是跨块的同族思想。八叉树实现细节也回链第六季体素哈希 / octree 课。</p></div>
+      </div>
+
+      <h2 id="b">1. 为什么要换体素</h2>
+      <p>0159 说过 surfel 只存表面、没有自由空间；0160 的 Co/MaskFusion 也仍是 surfel。可一旦要做「对象级」——每个物体独立建模、还要知道物体之间、物体和空地之间的空间关系——surfel 就不够了。于是这两篇（2019）一起把地图表示换成了<b>体素 / TSDF</b>，而且用 <b>octree（八叉树）</b>来组织，让「能装空间」这件事第一次在语义块里落地。</p>
+      <p>通俗点：surfel 像「在物体表面贴满便利贴」；体素像「把整个房间切成乐高小方块，实心块写物体、空心块写自由空间」。后者天然能回答「这块地方能不能站人」。</p>
+
+      <h2 id="c">2. 体素挂语义与八叉树自适应</h2>
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#f5f7fa"/>
+          <text x="450" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">房间被切成小立方体，部分方块里写着语义标签</text>
+          <rect x="40" y="70" width="400" height="320" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="240" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">均匀体素 + 语义标签</text>
+          <g>
+            <rect x="70" y="130" width="34" height="34" fill="#d8e6f5" stroke="#9aa7b4"/>
+            <rect x="108" y="130" width="34" height="34" fill="#d8e6f5" stroke="#9aa7b4"/>
+            <rect x="146" y="130" width="34" height="34" fill="#cfe3d2" stroke="#5aa86a"/>
+            <rect x="70" y="168" width="34" height="34" fill="#d8e6f5" stroke="#9aa7b4"/>
+            <rect x="108" y="168" width="34" height="34" fill="#cfe3d2" stroke="#5aa86a"/>
+            <rect x="146" y="168" width="34" height="34" fill="#cfe3d2" stroke="#5aa86a"/>
+            <rect x="70" y="206" width="34" height="34" fill="#f6c453" stroke="#d9a93a"/>
+            <rect x="108" y="206" width="34" height="34" fill="#f6c453" stroke="#d9a93a"/>
+            <rect x="146" y="206" width="34" height="34" fill="#cfe3d2" stroke="#5aa86a"/>
+            <rect x="70" y="244" width="34" height="34" fill="#d8e6f5" stroke="#9aa7b4"/>
+            <rect x="108" y="244" width="34" height="34" fill="#d8e6f5" stroke="#9aa7b4"/>
+            <rect x="146" y="244" width="34" height="34" fill="#f6c453" stroke="#d9a93a"/>
+          </g>
+          <text x="240" y="300" text-anchor="middle" font-size="12" fill="#5a6675">蓝=自由空间</text>
+          <text x="240" y="320" text-anchor="middle" font-size="12" fill="#1d6b3c">绿=墙/地</text>
+          <text x="240" y="340" text-anchor="middle" font-size="12" fill="#7a5a00">黄=椅子</text>
+          <rect x="480" y="70" width="400" height="320" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="680" y="100" text-anchor="middle" font-size="15" font-weight="700" fill="#1f3a5f">八叉树：近处细、远处粗</text>
+          <rect x="520" y="130" width="240" height="200" fill="none" stroke="#b89b78" stroke-width="2"/>
+          <line x1="640" y1="130" x2="640" y2="330" stroke="#b89b78" stroke-width="1.5"/>
+          <line x1="520" y1="230" x2="760" y2="230" stroke="#b89b78" stroke-width="1.5"/>
+          <rect x="520" y="130" width="60" height="50" fill="#cfe3d2" stroke="#5aa86a"/>
+          <rect x="640" y="130" width="60" height="50" fill="#f6c453" stroke="#d9a93a"/>
+          <rect x="520" y="230" width="60" height="50" fill="#d8e6f5" stroke="#9aa7b4"/>
+          <rect x="700" y="280" width="60" height="50" fill="#d8e6f5" stroke="#9aa7b4"/>
+          <text x="680" y="300" text-anchor="middle" font-size="12" fill="#5a6675">远处一大块=一格</text>
+          <text x="680" y="320" text-anchor="middle" font-size="12" fill="#5a6675">近处再细分</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图把房间切成均匀小立方体，蓝色的标自由空间、绿色的标墙地、黄色的标椅子——语义直接「挂」在体素上；右图是八叉树思路：物体附近把方块细分成很多小格，空旷远处一大片就用一个粗格表示。<br>
+          <b>怎么看这张图：</b>① 体素让「自由空间」第一次可被显式存储；② octree 用自适应的粗细省内存——近处细、远处粗；③ 这正是 MID-Fusion 用的「octree 体素 TSDF」表示。<br>
+          <b>要记住的一句话：</b>换了体素，地图才「装得下空间」；octree 让这种装法既精细又不爆内存。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 420" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="420" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" font-size="16.5" font-weight="700" fill="#5cffb0">八叉树的聪明之处：空的地方不细分，有东西的地方才往下切</text>
+
+          <!-- 左：均匀网格 -->
+          <text x="222" y="62" text-anchor="middle" font-size="12.5" fill="#ffd1d8">均匀体素（浪费）</text>
+          <rect x="92" y="78" width="260" height="260" fill="none" stroke="#a32617" stroke-width="1.8"/>
+          <g stroke="#a32617" stroke-width="0.9" fill="none">
+            <line x1="157" y1="78" x2="157" y2="338"/><line x1="222" y1="78" x2="222" y2="338"/><line x1="287" y1="78" x2="287" y2="338"/>
+            <line x1="92" y1="143" x2="352" y2="143"/><line x1="92" y1="208" x2="352" y2="208"/><line x1="92" y1="273" x2="352" y2="273"/>
+          </g>
+          <!-- 一把椅子占 2 格 -->
+          <rect x="157" y="208" width="65" height="65" fill="#5cffb0" fill-opacity="0.45"/>
+          <rect x="222" y="208" width="65" height="65" fill="#5cffb0" fill-opacity="0.3"/>
+          <text x="190" y="246" text-anchor="middle" font-size="9.5" fill="#0f1424">椅</text>
+          <text x="222" y="366" text-anchor="middle" font-size="11" fill="#ffd1d8">16 个格子全都要存</text>
+          <text x="222" y="384" text-anchor="middle" font-size="11" fill="#ffd1d8">空空的地方也占内存</text>
+
+          <!-- 右：八叉树 -->
+          <text x="678" y="62" text-anchor="middle" font-size="12.5" fill="#5cffb0">八叉树（只在有东西处细分）</text>
+          <rect x="548" y="78" width="260" height="260" fill="none" stroke="#2f7a45" stroke-width="1.8"/>
+          <line x1="678" y1="78" x2="678" y2="338" stroke="#2f7a45" stroke-width="1"/>
+          <line x1="548" y1="208" x2="808" y2="208" stroke="#2f7a45" stroke-width="1"/>
+          <!-- 右下格细分 -->
+          <line x1="678" y1="273" x2="808" y2="273" stroke="#2f7a45" stroke-width="0.9"/>
+          <line x1="743" y1="208" x2="743" y2="338" stroke="#2f7a45" stroke-width="0.9"/>
+          <rect x="678" y="273" width="65" height="65" fill="#5cffb0" fill-opacity="0.5"/>
+          <rect x="743" y="273" width="65" height="65" fill="#5cffb0" fill-opacity="0.35"/>
+          <text x="710" y="310" text-anchor="middle" font-size="9.5" fill="#0f1424">椅</text>
+          <text x="613" y="112" font-size="11" fill="#2f7a45">大格子：空</text>
+          <text x="613" y="130" font-size="10.5" fill="#2f7a45">不再细分</text>
+          <text x="613" y="240" font-size="11" fill="#5cffb0">只在这一角递归</text>
+          <text x="678" y="366" text-anchor="middle" font-size="11" fill="#5cffb0">只存 4 格 + 树结构</text>
+          <text x="678" y="384" text-anchor="middle" font-size="11" fill="#5cffb0">省内存，还留着自由空间</text>
+
+          <text x="450" y="406" text-anchor="middle" font-size="12.5" fill="#cdd6ff">同一个房间：均匀网格「一视同仁」，八叉树把分辨率花在有物体的地方</text>
+        </svg>
+        <figcaption>
+          <b>这张图在说什么：</b>左图是把房间切成同样大小的 16 个体素、一格一格全都要存；右图是八叉树——先切成大格，只有发现里面「有东西」的大格才继续往小切，空的大格就到此为止。灰色的框都是「空的地方」。
+          <br>
+          <b>怎么看这张图：</b>① 两边画的其实是同一个房间和同一把椅子（绿色格子）；② 左图不管有没有东西，16 格都得分配内存；③ 右图只把有椅子的那个角往下细分，其余三块大格子直接标记成「空」——这一步同时省了内存、又明确了「这里是自由空间」；④ 注意右图那三块大格子不是没存，而是「一格代表一大片空」，这正是导航要的信息。
+          <br>
+          <b>要记住的一句话：</b>八叉树的自适应分辨率是为了「把算力和内存花在有东西的地方」，而它顺带保住的「空的地方」恰恰是自由空间——这是面元路线拿不到的东西。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. MID-Fusion：octree 对象级 + 三线索检测</h2>
+      <p>MID-Fusion（AAAI 2019，Xu 等，帝国理工）把每个物体建成一份<b>octree 体素 TSDF</b>（体素约 1 mm，基于 Supereight）。它检测「哪些像素属于前景物体」用的是<b>三线索联合</b>：Mask R-CNN 实例分割 + 几何边缘 + 运动残差，合出一个「前景概率（foreground probability）」，再按物体独立追踪。</p>
+      <p>物体位姿是 <b>object-centric</b>（以物体自身为坐标原点），不是把物体当「虚拟相机」，这样旋转、平移都更自然。相机位姿则用测量不确定性加权（Cauchy 损失）来追踪。</p>
+      <figure class="figure">
+        <img src="../../md/images/2019_MID-Fusion/dccba275caa6cf43d36d7672ccd6f608ff99e85efb0b4bf652bcdb0dcbd6bf54.jpg" alt="MID-Fusion system overview: object-level dense volumetric map">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>An overview of our system. Given RGB-D images, our system builds an object-level dense volumetric map that deals with dynamic objects and ignores people. Next to the input image we show the labelled object models as well as the coloured reconstruction.<br>
+          <b>怎么看这张图：</b>这是 MID-Fusion 的总览：输入 RGB-D，输出「对象级稠密体素地图」——既处理动态物体、又忽略人。注意它标出的每个物体都是独立模型，且是体素表示的重建（不再是 surfel 表面）。这是「对象级 + 体素」第一次合体。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2019_MID-Fusion/de547d368dced5785260a0d5dd95af58a6a53023a229f8df31e1826512309bb0.jpg" alt="MID-Fusion qualitative comparison with Co-Fusion">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Qualitative comparison with Co-Fusion: input RGB (left column), our reconstruction results (middle) and Co-Fusion results (right column).<br>
+          <b>怎么看这张图：</b>左中右三列对比 MID-Fusion 和 0160 的 Co-Fusion。关键差异在表示：Co-Fusion 是 surfel（只表面），MID-Fusion 是 octree 体素（能填满空间、存自由空间）。这正呼应本课第 1–2 节说的「换体素补自由空间」。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. MID-Fusion 的关联：IoU &gt; 0.5</h2>
+      <p>「这一帧的物体是不是上一帧那个」怎么判？MID-Fusion 用了一个很直白的几何判据：把已有物体的<b>渲染 mask</b>和当前帧的<b>局部 mask</b>求交并比（IoU），<b>大于 0.5</b> 就认为是同一个物体，继续追踪；匹配不上就新建一个。它<b>不做 EM、也不做匈牙利匹配</b>，就是纯几何 IoU 判据——简单、够用。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="380" fill="#f5f7fa"/>
+          <text x="450" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">渲染 mask 与当前帧 mask 重叠度（IoU）决定「是不是同一个」</text>
+          <rect x="80" y="80" width="320" height="240" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="240" y="110" text-anchor="middle" font-size="14" fill="#33414f">渲染 mask（已有模型）</text>
+          <ellipse cx="240" cy="220" rx="90" ry="70" fill="#bfe0ff" stroke="#4a90c2" stroke-width="2" opacity="0.85"/>
+          <rect x="500" y="80" width="320" height="240" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="660" y="110" text-anchor="middle" font-size="14" fill="#33414f">当前帧 mask</text>
+          <ellipse cx="660" cy="220" rx="95" ry="75" fill="#bfe0ff" stroke="#4a90c2" stroke-width="2" opacity="0.85"/>
+          <rect x="360" y="190" width="180" height="60" rx="10" fill="#eafaf0" stroke="#3a9d5d"/>
+          <text x="450" y="218" text-anchor="middle" font-size="14" font-weight="700" fill="#1d6b3c">IoU = 重叠 / 并集</text>
+          <text x="450" y="240" text-anchor="middle" font-size="13" fill="#1d6b3c">> 0.5 → 同一物体</text>
+          <text x="240" y="350" text-anchor="middle" font-size="13" fill="#6b7785">两个椭圆大部分重叠</text>
+          <text x="660" y="350" text-anchor="middle" font-size="13" fill="#6b7785">→ 判为继续追踪</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是已有物体「渲染出来」的 mask，右边是当前帧检测到的 mask，两者椭圆大部分重叠；中间算出 IoU，超过 0.5 阈值就判定「是同一个物体，继续追踪」。<br>
+          <b>怎么看这张图：</b>① 这是 MID-Fusion 关联的核心判据，简单直观；② IoU&gt;0.5 意味着「七成以上重合才信是同一个」，太松会合并、太紧会拆开；③ 它比 0160 的「&gt;3% 离群就开新模型」更依赖形状重合，更适合物体级。<br>
+          <b>要记住的一句话：</b>MID-Fusion 的关联 = 渲染 mask 与帧 mask 的 IoU 是否过 0.5。
+        </figcaption>
+      </figure>
+
+      <h2 id="f">5. EM-Fusion：把关联做成概率</h2>
+      <p>EM-Fusion（ICRA 2019，Strecke &amp; Stückler，MPI）换了个更「软」的思路。它不硬判「这个像素属于物体 A 还是 B」，而是用 <b>EM（期望最大化）算法</b>估计每个像素属于各个物体的<b>概率</b>。E 步（期望步）算出联合分布下的关联似然，M 步（最大化步）据这些软关联去更新物体位姿——交替迭代。</p>
+      <div class="formula-box"><div class="flow-formula">$$p(c_t \mid z_t,\theta) = \frac{p(z_t \mid c_t,\theta)}{\sum_{c'} p(z_t \mid c',\theta)}$$</div></div>
+      <p><b>这句话在说什么：</b>「当前像素属于物体 $c_t$ 的概率」等于「假设它属于 $c_t$ 时、观测数据有多像」除以「所有可能物体（含背景）的同样似然之和」。用人话说：<b>不直接投票给某个物体，而是给每个候选都打一个「归属概率」</b>，谁的概率高就偏谁，但永远保留「可能是别的」的余地。这种「软关联」对遮挡、噪声特别友好。</p>
+      <figure class="figure">
+        <img src="../../md/images/2019_EM-Fusion/25575a3c668cdc7ce7367ab01b02c9e7dd918b0961e828c22c9587315b308833.jpg" alt="EM-Fusion probabilistic data association overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Dynamic object-level SLAM with probabilistic data association. We infer the association likelihood of pixels with objects in an expectation-maximization framework. The probabilistic data association improves accuracy and robustness of tracking and mapping. It implicitly handles occlusions.<br>
+          <b>怎么看这张图：</b>这张总览点明 EM-Fusion 的卖点——「概率数据关联」在 EM 框架里推断像素与物体的关联似然，从而提升追踪/建图的鲁棒性，并<b>隐式处理遮挡</b>。这正是「软关联」相比硬 IoU 的关键优势。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2019_EM-Fusion/a33a00c5be56d4c7311ef1d0bc1564c971b7b0d3b68a717feb3ec90f67d1e6b7.jpg" alt="EM-Fusion pixel association likelihood E-step">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Pixel association likelihood. The E-step of our EM method determines the association likelihood (black: 0, white: 1) for the background (third row) and all objects (fourth row: clock). The association likelihood is determined from the data likelihood of the pixels in all objects given the current pose and map estimates.<br>
+          <b>怎么看这张图：</b>第 3–4 行就是 E-step 输出的「归属概率图」：越白表示越像该物体（背景 / 钟）。它不是非黑即白的掩码，而是一张灰度概率——这正是公式里 $p(c_t \mid z_t,\theta)$ 的可视化。
+        </figcaption>
+      </figure>
+
+      <h2 id="g">6. 软关联 + 存在概率删物体</h2>
+      <p>EM-Fusion 还有两个细节很实用。一是追踪用<b>直接 SDF 对齐</b>（不是 ICP 迭代最近点），配 Huber 范数 + IRLS / Levenberg-Marquardt，对离群更稳。二是它给每个物体维护一个<b>存在概率 $p_{ex}$</b>：如果某物体长期「对不上」、存在概率掉到 <b>0.1 以下就直接删掉</b>。这比 MID-Fusion 的硬阈值更平滑——关联偶尔错一下不会立刻误删，长期错才清掉。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 390" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="390" fill="#f5f7fa"/>
+          <text x="450" y="38" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">软关联：每个像素给每个候选打一个归属概率</text>
+          <rect x="60" y="70" width="360" height="280" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="240" y="100" text-anchor="middle" font-size="14" fill="#33414f">硬关联（MID 思路）</text>
+          <ellipse cx="240" cy="210" rx="95" ry="75" fill="#cfe3d2" stroke="#5aa86a" stroke-width="2"/>
+          <ellipse cx="330" cy="240" rx="55" ry="45" fill="#f6c453" stroke="#d9a93a" stroke-width="2"/>
+          <text x="240" y="320" text-anchor="middle" font-size="12" fill="#5a6675">像素非A即B</text>
+          <text x="240" y="340" text-anchor="middle" font-size="12" fill="#5a6675">边界一刀切</text>
+          <rect x="480" y="70" width="360" height="280" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="660" y="100" text-anchor="middle" font-size="14" fill="#33414f">软关联（EM 思路）</text>
+          <ellipse cx="660" cy="210" rx="95" ry="75" fill="#bfe0ff" stroke="#4a90c2" stroke-width="2" opacity="0.55"/>
+          <ellipse cx="660" cy="210" rx="55" ry="45" fill="#f6c453" stroke="#d9a93a" stroke-width="2" opacity="0.8"/>
+          <text x="660" y="320" text-anchor="middle" font-size="12" fill="#5a6675">重叠区两物体都有</text>
+          <text x="660" y="340" text-anchor="middle" font-size="12" fill="#5a6675">一定概率，不硬切</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是硬关联——一个像素要么归绿物体、要么归黄物体，边界一刀切；右图是软关联——重叠区里像素对两个物体都「有一定概率」，用半透明叠加表示这种模糊归属。<br>
+          <b>怎么看这张图：</b>① 软关联不强迫二选一，所以个别帧判错不会立刻炸；② 配合「存在概率 &lt;0.1 才删」，系统对短暂遮挡/误检更鲁棒；③ 这是 EM-Fusion 相对 MID-Fusion 的核心差异。<br>
+          <b>要记住的一句话：</b>把关联从「非黑即白」改成「打概率」，是对象级 SLAM 抗噪的关键一招。
+        </figcaption>
+      </figure>
+
+      <h2>7. 实时性与局限</h2>
+      <p>两篇都明显比前面的 surfel 系更「重」。MID-Fusion <b>不含 Mask R-CNN 时约 2–3 Hz（CPU）</b>，物体一多（25+）就掉到约 400 ms/帧；EM-Fusion <b>106–257 ms/帧（GPU）</b>，更非实时。共同点是都<b>依赖 Mask R-CNN 的频率</b>——检测器慢，整体就慢。</p>
+      <p>作者自陈的局限也诚实：MID-Fusion 实时性随物体数下降；EM-Fusion <b>不区分动态/静态物体</b>，会浪费算力去追踪大量本就静止的物体（这也被综述文点名）。这两点正好留给后面的 PanopticFusion（统一 stuff+things）和对象 SLAM 框架（更省力的关联）去补。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>EM-Fusion 用 EM 做数据关联，相对 MID-Fusion 的硬 IoU 关联，主要多了什么能力？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对：EM 给每个像素对各个物体打「归属概率」而非硬归类，配合存在概率删除，对遮挡和短暂误检更鲁棒。" onclick="lessonKit.answer(this,'q0161a')">它做软概率关联</button>
+          <button data-correct="no" data-explanation="错：MID-Fusion 也用体素/octree，且同样依赖 Mask R-CNN；EM-Fusion 的区别在「关联做成概率」，不在表示或检测器。" onclick="lessonKit.answer(this,'q0161a')">它改用稀疏点</button>
+        </div>
+        <div class="quiz-feedback" id="q0161a"></div>
+      </div>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>对象级 SLAM 为什么要从 surfel（0159/0160）换到 octree / TSDF 体素？「自由空间」为何重要？</li>
+        <li>MID-Fusion 靠哪三线索检测前景物体？它的关联判据是什么（阈值多少）？</li>
+        <li>EM-Fusion 的 EM 在算什么？公式 $p(c_t \mid z_t,\theta)$ 用一句话怎么翻译？</li>
+        <li>EM-Fusion 的「存在概率 &lt;0.1 删物体」相比 MID-Fusion 的硬阈，好在哪？</li>
+        <li>两篇的实时性代价各是多少？共同瓶颈是什么？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <ol>
+        <li>用生活类比解释「octree 八叉树」为什么比「均匀切小方块」省内存。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>均匀切方块像把整面墙按 1cm 网格贴满便利贴，连空白墙也贴——浪费。八叉树像「哪有细节哪才细分」：空旷远处一大片用一张大便利贴就够，桌角、杯沿附近才细分成小格。这样总格子数少很多，又能在该细的地方细。MID-Fusion 用 octree 体素 TSDF 正是这个思路，约 1mm 分辨率的细节靠自适应细分实现，而不是全场景 1mm。</div></details>
+        </li>
+        <li>MID-Fusion 用 IoU&gt;0.5 判同一物体。如果两帧之间物体被部分遮挡（只露出一半），IoU 会怎样？这会引发什么问题？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>被遮挡后当前帧 mask 只剩一半，和已有模型的渲染 mask 重叠比例骤降，IoU 很容易跌破 0.5，于是系统可能误判「这是一个新物体」而开第二份模型（类似 0160 的双杯问题）。这就是硬 IoU 关联对遮挡脆弱的地方。EM-Fusion 的软概率关联 + 存在概率延迟删除，正是为缓解这个——单帧 IoU 低不至于立刻误判，要看长期存在概率。</div></details>
+        </li>
+        <li>EM-Fusion 公式 $p(c_t \mid z_t,\theta) = p(z_t \mid c_t,\theta) / \sum p(z_t \mid c',\theta)$ 里，分母那个求和在干什么？去掉它会怎样？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>分母是把「属于物体 A、物体 B、背景……所有候选」的似然加起来，作用是归一化，让分子变成一个 0~1 的概率。去掉分母，得到的只是「似然」而非「概率」，数值可能远大于 1，且无法在不同像素间横向比较「更可能属于谁」。有了归一化，每个像素对各个候选的归属概率之和才等于 1，E-step 的语义才成立。</div></details>
+        </li>
+        <li>两篇都依赖 Mask R-CNN 的频率。如果检测器只每 30 帧跑一次（像 EM-Fusion），中间 29 帧的物体检测从哪来？这会带来什么风险？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>中间帧的物体位置靠「上一帧的检测 + 追踪/对齐」来延续，而不是每帧重新检测。风险是：若物体在中间帧发生快速运动、形变或被长时间遮挡，追踪就可能漂走，等第 30 帧再检测时已经对不上，关联出错。EM-Fusion 用软关联和抗噪的 SDF 对齐缓解这个，但本质瓶颈仍在——检测频率越低，对快速动态的鲁棒性越差。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0160-MaskFusion与CoFusion-实例级分割进场.html">← 0160 Co-Fusion 与 MaskFusion：实例级分割进场</a>
+        <a class="next" href="0162-PanopticFusion-全景分割建图.html">0162 PanopticFusion：全景分割建图 →</a>
+      </div>
+      <p class="foot-note">体素让地图「装得下空间」，下一步把「背景」和「物体」统一成一种语言 🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

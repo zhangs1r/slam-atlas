@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>动态块小结：代价账与验收 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0157</div>
+      <h1>动态块小结：代价账与「判错了会怎样」验收</h1>
+      <p class="subtitle">把八篇动态 SLAM 摆上同一张账本 🧾——我们到底为「环境会动」付了多少钱，又该怎么验收它没算错</p>
+      <div class="hero-meta">
+        <span>🎯 主题：动态块的收束与代价核算</span>
+        <span>👥 作者：本季助教带读（无新论文）</span>
+        <span>📅 收束课 · 涵盖 0153–0156 八篇</span>
+      </div>
+      <div class="toc">
+        <a href="#a">这一块拆掉了什么</a>
+        <a href="#b">两条技术路线</a>
+        <a href="#c">四种哲学的代价账</a>
+        <a href="#d">判错了会怎样</a>
+        <a href="#e">横向链接与下一步</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应能：① 说出动态检测只有「几何」与「语义」两条路线；② 把八篇方法归到「删 / 留＋追踪 / 降权 / 造虚拟路标」四种哲学；③ 算清每家的「实时性 / 静态场景 / 是否输出轨迹」三笔账；④ 用「误删 vs 漏检」两种代价验收一个动态 SLAM。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>本块全部建立在第三季 <b>0043–0045</b>（ORB-SLAM）之上——八篇里有七篇是「在 ORB-SLAM 上打一层动态剔除补丁」。<b>0005</b>（SW-NDT）是全项目第一次碰动态的激光侧做法，0158 会专门对照。<b>0147</b> 讲的 SAM / DINOv2 就是动态剔除现成的「语义零件」，<b>0121</b>（WildGS-SLAM）用特征不确定度当动态信号且不靠深度语义。多机块的 <b>0140</b>「回环假阳性铁律」与「判错会怎样」是同一类「错了就崩」的张力。</p></div>
+      </div>
+
+      <h2 id="b">1. 这一块我们到底拆掉了什么</h2>
+      <p>导览课（0152）说过：前七季默认了三件事，本季逐个戳破。动态环境块专门戳第一件——「<b>环境是静止的</b>」。前面所有的 SLAM 都把地图点当成永远不动的钉子，BA 里每个点只贡献一个「它该出现在哪」的约束。可真实世界里有人走来、车开过，这些「钉子」其实在动。一旦把动的点当静的塞进 BA，整条轨迹就会被拽歪。</p>
+      <p>所以动态 SLAM 的核心问题只有一句话：<b>怎么判断「哪些点此刻在动」，判错了怎么办？</b> 八篇论文（0153–0156 覆盖）给出的答案可以归成两路「怎么判」和四种「判出来怎么处理」。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面这句话对不对：「只要把会动的东西全删掉，SLAM 就安全了，不用管别的。」</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="错：删得太狠会把停着的车、站着的人这类「可动但此刻静止」的点也删掉，损失本可用来定位的静态特征，反而让精度下降（DynaSLAM II 在 seq0001 就出现 2.31＞1.95）。" onclick="lessonKit.answer(this,'q0157a')">这是完全错误的</button>
+          <button data-correct="yes" data-explanation="对：单纯硬删会误伤静止可动物体，且「真在动的没删干净」会比「删多了」更致命，所以才衍生出留、降权、造虚拟路标等更细的处理哲学。" onclick="lessonKit.answer(this,'q0157a')">这是过于简单的</button>
+        </div>
+        <div class="quiz-feedback" id="q0157a"></div>
+      </div>
+
+      <h2 id="c">2. 两条技术路线：几何 vs 语义</h2>
+      <p>「怎么判断在动」在工程上只有两条路线，而且常常组合使用：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h3>几何路线</h3>
+          <p>靠「运动残差」：同一地图点在新老帧里该长得一样。用重投影误差、对极约束、多视角深度一致性、场景流来量「它偏了多少」。偏太多就判动。<b>不认识物体，只认运动</b>。代表：DSLAM（2022，点相关图）、CRF 长时一致（2022）、Dynam-SLAM（2023）。</p>
+        </div>
+        <div class="mini-card">
+          <h3>语义路线</h3>
+          <p>靠「类别先验」：分割网络先说「这是人 / 车，是可动类」，直接把整类当潜在动态。它<b>认识物体，但不一定知道它此刻动没动</b>——停着的车也会被划进动态候选。代表：DynaSLAM（2018）、DS-SLAM（2018）、室外动态（2023）、WF-SLAM（2022）。</p>
+        </div>
+      </div>
+      <p>一个关键观察：<b>纯几何法不依赖训练数据 / GPU</b>（DSLAM 30.65 ms、CRF 16–18 fps 都接近 ORB-SLAM2 的实时性），但靠「动静统计差异」赌场景里静态点占多数；语义法先拿到「可动类」先验更省心，却要为分割网络付出 25–195 ms 不等的算力，而且永远背着一个隐患——它分不清「可动」和「此刻在动」。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#f5f7fa"/>
+          <rect x="20" y="20" width="420" height="360" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <rect x="460" y="20" width="420" height="360" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="52" text-anchor="middle" font-size="20" font-weight="700" fill="#1f3a5f">几何路线：看「运动残差」</text>
+          <text x="670" y="52" text-anchor="middle" font-size="20" font-weight="700" fill="#1f3a5f">语义路线：看「类别先验」</text>
+          <line x1="60" y1="120" x2="400" y2="120" stroke="#9aa7b4"/>
+          <circle cx="60" cy="120" r="6" fill="#e0533d"/>
+          <circle cx="400" cy="120" r="6" fill="#e0533d"/>
+          <text x="230" y="150" text-anchor="middle" font-size="15" fill="#33414f">同一点的新老帧投影</text>
+          <line x1="120" y1="200" x2="340" y2="290" stroke="#e0533d" stroke-width="3" stroke-dasharray="6 4" marker-end="url(#ar1)"/>
+          <text x="230" y="250" text-anchor="middle" font-size="15" fill="#33414f">偏了很远 → 判「动」</text>
+          <text x="230" y="330" text-anchor="middle" font-size="14" fill="#6b7785">不认识物体，只认运动</text>
+          <text x="230" y="355" text-anchor="middle" font-size="14" fill="#6b7785">DSLAM / CRF / Dynam</text>
+          <rect x="510" y="110" width="160" height="44" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="590" y="138" text-anchor="middle" font-size="15" fill="#7a5a00">人（红）</text>
+          <rect x="690" y="110" width="160" height="44" rx="8" fill="#d8f0ff" stroke="#4a90c2"/>
+          <text x="770" y="138" text-anchor="middle" font-size="15" fill="#0b4f7a">车（蓝）</text>
+          <text x="670" y="185" text-anchor="middle" font-size="15" fill="#33414f">分割网络整类标「可动」</text>
+          <text x="670" y="250" text-anchor="middle" font-size="15" fill="#33414f">停着的车也被划进候选</text>
+          <text x="670" y="330" text-anchor="middle" font-size="14" fill="#6b7785">认识物体，不知此刻动没动</text>
+          <text x="670" y="355" text-anchor="middle" font-size="14" fill="#6b7785">DynaSLAM / DS-SLAM / 室外 / WF</text>
+          <defs><marker id="ar1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e0533d"/></marker></defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是几何路线——只盯「同一个点的投影从上一帧到这一帧偏了多少」，偏大就判动；右图是语义路线——网络先把「人整类刷红、车整类刷蓝」当潜在动态，不追究它此刻是否真在动。<br>
+          <b>怎么看这张图：</b>① 左图的箭头代表「重投影误差」，它不需要任何物体知识；② 右图里「停着的车」明明没动，却被蓝框划进了动态候选，这正是语义路线的典型浪费；③ 两条线经常组合：语义先圈候选、几何再确认。<br>
+          <b>要记住的一句话：</b>几何认运动不认物体，语义认物体不认「此刻动没动」，所以才会有人想把它们拼起来。
+        </figcaption>
+      </figure>
+
+      <h2 id="d">3. 四种处理哲学的代价账</h2>
+      <p>「判出来是动态的」之后怎么处理？八篇可以收进四种哲学。下面这张账本把每家按这三笔账摊开：<b>实时性</b>（每帧多花多少 ms）、<b>静态场景代价</b>（安静时会不会反而变差）、<b>是否输出动态轨迹</b>（除了定位还给你什么）。</p>
+      <table>
+        <thead>
+          <tr><th>方法（年）</th><th>路线</th><th>哲学</th><th>实时性代价</th><th>静态场景代价</th><th>输出轨迹</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DynaSLAM（2018）</td><td>几何＋语义</td><td>删＋inpaint</td><td>非实时（CNN 195＋几何 334＋inpaint 208 ms）</td><td>略亏（删了可动类静态特征）</td><td>否</td></tr>
+          <tr><td>DS-SLAM（2018）</td><td>语义＋几何</td><td>删</td><td>~16.8 fps（语义线程并行）</td><td>略亏（站着的「人」被删）</td><td>否</td></tr>
+          <tr><td>DSLAM（2022）</td><td>纯几何</td><td>删（连通分量）</td><td>近实时 30.65 ms，无需 GPU</td><td><tspan font-weight="700">几乎不亏</tspan></td><td>否</td></tr>
+          <tr><td>DynaSLAM II（2021）</td><td>语义实例</td><td>留＋追踪</td><td>10–12 fps（唯一实时 MOT）</td><td>略降（seq0001 2.31＞1.95）</td><td><tspan font-weight="700">是（6DoF＋box）</tspan></td></tr>
+          <tr><td>室外动态（2023）</td><td>语义＋场景流</td><td>删（区分动静）</td><td>非实时（分割太慢）</td><td>少动态时提升有限</td><td>否</td></tr>
+          <tr><td>CRF（2022）</td><td>纯几何</td><td>删（长时一致）</td><td>16–18 fps（CPU）</td><td><tspan font-weight="700">几乎不亏</tspan></td><td>否</td></tr>
+          <tr><td>WF-SLAM（2022）</td><td>语义＋几何</td><td>降权</td><td>非实时 310 ms</td><td>增益薄（sitting 仅 5.43%）</td><td>否</td></tr>
+          <tr><td>Dynam-SLAM（2023）</td><td>几何＋IMU</td><td>造虚拟路标</td><td>滑动窗口 10 帧近实时</td><td>模糊序列略亏</td><td>否（转虚拟约束）</td></tr>
+        </tbody>
+      </table>
+      <p>账本读下来有三条规律：① <b>纯几何法在静态场景几乎不亏本</b>（DSLAM、CRF 不删「可动类先验」），语义删除派在静止可动物体场景会略降；② <b>实时性普遍是痛点</b>，只有纯几何两篇接近 ORB-SLAM2 的实时；③ <b>只有 DynaSLAM II 输出动态物体轨迹</b>，其余大多只过滤 / 降权，定位之外的信息为零。</p>
+
+      <h3>3.1 静态场景下的代价（空房间也要付的钱）</h3>
+      <p>这张图回答 §九.1 点名的「静态场景下的代价」：一个空无一人的房间，本来没有任何东西在动，但防动态的流水线仍在跑——分割网络照样要把「人 / 车」整类标一遍，哪怕房间里根本没有。这笔「安静时也要付的算力 + 误删风险」就是动态方法的隐性账单。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#eef2f6"/>
+          <rect x="30" y="40" width="380" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="220" y="72" text-anchor="middle" font-size="18" font-weight="700" fill="#1f3a5f">安静的空房间</text>
+          <rect x="70" y="100" width="300" height="170" fill="#f3f6fa" stroke="#c2ccd6"/>
+          <rect x="90" y="230" width="60" height="40" fill="#d9e2ec"/>
+          <rect x="170" y="230" width="60" height="40" fill="#d9e2ec"/>
+          <rect x="250" y="230" width="60" height="40" fill="#d9e2ec"/>
+          <circle cx="380" cy="150" r="16" fill="#8a97a5"/>
+          <line x1="380" y1="166" x2="380" y2="200" stroke="#8a97a5" stroke-width="3"/>
+          <text x="220" y="300" text-anchor="middle" font-size="14" fill="#6b7785">没有任何物体在动</text>
+          <rect x="470" y="40" width="400" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="72" text-anchor="middle" font-size="18" font-weight="700" fill="#1f3a5f">防动态流水线仍在跑</text>
+          <rect x="510" y="100" width="150" height="70" rx="8" fill="#fff3cf" stroke="#e0b449"/>
+          <text x="585" y="132" text-anchor="middle" font-size="14" fill="#7a5a00">分割网络</text>
+          <text x="585" y="156" text-anchor="middle" font-size="12" fill="#7a5a00">逐帧标「可动类」</text>
+          <rect x="690" y="100" width="150" height="70" rx="8" fill="#e9f7ef" stroke="#3a9d5d"/>
+          <text x="765" y="132" text-anchor="middle" font-size="14" fill="#1d6b3c">几何确认</text>
+          <text x="765" y="156" text-anchor="middle" font-size="12" fill="#1d6b3c">对极/深度</text>
+          <line x1="660" y1="170" x2="660" y2="210" stroke="#9aa7b4"/>
+          <rect x="510" y="220" width="330" height="60" rx="8" fill="#fdecea" stroke="#e0533d"/>
+          <text x="675" y="248" text-anchor="middle" font-size="14" fill="#a32617">账单：GPU 算力 + 时间</text>
+          <text x="675" y="270" text-anchor="middle" font-size="13" fill="#a32617">还冒「误删静止可动物体」风险</text>
+          <text x="670" y="320" text-anchor="middle" font-size="14" fill="#6b7785">房间越安静，这笔钱越「白花」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是一个空房间，机器人（左下小人）看着它，没有任何东西在动；右图是把同一场景丢进防动态流水线——分割网络照样逐帧把「人 / 车」整类标一遍，几何模块照样比对，最后落在一张红色「账单」上。<br>
+          <b>怎么看这张图：</b>① 房间是空的，所以分割网络的输出其实是「无人无车」，但算力已经花出去了；② 红色账单点出隐性成本：GPU / 时间，以及把「可动类」当动态先验时，一旦房间里真有个停着的车，它会被误删；③ 这正是纯几何派（DSLAM / CRF）几乎不亏的原因——它们不跑分割网络，安静时几乎零额外开销。<br>
+          <b>要记住的一句话：</b>「为了防动态，安静时也要付的这笔钱」就是语义删除派相对于纯几何派的结构性劣势。
+        </figcaption>
+      </figure>
+
+      <h3>3.2 第四种哲学：把动态变成「虚拟路标」</h3>
+      <p>前面三种哲学（删、留＋追踪、降权）都在「减少动态点对 BA 的坏影响」。Dynam-SLAM（2023）走了第四条路：<b>当动态点太多、静态点不够时，反而拿动态点造「虚拟路标」补约束</b>——假设物体在帧间近似匀速，用当前运动预测它下一帧该在的位置，当成一条「静态约束」塞回 BA。这把「坏数据」反转成「补丁」。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="380" fill="#f5f7fa"/>
+          <rect x="30" y="40" width="400" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="72" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">动态点太多 → 静态点不够</text>
+          <circle cx="120" cy="180" r="8" fill="#3a9d5d"/>
+          <circle cx="160" cy="200" r="8" fill="#3a9d5d"/>
+          <circle cx="320" cy="150" r="9" fill="#e0533d"/>
+          <circle cx="350" cy="200" r="9" fill="#e0533d"/>
+          <circle cx="300" cy="240" r="9" fill="#e0533d"/>
+          <text x="230" y="300" text-anchor="middle" font-size="14" fill="#6b7785">红点（动态）占多数，绿点（静态）太少</text>
+          <text x="230" y="325" text-anchor="middle" font-size="14" fill="#6b7785">BA 约束不足 → 轨迹要漂</text>
+          <rect x="470" y="40" width="400" height="300" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="72" text-anchor="middle" font-size="17" font-weight="700" fill="#1f3a5f">Dynam：造「虚拟路标」补约束</text>
+          <circle cx="560" cy="160" r="9" fill="#e0533d"/>
+          <circle cx="700" cy="220" r="9" fill="#e0533d"/>
+          <line x1="560" y1="160" x2="700" y2="220" stroke="#e0a93a" stroke-width="3" stroke-dasharray="6 4"/>
+          <circle cx="700" cy="220" r="14" fill="none" stroke="#e0a93a" stroke-width="2"/>
+          <text x="630" y="135" text-anchor="middle" font-size="13" fill="#7a5a00">预测下一帧位置</text>
+          <text x="670" y="300" text-anchor="middle" font-size="14" fill="#6b7785">把动态点变成「匀速约束」</text>
+          <text x="670" y="325" text-anchor="middle" font-size="14" fill="#6b7785">反而稳定了相机位姿</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是「动态点（红）占多数、静态点（绿）太少」的危险场景，BA 因为可靠约束不足要漂；右图是 Dynam-SLAM 的做法——给动态点之间连一条「假设匀速」的预测虚线，并在预测位置画一个空心圈当「虚拟路标」，把动态点转成可服务的约束。<br>
+          <b>怎么看这张图：</b>① 虚线代表「用当前运动外推下一帧」，不是真观测；② 空心圈是人为造的约束，和真静态点作用类似——给 BA 多一条边；③ 这是「删 vs 留 vs 降权」之外的第四种思路：把坏数据也用起来。<br>
+          <b>要记住的一句话：</b>当静态点不够时，最狠的办法不是删动态点，而是把动态点「伪装」成静态约束。
+        </figcaption>
+      </figure>
+
+      <h2 id="e">4. 判错了会怎样：两种代价的验收</h2>
+      <p>动态检测只有两种判错，而且后果完全不对称。验收一个动态 SLAM 好不好，就看它在这两头压得怎么样：</p>
+      <div class="grid-2">
+        <div class="mini-card">
+          <h3>代价一：误删静止可动物体</h3>
+          <p>把「停着的车 / 站着的人」当成动态删掉 → <b>损失本可定位的静态特征</b> → 精度略降。这是「保守删除的亏本」，通常不致命，但会在静态场景拖累你。DynaSLAM II 在 KITTI seq0001 上 Ours 2.31 ＞ ORB-SLAM2 1.95，就是「给动态物体太多自由度」的实锤。</p>
+        </div>
+        <div class="mini-card">
+          <h3>代价二：漏判真动物体</h3>
+          <p>把「真在走的人」当成静态塞进 BA → <b>污染 BA</b> → 整条轨迹被拽歪，这是「漏检的崩盘」，比误删严重得多。所有方法都靠更严的阈值（如 Dynam 的 χ² 99% 分位 11.34）和长时统计来压制它。</p>
+        </div>
+      </div>
+      <p>用加权 BA（WF-SLAM 的 Eq.6）可以一句说清「降权」哲学如何处理这两头：不是删点，而是让可靠点贡献大、不可靠点贡献小。</p>
+      <div class="formula-box"><div class="flow-formula">$$\{R^*,t^*,w_i^*\} = \arg\min \frac{1}{2} w_i \sum_i \lVert x_i - \pi(R X_i + t) \rVert^2$$</div></div>
+      <p><b>这句话在说什么：</b>这个式子在算「最优的相机旋转 R、平移 t，以及每个特征点的权重 w_i」。它和 ORB-SLAM2 唯一的不同，是给每个重投影误差乘了个权重 w_i——权重大的点（大概率是静态）说了算，权重小的点（可能是动态）说了不算。所以它<b>不硬删点而是软降权</b>：漏判了真动物体时，这颗点的权重会被慢慢压低，不至于一下子污染整条 BA；误删静止可动物体时，它本就被当成「语义动态」给了低权重而不是清零，留了余地。这就是「降权」比「硬删」更稳的地方。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#f5f7fa"/>
+          <rect x="30" y="30" width="400" height="340" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="230" y="62" text-anchor="middle" font-size="17" font-weight="700" fill="#a32617">误删：停着的车被删</text>
+          <rect x="70" y="90" width="320" height="120" fill="#f3f6fa" stroke="#c2ccd6"/>
+          <rect x="120" y="150" width="80" height="40" fill="#d9e2ec" stroke="#9aa7b4" stroke-dasharray="5 3"/>
+          <text x="230" y="135" text-anchor="middle" font-size="13" fill="#6b7785">车明明静止</text>
+          <path d="M260,170 L360,170" stroke="#e0533d" stroke-width="3" marker-end="url(#ax1)"/>
+          <text x="320" y="195" text-anchor="middle" font-size="12" fill="#a32617">被当动态删掉</text>
+          <rect x="70" y="240" width="320" height="100" rx="8" fill="#fdecea" stroke="#e0533d"/>
+          <text x="230" y="275" text-anchor="middle" font-size="14" fill="#a32617">损失定位特征</text>
+          <text x="230" y="305" text-anchor="middle" font-size="13" fill="#a32617">精度略降（2.31＞1.95）</text>
+          <rect x="470" y="30" width="400" height="340" rx="10" fill="#ffffff" stroke="#cfd8e3"/>
+          <text x="670" y="62" text-anchor="middle" font-size="17" font-weight="700" fill="#a32617">漏检：真走的人留着</text>
+          <rect x="510" y="90" width="320" height="120" fill="#f3f6fa" stroke="#c2ccd6"/>
+          <circle cx="560" cy="150" r="14" fill="#e0533d"/>
+          <line x1="560" y1="150" x2="640" y2="170" stroke="#e0533d" stroke-width="3" marker-end="url(#ax2)"/>
+          <text x="640" y="135" text-anchor="middle" font-size="13" fill="#6b7785">人在走却被当静态</text>
+          <rect x="510" y="240" width="320" height="100" rx="8" fill="#fdecea" stroke="#e0533d"/>
+          <text x="670" y="275" text-anchor="middle" font-size="14" fill="#a32617">污染 BA</text>
+          <text x="670" y="305" text-anchor="middle" font-size="13" fill="#a32617">整条轨迹被拽歪（崩盘）</text>
+          <defs>
+            <marker id="ax1" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e0533d"/></marker>
+            <marker id="ax2" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#e0533d"/></marker>
+          </defs>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图是「误删」——一辆静止的车被当动态抹掉，结果是损失了本来能用来定位的特征，精度略降（用 DynaSLAM II seq0001 的 2.31＞1.95 当例子）；右图是「漏检」——一个真在走的人被当成静态塞进 BA，结果是整条轨迹被拽歪，是更严重的崩盘。<br>
+          <b>怎么看这张图：</b>① 左图的代价是「亏」，右图的代价是「崩」，不对称；② 验收时优先看右图——任何动态 SLAM 都必须证明它在高动态场景不会漏检；③ 左图提醒我们：纯靠「删」的方法在静止可动物体场景会吃亏，这就是留 / 降权 / 造虚拟路标存在的理由。<br>
+          <b>要记住的一句话：</b>误删让精度略降，漏检让轨迹崩盘——所以宁可调严阈值多误删一点，也不能放过一个真动物体。
+        </figcaption>
+      </figure>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>某动态 SLAM 在「停着的车」场景精度略低于原版 ORB-SLAM2，在高动态行人场景精度远超 ORB-SLAM2。这算失败吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不算失败：静态场景略降正是「为了防动态付的代价」（账本里 DSLAM/CRF 之外的方法几乎都有），只要高动态场景显著更准，就说明它做对了最关键的「防漏检」。" onclick="lessonKit.answer(this,'q0157b')">这算是完全失败</button>
+          <button data-correct="yes" data-explanation="答对：验收看两端——它在更要命的「漏检」端赢了，静态端的小亏是可接受的取舍，符合本块「误删可忍、漏检致命」的结论。" onclick="lessonKit.answer(this,'q0157b')">这反而是合格的</button>
+        </div>
+        <div class="quiz-feedback" id="q0157b"></div>
+      </div>
+
+      <h2>5. 横向链接与下一步</h2>
+      <p>动态块不是孤岛，它和另外三块互相咬合：</p>
+      <ul>
+        <li><b>动态 ↔ 语义</b>：判断「动」最省力的办法就是用语义分割把「人」整类剔掉——这正是 0153 与 0159（SemanticFusion）交叉的地方。0158 会专门讲「语义通道怎么被动态检测借用」。</li>
+        <li><b>动态 ↔ 多机</b>：多机场景里，别的机器人本身就是「动态物体」。0173 附近的 D²SLAM 专门处理「近场另一个机器人」的精确相对状态——动态检测的多机版。</li>
+        <li><b>动态 ↔ 回环假阳性</b>：第七季 <b>0140</b> 的「回环假阳性铁律」与这里的「判错会怎样」是同一类张力——一个错边就能毁掉整张图，所以都靠更严的阈值 / 统计一致性来压。</li>
+        <li><b>动态 ↔ 事件相机</b>：事件相机最强的场景恰恰是高速运动（不产生运动模糊），与动态块天然互补，175–178 会展开。</li>
+      </ul>
+      <p>下一节（0158）是动态块的延伸对照：一条往<b>激光侧</b>看（回链 0005 的 SW-NDT，全项目第一次碰动态），一条往<b>语义侧</b>看（借 SemanticFusion 2017 的语义通道，理解「可动类先验」到底从哪来）。</p>
+
+      <h2>读完你应该能回答</h2>
+      <ol>
+        <li>动态检测为什么只有「几何」和「语义」两条技术路线？各自最大的盲区是什么？</li>
+        <li>「删 / 留＋追踪 / 降权 / 造虚拟路标」四种哲学，分别对应八篇里的哪几家？造虚拟路标解决的是什么特殊困境？</li>
+        <li>为什么纯几何法（DSLAM、CRF）在静态场景几乎不亏本，而语义删除派会略降？</li>
+        <li>「误删静止可动物体」和「漏检真动物体」哪种后果更严重？验收时应该优先压住哪一头？</li>
+        <li>用 WF-SLAM 的加权 BA 公式，说明「软降权」比「硬删除」稳在哪里？</li>
+      </ol>
+    </main>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>把下面八篇按「是否需要语义分割网络」分成两组，并各举一个代表数字说明其代价：DynaSLAM、DS-SLAM、DSLAM、DynaSLAM II、室外动态、CRF、WF-SLAM、Dynam-SLAM。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>需要语义分割：DynaSLAM（CNN 195 ms，静态略亏）、DS-SLAM（只取 person）、DynaSLAM II（实例分割，seq0001 2.31＞1.95）、室外动态（SegNet，非实时）、WF-SLAM（Mask R-CNN，310 ms）。不需要语义分割（纯几何）：DSLAM（30.65 ms，无 GPU）、CRF（16–18 fps CPU）、Dynam-SLAM（靠场景流＋IMU，需 stereo＋IMU 但无分割）。纯几何组的共同卖点是「静态场景几乎不亏本且更实时」。</div></details>
+        </li>
+        <li>为什么 DynaSLAM II 在 KITTI seq0001 上比原版 ORB-SLAM2 还差（2.31 vs 1.95），却被评价为「范式跃迁」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它把动态物体从「删」改成「留＋追踪」，给每个可动类物体加了位姿和速度自由度。当物体实际静止时这些自由度近似零、无害；但当物体真在动时，这些运动线索反过来帮相机定位。seq0001 多停驶车，给了额外自由度反而略亏；这是「为动场景付费、静态场景小亏」的取舍，所以仍算从「删」到「留」的范式跃迁。</div></details>
+        </li>
+        <li>「造虚拟路标」只在什么条件下才有意义？如果场景里静态点本来就够多，Dynam-SLAM 还用得着它吗？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>只在「动态点太多、静态点不够，BA 约束不足」时才需要——用动态点的帧间匀速假设造出额外约束补位。若静态点本来就充足，虚拟路标没有增量价值，常规只靠静态点做 BA 即可。这也解释了 Dynam-SLAM 在静态 EuRoC 上「关掉动态特征检测（w/o DFT）几乎一样准」的现象。</div></details>
+        </li>
+        <li>一个验收指标：若要证明某动态 SLAM「没漏检」，你会优先看哪种测试序列的结果？为什么不直接看静态序列？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>优先看高动态占比序列（如 TUM fr3/walking_xyz、KITTI 1003-0047 这类多行人多车）的 ATE——若它显著优于 ORB-SLAM2，说明漏检被压住了。静态序列只能验证「误删的亏本」小不小，验证不了最致命的「漏检」，所以不能直接用静态序列当验收。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0156-别把停着的车删掉-语义动态与当前真在动.html">← 0156 别把停着的车删掉</a>
+        <a class="next" href="0158-动态环境补充-两条延伸路线.html">0158 动态环境补充：两条延伸路线 →</a>
+      </div>
+      <p class="foot-note">把账算清，才知道哪笔钱花得值 🧾 下一节我们往激光侧和语义侧各看一眼。</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

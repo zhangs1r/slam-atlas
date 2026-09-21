@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>替代路线：拓扑与量距 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0174</div>
+      <h1>替代路线：拓扑与量距</h1>
+      <p class="subtitle">前面六节都在想办法「筛掉假回环」。有没有可能干脆换一条路，让它无从产生？🛣️ 这一节看两条绕行路线。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：绕过「机间回环关联」的两条替代思路</span>
+        <span>👥 作者：Zhang 等（MR-TopoMap，2022）＋ Nguyen、Xie 等（VI-Range，2022）</span>
+        <span>📅 年份 · <i>Multi-Robot Exploration Based on Topological Map / Flexible and Resource-Efficient Multi-Robot Collaborative VI-Range Localization</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：换一条路</a>
+        <a href="#b">MR-TopoMap：只传拓扑</a>
+        <a href="#c">它的边界在哪</a>
+        <a href="#d">VI-Range：用测距代替回环</a>
+        <a href="#e">两条路线怎么选</a>
+        <a href="#f">本块收束</a>
+        <a href="#g">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「拓扑建图」与「量距定位」各自绕开了什么；用带宽账解释 MR-TopoMap 通信降 84–90% 是怎么来的；如实说出 MR-TopoMap 的边界（它管探索与拓扑，不管全局一致的位姿图鲁棒解）；用自己的话讲清 UWB 为什么能不靠回环定出相对位置；把整块七节课的方法家族串成一张图。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本节是 <b>0168 那条「假回环铁律」</b>（更早的根是 <b>第七季 0140</b>）的第三条出路：前六节的 PCM / GNC / ADMM 都是「正面把假的筛掉」，本节是「换一类观测量，让它根本没机会假」。★ 「拓扑」这个表示法回链 <b>0163 Kimera 的 DSG 场景图</b>——DSG 的 Layer 3「Places」就是地点节点，MR-TopoMap 的思路与它同源但更轻。★ UWB 量距是<b>第五季 0095–0103 多传感器融合</b>的地盘——把一种全新的传感器（无线测距）揉进 VIO，正是那一季讲过的「统一场景表示」问题的又一次翻版。★ 紧耦合因子图的写法回链 <b>第二季位姿图</b>与<b>第三季 VIO</b>。</p></div>
+      </div>
+
+      <h2>1. 先说人话：与其解决难题，不如换一道题</h2>
+      <p>前面六节课都在跟同一个敌人缠斗：<b>假回环</b>。0168 讲它为什么在多机里更致命，0169 讲用 GNC 让它自己退出，0170 讲用描述子提高匹配质量，0171 讲分布式版 GNC，0172 讲怎么少验证一点，0173 讲近场远场分开处理。它们的共同前提是：<b>我们仍然要用「机间回环」这个工具，所以要学会分辨它的真假。</b></p>
+      <p>本节的两篇论文换了问法：<b>为什么非要用回环不可？</b></p>
+      <ul>
+        <li><b>MR-TopoMap</b>（2022）：不追求在地图层面拼出一张全局一致的三维地图，而是让每台机器人只维护一张<b>拓扑图</b>——顶点是「地点」、边是「这两处连通」。机器人之间只交换新建的顶点和边，本地的密栅格地图压根不上路。既然不拼密地图，也就没有「缝歪两台地图」这回事。</li>
+        <li><b>VI-Range</b>（2022）：不要回环，改用 <b>UWB 无线测距</b>——我不用认出「你去过哪」，我只要知道你此刻离我几米。距离是一个<b>直接测出来的数</b>，没有「认错地方」的余地。</li>
+      </ul>
+      <p>两篇的共同点很漂亮：<b>换掉观测量，而不是把观测量的错误筛得更狠。</b>这是本块第三条出路。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">只传拓扑：把「一张几 MB 的密栅格」换成「几十个顶点和边」</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">左边是每台机器人自己留着的栅格地图，右边才是上路交换的东西</text>
+          <!-- 左：栅格 -->
+          <rect x="40" y="74" width="370" height="242" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="225" y="98" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">本地栅格地图（留在机器上，不传）</text>
+          <g stroke="#4a5a88" stroke-width="1" opacity="0.8">
+            <line x1="70" y1="110" x2="70" y2="280"/><line x1="110" y1="110" x2="110" y2="280"/>
+            <line x1="150" y1="110" x2="150" y2="280"/><line x1="190" y1="110" x2="190" y2="280"/>
+            <line x1="230" y1="110" x2="230" y2="280"/><line x1="270" y1="110" x2="270" y2="280"/>
+            <line x1="310" y1="110" x2="310" y2="280"/><line x1="350" y1="110" x2="350" y2="280"/>
+            <line x1="390" y1="110" x2="390" y2="280"/>
+            <line x1="70" y1="110" x2="390" y2="110"/><line x1="70" y1="138" x2="390" y2="138"/>
+            <line x1="70" y1="166" x2="390" y2="166"/><line x1="70" y1="194" x2="390" y2="194"/>
+            <line x1="70" y1="222" x2="390" y2="222"/><line x1="70" y1="250" x2="390" y2="250"/>
+            <line x1="70" y1="278" x2="390" y2="278"/>
+          </g>
+          <polyline points="80,266 130,238 180,200 240,214 300,170 350,140" fill="none" stroke="#5cffb0" stroke-width="4"/>
+          <text x="225" y="340" text-anchor="middle" fill="#ffd1d8" font-size="12">细到每一格：一份就是 MB 量级</text>
+          <!-- 中间箭头 -->
+          <line x1="416" y1="200" x2="474" y2="200" stroke="#ffd166" stroke-width="3"/>
+          <text x="445" y="190" text-anchor="middle" fill="#ffd166" font-size="12">压缩</text>
+          <!-- 右：拓扑 -->
+          <rect x="490" y="74" width="370" height="242" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="675" y="98" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">拓扑图（只有它上路交换）</text>
+          <g stroke="#5cffb0" stroke-width="2">
+            <line x1="550" y1="160" x2="650" y2="130"/>
+            <line x1="650" y1="130" x2="760" y2="170"/>
+            <line x1="550" y1="160" x2="600" y2="250"/>
+            <line x1="600" y1="250" x2="730" y2="260"/>
+            <line x1="760" y1="170" x2="730" y2="260"/>
+          </g>
+          <g fill="#9b8cff">
+            <circle cx="550" cy="160" r="14"/><circle cx="650" cy="130" r="14"/><circle cx="760" cy="170" r="14"/>
+            <circle cx="600" cy="250" r="14"/><circle cx="730" cy="260" r="14"/>
+          </g>
+          <g fill="#0f1424" font-size="10" text-anchor="middle">
+            <text x="550" y="164">地点1</text><text x="650" y="134">地点2</text><text x="760" y="174">地点3</text>
+            <text x="600" y="254">地点4</text><text x="730" y="264">地点5</text>
+          </g>
+          <text x="675" y="340" text-anchor="middle" fill="#bfe" font-size="12">顶点 = 地点，边 = 连通关系</text>
+          <text x="450" y="396" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：只交换新建的顶点与边，通信量降 84–90%</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右对照两套地图表示。左边是机器人自己留着的密栅格地图（每一小格都记着有障碍没障碍，还有一条走过的轨迹）；右边才是真正在两台机器人之间传输的拓扑图——几个圆点是「地点」，连线是「这两处连通」。<br>
+          <b>怎么看这张图：</b>① 左边看格子的密度：细到这个程度，一份就是 MB 量级，两台机器人每秒互发根本受不了；② 右边只有 5 个顶点和 5 条边，换成字节数就是几十个元素的量级；③ 中间那个「压缩」箭头说明了这套系统省带宽的全部秘密——<b>不是把栅格压小，而是根本不传栅格</b>。<br>
+          <b>要记住的一句话：</b>MR-TopoMap 的思路是「换表示换到最轻」：既然栅格最贵，那就只传拓扑。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 论文一：MR-TopoMap（2022）——通信受限下的拓扑探索</h2>
+      <p>MR-TopoMap（Zhang 等，IEEE RA-L 2022）是一套<b>通信受限多机探索框架</b>。它的设计非常彻底：</p>
+      <ul>
+        <li><b>每台机器人本地跑 Cartographer</b> 建占据栅格地图，但这张栅格<b>只留在本地、永不外传</b>；</li>
+        <li>机器人从自己的视角里提炼出<b>拓扑顶点</b>：到了一个「新地点」就建一个顶点，顶点上挂一枚<b>全景图像描述子</b>（用来表达「这里长什么样」）；顶点之间用<b>边</b>表示连通；</li>
+        <li>两台机器人<b>偶遇</b>时，只交换<b>新建的顶点与边</b>；靠比较描述子的内积找「同名地点」（相似度阈值 th = 0.75），找到就用一条相对位姿边把两张拓扑图接起来。</li>
+      </ul>
+      <p>效果很直接：小规模场景通信 <b>77.3 kB 对 493 kB（降 84%）</b>，大规模 <b>135.3 kB 对 1403.7 kB（降 90%）</b>；同时探索效率比 RRT / MMPF 提高 <b>23%–77%</b>（拓扑图天然适合「哪里还没去过」的决策）。实验既有 Gazebo 仿真，也有真机（Jetson Xavier NX）。</p>
+      <p>它甚至顺手解决了一个「假回环的轻量版」：如果一条候选匹配把两台机器人的图拼成了自相矛盾的样子，它就用<b>多假设中值</b>把离群的变换挤出去（下一节看图）。这是一种比 PCM / GNC 更土、但也更省算力的办法。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_MR-TopoMap__Multi-Robot_Exploration_Based_on_Topological/8cde6e64c7cc51769dcc43194454f8d06f77dd98ec81698b5d4dd25a3a8b9544.jpg" alt="MR-TopoMap system overview">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>The proposed system’s overview. Among different robots, only newly built vertices and edges are transferred.<br>
+          <b>怎么看这张图：</b>整张架构图最重要的一句话就在图注里——<b>机器人之间只传「新建的顶点与边」</b>。对照上一张自绘图：左边那套密栅格地图确实存在于每台机器人身上，但它被挡在了通信链路之外。这就是它敢宣称通信降 84–90% 的底气。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_MR-TopoMap__Multi-Robot_Exploration_Based_on_Topological/04bf617b210e2ead168bbf4ef1941ec01fb5217c4dbfedcec612824ca75390e7.jpg" alt="Different views of the same place">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Different views of the same place, as observed from different directions.<br>
+          <b>怎么看这张图：</b>同一个地点从不同方向看，画面完全不一样——这正是「用图像描述子认地点」的困难所在。它解释了为什么顶点上挂的是<b>全景</b>描述子、而不是普通单张图：全景能覆盖一圈，从哪个方向来都留得下痕迹。回链 <b>0170</b> 的描述子思路，这里是同一难题的另一个解法。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_MR-TopoMap__Multi-Robot_Exploration_Based_on_Topological/b37b37b084496a713624e7f2ff1db26b61f9f086095c97c0907c51a4dff46383.jpg" alt="The situation that mismatch occurs">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>The situation that mismatch occurs.<br>
+          <b>怎么看这张图：</b>误匹配发生的那一刻：某条候选匹配算出来的相对变换，和大多数候选算出来的差得很远。盯住那个「和别人不一样」的变换——它就是被多假设中值法挤出去的那个离群值。对比 0168 的 PCM、0169 的 GNC：这里是同一件事的第三套做法，也是本块最朴素的版本。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ★ 诚实说明：MR-TopoMap 不是完整的协同 SLAM 后端</h2>
+      <p>这一节必须把边界说清楚，否则很容易高估它。MR-TopoMap 的定位是<b>通信受限下的多机器人探索 + 拓扑建图框架</b>，它<b>不是</b>一套完整的协同 SLAM 后端：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>它管什么</h4><p>探索决策（哪条路还没走过）、拓扑图的构建与合并、地点级别的数据关联（靠全景描述子）与误匹配剔除（多假设中值）。</p></div>
+        <div class="mini-card"><h4>它不管什么</h4><p>全局一致的位姿图鲁棒解；跨机器人地图的尺度统一；稠密几何精度。原文自己也承认：拓扑图不含几何细节，长期大范围漂移未处理。</p></div>
+      </div>
+      <p>换句话说：<b>它回答的是「大家去过哪些地方、彼此怎么连通」，而不是「把所有位姿在一张图上解到全局最优」。</b>把它和 0168–0173 那些系统并列时，要清楚它们是两个不同层级的东西——前者是任务级 / 表示级的省通信，后者是后端优化级的鲁棒性。这个区别说清了，它的价值才看得准：在「带宽窄、机器人多、任务只是探索」的场景下，拓扑路线可能是最划算的选择。</p>
+
+      <div class="formula-box">
+        $$ \hat{T} = \operatorname{median}\{\, T_1,\ T_2,\ \dots,\ T_k \,\} $$
+        <div class="flow-formula">输入：同一条候选匹配给出的若干组相对变换假设 T₁…T_k → 处理：逐分量取中位数 → 输出：一个被少数离群值拉不动的稳健变换估计</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「从一堆互相不太一致的候选变换里，挑出一个代表」；② 为什么这样就能判对——和取平均不同，中位数只关心「排在中间的那个」，少数几个离谱的候选（比如一条错匹配算出来的变换）根本影响不到中间位置；③ 什么时候把某个观测当回事——它把<b>每一条</b>候选都当输入，但不给任何一条特别大的话语权；只要离群候选不到一半，估计就不会被带跑。这就是它比「加权平均」更能抗假回环的原因，也是它比 PCM（求最大团）更省算力的原因。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">多变换中值：4 条候选挤在一起，1 条跑偏——中位数不被带跑</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">每条箭头 = 一条候选机间匹配算出来的「你该在我这个方向、这么远」</text>
+          <!-- 左面板 -->
+          <rect x="40" y="74" width="440" height="270" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="260" y="100" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">候选变换：多数一致，少数离群</text>
+          <g stroke="#5cffb0" stroke-width="2">
+            <line x1="110" y1="255" x2="300" y2="150"/>
+            <line x1="110" y1="255" x2="315" y2="160"/>
+            <line x1="110" y1="255" x2="288" y2="142"/>
+            <line x1="110" y1="255" x2="322" y2="172"/>
+          </g>
+          <ellipse cx="306" cy="156" rx="50" ry="38" fill="none" stroke="#5cffb0" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="306" y="220" text-anchor="middle" fill="#bfe" font-size="12">4 条挤在一起</text>
+          <circle cx="110" cy="255" r="9" fill="#ffd166"/>
+          <text x="110" y="284" text-anchor="middle" fill="#ffd166" font-size="12">机器人 A 原点</text>
+          <line x1="110" y1="255" x2="420" y2="300" stroke="#ff5d73" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="420" y="322" text-anchor="middle" fill="#ff5d73" font-size="16" font-weight="700">✕</text>
+          <text x="352" y="322" text-anchor="middle" fill="#ffd1d8" font-size="12">1 条离群</text>
+          <!-- 右面板 -->
+          <rect x="510" y="74" width="350" height="270" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="685" y="100" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">取中位数：稳的那一条</text>
+          <circle cx="570" cy="255" r="9" fill="#ffd166"/>
+          <line x1="570" y1="255" x2="780" y2="160" stroke="#5cffb0" stroke-width="4"/>
+          <line x1="570" y1="255" x2="790" y2="300" stroke="#ff5d73" stroke-width="1.5" stroke-dasharray="5 5" opacity="0.5"/>
+          <text x="570" y="284" text-anchor="middle" fill="#ffd166" font-size="12">A 原点</text>
+          <text x="685" y="322" text-anchor="middle" fill="#bfe" font-size="12">中位箭头：位置没被拖走</text>
+          <text x="450" y="396" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：中位数只认「排中间的那个」——少数离群候选掀不翻整张图</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边：从机器人 A 的原点出发，5 条候选匹配各自算出一个「相对变换」箭头——4 条（绿）指向同一小片区域，1 条（红虚线）指向完全不同的方向；右边：取中位数后得到的变换箭头稳稳落在绿簇方向，红虚线被淡化成几乎看不见。<br>
+          <b>怎么看这张图：</b>① 先看左图的绿簇：4 条候选「英雄所见略同」，说明这里才是真的对应；② 再看红虚线那条：它是某次错匹配的产物，如果取平均，它会把结果拽偏；③ 右图给出了中位数法在这种情况下的答案——结果贴着绿簇走。<br>
+          <b>要记住的一句话：</b>对付假回环不一定非要最大团（PCM）或渐进非凸（GNC），「取中位数」是被低估的第三招，代价是它只对「离群值不到一半」的情况有效。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 论文二：VI-Range（2022）——用一条测距线代替回环</h2>
+      <p>第二篇的脑洞更大：<b>如果两台机器人之间能直接测出距离，为什么还要费力去「认出同一个地方」？</b>这就是 VI-Range（Nguyen、Nguyen、Xie 等，IEEE RA-L 2022，NTU）的核心：给机器人装上 <b>UWB（超宽带无线测距）</b> 模块，测出两台机器人之间的<b>距离</b>，把这个距离当作观测量塞进视觉惯性优化里，从而<b>不需要回环、也不需要轨迹重叠</b>。</p>
+      <p>它叫「柔性（flexible）」正是因为这个：两台机器人可以<b>各飞各的、从不在同一个地方出现</b>，只要它们能互相测到距离，相对位姿就能被约束住。而且它很省——机器人之间<b>只传邻机的里程计</b>，不传图像、不传地图、不传描述子，是本块「传什么」光谱最右端的那一档。</p>
+      <p>技术上是两阶段：</p>
+      <ul>
+        <li><b>RTE（长滑窗，约 10 秒）</b>：用一个 4 自由度的随机游走漂移模型去精化两机之间的相对变换；距离残差写作「实测距离 − 预测距离」，还做了天线偏移的空间校准（因为 UWB 天线不装在机器人中心，差几厘米就够呛）;</li>
+        <li><b>VIRO（短滑窗，10 个关键帧）</b>：把相机、IMU、UWB 三者<b>紧耦合</b>进同一个因子图里一起优化，让距离直接参与定位。</li>
+      </ul>
+      <p>实验：两台四旋翼在 6 m × 6 m 室内飞行（VICON 做真值），整体 ATE 相比基线降低 <b>26.2%</b>，各组飞行的 ATE 在 <b>0.04–0.13 m</b> 之间；UWB 噪声标准差按 σ_r = 0.1 m 建模；计算耗时 VIRO 约 20.4 ms、RTE 约 10.9 ms，实时。论文还做了 N = 3、5 的仿真，但<b>真机实验只有 N = 2</b>——这一点要如实记住，别把它的可扩展性当成已验证的事实。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Flexible_and_Resource-Efficient_Multi-Robot_Collaborativ/af38f060998fc45a98de33bc404e663578234137c48dd372fd0635f4e4e43e44.jpg" alt="Conceptual overview of the VI-Range system">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Conceptual overview of the proposed system, simplified for two robots scenario: (a) The coordinate frames and sensor configuration on two robots R₁ and R₂. Without any corrections, the VIO estimates will drift over time compared to the ground truth (GT). (b) Illustration of the sliding window of the RTE module. (c) Illustration of the factor graph…（图注原文在 (c) 之后续写因子图部分）<br>
+          <b>怎么看这张图：</b>三块分别是「两机坐标系与传感器配置」「RTE 的长滑窗」「VIRO 的因子图」。盯住 (a) 里两台机器人之间那条测距链路——整篇论文的出发点就是它：<b>有了这条线，两台机器人不必到过同一个地方</b>。再对照 (b)(c) 两个不同长度的滑窗，就能明白为什么它要分「长窗精化相对变换」与「短窗紧耦合」两步。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Flexible_and_Resource-Efficient_Multi-Robot_Collaborativ/61dc531882f47929863a7dde0804ffbf6aee804a43dc2163254eaf5d0a130620.jpg" alt="VI-Range system architecture">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>System architecture: R₁ is the robot with access to UWB data while R₂ provides self odometry estimates. All of the proposed UWB-aided components run onboard R₁. The final estimates can be shared with R₂ if necessary.<br>
+          <b>怎么看这张图：</b>架构图里 R₁ 与 R₂ 的角色<b>不对称</b>：拿得到 UWB 距离的 R₁ 跑全部 UWB 相关模块，R₂ 只提供自己的里程计。这解释了它为什么能不传图像与地图——两台机器人之间流动的只有<b>里程计</b>数字。也要看清这是它的局限：主力仍是单机扛，N 大了之后这个不对称结构就得改。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        $$ E_{r} = \sum_{i} \bigl\|\, d_i - \bigl\| {}^{W}\!a_{12}\,p \,\bigr\| \,\bigr\|^{2}_{W_{r}} $$
+        <div class="flow-formula">输入：UWB 实测距离 dᵢ 与两机在世界系下的位置 p → 处理：把位置算成「预测距离」，与实测相减得残差，再按权重 W_r 加权 → 输出：这组距离观测带来的总误差</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「我测到的距离，和你现在的位置算出来的距离，差了多远」；② 为什么这样就能判对——距离是<b>直接测出来的物理量</b>，没有「认错地方」的概念，所以残差小就意味着两台机器人的相对位置确实摆对了；③ 权重 / 标定什么时候把观测当回事——W_r 由距离测量噪声决定，而且原文做了<b>空间校准</b>（因为 UWB 天线不装在机器人几何中心，天线偏移 `a₁₂` 是必须补的），测距没做这个校准，误差会有几十厘米。补齐之后，这个残差就直接给两台机器人的相对位置提供了锚点。</p>
+
+      <div class="formula-box">
+        $$ W_{d}^{j} = \Sigma_{drift}^{-1} + \bigl({}^{W}\!\hat{R}\bigr)\, W_{m}^{j}\, \bigl({}^{W}\!\hat{R}\bigr)^{\!\top} $$
+        <div class="flow-formula">输入：漂移协方差 Σ_drift 与运动补偿权重 W_m^j → 处理：用当前估计的姿态 R̂ 把机体系的权重旋转到世界系，再与漂移项相加 → 输出：综合权重 W_d^j</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「这条距离观测该被信多少」；② 为什么这样就能判对——VIO 的漂移是<b>有方向性</b>的（沿轨迹方向漂得多、垂直方向漂得少），而运动补偿权重 W_m 会在机器人拐弯、加速的时候把这条约束说得更重；两片信息相加，权重就更贴合当下这一刻的真实不确定性；③ 权重什么时候把观测当回事——轨迹走得稳、运动平稳时，W_m 小、主要由漂移项说话；一旦做剧烈机动，W_m 变大，距离观测的话语权就被抬上来。这是「随运动状态动态调权」的典型做法，和固定核函数（0169 的 TLS）是两种哲学。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 440" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="440" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">两条路线的区别：一个要「相遇」，一个只要「一条测距线」</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">回环路线要求两台机器人到过同一处；量距路线完全不要求</text>
+          <!-- 左面板：回环路线 -->
+          <rect x="40" y="74" width="370" height="250" rx="10" fill="#16203a" stroke="#ff5d73" stroke-width="2"/>
+          <text x="225" y="98" text-anchor="middle" fill="#ff9f6b" font-size="14" font-weight="700">回环路线：必须走过同一个地方</text>
+          <rect x="70" y="118" width="300" height="14" fill="#3a4a78"/>
+          <rect x="70" y="248" width="300" height="14" fill="#3a4a78"/>
+          <rect x="70" y="132" width="300" height="116" fill="#1b2440"/>
+          <polyline points="85,230 150,200 215,216 280,190" fill="none" stroke="#5cffb0" stroke-width="4"/>
+          <polyline points="95,180 160,164 225,186 290,170" fill="none" stroke="#ff9f6b" stroke-width="4"/>
+          <text x="225" y="300" text-anchor="middle" fill="#ffd1d8" font-size="12">两条轨迹必须重叠，才有回环可认</text>
+          <!-- 右面板：量距路线 -->
+          <rect x="490" y="74" width="370" height="250" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="675" y="98" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">量距路线：各飞各的，只测一条线</text>
+          <rect x="515" y="130" width="130" height="140" rx="6" fill="#1b2440" stroke="#4a5a88"/>
+          <rect x="705" y="150" width="130" height="130" rx="6" fill="#1b2440" stroke="#4a5a88"/>
+          <circle cx="565" cy="195" r="12" fill="#9b8cff"/>
+          <circle cx="775" cy="215" r="12" fill="#ffd166"/>
+          <text x="565" y="172" text-anchor="middle" fill="#bfe" font-size="11">机器人 A</text>
+          <text x="775" y="192" text-anchor="middle" fill="#ffe9a8" font-size="11">机器人 B</text>
+          <line x1="580" y1="198" x2="760" y2="212" stroke="#5cffb0" stroke-width="3" stroke-dasharray="8 6"/>
+          <text x="670" y="190" text-anchor="middle" fill="#5cffb0" font-size="12">d ≈ 6.2 m</text>
+          <text x="675" y="300" text-anchor="middle" fill="#bfe" font-size="12">轨迹毫不重叠，照样能定相对位置</text>
+          <text x="450" y="372" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：不靠「认出同一个地点」，而靠「我知道你离我多远」</text>
+          <text x="450" y="408" text-anchor="middle" fill="#9fb4ff" font-size="12">换一类观测量，假回环这个难题就无从谈起</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左面板是「回环路线」：两台机器人必须走过同一条走廊、轨迹重叠，才有机会认出同一地点；右面板是「量距路线」：两台机器人在两个独立的区域里各飞各的，中间只有一条绿色虚线表示 UWB 测出来的距离。<br>
+          <b>怎么看这张图：</b>① 左边看两条轨迹（绿、橙）——它们必须挤在同一条走廊里；② 右边看两个方框——它们甚至不连通，却依然能通过那条虚线建立约束；③ 这就是「柔性」二字的含义：不再要求任务上「碰头」，只要求无线电上「连得上」。<br>
+          <b>要记住的一句话：</b>VI-Range 把「关联问题」整个删掉了：距离是直接测出来的数，没有真假的分别，也就没有假回环。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>VI-Range 能「不要求两台机器人轨迹重叠」，根本原因是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：UWB 直接测出两机之间的距离，这是不依赖「认地点」的观测量，所以两机可以各飞各的；它彻底绕开了机间回环关联这道难题，代价是必须带 UWB 硬件并做天线偏移标定。" onclick="lessonKit.answer(this,'q0174a')">用直接测距代替地点识别</button>
+          <button data-correct="no" data-explanation="不对：前端更强也仍要两机看到同一处才能匹配；VI-Range 的关键恰恰是它不需要任何视觉上的共同观测。" onclick="lessonKit.answer(this,'q0174a')">前端视觉匹配足够强</button>
+        </div>
+        <div class="quiz-feedback" id="q0174a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 两条路线怎么选：一场诚实的对照</h2>
+      <p>把两篇放在一起看，它们其实在回答同一道题的两个不同答案：「如果带宽极度受限 / 环境极度缺少特征，我怎么让多机保持一致？」</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">对比项</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">MR-TopoMap（拓扑）</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">VI-Range（量距）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">绕开难题的方式</td><td style="padding:.6rem;border:1px solid #3a4a78;">不拼密地图，只拼拓扑</td><td style="padding:.6rem;border:1px solid #3a4a78;">不认地点，直接测距离</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">机间传什么</td><td style="padding:.6rem;border:1px solid #3a4a78;">新建的顶点（地点 + 全景描述子）与边</td><td style="padding:.6rem;border:1px solid #3a4a78;">仅邻机里程计（距离由 UWB 直接测）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">额外硬件</td><td style="padding:.6rem;border:1px solid #3a4a78;">全景相机</td><td style="padding:.6rem;border:1px solid #3a4a78;">UWB 测距模块</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">抗假回环的手段</td><td style="padding:.6rem;border:1px solid #3a4a78;">多假设中值（挤掉离群变换）</td><td style="padding:.6rem;border:1px solid #3a4a78;">不需要——距离没有真假之分</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">代表数字</td><td style="padding:.6rem;border:1px solid #3a4a78;">通信降 84%–90%；探索效率 +23%–77%</td><td style="padding:.6rem;border:1px solid #3a4a78;">ATE 降 26.2%；飞行 ATE 0.04–0.13 m</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">主要局限</td><td style="padding:.6rem;border:1px solid #3a4a78;">不是完整协同 SLAM 后端；无几何细节；长期漂移未处理</td><td style="padding:.6rem;border:1px solid #3a4a78;">依赖 UWB 硬件与标定；真机只验证了 N = 2</td></tr>
+        </tbody>
+      </table>
+      <p>一句话总结我们的判断（<b>这是本课的归纳，不是原文自评</b>）：<b>拓扑路线是「任务层的省」</b>——它把要共享的东西降到最低，适合探索型任务；<b>量距路线是「感知层的换」</b>——它引入一类全新的、不会真假混淆的观测量，适合有硬件条件、且机器人体积 / 功耗允许的场景。两条路都不解决「位姿图全局最优」这件事，因此它们是<b>补充</b>而不是<b>替代</b>：0168–0173 的那些鲁棒后端，在需要高精度全局一致的场合仍然不可少。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>下面哪一种说法最准确地描述了 MR-TopoMap 与 VI-Range 的共同点？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：两篇都不是「把假回环筛得更狠」，而是换掉观测量或换掉共享的表示——让「假回环」这件事要么不发生（量距），要么代价很小（拓扑）。" onclick="lessonKit.answer(this,'q0174b')">换掉观测量而非更狠地筛</button>
+          <button data-correct="no" data-explanation="不对：它们都没有用最大团或渐进非凸这类后端，走的恰恰是另一条路。" onclick="lessonKit.answer(this,'q0174b')">都在优化一致集最大化</button>
+        </div>
+        <div class="quiz-feedback" id="q0174b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 本块收束：七节课其实是一条线</h2>
+      <p>走到这里，多机协同块讲完了。把七节课按顺序串起来，你会发现它其实是一条非常干净的推理链：</p>
+      <ul>
+        <li><b>0168</b>：先说清为什么难——多机一次假回环会<b>同时</b>毁掉两台机器人的地图，并交代「中心化 → 分布式 → 去中心化」三档主线与「传什么」的带宽光谱；</li>
+        <li><b>0169</b>：量出中心化的天花板（COVINS 12 台 / LAMP 2.0 地下 6 km），讲清它撞的三面墙，并第一次引出 <b>GNC 渐进非凸</b>；</li>
+        <li><b>0170</b>：把服务器拆掉，靠<b>描述子当机间通用语言</b>（Scan Context → LiDAR-Iris → DELIGHT），后端用分布式 Gauss-Seidel；</li>
+        <li><b>0171</b>：分布式还不够，还要出<b>度量-语义网格</b>，于是有了 D-GNC（GNC 初始化 + RBCD）与 LMO 网格变形；</li>
+        <li><b>0172</b>：把「省」推到极致——去中心化 + 稀疏化，用<b>光谱优先化</b>只挑最少的回环，带宽差出约 100×；</li>
+        <li><b>0173</b>：换一个场景（空中集群），把 <b>decentralized 与 distributed 讲清楚</b>，并提出近场 / 远场双模式与异步 ARock；</li>
+        <li><b>0174</b>（本节）：最后给出两条<b>绕行路线</b>——拓扑与量距，换掉观测量而非更狠地筛。</li>
+      </ul>
+      <p>而所有方法都落在四个家族里：<b>PCM 族</b>（最大一致集，简单但漏真）、<b>GNC 族</b>（渐进非凸，在线且保真）、<b>ADMM / ARock</b>（把大问题拆成异步子问题）、<b>替代路线</b>（拓扑与量距，绕开关联）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="32" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">本块方法家族：三条正面路线 + 两条绕行路线</text>
+          <text x="450" y="58" text-anchor="middle" fill="#9fb4ff" font-size="13">上排都在「把假的机间关联筛掉」，下排干脆「换一类观测量」</text>
+          <rect x="40" y="74" width="820" height="150" rx="10" fill="#1b2440" stroke="#ffd166" stroke-width="2"/>
+          <text x="450" y="100" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">正面解决：把假的机间关联筛掉</text>
+          <rect x="70" y="115" width="240" height="88" rx="8" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="190" y="142" text-anchor="middle" fill="#ffd1d8" font-size="14" font-weight="700">PCM 族</text>
+          <text x="190" y="166" text-anchor="middle" fill="#9fb4ff" font-size="12">最大一致集 · 漏真回环</text>
+          <text x="190" y="190" text-anchor="middle" fill="#9fb4ff" font-size="11">DOOR / DiSCo / DCL / D²SLAM</text>
+          <rect x="330" y="115" width="240" height="88" rx="8" fill="#16203a" stroke="#5cffb0"/>
+          <text x="450" y="142" text-anchor="middle" fill="#bfe" font-size="14" font-weight="700">GNC 族</text>
+          <text x="450" y="166" text-anchor="middle" fill="#9fb4ff" font-size="12">渐进非凸 · 保真回环</text>
+          <text x="450" y="190" text-anchor="middle" fill="#9fb4ff" font-size="11">LAMP2 / Kimera-Multi / Swarm</text>
+          <rect x="590" y="115" width="240" height="88" rx="8" fill="#16203a" stroke="#9b8cff"/>
+          <text x="710" y="142" text-anchor="middle" fill="#cdbcff" font-size="14" font-weight="700">ADMM / ARock</text>
+          <text x="710" y="166" text-anchor="middle" fill="#9fb4ff" font-size="12">拆成子问题 · 异步迭代</text>
+          <text x="710" y="190" text-anchor="middle" fill="#9fb4ff" font-size="11">D²SLAM 近场 / 远场</text>
+          <rect x="40" y="240" width="820" height="130" rx="10" fill="#14301f" stroke="#5cffb0" stroke-width="2"/>
+          <text x="450" y="266" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">绕行解决：换一类观测量，让「假回环」无从发生</text>
+          <rect x="110" y="282" width="320" height="72" rx="8" fill="#16203a" stroke="#9b8cff"/>
+          <text x="270" y="308" text-anchor="middle" fill="#cdbcff" font-size="13" font-weight="700">只传拓扑（MR-TopoMap）</text>
+          <text x="270" y="334" text-anchor="middle" fill="#9fb4ff" font-size="12">通信降 84–90%，但只管拓扑</text>
+          <rect x="470" y="282" width="320" height="72" rx="8" fill="#16203a" stroke="#ffd166"/>
+          <text x="630" y="308" text-anchor="middle" fill="#ffe9a8" font-size="13" font-weight="700">UWB 直接量距（VI-Range）</text>
+          <text x="630" y="334" text-anchor="middle" fill="#9fb4ff" font-size="12">不要求轨迹重叠，真机 N = 2</text>
+          <text x="450" y="404" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：上排比的是「谁筛得准」，下排比的是「还用不用筛」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上排（黄框）是三条「正面路线」——PCM 族、GNC 族、ADMM / ARock，都在想办法把假的机间关联识别出来并剔除；下排（绿框）是两条「绕行路线」——只传拓扑、用 UWB 直接量距，它们的共同点是让假回环这件事根本不发生或代价很小。<br>
+          <b>怎么看这张图：</b>① 先看上排三个盒子里的第二行小字：PCM「漏真」、GNC「保真」、ADMM「异步」，这就是三个家族的性格；② 再看下排两个盒子：左边换了「传什么」，右边换了「用什么测」；③ 对照这两个层次，就能理解为什么替代路线不能取代正面路线——它们回答的不是同一个问题。<br>
+          <b>要记住的一句话：</b>整块的终极问题只有一个「两台机器人的地图凭什么相信对方」，而上排是「学会甄别」，下排是「换掉证据」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>MR-TopoMap 的「通信降 84%–90%」是怎么算出来的？它省下的到底是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它根本不传本地那张占据栅格地图（只留在机器人本地），机器人之间只交换新建的拓扑顶点（地点 + 全景描述子）与边。小规模场景 77.3 kB 对 493 kB（降 84%），大规模 135.3 kB 对 1403.7 kB（降 90%）。省下的是「稠密几何信息」的传输量，代价是拓扑图不含几何细节。</div></details>
+        </li>
+        <li>为什么必须说明「MR-TopoMap 不是完整的协同 SLAM 后端」？它不管什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它做的是「多机器人探索 + 拓扑建图」：管探索决策、拓扑构建与合并、地点级数据关联与误匹配剔除，但不做全局一致的位姿图鲁棒解、不做跨机器人尺度统一、不追求稠密几何精度（原文自述拓扑图不含几何细节、长期漂移未处理）。把它和 0168–0173 的系统并列时要说清这是不同层级的东西，否则会高估它。</div></details>
+        </li>
+        <li>「多变换中值」为什么能剔除误匹配？它的失效条件是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>同一条候选匹配会给出多组相对变换假设，取逐分量中位数时只认「排在中间的那个」，少数离谱的离群变换影响不到中间位置，所以它比加权平均更抗假回环，也比求最大团（PCM）更省算力。失效条件：离群候选占到一半以上时，中位数本身就会被污染，稳健性不再成立。</div></details>
+        </li>
+        <li>VI-Range 为什么能做到「两台机器人不要求轨迹重叠」？它为此付出了什么代价？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它用 UWB 直接测出两机之间的距离，把距离当作观测量紧耦合进视觉惯性优化（RTE 长滑窗精化相对变换 + VIRO 短滑窗相机-IMU-UWB 紧耦合）。距离是直接测出的物理量，不需要「认出同一个地点」，所以不必轨迹重叠，两机之间也只需传邻机里程计。代价：必须携带 UWB 硬件，且要做天线偏移的空间校准（否则误差可达几十厘米）；真机实验只验证了 N = 2（N = 3、5 仅仿真）。</div></details>
+        </li>
+        <li>用一句话说明：本块的「正面路线」和「替代路线」分别在对什么问题作答？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>正面路线（PCM / GNC / ADMM）回答「怎么把假的机间关联甄别出来并剔除」；替代路线（拓扑 / 量距）回答「能不能换掉共享的表示或观测量，让假回环这件事根本不发生」。前者是优化层的鲁棒性，后者是表示层 / 感知层的取舍，两者互补而非互替。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>MR-TopoMap 只传什么？为什么这样就能降 84%–90% 的通信量？</li>
+        <li>MR-TopoMap 的边界在哪——它管什么、不管什么？</li>
+        <li>「多变换中值」怎么剔除误匹配？它在什么情况下会失效？</li>
+        <li>VI-Range 为什么不需要回环？它依赖什么硬件、做了什么标定？</li>
+        <li>本块的「三条正面路线 + 两条绕行路线」分别是什么？它们为什么互补而非互替？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0173-D2SLAM-空中集群的近场与远场.html">← 上一课：D²SLAM 空中集群的近场与远场</a>
+        <a class="next" href="0175-事件相机是什么-先补物理机理.html">下一课：事件相机是什么 →</a>
+      </div>
+      <p class="foot-note">多机协同块到此收束，下一块换一种完全不同的传感器：事件相机 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

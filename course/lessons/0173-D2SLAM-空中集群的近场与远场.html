@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D²SLAM：空中集群的近场与远场 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 H · 专题支线（动态 / 语义 / 多机 / 事件）/ Lesson 0173</div>
+      <h1>D²SLAM：空中集群的近场与远场</h1>
+      <p class="subtitle">一群无人机贴身编队时，另一架就是最大的「动态物体」；散开几百米时，又只剩大方向可谈。🚁 这一节看 D²SLAM 怎么按距离切换两套算法。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：去中心化＋分布式的空中集群协作视觉惯性 SLAM</span>
+        <span>👥 作者：Hao Xu, Peize Liu, Shaojie Shen（港科大，2024）</span>
+        <span>📅 年份 · <i>D²SLAM: Decentralized and Distributed Collaborative Visual-Inertial SLAM System for Aerial Swarm</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：距离决定算法</a>
+        <a href="#b">两个 D 是什么</a>
+        <a href="#c">近场：D²VINS</a>
+        <a href="#d">远场：D²PGO</a>
+        <a href="#e">实验怎么看</a>
+        <a href="#f">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 D²SLAM 名字里两个 D 各指什么；解释近场为什么用 D²VINS（ADMM 厘米级相对定位）、远场为什么用 D²PGO（ARock 异步位姿图）；说出远场拒假回环用的是分布式 PCM；知道这套系统装在 623 克的小无人机上真实飞过。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ <b>0168 的假回环铁律</b>在远场继续生效——D²PGO 用分布式 PCM 拒错缝，与 DOOR-SLAM 同思路（0168 已讲过 PCM 公式）。★ 架构回链 <b>0168 的三档主线</b>：D²SLAM 明确定义「去中心化（decentralized）＝无主协调」「分布式（distributed）＝计算分散」，并两个都占。★ <b>动态↔多机的交叉点就在这节</b>：近场里另一架无人机本身就是最大的动态物体，D²VINS 专门把它当成高精度相对观测量来跟踪。★ 检索用 NetVLAD，正是 <b>0168 DOOR-SLAM</b> 用的那个描述子。★ 名字与 <b>0170 的 DiSCo-SLAM</b> 极像，务必靠作者与传感器区分（0170 已立教学点）。</p></div>
+      </div>
+
+      <h2>1. 先说人话：为什么「距离」决定「算法」</h2>
+      <p>设想一支编队飞行的无人机群。两架无人机<b>贴得近</b>（比如 3–5 米内）时，你的相机里一大半画面都是队友——它遮挡、它移动、它就是环境里最大的动态物体。这时你需要的是<b>厘米级的相对位置</b>：编队、避撞、协同搬运都靠它。反过来，两架无人机<b>飞远了</b>（几栋楼之外），互相根本看不清细节，你能指望的只是「我们俩的地图大致对得上、大方向一致」。</p>
+      <p>D²SLAM 的核心设计就是<b>按距离切换两套状态估计</b>：<b>近场</b>用 D²VINS（ADMM 紧耦合视觉惯性里程计，小于约 3–5 米时交换全关键帧，相对定位到厘米级）；<b>远场</b>用 D²PGO（异步分布式位姿图优化，交换 NetVLAD 紧凑关键帧，把全局轨迹缝到一起）。一套系统，两个档位，覆盖整个集群。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">近场与远场：距离决定用哪套算法</text>
+          <!-- 左：近场 -->
+          <rect x="40" y="52" width="400" height="290" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="240" y="80" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">近场（约 3–5 米内）→ D²VINS</text>
+          <!-- 无人机 A -->
+          <g>
+            <line x1="130" y1="170" x2="108" y2="152" stroke="#9b8cff" stroke-width="3"/>
+            <line x1="130" y1="170" x2="152" y2="152" stroke="#9b8cff" stroke-width="3"/>
+            <line x1="130" y1="170" x2="108" y2="188" stroke="#9b8cff" stroke-width="3"/>
+            <line x1="130" y1="170" x2="152" y2="188" stroke="#9b8cff" stroke-width="3"/>
+            <circle cx="108" cy="152" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <circle cx="152" cy="152" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <circle cx="108" cy="188" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <circle cx="152" cy="188" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <ellipse cx="130" cy="170" rx="16" ry="9" fill="#9b8cff"/>
+            <text x="130" y="140" text-anchor="middle" fill="#bfe" font-size="11">无人机 A</text>
+          </g>
+          <!-- 无人机 B -->
+          <g>
+            <line x1="350" y1="170" x2="328" y2="152" stroke="#5cffb0" stroke-width="3"/>
+            <line x1="350" y1="170" x2="372" y2="152" stroke="#5cffb0" stroke-width="3"/>
+            <line x1="350" y1="170" x2="328" y2="188" stroke="#5cffb0" stroke-width="3"/>
+            <line x1="350" y1="170" x2="372" y2="188" stroke="#5cffb0" stroke-width="3"/>
+            <circle cx="328" cy="152" r="6" fill="none" stroke="#5cffb0" stroke-width="2"/>
+            <circle cx="372" cy="152" r="6" fill="none" stroke="#5cffb0" stroke-width="2"/>
+            <circle cx="328" cy="188" r="6" fill="none" stroke="#5cffb0" stroke-width="2"/>
+            <circle cx="372" cy="188" r="6" fill="none" stroke="#5cffb0" stroke-width="2"/>
+            <ellipse cx="350" cy="170" rx="16" ry="9" fill="#5cffb0"/>
+            <text x="350" y="140" text-anchor="middle" fill="#bfe" font-size="11">无人机 B</text>
+          </g>
+          <!-- 标尺 -->
+          <line x1="160" y1="225" x2="320" y2="225" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="160" y1="216" x2="160" y2="234" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="320" y1="216" x2="320" y2="234" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="184" y1="220" x2="184" y2="230" stroke="#5cffb0" stroke-width="1.5"/>
+          <line x1="208" y1="220" x2="208" y2="230" stroke="#5cffb0" stroke-width="1.5"/>
+          <line x1="232" y1="220" x2="232" y2="230" stroke="#5cffb0" stroke-width="1.5"/>
+          <line x1="256" y1="220" x2="256" y2="230" stroke="#5cffb0" stroke-width="1.5"/>
+          <line x1="280" y1="220" x2="280" y2="230" stroke="#5cffb0" stroke-width="1.5"/>
+          <text x="240" y="252" text-anchor="middle" fill="#5cffb0" font-size="12">标尺：相对位置要量到厘米级</text>
+          <text x="240" y="300" text-anchor="middle" fill="#9fb4ff" font-size="12">交换全关键帧＋共享路标，约 3.5 kB/步</text>
+          <!-- 右：远场 -->
+          <rect x="460" y="52" width="400" height="290" rx="10" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <text x="660" y="80" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">远场（几栋楼外）→ D²PGO</text>
+          <g>
+            <line x1="560" y1="150" x2="538" y2="132" stroke="#9b8cff" stroke-width="3"/>
+            <line x1="560" y1="150" x2="582" y2="132" stroke="#9b8cff" stroke-width="3"/>
+            <line x1="560" y1="150" x2="538" y2="168" stroke="#9b8cff" stroke-width="3"/>
+            <line x1="560" y1="150" x2="582" y2="168" stroke="#9b8cff" stroke-width="3"/>
+            <circle cx="538" cy="132" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <circle cx="582" cy="132" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <circle cx="538" cy="168" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <circle cx="582" cy="168" r="6" fill="none" stroke="#9b8cff" stroke-width="2"/>
+            <ellipse cx="560" cy="150" rx="16" ry="9" fill="#9b8cff"/>
+            <text x="560" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 A</text>
+          </g>
+          <g>
+            <line x1="790" y1="210" x2="768" y2="192" stroke="#ffd166" stroke-width="3"/>
+            <line x1="790" y1="210" x2="812" y2="192" stroke="#ffd166" stroke-width="3"/>
+            <line x1="790" y1="210" x2="768" y2="228" stroke="#ffd166" stroke-width="3"/>
+            <line x1="790" y1="210" x2="812" y2="228" stroke="#ffd166" stroke-width="3"/>
+            <circle cx="768" cy="192" r="6" fill="none" stroke="#ffd166" stroke-width="2"/>
+            <circle cx="812" cy="192" r="6" fill="none" stroke="#ffd166" stroke-width="2"/>
+            <circle cx="768" cy="228" r="6" fill="none" stroke="#ffd166" stroke-width="2"/>
+            <circle cx="812" cy="228" r="6" fill="none" stroke="#ffd166" stroke-width="2"/>
+            <ellipse cx="790" cy="210" rx="16" ry="9" fill="#ffd166"/>
+            <text x="790" y="180" text-anchor="middle" fill="#bfe" font-size="11">无人机 B</text>
+          </g>
+          <line x1="588" y1="158" x2="762" y2="202" stroke="#ffd166" stroke-width="2" stroke-dasharray="8 6"/>
+          <text x="660" y="255" text-anchor="middle" fill="#ffd166" font-size="12">虚线：只要大方向对（全局一致即可）</text>
+          <text x="660" y="300" text-anchor="middle" fill="#9fb4ff" font-size="12">交换 NetVLAD 紧凑关键帧，单次约 81 kB</text>
+          <text x="450" y="384" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：近场拼精度（厘米级相对定位），远场拼全局（大方向一致）</text>
+          <text x="450" y="412" text-anchor="middle" fill="#9fb4ff" font-size="12">同一套系统按距离切换两档，合起来覆盖整个集群</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左面板是贴身编队的两架无人机，中间画了一把标尺——近场要做厘米级相对定位（D²VINS）；右面板是飞远后的两架无人机，中间只有一条虚线——远场只求全局大方向一致（D²PGO）。<br>
+          <b>怎么看这张图：</b>① 左边看标尺与刻度：距离近，误差必须压到厘米；② 右边看虚线：距离远，细节看不清，只有轨迹的大形状可对；③ 两面板下方的通信量也不同——近场传全关键帧＋共享路标（约 3.5 kB/步），远场传 NetVLAD 紧凑关键帧（单次约 81 kB）。<br>
+          <b>要记住的一句话：</b>D²SLAM 的答案是「距离决定算法」：近场用 D²VINS 拼精度，远场用 D²PGO 拼全局。
+        </figcaption>
+      </figure>
+
+      <p>这里还有一条<b>动态↔多机的交叉线</b>：单机 SLAM 里「动态物体」是要剔除的麻烦（回顾 <b>0153–0157 动态块</b>）；但近场编队里，那架挡在镜头前的队友<b>不能剔</b>——它恰恰是你要最精确跟踪的对象。D²VINS 把队友直接当作高精度的相对观测量来估计，这是本季两条支线在最典型处的一次相遇。</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. D²SLAM 的两个 D：去中心化 ＋ 分布式</h2>
+      <p>名字里的 D² 不是随口起的——论文特意区分了两个常被混用的词：<b>去中心化（decentralized）</b>指「没有主节点协调」，<b>分布式（distributed）</b>指「计算与存储分散到每台机器人上」。很多系统只占其一：有的去中心化但没有把计算真正拆开；有的把计算拆开了却还靠一个协调者。D²SLAM 的主张是<b>两个都占</b>：无主协调、各机各算。</p>
+      <p>先处理一个书写细节（规范 §八②）：这份语料文件的一级标题原文写作 <code>D&lt;sup&gt;2&lt;/sup&gt;SLAM</code>（带 HTML 上标标签），本课一律写作 <b>D²SLAM</b>（Unicode 上标）。另外复习 <b>0170 立过的教学点</b>：DiSCo-SLAM（Huang 等，2022，激光，ScanContext）与 D²SLAM（Xu 等，港科大，2024，空中集群视觉惯性）是<b>两篇不同的论文</b>，名字像，务必靠作者与传感器区分。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024__D__2__SLAM__Decentralized_and_Distributed_Collaborative/755c0443301eb34719e16e0b110b64fd8ec4b9851379522650ada5e89a3b2374.jpg" alt="Fig. 3 decentralized vs distributed">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Visual-inertial UWB fusion 和 Omni-Swarm 是去中心化的，异步 Distributed ADMM 是分布式的，D²SLAM 既是去中心化也是分布式的。<br>
+          <b>怎么看这张图：</b>这是一张「坐标系分类图」：横竖两个维度分别是「有无主协调」与「计算是否分散」，各系统落在不同象限，D²SLAM 独占「两者兼备」那一格。盯着看哪些同行只占一格，就能明白这个 D² 的含金量。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">D²SLAM 的两个 D：去中心化 ＋ 分布式</text>
+          <!-- 左：去中心化 -->
+          <rect x="40" y="52" width="400" height="280" rx="10" fill="#16203a" stroke="#9b8cff" stroke-width="2"/>
+          <text x="240" y="78" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">去中心化：没有主节点</text>
+          <g fill="#9b8cff">
+            <circle cx="140" cy="160" r="14"/><circle cx="340" cy="160" r="14"/><circle cx="240" cy="270" r="14"/>
+          </g>
+          <g stroke="#7c8bbf" stroke-width="2">
+            <line x1="140" y1="160" x2="340" y2="160"/>
+            <line x1="140" y1="160" x2="240" y2="270"/>
+            <line x1="340" y1="160" x2="240" y2="270"/>
+          </g>
+          <text x="140" y="165" text-anchor="middle" fill="#0f1424" font-size="11" font-weight="700">A</text>
+          <text x="340" y="165" text-anchor="middle" fill="#0f1424" font-size="11" font-weight="700">B</text>
+          <text x="240" y="275" text-anchor="middle" fill="#0f1424" font-size="11" font-weight="700">C</text>
+          <g stroke="#ff5d73" stroke-width="4">
+            <line x1="228" y1="192" x2="252" y2="216"/>
+            <line x1="252" y1="192" x2="228" y2="216"/>
+          </g>
+          <text x="240" y="243" text-anchor="middle" fill="#ff5d73" font-size="12">无服务器、无主</text>
+          <!-- 右：分布式 -->
+          <rect x="460" y="52" width="400" height="280" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="660" y="78" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">分布式：计算分散到每台</text>
+          <g fill="#5cffb0">
+            <circle cx="560" cy="140" r="14"/><circle cx="760" cy="140" r="14"/><circle cx="660" cy="240" r="14"/>
+          </g>
+          <text x="560" y="145" text-anchor="middle" fill="#0f1424" font-size="11" font-weight="700">A</text>
+          <text x="760" y="145" text-anchor="middle" fill="#0f1424" font-size="11" font-weight="700">B</text>
+          <text x="660" y="245" text-anchor="middle" fill="#0f1424" font-size="11" font-weight="700">C</text>
+          <g>
+            <rect x="515" y="175" width="90" height="34" rx="6" fill="#1b2647" stroke="#5cffb0"/>
+            <text x="560" y="197" text-anchor="middle" fill="#bfe" font-size="11">子问题 A</text>
+            <rect x="715" y="175" width="90" height="34" rx="6" fill="#1b2647" stroke="#5cffb0"/>
+            <text x="760" y="197" text-anchor="middle" fill="#bfe" font-size="11">子问题 B</text>
+            <rect x="615" y="275" width="90" height="34" rx="6" fill="#1b2647" stroke="#5cffb0"/>
+            <text x="660" y="297" text-anchor="middle" fill="#bfe" font-size="11">子问题 C</text>
+          </g>
+          <text x="450" y="362" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：去中心化答「谁来协调」，分布式答「在哪算」——D²SLAM 两个都占</text>
+          <text x="450" y="390" text-anchor="middle" fill="#9fb4ff" font-size="12">原文 Fig. 3 正是按这两个维度给协作系统分类的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左面板：三架无人机两两直连成网，中间画着红叉——没有服务器、没有主节点（去中心化）；右面板：同样三架无人机，每架下面挂一个「子问题」小盒子——计算与存储分散到每台（分布式）。<br>
+          <b>怎么看这张图：</b>① 左边问的是「协调权在谁手里」：无主，靠对等协商；② 右边问的是「活在哪里干」：每台抱着自己的因子图子问题本地解；③ 一个系统可以只占其一，D²SLAM 的卖点就是两个都占。<br>
+          <b>要记住的一句话：</b>去中心化管「谁来协调」，分布式管「在哪算」，D²SLAM 交的是两份答卷。
+        </figcaption>
+      </figure>
+
+      <p>整体架构上，每架无人机独立跑一份完整的 D²SLAM：前端处理鱼眼图像（四目全景，单相机横向视场约 200°，相邻相机重叠约 110°，保证「队友在侧后方也看得见」），后端做状态估计，结果再喂给稠密建图、规划与控制。看下面这张原文架构图，注意它是<b>复制品</b>——每架无人机上都装着同样一套。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024__D__2__SLAM__Decentralized_and_Distributed_Collaborative/26baec69c436d222b084ab03e678273e9484b07a10439e92bfc8141e85a9d2f1.jpg" alt="Fig. 2 architecture of D2SLAM">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>D²SLAM 的架构。D²SLAM 独立运行于每架无人机上：数据先经前端处理，再送入后端做状态估计，结果用于稠密建图、规划与控制。<br>
+          <b>怎么看这张图：</b>图里画了两架（Drone 1 与 Drone n）：每架都有「传感器 → 前端 → D²VINS / 异常剔除 / D²PGO」的同构流水线，机间的虚线箭头就是两套后端交换信息的通道。盯住「Outlier Rejection」这一格——它就是远场拒假回环的位置。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 近场：D²VINS，用 ADMM 把紧耦合 VIO 拆开算</h2>
+      <p>近场的任务是把「我和队友的相对位置」估到厘米级。做法是<b>紧耦合视觉惯性优化</b>：把每架无人机的位姿、速度、IMU 偏置放进同一个滑动窗口因子图，与视觉路标一起联解——这正是第三季 VIO 课（紧耦合那几节）的思路。新的麻烦是：单机的 VIO 在一台计算机上解，<b>多机的紧耦合 VIO 怎么在没有服务器的情况下解？</b>D²VINS 的答案是 <b>ADMM（交替方向乘子法）</b>：把大优化拆成每架无人机一个子问题，路标按「归属」分成不相交的集合（谁看到的多归谁），各机分头解自己的子问题，然后<b>交换平均状态、把解拉向平均，再解一轮</b>，迭代到大家的估计一致。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024__D__2__SLAM__Decentralized_and_Distributed_Collaborative/c8c1a4f963d0071033c9f34c79b14c4afe398ddaeccb39c452e0e5a306d75855.jpg" alt="Fig. 9 factor graph of D2VINS">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>D²VINS 的因子图示意。滑动窗口内的状态（位姿、速度、IMU 偏置）由 IMU 因子、视觉因子与先验因子相互连接。<br>
+          <b>怎么看这张图：</b>这是<b>单机视角</b>的因子图——就是你第二季 BA / 位姿图课里见过的那种结构：圆圈是待估状态，边是约束。ADMM 做的事，就是让每架无人机抱着这样一张图各自解，再靠「平均状态」这一步把多张图对齐。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 430" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="430" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">ADMM（D²VINS）：各算各的，定期对平均</text>
+          <!-- 面板① -->
+          <rect x="40" y="52" width="260" height="278" rx="10" fill="#16203a" stroke="#7c8bbf" stroke-width="2"/>
+          <text x="170" y="78" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">① 各自解子问题</text>
+          <rect x="55" y="95" width="100" height="90" rx="8" fill="#1b2647" stroke="#9b8cff" stroke-width="2"/>
+          <text x="105" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 A</text>
+          <rect x="70" y="135" width="70" height="8" rx="3" fill="#9b8cff"/>
+          <rect x="70" y="155" width="70" height="8" rx="3" fill="#5a6aa0"/>
+          <rect x="185" y="95" width="100" height="90" rx="8" fill="#1b2647" stroke="#5cffb0" stroke-width="2"/>
+          <text x="235" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 B</text>
+          <rect x="200" y="135" width="70" height="8" rx="3" fill="#5cffb0"/>
+          <rect x="200" y="155" width="70" height="8" rx="3" fill="#3a7a5a"/>
+          <text x="170" y="230" text-anchor="middle" fill="#9fb4ff" font-size="12">互不打扰，先解自己的</text>
+          <text x="170" y="300" text-anchor="middle" fill="#9fb4ff" font-size="12">路标按归属分成不相交集</text>
+          <!-- 面板② -->
+          <rect x="320" y="52" width="260" height="278" rx="10" fill="#16203a" stroke="#ffd166" stroke-width="2"/>
+          <text x="450" y="78" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">② 交换平均状态 x̄</text>
+          <rect x="330" y="95" width="95" height="90" rx="8" fill="#1b2647" stroke="#9b8cff" stroke-width="2"/>
+          <text x="377" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 A</text>
+          <rect x="345" y="135" width="65" height="8" rx="3" fill="#9b8cff"/>
+          <rect x="475" y="95" width="95" height="90" rx="8" fill="#1b2647" stroke="#5cffb0" stroke-width="2"/>
+          <text x="522" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 B</text>
+          <rect x="490" y="135" width="65" height="8" rx="3" fill="#5cffb0"/>
+          <line x1="427" y1="140" x2="473" y2="140" stroke="#5cffb0" stroke-width="2"/>
+          <polygon points="473,135 481,140 473,145" fill="#5cffb0"/>
+          <text x="450" y="128" text-anchor="middle" fill="#bfe" font-size="12">x̄</text>
+          <line x1="473" y1="168" x2="427" y2="168" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="427,163 419,168 427,173" fill="#ffd166"/>
+          <text x="450" y="192" text-anchor="middle" fill="#bfe" font-size="12">x̄</text>
+          <text x="450" y="230" text-anchor="middle" fill="#9fb4ff" font-size="12">把各自的解平均一下</text>
+          <text x="450" y="300" text-anchor="middle" fill="#9fb4ff" font-size="12">在 SE(3) 上用黎曼方法更新</text>
+          <!-- 面板③ -->
+          <rect x="600" y="52" width="260" height="278" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="730" y="78" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">③ 拉回平均，再解一轮</text>
+          <rect x="610" y="95" width="95" height="90" rx="8" fill="#1b2647" stroke="#9b8cff" stroke-width="2"/>
+          <text x="657" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 A</text>
+          <rect x="625" y="135" width="65" height="8" rx="3" fill="#9b8cff"/>
+          <rect x="755" y="95" width="95" height="90" rx="8" fill="#1b2647" stroke="#5cffb0" stroke-width="2"/>
+          <text x="802" y="120" text-anchor="middle" fill="#bfe" font-size="11">无人机 B</text>
+          <rect x="770" y="135" width="65" height="8" rx="3" fill="#5cffb0"/>
+          <line x1="707" y1="140" x2="753" y2="140" stroke="#5cffb0" stroke-width="2"/>
+          <polygon points="753,135 761,140 753,145" fill="#5cffb0"/>
+          <line x1="753" y1="168" x2="707" y2="168" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="707,163 699,168 707,173" fill="#ffd166"/>
+          <path d="M 680 235 a 22 22 0 1 1 -8 -18" fill="none" stroke="#ffd166" stroke-width="2.5"/>
+          <polygon points="668,212 676,218 666,224" fill="#ffd166"/>
+          <text x="730" y="300" text-anchor="middle" fill="#9fb4ff" font-size="12">重复②③，直到大家一致</text>
+          <text x="450" y="384" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：ADMM ＝ 分头解题 ＋ 对平均 ＋ 拉回，迭代到一致</text>
+          <text x="450" y="412" text-anchor="middle" fill="#9fb4ff" font-size="12">近场 D²VINS 用它把紧耦合 VIO 拆到每架无人机上，相对定位到厘米级</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三格连环画画出 ADMM 的一轮循环：① 两架无人机各抱一张自己的因子图（滑窗＋各自的路标子集）分头求解；② 中间交换「平均状态 x̄」——你传我、我传你；③ 各自把解拉向平均，再回到①继续，直到两边的估计收敛到一致。<br>
+          <b>怎么看这张图：</b>① 先看第一格：路标按归属分成不相交集合，所以各机解的是「自己的那部分」，不冲突；② 再看第二格：双向箭头上的 x̄ 就是协调的全部内容——不用传原始图像，只传状态平均；③ 第三格的循环箭头表示这个过程反复做，平均拉力让两张图慢慢对齐。<br>
+          <b>要记住的一句话：</b>ADMM 的协调方式＝「分头解题、定期对平均」——这正是「分布式」这个名字在数学上的落地。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        $$\min_{x_1,\dots,x_n}\ \sum_{i=1}^{n} f_i(x_i)\qquad \text{s.t.}\ \ x_i=\bar x$$
+        <div class="flow-formula">各机子问题 fᵢ → 交换并求平均 x̄ → 把解拉向 x̄ → 重复直到一致</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「让每架无人机自己的解尽量好（各最小化 fᵢ），同时大家的 xᵢ 都不许偏离公共的平均 x̄」；② 为什么这样就能对齐——平均步骤像一只看不见的手，每轮把所有人往同一个坐标系拽一点，迭代收敛后共享路标与相对位姿的估计就统一了；③ 状态更新在 SE(3) 流形上用黎曼方法做（回链第二季讲过的旋转表示：旋转不能直接当普通向量加减）。实测近场精度：Omni 2 数据集 ATE 平移误差 0.069 米，Omni 5 数据集 0.075 / 0.076 米——<b>厘米级</b>。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>编队飞行中两架无人机相距约 4 米，D²SLAM 此刻应该主要靠哪套模块工作？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：约 3–5 米内属于近场，D²VINS 交换全关键帧＋共享路标，用 ADMM 做厘米级相对定位。" onclick="lessonKit.answer(this,'q0173a')">D²VINS（ADMM 紧耦合）</button>
+          <button data-correct="no" data-explanation="不对：D²PGO 是远场模块，靠 NetVLAD 检索与位姿图对全局，做不了厘米级贴身相对定位。" onclick="lessonKit.answer(this,'q0173a')">D²PGO（NetVLAD 检索）</button>
+        </div>
+        <div class="quiz-feedback" id="q0173a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 远场：D²PGO，ARock 异步位姿图 ＋ 分布式 PCM</h2>
+      <p>飞远了，视觉重合变少，D²VINS 那种「共享路标直接量相对位置」的玩法失效，退回到多机块的老问题：<b>靠机间回环把全局位姿图缝起来</b>。流程与 <b>0168 的 DOOR-SLAM</b> 一脉相承：各机把 NetVLAD 紧凑关键帧广播出去；收到后做分布式回环检测，匹配成功才回传完整关键帧、提取相对位姿（见下方原文 Fig. 8）；随后用<b>分布式 PCM</b> 拒假回环，再用 <b>ARock 异步分布式优化</b>解位姿图。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2024__D__2__SLAM__Decentralized_and_Distributed_Collaborative/dc31d6852491f4238b1c5d0e744b32f289352e2e4ebcd2795d1295897e1b86cd.jpg" alt="Fig. 8 distributed loop closure">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>分布式回环检测示意：无人机之间传递含 NetVLAD 全局描述子的紧凑关键帧；无人机 j 收到无人机 i 的数据后启动回环检测，若匹配成功，j 再把含路标信息的完整关键帧传回 i，最终提取相对位姿。<br>
+          <b>怎么看这张图：</b>注意传的东西分两步走——先传「小」的紧凑关键帧做检索，命中了才传「大」的完整关键帧做几何验证。这就是多机块反复出现的省带宽套路（回链 0168 DOOR-SLAM 的 NetVLAD 前端、0170 的描述子三兄弟）。
+        </figcaption>
+      </figure>
+
+      <p>拒假回环用<b>分布式 PCM</b>——0168 详细讲过的那套「能互相拼成闭环的最大一致集」：</p>
+      <div class="formula-box">
+        $$\bigl\|\bigl(z_{\alpha_j}^{\alpha_i}\oplus z_{\beta_k}^{\alpha_j}\oplus z_{\beta_l}^{\beta_k}\bigr)\ominus z_{\beta_l}^{\alpha_i}\bigr\|_{\Sigma}\le\gamma$$
+        <div class="flow-formula">取几条机间/机内边拼一个环 → 算环闭合误差 → 误差 ≤ γ 的边互相信任 → 挑出最大的互信集</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「把两机之间的几条边首尾拼成一个环，环闭合得好不好」；② 为什么这样就能判对——真回环拼出的环几乎严丝合缝，假回环拼出的环一定对不上；③ 什么时候当回事——只把「互相都能拼闭环」的边请进一致集，孤证与矛盾边一律出局。要诚实说：D²SLAM 远场选的是 PCM 而非 0169/0171 的 GNC 族，作者自己承认 PCM 在大图上效率偏低——这是它与 GNC 族系统相比的短板（复习：PCM 漏真、GNC 保真）。</p>
+
+      <p>解位姿图时，D²PGO 用 <b>ARock 异步迭代</b>：旋转初始化用 chordal 松弛（把旋转拆成矩阵元来解，再 SVD 恢复回 SO(3)），随后各机不等彼此、拿到新数据就更新自己那一块。为什么强调异步？看下面这张对照图。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 400" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="400" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">ARock：异步更新，不等最慢的</text>
+          <!-- 左：同步 -->
+          <rect x="40" y="52" width="400" height="270" rx="10" fill="#16203a" stroke="#ff5d73" stroke-width="2"/>
+          <text x="240" y="76" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">同步（对照）：全体等最慢</text>
+          <g>
+            <circle cx="66" cy="110" r="9" fill="#9b8cff"/><text x="66" y="114" text-anchor="middle" fill="#0f1424" font-size="10" font-weight="700">A</text>
+            <circle cx="66" cy="160" r="9" fill="#9b8cff"/><text x="66" y="164" text-anchor="middle" fill="#0f1424" font-size="10" font-weight="700">B</text>
+            <circle cx="66" cy="210" r="9" fill="#9b8cff"/><text x="66" y="214" text-anchor="middle" fill="#0f1424" font-size="10" font-weight="700">C</text>
+          </g>
+          <g stroke="#7c8bbf" stroke-width="2">
+            <line x1="86" y1="110" x2="420" y2="110"/>
+            <line x1="86" y1="160" x2="420" y2="160"/>
+            <line x1="86" y1="210" x2="420" y2="210"/>
+          </g>
+          <g fill="#5a6aa0">
+            <rect x="90" y="103" width="34" height="14" rx="3"/><rect x="132" y="103" width="34" height="14" rx="3"/>
+            <rect x="90" y="153" width="34" height="14" rx="3"/><rect x="132" y="153" width="34" height="14" rx="3"/><rect x="174" y="153" width="34" height="14" rx="3"/><rect x="216" y="153" width="34" height="14" rx="3"/><rect x="258" y="153" width="34" height="14" rx="3"/>
+            <rect x="90" y="203" width="34" height="14" rx="3"/><rect x="132" y="203" width="34" height="14" rx="3"/><rect x="174" y="203" width="34" height="14" rx="3"/><rect x="216" y="203" width="34" height="14" rx="3"/><rect x="258" y="203" width="34" height="14" rx="3"/><rect x="300" y="203" width="34" height="14" rx="3"/>
+          </g>
+          <line x1="352" y1="92" x2="352" y2="228" stroke="#ff5d73" stroke-width="3" stroke-dasharray="6 5"/>
+          <text x="240" y="256" text-anchor="middle" fill="#ff5d73" font-size="12">红色栅栏：快的必须停下来等最慢的</text>
+          <!-- 右：异步 -->
+          <rect x="460" y="52" width="400" height="270" rx="10" fill="#16203a" stroke="#5cffb0" stroke-width="2"/>
+          <text x="660" y="76" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">ARock 异步：谁好谁更新</text>
+          <g>
+            <circle cx="486" cy="110" r="9" fill="#5cffb0"/><text x="486" y="114" text-anchor="middle" fill="#0f1424" font-size="10" font-weight="700">A</text>
+            <circle cx="486" cy="160" r="9" fill="#5cffb0"/><text x="486" y="164" text-anchor="middle" fill="#0f1424" font-size="10" font-weight="700">B</text>
+            <circle cx="486" cy="210" r="9" fill="#5cffb0"/><text x="486" y="214" text-anchor="middle" fill="#0f1424" font-size="10" font-weight="700">C</text>
+          </g>
+          <g stroke="#7c8bbf" stroke-width="2">
+            <line x1="506" y1="110" x2="840" y2="110"/>
+            <line x1="506" y1="160" x2="840" y2="160"/>
+            <line x1="506" y1="210" x2="840" y2="210"/>
+          </g>
+          <g fill="#2a8a63">
+            <rect x="510" y="103" width="34" height="14" rx="3"/><rect x="552" y="103" width="34" height="14" rx="3"/><rect x="594" y="103" width="34" height="14" rx="3"/><rect x="636" y="103" width="34" height="14" rx="3"/><rect x="678" y="103" width="34" height="14" rx="3"/><rect x="720" y="103" width="34" height="14" rx="3"/>
+            <rect x="510" y="153" width="34" height="14" rx="3"/><rect x="552" y="153" width="34" height="14" rx="3"/><rect x="594" y="153" width="34" height="14" rx="3"/>
+            <rect x="510" y="203" width="34" height="14" rx="3"/><rect x="552" y="203" width="34" height="14" rx="3"/><rect x="594" y="203" width="34" height="14" rx="3"/><rect x="636" y="203" width="34" height="14" rx="3"/><rect x="678" y="203" width="34" height="14" rx="3"/>
+          </g>
+          <g fill="#5cffb0">
+            <rect x="762" y="103" width="34" height="14" rx="3"/>
+            <rect x="636" y="153" width="34" height="14" rx="3"/>
+            <rect x="720" y="203" width="34" height="14" rx="3"/>
+          </g>
+          <text x="660" y="256" text-anchor="middle" fill="#5cffb0" font-size="12">没有栅栏：数据一到就更新，进度各不相同</text>
+          <text x="450" y="354" text-anchor="middle" fill="#cdd6ff" font-size="15" font-weight="700">要记住：异步＝不为慢者停摆——通信延迟大的集群里更抗造</text>
+          <text x="450" y="382" text-anchor="middle" fill="#9fb4ff" font-size="12">D²PGO 用 ARock 做异步分布式位姿图优化；旋转初始化用 chordal 松弛＋SVD 恢复</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左面板（对照）：三架无人机各自干活，但红色栅栏逼着快的两架停下等最慢的那架——同步模式；右面板：ARock 异步——三行进度块长短不一、亮绿色的「新更新」出现在不同时刻，谁的数据到了谁就更新，没有栅栏。<br>
+          <b>怎么看这张图：</b>① 左边看红栅栏：一架慢，全员减速；② 右边看绿色块的位置：三行的更新节奏完全不同，但整体都在推进；③ 空中集群的无线链路延迟抖动大，异步正是为此设计。<br>
+          <b>要记住的一句话：</b>ARock 的哲学是「不等最慢的」——用容忍暂时的旧数据，换来整体不被拖垮。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于 ARock 异步分布式优化，下面哪个说法对？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：异步的意义就是不被慢节点/高延迟链路拖住，各机拿到新数据即更新，整体仍能收敛。" onclick="lessonKit.answer(this,'q0173b')">慢的无人机不拖累其他人的更新</button>
+          <button data-correct="no" data-explanation="不对：那是同步模式（栅栏式）的行为，ARock 恰恰取消了栅栏。" onclick="lessonKit.answer(this,'q0173b')">所有人到齐栅栏才能继续</button>
+        </div>
+        <div class="quiz-feedback" id="q0173b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 实验怎么看：近场厘米级，远场大图</h2>
+      <p>平台很轻：623 克的小四旋翼，机载 Xavier NX，四目鱼眼相机＋可选双目，单次飞行约 10 分钟——说明这套「去中心化＋分布式」不是工作站上的玩具，是真能装上小飞机的。实验分两层看：</p>
+      <ul>
+        <li><b>近场（D²VINS）</b>：Omni 2 数据集 ATE 平移 0.069 米，Omni 5 数据集 0.075 / 0.076 米——多机相对定位压到厘米级；每步通信量最大约 3.5 kB/机。</li>
+        <li><b>远场（D²PGO）</b>：TUM Corr 5（12065 关键帧、16814 条边）求解 10.1 秒；OmniLongYaw 5（16430 关键帧、51358 条边）20.5 秒——大图能解，且随机器人数量增加实测接近线性。</li>
+        <li><b>与 DOOR-SLAM 对比（诚实版）</b>：各有胜负——OmniLongYaw 5 上 DOOR 略优（0.149 vs 0.168 米），TUM Room 5 上 D²SLAM 更好（0.032 vs 0.064 米）。作者承认：远场偏航角重叠不足时精度会掉，PCM 在大图上效率也偏低。</li>
+      </ul>
+
+      <figure class="figure">
+        <img src="../../md/images/2024__D__2__SLAM__Decentralized_and_Distributed_Collaborative/29e17cd52673a4ff7b0bf62dc03e12f54d3fb35adaa0744a34e863ed8a259918.jpg" alt="Fig. 12 OmniLongYaw 5 trajectories">
+        <figcaption>
+          <b>原图注（Fig. 12）：</b>OmniLongYaw 5 数据集上 D²VINS 与 D²PGO 估计的轨迹：D²VINS 的轨迹漂移明显，D²PGO 的轨迹紧贴真值。<br>
+          <b>怎么看这张图：</b>这正是「近场／远场」双模块价值的直观证据：5 架无人机长时间飞行后，只靠近场 VIO 的轨迹已经飘走；远场 D²PGO 用机间回环把全局拉回真值。盯着黑框区域里两族轨迹的分岔看。
+        </figcaption>
+      </figure>
+
+      <p>最后把 D²SLAM 放回 <b>0168 的主线</b>：它是「去中心化＋分布式」一档的代表，把「近场拼精度、远场拼全局」拆成两个专门化模块；鲁棒后端站在 PCM 族这边（与 0168 DOOR 同族），而不是 0169/0171 的 GNC 族——这是它诚实写明的短板，也是你读论文时要学会辨认的「取舍痕迹」。</p>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>D²SLAM 名字里的两个 D 各指什么？为什么说它「两个都占」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>去中心化（decentralized）＝没有主节点协调，peer 对等；分布式（distributed）＝计算与存储分散到每台机器人。很多系统只占其一，D²SLAM 既无主协调、又把紧耦合优化真正拆到每机上（原文 Fig. 3 就是按这两个维度分类的）。</div></details>
+        </li>
+        <li>近场用全关键帧（约 3.5 kB/步）、远场用 NetVLAD 紧凑关键帧——「按距离切换传什么」换来了什么？代价是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>换来：近场共享路标直接量出厘米级相对位置；远场通信量骤减（单次约 81 kB）且能维持全局一致。代价：两套模块各有失效条件——远场偏航重叠不足时精度下降（作者自述），近场超出约 3–5 米就无法靠共享路标工作，必须切换到回环路线。</div></details>
+        </li>
+        <li>D²SLAM 远场用什么拒假回环？与 0169 / 0171 的 GNC 族相比弱势在哪？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>用分布式 PCM（最大一致集，同 DOOR-SLAM 思路）。弱势：PCM 是批式最大团思路，大图上效率低、recall 偏低（漏真回环）；GNC 族（0169 LAMP 2.0、0171 Kimera-Multi 的 D-GNC）在线运行且保 recall。作者自己也承认 PCM 大图效率低——这是 D²SLAM 的诚实短板。</div></details>
+        </li>
+        <li>DiSCo-SLAM 和 D²SLAM 怎么区分？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>靠作者与传感器：DiSCo-SLAM＝Huang 等，2022，多机 3D 激光，用 ScanContext（0170 讲过）；D²SLAM＝Xu 等，港科大，2024，空中集群视觉惯性，近场 D²VINS＋远场 D²PGO。两篇都在语料库里，是不同论文；名字像但领域与传感器完全不同（0170 已立此教学点）。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>D²SLAM 的「去中心化」与「分布式」分别指什么？为什么它说两个都占？</li>
+        <li>近场为什么选 D²VINS＋ADMM？「对平均」这一步在协调什么？</li>
+        <li>远场为什么退回「回环＋位姿图」？拒假回环靠什么？</li>
+        <li>ARock 异步相比同步栅栏，换来什么、容忍什么？</li>
+        <li>D²SLAM 的近场设计和动态块（0153–0157）有什么交叉？</li>
+      </ul>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0172-Swarm-SLAM-去中心化与稀疏化.html">← 上一课：Swarm-SLAM</a>
+        <a class="next" href="0174-替代路线-拓扑与量距.html">下一课：替代路线 →</a>
+      </div>
+      <p class="foot-note">多机块的主线走完了，下一节看两条干脆「绕开回环」的替代路线 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

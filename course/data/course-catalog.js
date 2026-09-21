@@ -7,7 +7,7 @@
 
 window.PAPERLESSON_DATA = {
   /* 首页「当前主线」指向的 collection id */
-  featuredCollectionId: "stage-g",
+  featuredCollectionId: "stage-h",
 
   /* ---------- 分馆 ---------- */
   groups: [
@@ -17,7 +17,7 @@ window.PAPERLESSON_DATA = {
       title: "SLAM 论文精读馆",
       emoji: "📄",
       description: "按语料库阅读路线的阶段（A–K）分块。每个「来源块」对应一个阶段，块内课程按认知依赖顺序排列；一篇论文可以拆成多节课，也可以几篇同类论文合成一节。",
-      meta: ["按阶段分块", "255 篇语料库", "已开到阶段 G · 学习式方法"]
+      meta: ["按阶段分块", "255 篇语料库", "已开到阶段 H · 专题支线"]
     },
     {
       id: "qa",
@@ -108,6 +108,16 @@ window.PAPERLESSON_DATA = {
       description: "第 0128 课起。第一季 0011 课写下过一句判断：深度学习先吃掉匹配和检索。这一季就是那句话的正面展开——到底吃掉了没有、吃到什么程度、哪些地方吃不动。四个战场依次推进：特征匹配（SuperGlue / LoFTR / LightGlue / SiLK / RAFT）、场景识别与回环（DBoW2 / Scan Context / LCDNet / BEVPlace / SALDA 等 12 篇）、端到端里程计（DeepVO 一路走到 DROID-SLAM 与 DPVO）、以及视觉基础模型（DINOv2 / SAM / DUSt3R / MASt3R-SLAM / SLAM3R / Metric3D v2）。第一季 0014 课立下的回环假阳性铁律会在 0140 被正面复查，尺度暗线在 0150 走到最新一站。最后一节不做新论文，只结账：哪些结论有论文证据、哪些还只是判断。",
       quickOpen: "start lessons\\0128-导览-第七季开场-一句话的面试.html",
       meta: ["24 节课", "覆盖 31 篇论文", "四个战场"]
+    },
+    {
+      id: "stage-h",
+      groupId: "papers",
+      kind: "阶段精读",
+      title: "阶段 H · 专题支线",
+      subtitle: "动态 / 语义 / 多机 / 事件 · 第八季 42 篇 / 27 节",
+      description: "第 0152 课起。前七季默认了三件事：环境是静止的、地图只有几何、只有一台快门式相机。这一季把它们逐个拆掉，于是横向长出四条专题支线：动态环境八篇、语义建图十一篇、多机协同十二篇、事件相机十一篇。四块之间还有横向联系（动态↔语义、语义↔多机、动态↔多机、事件↔高速），导览课会把它们串起来。全季 97 张具象自绘图，是各季密度最高的一季。",
+      quickOpen: "start lessons\\0152-导览-第八季开场-三个不成立的假设.html",
+      meta: ["27 节课", "覆盖 42 篇论文", "四个专题支线"]
     },
     {
       id: "qa-0002",
@@ -1793,6 +1803,303 @@ window.PAPERLESSON_DATA = {
       duration: "60 分钟",
       tags: ["收官", "总收束", "四战场"],
       description: "不做新论文，只结账。用一张四行对照表正面回答第一季 0011 那句判断：匹配吃掉了、检索吃掉了、位姿只吃掉了很窄的一段、几何被外包给了基础模型。把「复杂与极简之争」这条暗线结账，并诚实分区：哪些结论有论文证据、哪些只是判断。最后列出仍未解决的问题。"
+    },
+    {
+      id: "0152",
+      path: "lessons/0152-导览-第八季开场-三个不成立的假设.html",
+      paper: "stage-h",
+      title: "导览：第八季开场·三个不成立的假设",
+      subtitle: "专题支线横切前七季",
+      emoji: "🧭",
+      duration: "50 分钟",
+      tags: ["导览", "专题支线", "三个假设"],
+      description: "第八季开场。前七季默认了三件事：环境是静止的、地图只有几何、只有一台快门式相机。这一季把它们逐个拆掉，于是横向长出动态、语义、多机、事件四条支线。含一张真实机器人场景的「三假设被戳破」图、四块地图与横向联系预告。"
+    },
+    {
+      id: "0153",
+      path: "lessons/0153-DynaSLAM与DSS-SLAM-动态SLAM的开山.html",
+      paper: "stage-h",
+      title: "DynaSLAM 与 DS-SLAM：动态 SLAM 的开山",
+      subtitle: "语义与几何两条通道",
+      emoji: "🚶",
+      duration: "60 分钟",
+      tags: ["组课", "动态环境", "几何加语义"],
+      description: "组课，两篇 2018 年的开山之作。含语义先验粗粒度对照图、深度一致性阈值 τ_z=0.4 m 的地砖对照图，以及一张把语义 195 ms、几何 333.68 ms、修补 208.09 ms 按真实耗时排开的代价账图。回链 0005 激光侧第一次碰动态。"
+    },
+    {
+      id: "0154",
+      path: "lessons/0154-纯几何路线-不靠语义也能判动态.html",
+      paper: "stage-h",
+      title: "纯几何路线：不靠语义也能判动态",
+      subtitle: "点相关图与 CRF 长时一致",
+      emoji: "🔷",
+      duration: "60 分钟",
+      tags: ["组课", "动态环境", "纯几何"],
+      description: "组课，两篇不打语义牌的纯几何方案。含 Delaunay 点相关图与最大连通分量图、动态占比过高时的退化演示，以及一张显示 CRF 如何把孤立错判压回去的跨帧一致性图。好处是无需 GPU，代价是要等一段时间才能下结论。"
+    },
+    {
+      id: "0155",
+      path: "lessons/0155-不删而是跟踪-动态物体变成路标.html",
+      paper: "stage-h",
+      title: "不删，而是跟踪：动态物体变成路标",
+      subtitle: "把动态信息利用起来",
+      emoji: "🏷️",
+      duration: "60 分钟",
+      tags: ["组课", "动态环境", "物体级"],
+      description: "组课，两篇把动态物体「留下来用」的论文。含带轨迹的移动路标图，以及一张左「黑洞」右「约束源」的对照图：同一个停驶的车，删掉就少了一块可用信息，留着追踪反而更准。"
+    },
+    {
+      id: "0156",
+      path: "lessons/0156-别把停着的车删掉-语义动态与当前真在动.html",
+      paper: "stage-h",
+      title: "别把停着的车删掉：语义动态与当前真在动",
+      subtitle: "可动类不等于此刻在动",
+      emoji: "🚗",
+      duration: "55 分钟",
+      tags: ["组课", "动态环境", "场景流"],
+      description: "组课，两篇专门对付「可动但此刻没动」的方案。含一张二维四象限图：可动类与此刻是否真在动交叉出四种情形，路边停着的车属于「可动但静止」——一刀切剔除就把它本可用来定位的特征点全丢了。"
+    },
+    {
+      id: "0157",
+      path: "lessons/0157-动态块小结-代价账与验收.html",
+      paper: "stage-h",
+      title: "动态块小结：代价账与验收",
+      subtitle: "判错了会怎样",
+      emoji: "🧾",
+      duration: "45 分钟",
+      tags: ["收束", "动态环境", "小结"],
+      description: "动态块收束。把八篇的代价账合起来：为了处理动态，每帧要多付多少毫秒；以及在空无一人的静态场景里，这笔钱是不是净亏。含静态场景代价图与「误删 / 漏检」双代价图。"
+    },
+    {
+      id: "0158",
+      path: "lessons/0158-动态环境补充-两条延伸路线.html",
+      paper: "stage-h",
+      title: "动态环境补充：两条延伸路线",
+      subtitle: "激光侧与语义侧的对照",
+      emoji: "🧩",
+      duration: "40 分钟",
+      tags: ["补充", "动态环境", "横向"],
+      description: "补充节。把动态块与前七季的两条旧线索接上：第一季 0005 的激光侧动态处理，以及语义通道如何被动态检测借用。含流水线对照图。"
+    },
+    {
+      id: "0159",
+      path: "lessons/0159-SemanticFusion2017-语义建图的开端.html",
+      paper: "stage-h",
+      title: "SemanticFusion：语义建图的开端",
+      subtitle: "surfel 上的贝叶斯标签融合",
+      emoji: "🪑",
+      duration: "55 分钟",
+      tags: ["单篇", "语义建图", "surfel"],
+      description: "语义建图的开篇之作。含真实沙发贴满面元的示意图、标签概率随帧数收敛的贝叶斯更新图。回链第二季的体素与 TSDF，说明为什么 surfel 路线拿不到自由空间。"
+    },
+    {
+      id: "0160",
+      path: "lessons/0160-MaskFusion与CoFusion-实例级分割进场.html",
+      paper: "stage-h",
+      title: "MaskFusion 与 Co-Fusion：实例级分割进场",
+      subtitle: "从类别到第几个",
+      emoji: "🍵",
+      duration: "55 分钟",
+      tags: ["组课", "语义建图", "实例级"],
+      description: "组课，同一血脉的两篇。含实例与语义的并排对照图，以及一张用同一桌面两帧的掩码重叠度说明数据关联判据的图。"
+    },
+    {
+      id: "0161",
+      path: "lessons/0161-体素对象级-八叉树与EM关联.html",
+      paper: "stage-h",
+      title: "体素对象级：八叉树与 EM 关联",
+      subtitle: "自适应分辨率与概率关联",
+      emoji: "🧊",
+      duration: "55 分钟",
+      tags: ["组课", "语义建图", "体素"],
+      description: "组课。含一张八叉树自适应细分的对照图：左边均匀网格 16 格全存，右边八叉树只在有椅子的角往下切，顺带保住了空的地方即自由空间。"
+    },
+    {
+      id: "0162",
+      path: "lessons/0162-PanopticFusion-全景分割建图.html",
+      paper: "stage-h",
+      title: "PanopticFusion：stuff 与 things 一起建",
+      subtitle: "全景分割建图",
+      emoji: "🎨",
+      duration: "55 分钟",
+      tags: ["单篇", "语义建图", "全景"],
+      description: "单篇。含一张标签权重加减图：盯住同一格体素在四个时刻的标签权重，被看到就累加、被遮挡就衰减，但不删除——这就是「稳」与「能忘」的平衡。"
+    },
+    {
+      id: "0163",
+      path: "lessons/0163-Kimera与DSG-场景图的五层.html",
+      paper: "stage-h",
+      title: "Kimera 与 DSG：场景图的五层结构",
+      subtitle: "★ 全块最关键的一节",
+      emoji: "🏢",
+      duration: "70 分钟",
+      tags: ["单篇", "语义建图", "场景图", "重点"],
+      description: "本块最重要的一节。开课即说明：语料库里这个文件其实是 Kimera 主论文（IJRR 2021，含 DSG 五层与全家族模块），不是独立发表的 Kimera-Semantics 模块论文，文件名与年份都不符。含 DSG 五层房子图与 Kimera 家族模块数据流图。文内未提及 Kimera-Multi，本课不作前身断言。"
+    },
+    {
+      id: "0164",
+      path: "lessons/0164-SO-SLAM-对象级尺度与方向.html",
+      paper: "stage-h",
+      title: "SO-SLAM：对象级的尺度与方向",
+      subtitle: "椭球表示与一致性约束",
+      emoji: "📐",
+      duration: "50 分钟",
+      tags: ["单篇", "语义建图", "对象级"],
+      description: "单篇。含真实椅子外套半透明椭球的图，说明 9 个参数就能描述一个物体；并讲尺度比例与方向一致性两个约束怎么帮单目定方向。"
+    },
+    {
+      id: "0165",
+      path: "lessons/0165-YOLO-SLAM-轻量工程路线.html",
+      paper: "stage-h",
+      title: "YOLO-SLAM：轻量工程路线",
+      subtitle: "最容易被复现的一派",
+      emoji: "⚡",
+      duration: "50 分钟",
+      tags: ["单篇", "语义建图", "轻量"],
+      description: "单篇。含一张算力对照图：左边「只滤人点」只需一个检测器、无需 GPU；右边「给物体建模型」每帧要关联与融合、通常要显卡且掉到 2 至 5 Hz。选哪条取决于下游要不要知道那是什么。"
+    },
+    {
+      id: "0166",
+      path: "lessons/0166-对象SLAM关联框架-把数据关联做正.html",
+      paper: "stage-h",
+      title: "对象 SLAM 关联框架：把数据关联做正",
+      subtitle: "多判据汇总与物体参数化",
+      emoji: "🔗",
+      duration: "55 分钟",
+      tags: ["单篇", "语义建图", "数据关联"],
+      description: "单篇。含一张三种物体参数化对照图：立方体适合箱子、椭球适合椅子、圆柱适合柱子，各自的参数个数与换不来的代价都标了出来。说明为什么单靠 IoU 在遮挡与消失时会失效。"
+    },
+    {
+      id: "0167",
+      path: "lessons/0167-语义块的收束-语义怎么反过来帮定位.html",
+      paper: "stage-h",
+      title: "语义建图小结：语义怎么反过来帮定位",
+      subtitle: "闭环与表示全景",
+      emoji: "🔄",
+      duration: "50 分钟",
+      tags: ["收束", "语义建图", "小结"],
+      description: "语义块收束。含一张语义反哺定位的闭环图：分割、剔点、估计、回馈四个环节互相校正；以及一张四种地图表示对照图，用同一把椅子对比面元、体素、椭球、场景图各自能回答什么问题。"
+    },
+    {
+      id: "0168",
+      path: "lessons/0168-多机为什么难-假回环会毁掉两台地图.html",
+      paper: "stage-h",
+      title: "多机为什么难：假回环会毁掉两台地图",
+      subtitle: "多机块的地基",
+      emoji: "🔗",
+      duration: "65 分钟",
+      tags: ["组课", "多机协同", "鲁棒后端"],
+      description: "多机块的地基。单机一次假回环毁一张图，多机一次假回环会把两台机器人的地图一起缝歪。显式回链第七季 0140 的回环假阳性铁律。含两张地图被错误连线同时拉歪的图，以及一致集最大化的一堆候选卡片图。"
+    },
+    {
+      id: "0169",
+      path: "lessons/0169-中心化路线能做到多大-COVINS与LAMP2.html",
+      paper: "stage-h",
+      title: "中心化路线能做到多大",
+      subtitle: "COVINS 与 LAMP 2.0",
+      emoji: "🖥️",
+      duration: "60 分钟",
+      tags: ["组课", "多机协同", "中心化"],
+      description: "组课，两套中心化方案。讲清中心化为什么简单可靠、又为什么撞墙：含一张中央服务器被多台机器人连线、带宽水管成为瓶颈的图，以及渐进非凸把错误边逐步推开的弹簧连环画。"
+    },
+    {
+      id: "0170",
+      path: "lessons/0170-分布式激光-描述子当机间通用语言.html",
+      paper: "stage-h",
+      title: "分布式激光：描述子当机间通用语言",
+      subtitle: "ScanContext 到 LiDAR-Iris 到 DELIGHT",
+      emoji: "📡",
+      duration: "65 分钟",
+      tags: ["组课", "多机协同", "描述子"],
+      description: "组课，三篇分布式激光方案。显式回链第七季 0135 的 Scan Context。含两台机器人各自抽出极坐标格子图并对上的图、以及传原始点云撑爆带宽水管的对照图。"
+    },
+    {
+      id: "0171",
+      path: "lessons/0171-Kimera-Multi-分布式也能出语义网格.html",
+      paper: "stage-h",
+      title: "Kimera-Multi：分布式也能出语义网格",
+      subtitle: "D-GNC 与网格合并",
+      emoji: "🕸️",
+      duration: "60 分钟",
+      tags: ["单篇", "多机协同", "语义网格"],
+      description: "单篇。含一张 PCM 与 GNC 两代拒假回环思路的对照图：左边「要么全信要么全扔」，右边「逐步降低信任」，并标出各自属于哪些系统。注明 Kimera 主论文并未提及本文，不作前身断言。"
+    },
+    {
+      id: "0172",
+      path: "lessons/0172-Swarm-SLAM-去中心化与稀疏化.html",
+      paper: "stage-h",
+      title: "Swarm-SLAM：去中心化与稀疏化",
+      subtitle: "四性质与稀疏因子图",
+      emoji: "🐝",
+      duration: "55 分钟",
+      tags: ["单篇", "多机协同", "去中心化"],
+      description: "单篇。讲清可扩展、灵活、去中心化、稀疏这四个性质，以及去中心化与分布式这两个常被混用的词该怎么区分。"
+    },
+    {
+      id: "0173",
+      path: "lessons/0173-D2SLAM-空中集群的近场与远场.html",
+      paper: "stage-h",
+      title: "D²SLAM：空中集群的近场与远场",
+      subtitle: "距离决定算法",
+      emoji: "🚁",
+      duration: "60 分钟",
+      tags: ["单篇", "多机协同", "空中集群"],
+      description: "单篇。含两架无人机并排飞的图：近处要厘米级精度所以画了标尺，远处只要大方向对所以画虚线。标题里的 HTML 上标标签一律规范写成 D²SLAM 的 Unicode 形式。并说明 DiSCo-SLAM 与 D²SLAM 是两篇不同论文，靠作者与传感器区分。"
+    },
+    {
+      id: "0174",
+      path: "lessons/0174-替代路线-拓扑与量距.html",
+      paper: "stage-h",
+      title: "替代路线：拓扑与 UWB 量距",
+      subtitle: "绕过假回环这个难题",
+      emoji: "🗺️",
+      duration: "55 分钟",
+      tags: ["组课", "多机协同", "替代路线"],
+      description: "组课，两篇干脆绕开回环的方案：一篇只传拓扑所以通信量降 84 至 90 百分比，一篇用超宽带测距替代回环关联。如实说明 MR-TopoMap 是探索与拓扑框架，不是完整的协同 SLAM 后端。"
+    },
+    {
+      id: "0175",
+      path: "lessons/0175-事件相机是什么-先补物理机理.html",
+      paper: "stage-h",
+      title: "事件相机是什么：先补物理机理",
+      subtitle: "零基础铺垫课",
+      emoji: "📷",
+      duration: "60 分钟",
+      tags: ["概念", "事件相机", "物理机理"],
+      description: "全块最关键的概念课。事件相机输出的不是图像而是一串 (x, y, t, 极性) 四元组，没有绝对亮度、静止时什么都不输出。含五张图：输出对照、为什么没有绝对亮度、正负极性、静止桌子与挥动手臂的对照，以及回链第三季 0048 DSO 为何不能直接用光度误差。"
+    },
+    {
+      id: "0176",
+      path: "lessons/0176-纯事件路线-时间表面与对比度最大化.html",
+      paper: "stage-h",
+      title: "纯事件路线：时间表面与对比度最大化",
+      subtitle: "两条中间表示与两种目标",
+      emoji: "⏱️",
+      duration: "60 分钟",
+      tags: ["组课", "事件相机", "纯事件"],
+      description: "组课，三篇纯事件方案。含时间表面灰度图（刚变过的亮、很久没变的暗）与运动补偿前后对比图。明确说明 CMax-SLAM 只做旋转运动，不是完整六自由度 SLAM。"
+    },
+    {
+      id: "0177",
+      path: "lessons/0177-混合路线-事件加帧加深度加IMU.html",
+      paper: "stage-h",
+      title: "混合路线：事件加帧加深度加 IMU",
+      subtitle: "各有分工",
+      emoji: "🧩",
+      duration: "60 分钟",
+      tags: ["组课", "事件相机", "混合"],
+      description: "组课，四篇混合方案。讲清各自角色：双目与深度主要解决尺度，IMU 与标准帧主要解决静止退化与初始化。含事件与惯性互相校准的曲线图。如实说明 EventTracking 偏跟踪且依赖已有深度图。"
+    },
+    {
+      id: "0178",
+      path: "lessons/0178-事件双目VIO与全季收官.html",
+      paper: "stage-h",
+      title: "事件双目 VIO 与全季收官",
+      subtitle: "全季最后一节",
+      emoji: "🎬",
+      duration: "70 分钟",
+      tags: ["收官", "事件相机", "总收束"],
+      description: "全季最后一节。含逆深度射线随观测收窄的图、事件双目 VIO 的机载结果，以及一张收官图把四个块各自拆掉了哪个假设、还剩什么没解决列清楚。VECtor 数据集给出统一评测口径并暴露现有事件法仍弱。"
     },
     {
       id: "QA0002",
