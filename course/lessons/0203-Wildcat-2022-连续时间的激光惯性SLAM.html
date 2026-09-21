@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wildcat（2022）：连续时间的激光惯性 SLAM — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 K · 应用与相邻领域 / Lesson 0203（单篇 · SLAM）</div>
+      <h1>Wildcat（2022）：连续时间的激光惯性 SLAM</h1>
+      <p class="subtitle">第九季说过「Wild-Places 的真值由 Wildcat 自举生成，平均误差 0.3 m」。这一课第一次读 Wildcat 本身，来做一次跨越两季的对账 🔍</p>
+      <div class="hero-meta">
+        <span>🎯 主题：连续时间轨迹表示 ＋ 位姿图优化，做成在线的三维激光惯性 SLAM</span>
+        <span>🧭 位置：它就是系统链上「SLAM/里程计」这一环本身，并顺带产出「地图」</span>
+        <span>📅 2022 · <i>Wildcat: Online Continuous-Time 3D Lidar-Inertial SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a1">它在系统链的哪一环</a>
+        <a href="#b">先纠正清单：SE(2) 与稠密重建</a>
+        <a href="#c">一帧点云不是一个瞬间</a>
+        <a href="#d">连续时间：一条能求值的曲线</a>
+        <a href="#e">B 样条的三点直觉</a>
+        <a href="#f">在线：滑动窗口与位姿图</a>
+        <a href="#g">那 0.3 m 是怎么来的：63 个靶标</a>
+        <a href="#h">跨季对账：0.3 m 与 0.42 / 0.34 m</a>
+        <a href="#i">一个重要的反面：它不是全面最强</a>
+        <a href="#j">和前面课程怎么接</a>
+        <a href="#k">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清<b>连续时间</b>与<b>离散时间</b>的区别，并解释它为什么能消除激光雷达的<b>运动畸变</b>；② 对 B 样条说得出「三次、控制点、局部支撑」三句直觉，并知道<b>这几个词的术语级解释是补的、不是原文给的</b>；③ 讲清 Wildcat 的名字是怎么来的（连续时间里程计 ＋ 位姿图优化），以及「在线」付出了哪三笔代价；④ 说清它那 0.3 m 的<b>真实口径</b>——是 63 个测绘靶标的绝对误差，不是轨迹误差；⑤ 说出它<b>并不是全面最强</b>：单帧精度输给 LIO-SAM，赢在鲁棒性与全局一致性。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一课是第九季的<b>闭环课</b>。第九季 <a href="0184-WildPlaces-2023-自然场景的地点识别.html">0184</a> 写「Wild-Places 的真值由 <b>Wildcat SLAM 自举</b>生成，原文写明平均误差 <b>0.3 m</b>」——那一课是站在<b>数据集</b>的角度看真值，这一课第一次站在<b>SLAM 系统</b>的角度看那台「自举真值」的机器。它的滑窗优化与回环约束，建立在第二季讲的<b>位姿图与 BA</b>（<a href="0017-导览-第二季开场-打地基.html">0017</a> 起那一块）之上；它的竞争对手 LIO-SAM 与 FAST-LIO2，是第四季激光主干里的常客。它还跟同一季的 <a href="0183-Hilti-Oxford-2023-毫米级真值.html">0183</a> 形成对照：两篇都靠<b>布靶标</b>来给大场景造真值，只是靶标的密度和精度层级不同。最后，它和上一课 <a href="0202-RecSLAM-2022-算力不够就往上送.html">0202</a> 正好分工：一篇讲这一环的<b>计算该放哪</b>，一篇讲这一环的<b>算法怎么做</b>。</p>
+        </div>
+      </div>
+
+      <h2 id="a1">0. 它在系统链的哪一环</h2>
+
+      <p>上一课 <a href="0202-RecSLAM-2022-算力不够就往上送.html">0202</a> 那一篇只碰系统链第 ③ ④ 两环的「部署与融合」，用的是别人的 SLAM；这一篇<b>就是第 ③ 环本身</b>——它是一套完整的 3D 激光惯性 SLAM，从激光点云和 IMU 出发，自己估轨迹、自己建地图。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 250" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="250" fill="#0f1622"/>
+          <text x="450" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">0203 Wildcat：它就是第 ③ 环本身，并顺带产出第 ④ 环</text>
+
+          <rect x="20" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="145" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="270" y="52" width="110" height="96" rx="8" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="2.4"/>
+          <rect x="395" y="52" width="110" height="96" rx="8" fill="#16241f" stroke="#5ad1a8" stroke-width="1.4" stroke-dasharray="7 4"/>
+          <rect x="520" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="645" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="770" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+
+          <text x="75" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">① 传感器</text>
+          <text x="75" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">VLP-16 与 9 轴 IMU</text>
+          <text x="75" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">20 Hz 与 100 Hz</text>
+          <text x="75" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">只是输入来源</text>
+
+          <text x="200" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">② 感知/前端</text>
+          <text x="200" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">不做语义不做分割</text>
+          <text x="200" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">点云直接进面元</text>
+          <text x="200" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="325" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9fd8bd">③ SLAM/里程计</text>
+          <text x="325" y="96" text-anchor="middle" font-size="9" fill="#cfe0f7">连续时间轨迹 ＋ 面元</text>
+          <text x="325" y="116" text-anchor="middle" font-size="9" fill="#cfe0f7">滑窗优化 ＋ 位姿图</text>
+          <text x="325" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">★ 就是这一环本身</text>
+
+          <text x="450" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9fd8bd">④ 地图</text>
+          <text x="450" y="96" text-anchor="middle" font-size="9" fill="#cfe0f7">surfel 面元 ＋ submap</text>
+          <text x="450" y="116" text-anchor="middle" font-size="9" fill="#cfe0f7">6 秒一捆，每 5 秒一个</text>
+          <text x="450" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">★ 顺带产出</text>
+
+          <text x="575" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">⑤ 规划</text>
+          <text x="575" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">只把地图交出去</text>
+          <text x="575" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">自己不做规划</text>
+          <text x="575" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="700" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">⑥ 控制</text>
+          <text x="700" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">轨迹交给下游</text>
+          <text x="700" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">它不闭环控制</text>
+          <text x="700" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="825" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">⑦ 执行器</text>
+          <text x="825" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">电机与轮子</text>
+          <text x="825" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">它完全不碰</text>
+          <text x="825" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="20" y="176" font-size="11.5" fill="#8fb4d9">上游：3D 激光点云（VLP-16，20 Hz）与 IMU（100 Hz），不经任何感知模块</text>
+          <text x="880" y="176" text-anchor="end" font-size="11.5" fill="#8fb4d9">下游：导航、规划、控制</text>
+          <text x="20" y="204" font-size="11.5" fill="#cfe0f7">绿实线＝它的主战场；绿虚线＝它顺带产出的东西。其余五格全部涂灰，一格都不碰。</text>
+          <text x="20" y="232" font-size="11.5" fill="#5ad1a8">输出是 6 自由度轨迹 ＋ 全局一致的面元与子图地图，submap 最大约 500 KB。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>七环系统链一字排开。第 ③ 格（SLAM/里程计）用<b>实线绿框</b>高亮，因为那就是它本身；第 ④ 格（地图）用<b>虚线绿框</b>，表示它是顺带产出的；其余五格全部涂灰。每格下面写着它在这一格上的态度。<br>
+          <b>怎么看这张图：</b>① 先注意<b>第 ② 格也是灰的</b>——这一篇没有语义感知、没有分割，激光点云直接从第 ① 格进到第 ③ 格；② 看第 ③ 格里的三行字：连续时间轨迹、面元匹配、滑窗优化加位姿图，这就是全篇的技术内容；③ 看第 ④ 格：它的地图产物是 <b>surfel（面元）加 submap（子图）</b>，不是点云也不是体素占据栅格，这个选择会在第 5 节解释；④ 最后看最下面两行：上游是两种传感器数据，下游是「导航、规划、控制」——<b>它只把轨迹和地图交出去，自己不消费它们。</b><br>
+          <b>要记住的一句话：</b>上一篇 RecSLAM 是「SLAM 该跑在哪」，这一篇是「SLAM 该怎么做」——<b>同一环，两种完全不同的问法。</b>
+        </figcaption>
+      </figure>
+
+      <p>它和同一环里的其他系统比，特殊在哪？看它的名字就知道：<b>Wildcat: Online Continuous-Time 3D Lidar-Inertial SLAM。</b>拆成四个词看：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:24%;">名字里的词</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">它承诺了什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>Online</b>（在线）</td><td style="padding:.45rem;border:1px solid #cfd9e6;">不攒数据离线批优化。里程计以<b>滑动窗口</b>逐窗处理，窗内处理完<b>立刻</b>吐出子图交给位姿图</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>Continuous-Time</b>（连续时间）</td><td style="padding:.45rem;border:1px solid #cfd9e6;">轨迹被存成<b>一条连续曲线</b>，任意时刻都能求值。这是它最核心的技术主张，第 3、4 节专讲</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>3D</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">三维的。这一条会在下一节变成一个重要的纠错点</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>Lidar-Inertial</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">激光加惯性，两种传感器紧耦合在同一个优化里</td></tr>
+        </tbody>
+      </table>
+
+      <p>它由<b>两个模块</b>组成：一个是实时激光惯性<b>里程计</b>（连续时间轨迹表示），一个是<b>位姿图优化</b>（PGO）。原文的另一句话值得单独记住：<b>同一套代码同时支持单机与多机</b>——多机时去中心化，各机点对点交换子图，然后各自独立优化同一张位姿图。这也是它后来能出现在 DARPA 地下挑战赛（粉尘、烟雾等感知退化环境）上的原因。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/2f6a549cac90f623c29092d79b7cc362bd655a6f025410f67f781ac7661de37c.jpg" alt="Wildcat consists of two major modules">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Wildcat consists of two major modules: Wildcat odometry in which IMU and lidar measurements are integrated in a sliding window fashion to continuously estimate the robot trajectory and produce submaps for pose-graph optimisation; Pose-graph optimisation where submaps are used to generate odometry edges as well as loop closures to efficiently map large-scale environments while correcting the accumulated drift.（Wildcat 由两个主要模块组成：Wildcat 里程计，以滑动窗口的方式融合 IMU 与激光测量，连续地估计机器人轨迹并产出用于位姿图优化的子图；位姿图优化，用子图生成里程计边以及回环，从而高效地测绘大规模环境并纠正累积漂移。）<br>
+          <b>怎么看这张图：</b>① 把图分成左右两半：<b>左边是里程计（odometry）、右边是位姿图优化（PGO）</b>，这就是全篇的骨干；② 盯住它们之间那条连接的箭头——传过去的东西是 <b>submap（子图）</b>，而不是原始点云；③ 再看右边的两类边：<b>odometry edges（里程计边）</b>把相邻子图连起来，<b>loop closure（回环）</b>把不挨着的子图连起来，这正是第二季讲过的位姿图结构；④ 注意左边那一行「sliding window」：这是「在线」的实现方式，也是它必须付出代价的地方。<br>
+          <b>要记住的一句话：</b>整篇文章可以用一句话概括：<b>用连续时间把里程计做稳，再用位姿图把漂移拉回来。</b>
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">1. 先纠正清单：「SE(2)」与「稠密重建」都不是论文写的</h2>
+
+      <p>导览课 <a href="0199-导览-第十一季开场-SLAM站在系统的哪一环.html">0199</a> 立过一句口号：<b>看位置之前，先看清这篇到底是什么。</b>上一课我们已经用它抓到一个「文件名截断」造成的误读。这一课要抓的是另一种：<b>清单替论文说了一句它没说过的话。</b></p>
+
+      <h3>清单说了什么</h3>
+
+      <p>有一份清单在备注里这样写 Wildcat：「<b>用 SE(2) 相对位姿做稠密重建，几何味较重</b>」。这里有三处需要核对：SE(2)、相对位姿、稠密重建。</p>
+
+      <h3>论文里实际写了什么</h3>
+
+      <p>逐词实测的结果是这样的：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:30%;">清单的说法</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">正文实测</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>用 SE(2)</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>SE(2) 在正文里出现 0 次。</b>出现的是 SE(3)、SO(3)、so(3)——这些只在记号说明、公式与一处脚注里露面</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>做稠密重建</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>正文没有「稠密重建」这个说法。</b>全篇唯一一次出现 dense，是在讲「地图点在该靶标中心附近<b>不够密</b>」——恰恰是在说某处不够稠密</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>产物是重建结果</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">产物是 <b>surfel（面元）＋ submap（子图）</b>，一个给定位用的地图表示，不是重建网格</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>★ 这一课的处理纪律</h4>
+        <p><b>这是清单的说法，不是论文写的。</b>写这一课的时候，我们<b>不为它补话</b>——不去替论文解释「它其实也想用 SE(2)」，也不去替它圆「稠密重建大概是这个意思」。<b>论文说的是 SE(3)，我们就写 SE(3)。</b>这条纪律本身比这次纠错更重要：<b>当一个二手描述和一手正文冲突时，永远以正文为准，并且当场说明冲突在哪。</b>这是本项目在前十季已经抓到二十处的同一类问题，本课是第二十一处。</p>
+      </div>
+
+      <h3>顺手把 SE(2) 与 SE(3) 的区别讲清</h3>
+
+      <p>这两个名词的差别其实很好懂，就是<b>「平面」还是「空间」</b>：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>SE(2)：平面上的刚体运动</h4>
+          <p><b>3 个自由度</b>——横坐标 x、纵坐标 y、以及绕竖直轴的转角 θ。它描述的是<b>一张纸上的一枚棋子</b>：怎么平移、怎么原地转，但永远贴着桌面。</p>
+          <p>用它的典型场景是<b>室内平面导航</b>：扫地机器人、AGV。地图是一张二维栅格，只要 x、y、θ 就够用了。</p>
+        </div>
+        <div class="mini-card">
+          <h4>SE(3)：空间里的刚体运动</h4>
+          <p><b>6 个自由度</b>——三个平移（x、y、z）加三个旋转（roll、pitch、yaw）。它描述的是<b>空中的一个盒子</b>：可以翻、可以仰、可以在任意高度。</p>
+          <p>用它的典型场景是<b>三维测绘</b>：手持或车载的激光雷达在多层建筑、隧道、楼梯之间穿行，地图必须能表达竖直的墙面与不同高度的楼层。</p>
+        </div>
+      </div>
+
+      <p>那<b>为什么这一篇不需要 SE(2)？</b>有两条正文里找得到的理由：</p>
+
+      <ul>
+        <li><b>场景本身是三维的。</b>它的实验场地 QCAT 包含<b>三层楼梯与隧道</b>，地图必须表达竖直墙面。如果位姿被限制在平面 SE(2) 里，楼梯和上下层就没法表达。</li>
+        <li><b>它的位姿图专门加了重力方向约束。</b>原文在位姿图里额外加了一项，把每个节点的「局部竖直方向」对到世界坐标系的竖直轴上（论文里记作 $[0\ 0\ 1]^\top$）。<b>这一项存在的意义就是让姿态在三维里不跑偏</b>——平面表示根本不需要这一项。</li>
+      </ul>
+
+      <p>另外，它的面元匹配代价函数是<b>三维的 point-to-plane</b> 型，需要三维法向量——这也只有 SE(3) 才谈得上。</p>
+
+      <p>那「SE(2)」这个说法可能是从哪里误会来的？精读给了一个很合理的猜测：<b>它用协方差矩阵的最小特征值来判断一个面元「平不平」</b>——特征值差得越大，这个面元越平整。但那是<b>面元自己的局部几何</b>（一个面子平不平），<b>不是位姿被表示成平面运动</b>。两件事名字里都带「平面」，很容易串在一起。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>有一份清单说 Wildcat「用 SE(2) 相对位姿做稠密重建」。这个说法成立吗？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。正文里 SE(2) 出现 0 次，出现的只有 SE(3)、SO(3)、so(3)；正文也没有「稠密重建」这个说法，唯一一次 dense 说的是某处地图点不够密。它的产物是 surfel 面元加 submap 子图。所以这是清单的说法，不是论文写的，我们不为它补话。" onclick="lessonKit.answer(this,'q0203a')">不成立，正文用的是 SE(3)</button>
+          <button data-correct="no" data-explanation="不成立。这是一处二手描述与一手正文冲突的情况：SE(2) 在正文里出现 0 次（出现的是 SE(3)/SO(3)/so(3)），「稠密重建」这个说法也不存在。它的场景含三层楼梯与隧道，位姿图还专门加了重力方向约束，根本不可能退回平面表示。" onclick="lessonKit.answer(this,'q0203a')">成立，正文确实在用它</button>
+        </div>
+        <div class="quiz-feedback" id="q0203a"></div>
+      </div>
+    </section>
+    <section class="section-card">
+      <h2 id="c">2. 一帧点云不是一个瞬间：运动畸变</h2>
+
+      <p>要理解连续时间，得先把一个非常容易被忽略的事实讲清楚：<b>激光雷达的「一帧」不是一个瞬间，而是一段时间。</b></p>
+
+      <p>先打个生活里的比方。你用手机拍一张全景照片，如果是一边慢慢转身一边拍，只要转得足够稳，照片里的栏杆还是直的；但如果你转得快一点，<b>直的栏杆就会被拍成弯的</b>——因为照片是分很多小段、在不同的时刻拼起来的，每一小段记录的是「你当时朝哪边」。激光雷达的一圈扫描完全一样：它靠一个旋转的激光束逐点测距，<b>转一圈需要时间</b>，所以一帧点云里的每个点，采样的瞬间都不一样。</p>
+
+      <p>如果机器人在这一圈里保持不动，这不是问题。但它在动——而且可能转得很快。<b>结果就是：每一帧点云的各个点，是按「机器人当时不同的位姿」测出来的，可我们在处理时却习惯把它们全归到「这一帧的某一个位姿」上。</b>这个错配造成的形状扭曲，就叫<b>运动畸变</b>（motion distortion，有时也叫点云畸变）。</p>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>★ 和第四季怎么接</h4>
+        <p>第四季讲激光主干时，运动畸变是绕不过去的一课：<b>一帧点云是「跨时间采集」的，不是瞬时快照。</b>当时的常规解法叫「去畸变」——用 IMU 或匀速运动模型，把每个点<b>推回</b>某一个统一的时刻，或者估计出每个点的相对位移再补偿掉。那是一套「事后把点挪一挪」的思路。</p>
+        <p>这一篇换了一条路：<b>它不去纠正点，而是让位姿在任意时刻都能求值。</b>点不用挪——每个点直接去问曲线「在我被采到的那一刻，机器人在哪」。<b>这就是第四季铺了很久、到这里终于给出解法的那个问题。</b></p>
+      </div>
+
+      <p>为什么这个区别很重要？因为「事后挪点」有个前提：你得先知道机器人在这一圈里是怎么动的。而如果你已经在跑一个「一帧一个位姿」的里程计，那这个信息本来就不够——你只有两个快照，中间那段是空白的。<b>连续时间把这段空白直接变成了「可以问的」。</b></p>
+
+      <p>先看一眼它要对付的是什么级别的环境——这一篇的动机图很好地说明了「为什么这件事难」：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/dc37193c5a8172ac43eb16c7f331a2439ec57f8d3137dfb81a2ab297dc0243e2.jpg" alt="Top: Wildcat can map large-scale environments. Bottom: close-up views from challenging areas">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Top: Wildcat can map large-scale environments, including various types of structured and unstructured areas indoors and outdoors. Bottom: Two close-up views from the challenging areas where the state-of-the-art systems struggle to converge (see Sec. VI-D).（上：Wildcat 能够测绘大规模环境，包括室内外各种结构化与非结构化区域。下：两张来自困难区域的特写，在那里当时最先进的系统难以收敛。）<br>
+          <b>怎么看这张图：</b>① 上半部分是<b>一张拼起来的地图</b>，你能看出它同时包含规整的室内空间（有直线墙、有走廊）和不规整的室外场地；② 下半部分那两张特写是要点：<b>那是当时最先进的方法都会「跑不下去」的地方</b>，正文后面点名说是隧道；③ 把这张图和后面的动态联系起来记：<b>场地越大、越狭长、越缺少可用于定位的几何特征，位姿估计就越容易在某个方向失去约束</b>；④ 这张图也在暗示一件事：这类场景往往<b>拿不到轨迹真值</b>，因为室内外连成一片、没法在整条轨迹上布置外部定位系统。<br>
+          <b>要记住的一句话：</b>这篇论文要对付的不是「理想实验室环境」，<b>而是连最先进方法都跑不完的大尺度室内外混合场景</b>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">3. 连续时间：一条能求值的曲线</h2>
+
+      <p>下面就来看它给的解法。先把两种思路并排画出来——这是这一课最核心的一张图。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 570" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="570" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e8eef7">一帧点云不是一个瞬间：离散表示把它全归到一帧，连续表示让每个点各归各位</text>
+
+          <rect x="20" y="44" width="420" height="256" rx="9" fill="#141c26" stroke="#c65c47" stroke-width="1.5"/>
+          <text x="235" y="68" text-anchor="middle" font-size="12.5" font-weight="700" fill="#f0a08c">① 离散时间：整圈点都算在同一个位姿上</text>
+          <text x="250" y="100" font-size="8" fill="#4f9dff">同一根激光束</text>
+          <text x="40" y="110" font-size="9" fill="#8fb4d9">黄色虚线＝真实墙面</text>
+          <text x="40" y="132" font-size="9" fill="#f0a08c">红线＝按同一帧位姿算出来的墙</text>
+          <text x="40" y="152" font-size="9" fill="#8fb4d9">箭头＝旋转方向</text>
+          <text x="40" y="236" font-size="9" fill="#8fb4d9">t 从 0 到 0.2 s 之间转过的角度</text>
+          <text x="40" y="266" font-size="9" fill="#f0a08c">墙被画成了锯齿，这就是运动畸变</text>
+          <text x="250" y="278" font-size="8" fill="#4f9dff">落在墙的不同位置</text>
+          <line x1="350" y1="92" x2="350" y2="284" stroke="#8fb4d9" stroke-width="4"/>
+          <line x1="350" y1="92" x2="350" y2="284" stroke="#e8d57a" stroke-width="1.2" stroke-dasharray="6 4"/>
+          <polyline points="336,92 364,128 334,166 366,204 336,242 362,284" fill="none" stroke="#f0705c" stroke-width="3"/>
+          <line x1="160" y1="180" x2="350" y2="120" stroke="#4f9dff" stroke-width="1.4"/>
+          <line x1="160" y1="180" x2="350" y2="190" stroke="#4f9dff" stroke-width="1.4"/>
+          <line x1="160" y1="180" x2="350" y2="262" stroke="#4f9dff" stroke-width="1.4"/>
+          <path d="M112,166 A52,52 0 0 1 190,152" fill="none" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="194,151 183,147 185,157" fill="#e8d57a"/>
+          <rect x="118" y="176" width="66" height="32" rx="6" fill="#233046" stroke="#cfe0f7" stroke-width="1.3"/>
+          <text x="151" y="197" text-anchor="middle" font-size="9" fill="#cfe0f7">小车</text>
+          <circle cx="134" cy="212" r="6" fill="#4a5566"/>
+          <circle cx="168" cy="212" r="6" fill="#4a5566"/>
+
+          <rect x="460" y="44" width="420" height="256" rx="9" fill="#141c26" stroke="#5ad1a8" stroke-width="1.5"/>
+          <text x="670" y="68" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9fd8bd">② 连续时间：每个点各归各的时刻</text>
+          <text x="690" y="100" font-size="8" fill="#4f9dff">同一根激光束</text>
+          <text x="480" y="110" font-size="9" fill="#8fb4d9">同一个房间，同样的快速旋转</text>
+          <text x="480" y="132" font-size="9" fill="#5ad1a8">每个点各自去曲线上取自己的时刻</text>
+          <text x="480" y="152" font-size="9" fill="#8fb4d9">曲线能回答任意时刻</text>
+          <text x="650" y="150" font-size="9" fill="#4f9dff">按各自的采集时刻归位</text>
+          <text x="480" y="236" font-size="9" fill="#8fb4d9">同一段旋转，同样的点云</text>
+          <text x="480" y="266" font-size="9" fill="#9fd8bd">墙还原成一条直线，畸变从根上消失</text>
+          <text x="690" y="278" font-size="8" fill="#4f9dff">点各归各位</text>
+          <line x1="790" y1="92" x2="790" y2="284" stroke="#8fb4d9" stroke-width="4"/>
+          <line x1="790" y1="92" x2="790" y2="284" stroke="#5ad1a8" stroke-width="3"/>
+          <line x1="600" y1="180" x2="790" y2="120" stroke="#4f9dff" stroke-width="1.4"/>
+          <line x1="600" y1="180" x2="790" y2="190" stroke="#4f9dff" stroke-width="1.4"/>
+          <line x1="600" y1="180" x2="790" y2="262" stroke="#4f9dff" stroke-width="1.4"/>
+          <path d="M552,166 A52,52 0 0 1 630,152" fill="none" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="634,151 623,147 625,157" fill="#e8d57a"/>
+          <rect x="558" y="176" width="66" height="32" rx="6" fill="#233046" stroke="#cfe0f7" stroke-width="1.3"/>
+          <text x="591" y="197" text-anchor="middle" font-size="9" fill="#cfe0f7">小车</text>
+          <circle cx="574" cy="212" r="6" fill="#4a5566"/>
+          <circle cx="608" cy="212" r="6" fill="#4a5566"/>
+
+          <rect x="20" y="318" width="860" height="176" rx="9" fill="#141c26" stroke="#4a5566" stroke-width="1.4"/>
+          <text x="450" y="340" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">③ 时间轴：IMU 每秒 100 次，采样位姿少一个数量级</text>
+          <text x="40" y="360" font-size="9" fill="#8fb4d9">纵轴：机器人转角</text>
+          <text x="860" y="360" text-anchor="end" font-size="9" fill="#8fb4d9">横轴：时间</text>
+          <text x="150" y="406" font-size="8.5" fill="#8fb4d9">密排的小圆点＝IMU 采样</text>
+          <text x="600" y="406" font-size="8.5" fill="#e8d57a">大方块＝采样位姿（控制点）</text>
+          <text x="860" y="406" text-anchor="end" font-size="8.5" fill="#6b7d94">采样位姿数比窗内 IMU 数少一个数量级</text>
+          <polyline points="110.0,468.0 113.8,467.0 118.2,465.8 123.1,464.3 128.5,462.6 134.3,460.8 140.5,458.8 147.1,456.6 154.1,454.4 161.3,452.1 168.8,449.7 176.5,447.3 184.4,445.0 192.4,442.7 200.6,440.5 208.8,438.3 217.0,436.3 225.3,434.4 233.5,432.8 241.7,431.3 249.7,430.0 257.6,429.1 265.3,428.4 272.8,428.0 280.0,428.0 280.0,428.0 287.1,428.4 294.2,429.2 301.2,430.5 308.3,432.1 315.4,434.0 322.5,436.2 329.6,438.6 336.7,441.2 343.8,443.9 350.8,446.8 357.9,449.8 365.0,452.8 372.1,455.7 379.2,458.6 386.2,461.5 393.3,464.1 400.4,466.7 407.5,469.0 414.6,471.0 421.7,472.8 428.8,474.2 435.8,475.2 442.9,475.8 450.0,476.0 450.0,476.0 457.1,475.7 464.1,474.9 471.2,473.7 478.2,472.1 485.2,470.2 492.3,468.0 499.3,465.5 506.3,462.8 513.3,460.0 520.3,457.0 527.3,453.9 534.4,450.8 541.4,447.6 548.5,444.5 555.5,441.4 562.6,438.5 569.7,435.7 576.8,433.2 583.9,430.8 591.1,428.7 598.3,427.0 605.5,425.6 612.7,424.6 620.0,424.0 620.0,424.0 627.5,423.8 635.2,424.0 643.3,424.5 651.5,425.3 659.9,426.4 668.5,427.7 677.2,429.1 685.9,430.8 694.7,432.6 703.4,434.6 712.1,436.6 720.6,438.8 729.0,440.9 737.3,443.1 745.2,445.3 753.0,447.4 760.4,449.5 767.4,451.5 774.1,453.3 780.3,455.1 786.0,456.6 791.3,458.0 795.9,459.1 800.0,460.0" fill="none" stroke="#5ad1a8" stroke-width="2.5"/>
+          <circle cx="110.0" cy="468.0" r="2" fill="#8fb4d9"/> <circle cx="118.2" cy="465.8" r="2" fill="#8fb4d9"/> <circle cx="128.5" cy="462.6" r="2" fill="#8fb4d9"/> <circle cx="140.5" cy="458.8" r="2" fill="#8fb4d9"/> <circle cx="147.1" cy="456.6" r="2" fill="#8fb4d9"/> <circle cx="161.3" cy="452.1" r="2" fill="#8fb4d9"/> <circle cx="176.5" cy="447.3" r="2" fill="#8fb4d9"/> <circle cx="192.4" cy="442.7" r="2" fill="#8fb4d9"/> <circle cx="208.8" cy="438.3" r="2" fill="#8fb4d9"/> <circle cx="217.0" cy="436.3" r="2" fill="#8fb4d9"/> <circle cx="233.5" cy="432.8" r="2" fill="#8fb4d9"/> <circle cx="249.7" cy="430.0" r="2" fill="#8fb4d9"/> <circle cx="265.3" cy="428.4" r="2" fill="#8fb4d9"/> <circle cx="280.0" cy="428.0" r="2" fill="#8fb4d9"/> <circle cx="287.1" cy="428.4" r="2" fill="#8fb4d9"/> <circle cx="301.2" cy="430.5" r="2" fill="#8fb4d9"/> <circle cx="308.3" cy="432.1" r="2" fill="#8fb4d9"/> <circle cx="322.5" cy="436.2" r="2" fill="#8fb4d9"/> <circle cx="336.7" cy="441.2" r="2" fill="#8fb4d9"/> <circle cx="350.8" cy="446.8" r="2" fill="#8fb4d9"/> <circle cx="365.0" cy="452.8" r="2" fill="#8fb4d9"/> <circle cx="372.1" cy="455.7" r="2" fill="#8fb4d9"/> <circle cx="386.2" cy="461.5" r="2" fill="#8fb4d9"/> <circle cx="400.4" cy="466.7" r="2" fill="#8fb4d9"/> <circle cx="414.6" cy="471.0" r="2" fill="#8fb4d9"/> <circle cx="428.8" cy="474.2" r="2" fill="#8fb4d9"/> <circle cx="442.9" cy="475.8" r="2" fill="#8fb4d9"/> <circle cx="450.0" cy="476.0" r="2" fill="#8fb4d9"/> <circle cx="457.1" cy="475.7" r="2" fill="#8fb4d9"/> <circle cx="471.2" cy="473.7" r="2" fill="#8fb4d9"/> <circle cx="485.2" cy="470.2" r="2" fill="#8fb4d9"/> <circle cx="499.3" cy="465.5" r="2" fill="#8fb4d9"/> <circle cx="513.3" cy="460.0" r="2" fill="#8fb4d9"/> <circle cx="520.3" cy="457.0" r="2" fill="#8fb4d9"/> <circle cx="534.4" cy="450.8" r="2" fill="#8fb4d9"/> <circle cx="548.5" cy="444.5" r="2" fill="#8fb4d9"/> <circle cx="562.6" cy="438.5" r="2" fill="#8fb4d9"/> <circle cx="576.8" cy="433.2" r="2" fill="#8fb4d9"/> <circle cx="591.1" cy="428.7" r="2" fill="#8fb4d9"/> <circle cx="605.5" cy="425.6" r="2" fill="#8fb4d9"/> <circle cx="612.7" cy="424.6" r="2" fill="#8fb4d9"/> <circle cx="620.0" cy="424.0" r="2" fill="#8fb4d9"/> <circle cx="635.2" cy="424.0" r="2" fill="#8fb4d9"/> <circle cx="651.5" cy="425.3" r="2" fill="#8fb4d9"/> <circle cx="668.5" cy="427.7" r="2" fill="#8fb4d9"/> <circle cx="677.2" cy="429.1" r="2" fill="#8fb4d9"/> <circle cx="694.7" cy="432.6" r="2" fill="#8fb4d9"/> <circle cx="712.1" cy="436.6" r="2" fill="#8fb4d9"/> <circle cx="729.0" cy="440.9" r="2" fill="#8fb4d9"/> <circle cx="745.2" cy="445.3" r="2" fill="#8fb4d9"/> <circle cx="760.4" cy="449.5" r="2" fill="#8fb4d9"/> <circle cx="774.1" cy="453.3" r="2" fill="#8fb4d9"/> <circle cx="780.3" cy="455.1" r="2" fill="#8fb4d9"/> <circle cx="791.3" cy="458.0" r="2" fill="#8fb4d9"/> <circle cx="800.0" cy="460.0" r="2" fill="#8fb4d9"/>
+          <rect x="104.5" y="462.5" width="11" height="11" fill="#e8d57a" stroke="#0f1622" stroke-width="1"/>
+          <rect x="274.5" y="422.5" width="11" height="11" fill="#e8d57a" stroke="#0f1622" stroke-width="1"/>
+          <rect x="444.5" y="470.5" width="11" height="11" fill="#e8d57a" stroke="#0f1622" stroke-width="1"/>
+          <rect x="614.5" y="418.5" width="11" height="11" fill="#e8d57a" stroke="#0f1622" stroke-width="1"/>
+          <rect x="794.5" y="454.5" width="11" height="11" fill="#e8d57a" stroke="#0f1622" stroke-width="1"/>
+          <text x="450" y="490" text-anchor="middle" font-size="8.5" fill="#8fb4d9">两个方块之间的任意时刻，曲线都能给出位姿</text>
+          <text x="450" y="506" text-anchor="middle" font-size="8.5" fill="#6b7d94">窗口 W_k 就是一整段这样的时间</text>
+
+          <text x="20" y="522" font-size="11" fill="#f0a08c">左边：整圈点被贴到同一个位姿上，墙面被算成了锯齿，这就是运动畸变。</text>
+          <text x="20" y="546" font-size="11" fill="#9fd8bd">右边：每个点用自己的采集时刻去曲线上取位姿，点各归各位，畸变从根上被消除。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格和右格是同一个房间。小车在原地快速旋转，车顶上有一根激光束扫向右侧的墙（灰色粗线）。<b>左格</b>里，整圈点被贴到同一个位姿上，算出来的墙是红色的锯齿线，而真实墙面是穿在里面的黄色虚线；<b>右格</b>里，每个点各自去曲线上取自己被采集那一刻的位姿，算出来的墙（绿线）和真实墙面重合了。最下面整条是时间轴：密排的小圆点代表 IMU 采样（每秒 100 次），稀疏的大方块代表被优化的采样位姿（数量少一个数量级），绿色曲线就是把它们串起来的连续轨迹。<br>
+          <b>怎么看这张图：</b>① 先对比左格那两条线：<b>红锯齿与黄虚线</b>——锯齿就是畸变的形状，它的振幅取决于小车在这段时间里转了多少；② 再看右格：两条线几乎叠在一起，说明畸变消失了，而<b>取消畸变靠的不是把点挪走，而是让位姿能按时刻查询</b>；③ 注意两格里那段黄色箭头弧线：那是小车的旋转，也是畸变的唯一来源——<b>转得越快、一圈扫得越久，畸变越明显</b>；④ 最后看时间轴：绿色曲线穿过每一个大方块，并能给出任意中间时刻的值——这就是「连续」两个字的全部意思。<br>
+          <b>要记住的一句话：</b>运动畸变的根子是「一帧点云跨了一段时间」；<b>连续时间不修点，它让位姿变成可以按时刻查询的函数。</b>
+        </figcaption>
+      </figure>
+
+      <p>原文把这件事写成了一句话：它的连续时间轨迹估计记作 $\hat{\mathbf{T}}_{\mathrm{sp}} : \mathcal{W}_k \to \mathrm{SE}(3)$，意思是「在时间窗口 $\mathcal{W}_k$ 里的任意时刻，都能给出一个 SE(3) 的位姿」。$t$ 取任何值，$\hat{\mathbf{T}}_{\mathrm{sp}}(t)$ 都有定义——这就是它和「一串位姿快照」的全部差别。</p>
+
+      <p>连续时间还顺手解决了第二个麻烦：<b>IMU 和激光雷达的时间戳根本对不齐。</b>SpinningPack 上的 VLP-16 是 20 Hz，IMU 是 100 Hz——两者的采样时刻互不重合。如果轨迹是离散的，你要么得把 IMU 插值到激光时刻，要么反过来；而<b>曲线同时是两者的公共时间坐标</b>：任何一个 IMU 时刻、任何一个点的时间戳，都能直接去曲线上取值。原文在描述这一机制时用的词是「cubic B-spline interpolation」（三次 B 样条插值）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/5c2a60d6da8c61075618fd6bdee18e0a0ba011c3a74fda24db966c2f5c2ef23c.jpg" alt="Continuous-Time optimisation framework in Wildcat">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Continuous-Time optimisation framework in Wildcat. Local Optimisation is based on multiple cost terms mainly from IMU measurements and surfel correspondences. Local optimisation estimates a set of discrete poses (Update Sample Poses), then in B-spline Interpolations, by fitting a cubic B-spline over the corrected samples and the robot poses obtained from the IMU poses at the sample times, the robot poses (Update IMU Poses) are updated at a high temporal resolution. This process is repeated iteratively to obtain an accurate estimate of robot trajectory and remove distortion from the surfel map.（Wildcat 的连续时间优化框架。局部优化基于多个代价项，主要来自 IMU 测量与面元对应关系。局部优化先估出一组离散位姿（更新采样位姿），接着在 B 样条插值这一步，用一条三次 B 样条去拟合修正后的采样位姿、以及在采样时刻由 IMU 位姿得到的机器人位姿，从而以很高的时间分辨率更新机器人位姿（更新 IMU 位姿）。这个过程反复迭代，以得到准确的机器人轨迹估计，并消除面元地图里的畸变。）<br>
+          <b>怎么看这张图：</b>① 按箭头走一遍环路：<b>Local Optimisation（局部优化）→ Update Sample Poses（更新采样位姿）→ B-spline Interpolations（B 样条插值）→ Update IMU Poses（更新 IMU 位姿）→ 回到局部优化</b>；② 盯住两处措辞：优化出来的是<b>离散的采样位姿</b>，但插值之后得到的是<b>高时间分辨率的位姿</b>——「离散优化、连续输出」就是这张图要表达的；③ 注意环路最后那句「remove distortion from the surfel map」：<b>去畸变是写在这个循环的输出里的</b>，也就是说它不是一个单独的预处理步骤，而是和优化交织在一起的；④ 图的左边那些代价项来自 IMU 与面元对应，第 5 节会展开。<br>
+          <b>要记住的一句话：</b>Wildcat 的做法是<b>「用少量的离散位姿做优化，用一条连续曲线把结果铺满整段时间」</b>——优化保持轻量，轨迹保持连续。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">4. B 样条的三点直觉</h2>
+
+      <p>说了半天「曲线」，它到底是什么曲线？答案是<b>三次 B 样条</b>。这一节只讲三点直觉，不讲数学。</p>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>★★ 先说清楚哪些是原文给的、哪些是补的</h4>
+        <p><b>原文给的：</b>它明确说了用 <b>cubic B-spline</b>（三次 B 样条）——相关词出现在 Related Work、Fig. 3 的图注、以及优化流程的第二步里。</p>
+        <p><b>原文没有给的：</b><b>正文没有给出任何 B 样条公式</b>，也<b>从未出现「控制点」「节点」「阶数」这几个术语</b>。下面这张图和这三句直觉里的术语级解释（次数、阶数、局部支撑），<b>是标准教材里的说法，是我们补的，不能当作原文引用</b>。「采样位姿充当控制点」这一层意思可以从原文流程推出（它把若干个等距采样时刻的位姿当作待优化的变量），但那个词是补的。</p>
+      </div>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e8eef7">B 样条的一维直觉：拖一个控制点，只影响附近一段</text>
+          <text x="20" y="50" font-size="11" fill="#8fb4d9">横轴是控制点序号，纵轴是任意一个被插值的量（比如 x 坐标）。曲线上的每个点都是用基函数算出来的</text>
+          <text x="700" y="120" font-size="9" fill="#6b7d94">灰色虚线：拖动前的曲线</text>
+          <text x="700" y="142" font-size="9" fill="#5ad1a8">绿色实线：拖动后的曲线</text>
+          <text x="700" y="166" font-size="9" fill="#8fb4d9">改动一个控制点</text>
+          <text x="20" y="72" font-size="10" fill="#6b7d94">纵轴：被插值的量（仅示意）</text>
+          <text x="20" y="96" font-size="10" fill="#9fd8bd">改一个控制点 → 只动 4 段 → 雅可比稀疏 → 算得动</text>
+          <text x="455" y="140" text-anchor="middle" font-size="9.5" fill="#e8d57a">淡黄色区域 = 局部支撑范围</text>
+          <rect x="298" y="150" width="310" height="216" fill="#e8d57a" opacity="0.07"/>
+          <polyline points="90.0,300.0 180.0,215.0 275.0,292.0 365.0,185.0 450.0,272.0 540.0,160.0 632.0,248.0 722.0,190.0 800.0,262.0" fill="none" stroke="#4a5566" stroke-width="1.2" stroke-dasharray="5 4"/>
+          <polyline points="180.8,242.0 183.9,242.0 187.0,242.1 190.1,242.4 193.2,242.8 196.3,243.3 199.4,244.0 202.5,244.7 205.6,245.6 208.8,246.5 211.9,247.5 215.0,248.6 218.1,249.7 221.3,250.8 224.4,251.9 227.5,253.0 230.6,254.2 233.7,255.3 236.9,256.3 240.0,257.3 243.1,258.2 246.2,259.1 249.4,259.9 252.5,260.6 255.6,261.1 258.7,261.5 261.8,261.8 264.9,262.0 268.0,261.9 271.1,261.7 274.2,261.3 274.2,261.3 277.2,260.7 280.3,259.9 283.4,259.0 286.5,257.8 289.5,256.6 292.6,255.2 295.6,253.6 298.7,252.0 301.7,250.3 304.7,248.4 307.7,246.6 310.8,244.6 313.8,242.7 316.8,240.7 319.8,238.7 322.8,236.7 325.8,234.8 328.8,232.8 331.7,230.9 334.7,229.1 337.7,227.4 340.7,225.7 343.6,224.1 346.6,222.7 349.5,221.4 352.5,220.2 355.4,219.2 358.3,218.4 361.2,217.8 364.2,217.3 364.2,217.3 367.1,217.1 370.0,217.1 372.9,217.2 375.8,217.6 378.7,218.1 381.6,218.7 384.5,219.4 387.4,220.3 390.2,221.3 393.1,222.4 396.0,223.5 398.9,224.7 401.7,225.9 404.6,227.1 407.5,228.4 410.4,229.7 413.3,230.9 416.1,232.1 419.0,233.3 421.9,234.4 424.8,235.4 427.6,236.3 430.5,237.2 433.4,237.9 436.3,238.5 439.2,238.9 442.1,239.2 445.0,239.2 447.9,239.1 450.8,238.8 450.8,238.8 453.8,238.3 456.7,237.6 459.6,236.7 462.5,235.6 465.5,234.3 468.4,232.9 471.4,231.3 474.3,229.7 477.3,227.9 480.3,226.1 483.2,224.2 486.2,222.2 489.2,220.1 492.2,218.1 495.1,216.0 498.1,214.0 501.1,211.9 504.1,209.9 507.1,207.9 510.1,206.0 513.1,204.1 516.1,202.4 519.2,200.7 522.2,199.2 525.2,197.8 528.2,196.6 531.2,195.5 534.3,194.6 537.3,193.8 540.3,193.3 540.3,193.3 543.4,193.0 546.4,193.0 549.4,193.1 552.5,193.4 555.5,193.8 558.6,194.5 561.6,195.2 564.7,196.2 567.7,197.2 570.8,198.3 573.8,199.5 576.9,200.8 579.9,202.2 583.0,203.7 586.0,205.1 589.0,206.6 592.1,208.2 595.1,209.7 598.2,211.2 601.2,212.7 604.3,214.2 607.3,215.6 610.4,216.9 613.4,218.2 616.5,219.4 619.5,220.5 622.6,221.5 625.6,222.4 628.6,223.1 631.7,223.7 631.7,223.7 634.7,224.1 637.7,224.4 640.8,224.5 643.8,224.5 646.8,224.4 649.8,224.1 652.8,223.8 655.8,223.3 658.8,222.8 661.8,222.3 664.8,221.6 667.8,220.9 670.8,220.2 673.7,219.4 676.7,218.7 679.7,217.9 682.6,217.1 685.5,216.3 688.5,215.6 691.4,214.9 694.3,214.2 697.2,213.5 700.1,213.0 703.0,212.5 705.8,212.1 708.7,211.8 711.5,211.6 714.4,211.5 717.2,211.5 720.0,211.7" fill="none" stroke="#6b7d94" stroke-width="2" stroke-dasharray="7 5"/>
+          <polyline points="180.8,242.0 183.9,242.0 187.0,242.1 190.1,242.4 193.2,242.8 196.3,243.3 199.4,244.0 202.5,244.7 205.6,245.6 208.8,246.5 211.9,247.5 215.0,248.6 218.1,249.7 221.3,250.8 224.4,251.9 227.5,253.0 230.6,254.2 233.7,255.3 236.9,256.3 240.0,257.3 243.1,258.2 246.2,259.1 249.4,259.9 252.5,260.6 255.6,261.1 258.7,261.5 261.8,261.8 264.9,262.0 268.0,261.9 271.1,261.7 274.2,261.3 274.2,261.3 277.2,260.7 280.3,259.9 283.4,259.0 286.5,257.9 289.5,256.6 292.6,255.3 295.6,253.8 298.7,252.3 301.7,250.6 304.7,249.0 307.7,247.3 310.8,245.5 313.8,243.8 316.8,242.1 319.8,240.5 322.8,238.8 325.8,237.3 328.8,235.8 331.7,234.5 334.7,233.3 337.7,232.2 340.7,231.2 343.6,230.5 346.6,229.9 349.5,229.5 352.5,229.4 355.4,229.4 358.3,229.8 361.2,230.4 364.2,231.3 364.2,231.3 367.1,232.6 370.0,234.1 372.9,235.8 375.8,237.8 378.7,240.0 381.6,242.4 384.5,245.0 387.4,247.7 390.2,250.5 393.1,253.5 396.0,256.5 398.9,259.5 401.7,262.6 404.6,265.6 407.5,268.6 410.4,271.6 413.3,274.5 416.1,277.4 419.0,280.0 421.9,282.6 424.8,285.0 427.6,287.2 430.5,289.1 433.4,290.9 436.3,292.3 439.2,293.5 442.1,294.4 445.0,294.9 447.9,295.1 450.8,294.8 450.8,294.8 453.8,294.2 456.7,293.2 459.6,291.9 462.5,290.2 465.5,288.2 468.4,285.9 471.4,283.3 474.3,280.5 477.3,277.5 480.3,274.3 483.2,270.9 486.2,267.4 489.2,263.8 492.2,260.1 495.1,256.3 498.1,252.4 501.1,248.6 504.1,244.7 507.1,240.9 510.1,237.1 513.1,233.4 516.1,229.8 519.2,226.3 522.2,222.9 525.2,219.8 528.2,216.8 531.2,214.0 534.3,211.5 537.3,209.3 540.3,207.3 540.3,207.3 543.4,205.7 546.4,204.3 549.4,203.3 552.5,202.5 555.5,201.9 558.6,201.6 561.6,201.6 564.7,201.7 567.7,202.0 570.8,202.5 573.8,203.1 576.9,203.9 579.9,204.8 583.0,205.8 586.0,206.9 589.0,208.1 592.1,209.3 595.1,210.6 598.2,211.9 601.2,213.2 604.3,214.5 607.3,215.8 610.4,217.1 613.4,218.3 616.5,219.5 619.5,220.5 622.6,221.5 625.6,222.4 628.6,223.1 631.7,223.7 631.7,223.7 634.7,224.1 637.7,224.4 640.8,224.5 643.8,224.5 646.8,224.4 649.8,224.1 652.8,223.8 655.8,223.3 658.8,222.8 661.8,222.3 664.8,221.6 667.8,220.9 670.8,220.2 673.7,219.4 676.7,218.7 679.7,217.9 682.6,217.1 685.5,216.3 688.5,215.6 691.4,214.9 694.3,214.2 697.2,213.5 700.1,213.0 703.0,212.5 705.8,212.1 708.7,211.8 711.5,211.6 714.4,211.5 717.2,211.5 720.0,211.7" fill="none" stroke="#5ad1a8" stroke-width="3"/>
+          <rect x="85" y="295" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="175" y="210" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="270" y="287" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="360" y="180" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="445" y="267" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="535" y="155" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="627" y="243" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="717" y="185" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="795" y="257" width="10" height="10" fill="#8fb4d9"/>
+          <rect x="270" y="351" width="10" height="10" fill="#e8d57a"/>
+          <text x="98" y="291" font-size="9.5" fill="#cfe0f7">c1</text>
+          <text x="188" y="206" font-size="9.5" fill="#cfe0f7">c2</text>
+          <text x="283" y="283" font-size="9.5" fill="#cfe0f7">c3</text>
+          <text x="373" y="176" font-size="9.5" fill="#cfe0f7">c4</text>
+          <text x="458" y="263" font-size="9.5" fill="#cfe0f7">c5</text>
+          <text x="548" y="151" font-size="9.5" fill="#cfe0f7">c6</text>
+          <text x="640" y="239" font-size="9.5" fill="#cfe0f7">c7</text>
+          <text x="730" y="181" font-size="9.5" fill="#cfe0f7">c8</text>
+          <text x="808" y="253" font-size="9.5" fill="#cfe0f7">c9</text>
+          <text x="300" y="346" font-size="9" fill="#e8d57a">c3 被拖到这里</text>
+          <text x="227" y="372" text-anchor="middle" font-size="9" fill="#6b7d94">段 1</text>
+          <text x="315" y="372" text-anchor="middle" font-size="9" fill="#6b7d94">段 2</text>
+          <text x="407" y="372" text-anchor="middle" font-size="9" fill="#6b7d94">段 3</text>
+          <text x="498" y="372" text-anchor="middle" font-size="9" fill="#6b7d94">段 4</text>
+          <text x="586" y="372" text-anchor="middle" font-size="9" fill="#6b7d94">段 5</text>
+          <text x="670" y="372" text-anchor="middle" font-size="9" fill="#6b7d94">段 6</text>
+          <text x="20" y="390" font-size="10.5" fill="#8fb4d9">虚线折线＝控制多边形：把控制点依次连起来，曲线并不穿过它</text>
+          <text x="620" y="390" font-size="10.5" fill="#8fb4d9">● 控制点 c1 到 c9</text>
+          <text x="20" y="414" font-size="10.5" fill="#9fd8bd">受影响的那一段，正好是 c3 左右各两段</text>
+          <text x="620" y="414" font-size="10.5" fill="#e8d57a">■ c3 的新位置</text>
+          <text x="20" y="438" font-size="10.5" fill="#cfe0f7">三次：每段的形状由 4 个相邻控制点决定，所以改一个只动四段</text>
+          <text x="620" y="438" font-size="10.5" fill="#8fb4d9">端点不插值：曲线不穿过 c1 与 c9</text>
+          <text x="20" y="462" font-size="10.5" fill="#f0a08c">这几个词的术语级解释是补的，原文没有给</text>
+          <text x="620" y="462" font-size="10.5" fill="#6b7d94">控制点横坐标等间隔，仅作示意</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一张一维的曲线图。九个控制点（蓝色小方块，标成 c1 到 c9）被虚线连成一条折线；灰色虚线是原来的曲线，绿色实线是把 c3 往下拖到新位置（黄色方块）之后的曲线；中间那块淡黄色的区域标出了「被改动的范围」。下面标着「段 1」到「段 6」，是曲线的六个小段。<br>
+          <b>怎么看这张图：</b>① 先看灰虚线与绿实线的分叉点：<b>它们只在中间一段分开，两头完全重合</b>——这就是「局部支撑」最直观的样子；② 再看 c3 被拖了多远（从上到下整整一大截），而曲线的左端与右端却一点没动，<b>说明影响不会传导到整条曲线</b>；③ 数一数受影响的范围：c3 左右各两段——这正是「三次」带来的结果，每段只由 4 个相邻控制点决定；④ 最后注意曲线<b>没有穿过任何一个控制点</b>：B 样条不插值控制点，它只是被控制点「牵着走」。<br>
+          <b>要记住的一句话：</b>B 样条最有价值的一点不是它光滑，而是它<b>局部支撑</b>——改一个控制点只影响一小段，于是它在优化里对应的雅可比矩阵非常稀疏，算得动。
+        </figcaption>
+      </figure>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$s(t)=\sum_{i}c_i\,B_{i,3}(t)\qquad\text{（标量版；下标的 3 表示三次）}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>任意时刻 $t$ 的值，等于「若干控制点 $c_i$」各自乘上「一个只跟 $t$ 有关的权重 $B_{i,3}(t)$」再求和。<b>形状账／自由度账：</b>它的<b>次数是 3</b>（三次），对应<b>阶数是 4</b>；每个采样点的权重只由 $t$ 决定、与控制点的取值无关；<b>每段的形状只被 4 个相邻控制点影响</b>——这就是「局部支撑」在公式里的体现。控制点越多，曲线越能贴合细节，但待优化的变量也越多；原文的做法是<b>让采样位姿的数量比窗内 IMU 数量少一个数量级</b>，用少量变量换整段连续轨迹。<b>再次提醒：这个式子是标准形式的补充说明，原文没有给出任何 B 样条公式。</b></p>
+
+      <p>为什么要在「位姿」上做这件事？因为位姿不属于普通的向量空间——两个旋转矩阵相加没有意义。所以原文采用的是「在流形上做增量」的做法：优化变量是一个小修正量，再通过指数映射（记作 $\exp$）作用到当前位姿上。这一步在正文里出现在把约束优化转成无约束优化的过程里，也属于第二季讲过的<b>李群李代数</b>那一套的基本手法。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">5. 在线：滑动窗口与位姿图</h2>
+
+      <p>连续时间是「怎么表示」，这一节讲「怎么算出来、以及算了多少」。先看里程计这一半。</p>
+
+      <h3>滑动窗口：固定长度的窗口，每步前移一点</h3>
+
+      <p>Wildcat 的里程计<b>不攒数据离线批优化</b>，而是把时间切成一个个<b>固定长度、逐步前移</b>的窗口（正文记作 $\mathcal{W}_k$）。在每个窗口内，它固定次数地交替做三件事：</p>
+
+      <ol>
+        <li><b>匹配面元</b>——在当前轨迹估计下，找出窗口内互为最近邻的面元对；</li>
+        <li><b>优化轨迹</b>——用 IMU 测量和匹配好的面元对，一起解出一组位姿修正；</li>
+        <li><b>重投影面元</b>——用更新后的轨迹，把面元重新投到世界坐标系里。</li>
+      </ol>
+
+      <p>窗口处理完就<b>立刻吐出子图</b>交给位姿图模块，然后窗口往前移。原文把这一套的三项代价说得很直白。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\minimise_{\{\mathbf{T}_i^{\mathrm{cor}}\in SO(3)\times\mathbb{R}^3\}}\ \sum_{t\in\mathcal{T}_k^{\mathrm{imu}}} f_{\mathrm{imu}}^{t}\;+\;\sum_{(s,s')\in\mathcal{M}} f_{\mathrm{match}}^{s,s'}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>在窗口内找一组小位姿修正 $\mathbf{T}_i^{\mathrm{cor}}$，让两拨证据同时尽量满意：<b>一拨是 IMU 说「机器人应该这么动」，另一拨是点云说「这两块墙面应该是同一块、应该重合」</b>。<b>它为什么这么算：</b>把符号拆开看——$\mathcal{T}_k^{\mathrm{imu}}$ 是窗内 IMU 时间戳集合，$\mathcal{M}$ 是窗内互为最近邻的面元匹配对（用七维描述子做 k 近邻，并要求两端平均时间戳相差超过一个阈值）。<b>形状账／自由度账：</b>待解的是一个位姿修正 $\mathbf{T}_i^{\mathrm{cor}}=(\mathbf{R}_i^{\mathrm{cor}}, \mathbf{t}_i^{\mathrm{cor}})$，属于 $SO(3)\times\mathbb{R}^3$，也就是<b>3 个旋转自由度加 3 个平移自由度、一共 6 个</b>；用 retraction 把它化成 $(\mathfrak{so}(3)\times\mathbb{R}^3)^n \cong (\mathbb{R}^6)^n$ 上的<b>无约束</b>问题，再用 Gauss-Newton 解正规方程。抗外点靠 IRLS 加 Cauchy 损失函数。</p>
+
+      <p>轮到「点云说墙面该重合」这一项，就是这一篇最有特色的代价函数——它的关键之处藏在时间戳里：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f_{\mathrm{match}}^{s,s'}\triangleq w_{s,s'}\Big\langle \mathbf{n}_{s,s'},\ \bar{\mathbf{R}}^{\mathrm{cor}}_{\tau_{s'}}\hat{\mathbf{p}}_{s'}+\bar{\mathbf{t}}^{\mathrm{cor}}_{\tau_{s'}}-\bar{\mathbf{R}}^{\mathrm{cor}}_{\tau_{s}}\hat{\mathbf{p}}_{s}-\bar{\mathbf{t}}^{\mathrm{cor}}_{\tau_{s}}\Big\rangle^{2}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>把两块面元的点沿法线推到同一个平面上，推得越短越好。<b>它为什么这么算：</b>请盯住式子里那两个不同的时刻记号——<b>$\tau_s \neq \tau_{s'}$，两个面元各自的采集时刻不同</b>，而它们各自乘的都是<b>在自己那一刻插值出来的位姿修正</b>。这就是「连续时间」真正落地的地方：如果只有离散位姿，这个式子里根本写不出 $\tau_s$ 与 $\tau_{s'}$ 两个不同的时刻。<b>形状账／自由度账：</b>$\mathbf{n}_{s,s'}$ 是两块面元合并协方差矩阵最小特征值对应的特征向量，也就是合并平面的法向量，<b>是一个三维向量</b>（这也是本课第 1 节说「不可能退回 SE(2)」的原因之一）；权重 $w_{s,s'}=1/(\sigma^2+\lambda_{\min})$ 里的 $\lambda_{\min}$ 是合并协方差的最小特征值，代表这块面「有多厚」，<b>面越薄权重越大</b>。</p>
+
+      <h3>「在线」的三笔代价</h3>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:26%;">代价</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">原文怎么说</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>一、必须在窗口被顶掉之前算完</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">所以才有「用 B 样条把低频修正传播到高频」这一步。原文原话是：采样位姿的数量 $n$ 通常<b>比窗内 IMU 数量少一个数量级</b>——变量少，才来得及算</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>二、只看局部信息，必然累积漂移</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">第七节开头就写明：只用局部信息，<b>不可避免地随时间累积误差</b>。所以必须有第二个模块把漂移拉回来</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>三、板载算力很吃力</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">在笔记本的 Xeon W-10885M 上，主优化循环平均 <b>63.3 ms（约 15 Hz）</b>；在 SpinningPack 板载的 <b>NVIDIA Jetson AGX Xavier</b> 上，里程计只有 <b>1 到 4 Hz</b>。原文的辩解是「足够在一个时间窗口被下一个顶掉之前处理完当前窗口」</td></tr>
+        </tbody>
+      </table>
+
+      <p>注意第三笔代价和上一课 <a href="0202-RecSLAM-2022-算力不够就往上送.html">0202</a> 的关系：<b>同一个「算力不够」，这里给出的答案是「降低频率、用少量变量」</b>，既不是往机上堆算力，也不是把计算送出去。<b>同一季三篇论文，三种面对算力的姿势。</b></p>
+
+      <h3>位姿图：把漂移拉回来</h3>
+
+      <p>第二个模块是位姿图优化（PGO）。它的基本单位是 <b>submap（子图）</b>：每个子图是一段<b>六秒</b>的里程计估计、一张局部面元地图、以及一个重力方向估计，里程计<b>每五秒</b>生成一个。<b>子图内部的结构已经被里程计的滑窗优化过了，所以累积误差可以忽略</b>——正因如此，位姿图可以把每个子图当成一个<b>刚体块</b>，只用它的局部坐标系位姿来代表它。</p>
+
+      <p>位姿图的节点就是这些子图。它有一个很实用的设计：<b>当新加入一条边时，位姿图会把「局部面元地图有显著重叠、且马氏距离低于阈值」的节点合并掉</b>。这样做的效果是——<b>计算量随「探索过的环境大小」增长，而不是随「任务时间」增长。</b>实测数字很能说明问题：整个 SpinningPack 序列一共产生 <b>1402 个子图</b>，最后位姿图里只有 <b>213 个节点</b>，<b>约 85% 的缩减</b>。内存方面，里程计稳定在约 <b>500 MiB</b>，位姿图模块全程<b>不到 3 GiB</b>。</p>
+
+      <p>它的位姿图代价函数有一项特别值得看——就是第 1 节提到过的重力约束：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f_{\mathrm{pgo}}(\mathbf{T}_1,\dots,\mathbf{T}_m) + f_{\mathrm{up}}(\mathbf{R}_1,\dots,\mathbf{R}_m),\qquad f_{\mathrm{up}} = \sum_{i\in\mathcal{V}}\left\| \mathbf{R}_i\hat{\mathbf{u}}_i - {}_{\mathrm{w}}\mathbf{u} \right\|^{2}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>在标准位姿图代价的基础上，额外加一项：<b>每个节点的姿态都要把它「自己认为的竖直方向」对到世界坐标系的竖直轴上</b>（世界竖直轴取 $[0\ 0\ 1]^\top$）。<b>它为什么这么算：</b>$\hat{\mathbf{u}}_i$ 是第 $i$ 个节点在其局部坐标系里、由加速度计模型算出的竖直方向估计（单位向量）。加速度计天然知道哪边是「下」，把它加进全局优化里，就能<b>专门治大场景里姿态长期跑偏</b>这个毛病。<b>形状账／自由度账：</b>$\mathbf{R}_i$ 是 3×3 的旋转矩阵（$SO(3)$，3 个自由度），$\hat{\mathbf{u}}_i$ 与 ${}_{\mathrm{w}}\mathbf{u}$ 都是单位三维向量——<b>这一项约束的是旋转的三个自由度，不约束平移</b>，因为「哪边是下」只跟姿态有关。位姿图同样用 IRLS 加 Cauchy 来抗假回环，回环边用 point-to-plane ICP 对齐子图。</p>
+
+      <p>最后的产出是什么？<b>6 自由度轨迹 ＋ 全局一致的子图地图</b>。子图小到什么程度？原文说：在激光量程 100 m 时，<b>单个子图最大约 500 KB</b>；而地下挑战赛场景里的平均子图大小只有约 <b>100 到 170 KB</b>。原文特意点出这个尺寸的意义：<b>所以 Wildcat 能在不算宽的带宽下，轻松在各机器人之间交换子图</b>——这也解释了它为什么同一套代码就能支持多机。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/aaf98a75ff2536df13dcb1bbae6676ddee844eb434a771b64178a869a7965f8a.jpg" alt="A schematic of Wildcat data fusion procedure">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>A schematic of Wildcat data fusion procedure. The sample poses, whose timestamps (ti) fall between IMU timestamps, are initialised with linear interpolation between two closest IMU poses. Similarly, surfels, (e.g., s), are initialised based on linear interpolation between IMU poses.（Wildcat 数据融合流程的示意图。那些时间戳落在 IMU 时间戳之间的采样位姿，用最近的两个 IMU 位姿做线性插值初始化；面元（例如 s）同理，也基于 IMU 位姿之间的线性插值来初始化。）<br>
+          <b>怎么看这张图：</b>① 这张图要解决的是一个很实际的问题：<b>采样位姿的时间戳落在 IMU 时间戳之间，怎么给它一个起点？</b>答案是用最近的两个 IMU 位姿线性插值；② 注意「初始化」这个词——<b>插值只是给初值，真正的位姿由后面的优化决定</b>；③ 面元的初始化用的是同一套插值逻辑，说明在这个系统里<b>「位姿的时间插值」是一个到处都要用的基础操作</b>；④ 回到上一张自绘图的时间轴看：那些大方块就是这里的 sample poses，密排的小圆点就是 IMU poses，两者的时间戳天然错开。<br>
+          <b>要记住的一句话：</b>连续时间不只是「表示更漂亮」，它<b>顺手解决了两种传感器时间戳不对齐这个每天都在发生的工程问题</b>。
+        </figcaption>
+      </figure>
+    </section>
+    <section class="section-card">
+      <h2 id="g">6. 那 0.3 m 是怎么来的：63 个测绘靶标</h2>
+
+      <p>现在到了这一课最要紧的部分。第九季 <a href="0184-WildPlaces-2023-自然场景的地点识别.html">0184</a> 说 Wildcat 的平均误差是 0.3 m。这个数字是怎么来的？要讲清它，得先讲清<b>在一段 5 公里的轨迹上，误差到底怎么量</b>。</p>
+
+      <h3>先看它要量的场景：QCAT</h3>
+
+      <p>Wildcat 的主要评测场景叫 <b>QCAT</b>（昆士兰先进技术中心），在澳大利亚布里斯班。它有两个序列：<b>FlatPack</b> 和 <b>SpinningPack</b>，两条序列大致走同一条路径。原文给的关键参数是：<b>每段时长约 2 小时（步行速度），穿行距离约 5 公里。</b></p>
+
+      <p>这两个参数里藏着这一节的核心困难：<b>它同时包含室内与室外。</b>原文写得很直接——因为要穿越室内和室外，在这样一个复杂多样的环境里，<b>提供精确的位姿真值是不可行的</b>（原文原话：providing an accurate pose ground truth is not feasible）。<b>注意这句话的分量：不是「没测」，是「测不了」。</b>你没法在一个 5 公里、室内外连成一片的场地上，布一套能覆盖整条轨迹的外部定位系统。</p>
+
+      <p>于是它换了一个办法：<b>布靶标。</b>原文说，他们在场地里部署并测绘了 60 多个靶标散布各处（后文的表格与正文按 <b>63 个</b>统计）。<b>不去量整条轨迹准不准，改成量「地图上这 63 个点的位置准不准」。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="13.5" font-weight="700" fill="#e8eef7">63 个测绘靶标：这些红线的平均长度就是 0.42 m 与 0.34 m</text>
+
+          <rect x="30" y="56" width="530" height="290" rx="9" fill="#121a24" stroke="#4a5566" stroke-width="1.4"/>
+          <text x="295" y="80" text-anchor="middle" font-size="13" fill="#e8d57a">63 个测绘靶标散布在全场</text>
+          <rect x="45" y="100" width="160" height="210" rx="5" fill="#1a2430" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="125" y="94" text-anchor="middle" font-size="9.5" fill="#8fb4d9">室内（含 3 层楼梯）</text>
+          <rect x="215" y="190" width="120" height="54" rx="5" fill="#2c2a26" stroke="#9a917c" stroke-width="1.2"/>
+          <text x="275" y="182" text-anchor="middle" font-size="9.5" fill="#9a917c">隧道</text>
+          <rect x="345" y="100" width="205" height="210" rx="5" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="1.2"/>
+          <text x="447" y="94" text-anchor="middle" font-size="9.5" fill="#9fd8bd">室外场地</text>
+          <line x1="68.8" y1="143.9" x2="75.3" y2="144.5" stroke="#f0705c" stroke-width="1"/> <line x1="67.1" y1="257.5" x2="63.6" y2="266.7" stroke="#f0705c" stroke-width="1"/> <line x1="61.6" y1="246.6" x2="66.2" y2="253.1" stroke="#f0705c" stroke-width="1"/> <line x1="81.8" y1="152.0" x2="89.7" y2="144.8" stroke="#f0705c" stroke-width="1"/> <line x1="81.7" y1="241.8" x2="83.4" y2="235.4" stroke="#f0705c" stroke-width="1"/> <line x1="87.8" y1="217.4" x2="97.3" y2="221.0" stroke="#f0705c" stroke-width="1"/> <line x1="92.5" y1="185.3" x2="96.7" y2="192.2" stroke="#f0705c" stroke-width="1"/> <line x1="96.2" y1="203.6" x2="88.1" y2="209.0" stroke="#f0705c" stroke-width="1"/> <line x1="120.4" y1="233.2" x2="121.4" y2="224.3" stroke="#f0705c" stroke-width="1"/> <line x1="126.6" y1="284.7" x2="119.4" y2="295.3" stroke="#f0705c" stroke-width="1"/> <line x1="140.0" y1="145.0" x2="143.5" y2="141.0" stroke="#f0705c" stroke-width="1"/> <line x1="131.6" y1="269.0" x2="137.1" y2="280.3" stroke="#f0705c" stroke-width="1"/> <line x1="153.6" y1="299.8" x2="145.6" y2="294.3" stroke="#f0705c" stroke-width="1"/> <line x1="160.0" y1="288.2" x2="150.6" y2="296.5" stroke="#f0705c" stroke-width="1"/> <line x1="166.0" y1="244.0" x2="176.0" y2="249.3" stroke="#f0705c" stroke-width="1"/> <line x1="169.7" y1="284.4" x2="169.3" y2="272.3" stroke="#f0705c" stroke-width="1"/> <line x1="170.6" y1="134.3" x2="161.0" y2="137.4" stroke="#f0705c" stroke-width="1"/> <line x1="167.7" y1="211.8" x2="158.7" y2="204.5" stroke="#f0705c" stroke-width="1"/> <line x1="173.9" y1="133.4" x2="181.4" y2="135.4" stroke="#f0705c" stroke-width="1"/> <line x1="202.9" y1="198.6" x2="204.0" y2="211.5" stroke="#f0705c" stroke-width="1"/> <line x1="236.0" y1="199.1" x2="231.8" y2="202.3" stroke="#f0705c" stroke-width="1"/> <line x1="243.6" y1="230.7" x2="235.1" y2="234.8" stroke="#f0705c" stroke-width="1"/> <line x1="245.8" y1="231.1" x2="255.5" y2="232.3" stroke="#f0705c" stroke-width="1"/> <line x1="261.8" y1="203.6" x2="250.7" y2="203.3" stroke="#f0705c" stroke-width="1"/> <line x1="262.5" y1="209.3" x2="272.7" y2="209.4" stroke="#f0705c" stroke-width="1"/> <line x1="268.9" y1="201.4" x2="262.0" y2="202.5" stroke="#f0705c" stroke-width="1"/> <line x1="271.3" y1="200.3" x2="267.0" y2="203.7" stroke="#f0705c" stroke-width="1"/> <line x1="286.5" y1="205.8" x2="279.2" y2="206.0" stroke="#f0705c" stroke-width="1"/> <line x1="287.1" y1="225.2" x2="293.2" y2="230.9" stroke="#f0705c" stroke-width="1"/> <line x1="312.7" y1="207.0" x2="313.6" y2="213.1" stroke="#f0705c" stroke-width="1"/> <line x1="309.8" y1="202.3" x2="314.1" y2="205.6" stroke="#f0705c" stroke-width="1"/> <line x1="329.9" y1="229.0" x2="330.8" y2="234.3" stroke="#f0705c" stroke-width="1"/> <line x1="348.4" y1="220.4" x2="359.6" y2="226.1" stroke="#f0705c" stroke-width="1"/> <line x1="365.2" y1="239.9" x2="360.5" y2="242.1" stroke="#f0705c" stroke-width="1"/> <line x1="380.3" y1="117.1" x2="384.2" y2="109.1" stroke="#f0705c" stroke-width="1"/> <line x1="374.5" y1="150.1" x2="378.1" y2="153.6" stroke="#f0705c" stroke-width="1"/> <line x1="379.3" y1="273.9" x2="379.4" y2="265.5" stroke="#f0705c" stroke-width="1"/> <line x1="383.3" y1="299.0" x2="378.8" y2="296.9" stroke="#f0705c" stroke-width="1"/> <line x1="400.2" y1="122.5" x2="401.3" y2="114.3" stroke="#f0705c" stroke-width="1"/> <line x1="410.6" y1="248.2" x2="400.7" y2="243.0" stroke="#f0705c" stroke-width="1"/> <line x1="408.8" y1="265.0" x2="407.2" y2="270.8" stroke="#f0705c" stroke-width="1"/> <line x1="406.2" y1="240.7" x2="403.0" y2="253.1" stroke="#f0705c" stroke-width="1"/> <line x1="427.8" y1="194.7" x2="422.3" y2="193.3" stroke="#f0705c" stroke-width="1"/> <line x1="421.8" y1="117.6" x2="429.5" y2="107.3" stroke="#f0705c" stroke-width="1"/> <line x1="431.2" y1="272.1" x2="442.7" y2="276.8" stroke="#f0705c" stroke-width="1"/> <line x1="445.7" y1="287.8" x2="440.0" y2="288.7" stroke="#f0705c" stroke-width="1"/> <line x1="447.0" y1="262.2" x2="445.9" y2="268.2" stroke="#f0705c" stroke-width="1"/> <line x1="451.1" y1="294.8" x2="445.8" y2="305.4" stroke="#f0705c" stroke-width="1"/> <line x1="443.0" y1="201.8" x2="450.0" y2="211.1" stroke="#f0705c" stroke-width="1"/> <line x1="468.1" y1="133.8" x2="469.8" y2="142.2" stroke="#f0705c" stroke-width="1"/> <line x1="455.6" y1="203.2" x2="454.2" y2="191.2" stroke="#f0705c" stroke-width="1"/> <line x1="470.5" y1="214.9" x2="462.2" y2="215.4" stroke="#f0705c" stroke-width="1"/> <line x1="466.2" y1="211.4" x2="468.2" y2="201.7" stroke="#f0705c" stroke-width="1"/> <line x1="480.3" y1="203.9" x2="480.0" y2="193.9" stroke="#f0705c" stroke-width="1"/> <line x1="497.5" y1="190.1" x2="503.0" y2="189.2" stroke="#f0705c" stroke-width="1"/> <line x1="495.3" y1="243.6" x2="507.1" y2="242.5" stroke="#f0705c" stroke-width="1"/> <line x1="488.8" y1="197.2" x2="494.5" y2="188.8" stroke="#f0705c" stroke-width="1"/> <line x1="496.1" y1="279.2" x2="499.7" y2="289.0" stroke="#f0705c" stroke-width="1"/> <line x1="521.6" y1="240.6" x2="517.1" y2="236.5" stroke="#f0705c" stroke-width="1"/> <line x1="521.7" y1="113.5" x2="510.2" y2="118.2" stroke="#f0705c" stroke-width="1"/> <line x1="516.8" y1="245.3" x2="513.4" y2="238.5" stroke="#f0705c" stroke-width="1"/> <line x1="535.0" y1="182.7" x2="539.1" y2="191.6" stroke="#f0705c" stroke-width="1"/> <line x1="538.0" y1="218.2" x2="546.1" y2="217.9" stroke="#f0705c" stroke-width="1"/>
+          <circle cx="68.8" cy="143.9" r="2.4" fill="#e8d57a"/> <circle cx="67.1" cy="257.5" r="2.4" fill="#e8d57a"/> <circle cx="61.6" cy="246.6" r="2.4" fill="#e8d57a"/> <circle cx="81.8" cy="152.0" r="2.4" fill="#e8d57a"/> <circle cx="81.7" cy="241.8" r="2.4" fill="#e8d57a"/> <circle cx="87.8" cy="217.4" r="2.4" fill="#e8d57a"/> <circle cx="92.5" cy="185.3" r="2.4" fill="#e8d57a"/> <circle cx="96.2" cy="203.6" r="2.4" fill="#e8d57a"/> <circle cx="120.4" cy="233.2" r="2.4" fill="#e8d57a"/> <circle cx="126.6" cy="284.7" r="2.4" fill="#e8d57a"/> <circle cx="140.0" cy="145.0" r="2.4" fill="#e8d57a"/> <circle cx="131.6" cy="269.0" r="2.4" fill="#e8d57a"/> <circle cx="153.6" cy="299.8" r="2.4" fill="#e8d57a"/> <circle cx="160.0" cy="288.2" r="2.4" fill="#e8d57a"/> <circle cx="166.0" cy="244.0" r="2.4" fill="#e8d57a"/> <circle cx="169.7" cy="284.4" r="2.4" fill="#e8d57a"/> <circle cx="170.6" cy="134.3" r="2.4" fill="#e8d57a"/> <circle cx="167.7" cy="211.8" r="2.4" fill="#e8d57a"/> <circle cx="173.9" cy="133.4" r="2.4" fill="#e8d57a"/> <circle cx="202.9" cy="198.6" r="2.4" fill="#e8d57a"/> <circle cx="236.0" cy="199.1" r="2.4" fill="#e8d57a"/> <circle cx="243.6" cy="230.7" r="2.4" fill="#e8d57a"/> <circle cx="245.8" cy="231.1" r="2.4" fill="#e8d57a"/> <circle cx="261.8" cy="203.6" r="2.4" fill="#e8d57a"/> <circle cx="262.5" cy="209.3" r="2.4" fill="#e8d57a"/> <circle cx="268.9" cy="201.4" r="2.4" fill="#e8d57a"/> <circle cx="271.3" cy="200.3" r="2.4" fill="#e8d57a"/> <circle cx="286.5" cy="205.8" r="2.4" fill="#e8d57a"/> <circle cx="287.1" cy="225.2" r="2.4" fill="#e8d57a"/> <circle cx="312.7" cy="207.0" r="2.4" fill="#e8d57a"/> <circle cx="309.8" cy="202.3" r="2.4" fill="#e8d57a"/> <circle cx="329.9" cy="229.0" r="2.4" fill="#e8d57a"/> <circle cx="348.4" cy="220.4" r="2.4" fill="#e8d57a"/> <circle cx="365.2" cy="239.9" r="2.4" fill="#e8d57a"/> <circle cx="380.3" cy="117.1" r="2.4" fill="#e8d57a"/> <circle cx="374.5" cy="150.1" r="2.4" fill="#e8d57a"/> <circle cx="379.3" cy="273.9" r="2.4" fill="#e8d57a"/> <circle cx="383.3" cy="299.0" r="2.4" fill="#e8d57a"/> <circle cx="400.2" cy="122.5" r="2.4" fill="#e8d57a"/> <circle cx="410.6" cy="248.2" r="2.4" fill="#e8d57a"/> <circle cx="408.8" cy="265.0" r="2.4" fill="#e8d57a"/> <circle cx="406.2" cy="240.7" r="2.4" fill="#e8d57a"/> <circle cx="427.8" cy="194.7" r="2.4" fill="#e8d57a"/> <circle cx="421.8" cy="117.6" r="2.4" fill="#e8d57a"/> <circle cx="431.2" cy="272.1" r="2.4" fill="#e8d57a"/> <circle cx="445.7" cy="287.8" r="2.4" fill="#e8d57a"/> <circle cx="447.0" cy="262.2" r="2.4" fill="#e8d57a"/> <circle cx="451.1" cy="294.8" r="2.4" fill="#e8d57a"/> <circle cx="443.0" cy="201.8" r="2.4" fill="#e8d57a"/> <circle cx="468.1" cy="133.8" r="2.4" fill="#e8d57a"/> <circle cx="455.6" cy="203.2" r="2.4" fill="#e8d57a"/> <circle cx="470.5" cy="214.9" r="2.4" fill="#e8d57a"/> <circle cx="466.2" cy="211.4" r="2.4" fill="#e8d57a"/> <circle cx="480.3" cy="203.9" r="2.4" fill="#e8d57a"/> <circle cx="497.5" cy="190.1" r="2.4" fill="#e8d57a"/> <circle cx="495.3" cy="243.6" r="2.4" fill="#e8d57a"/> <circle cx="488.8" cy="197.2" r="2.4" fill="#e8d57a"/> <circle cx="496.1" cy="279.2" r="2.4" fill="#e8d57a"/> <circle cx="521.6" cy="240.6" r="2.4" fill="#e8d57a"/> <circle cx="521.7" cy="113.5" r="2.4" fill="#e8d57a"/> <circle cx="516.8" cy="245.3" r="2.4" fill="#e8d57a"/> <circle cx="535.0" cy="182.7" r="2.4" fill="#e8d57a"/> <circle cx="538.0" cy="218.2" r="2.4" fill="#e8d57a"/>
+          <circle cx="75.3" cy="144.5" r="1.9" fill="#5ad1a8"/> <circle cx="63.6" cy="266.7" r="1.9" fill="#5ad1a8"/> <circle cx="66.2" cy="253.1" r="1.9" fill="#5ad1a8"/> <circle cx="89.7" cy="144.8" r="1.9" fill="#5ad1a8"/> <circle cx="83.4" cy="235.4" r="1.9" fill="#5ad1a8"/> <circle cx="97.3" cy="221.0" r="1.9" fill="#5ad1a8"/> <circle cx="96.7" cy="192.2" r="1.9" fill="#5ad1a8"/> <circle cx="88.1" cy="209.0" r="1.9" fill="#5ad1a8"/> <circle cx="121.4" cy="224.3" r="1.9" fill="#5ad1a8"/> <circle cx="119.4" cy="295.3" r="1.9" fill="#5ad1a8"/> <circle cx="143.5" cy="141.0" r="1.9" fill="#5ad1a8"/> <circle cx="137.1" cy="280.3" r="1.9" fill="#5ad1a8"/> <circle cx="145.6" cy="294.3" r="1.9" fill="#5ad1a8"/> <circle cx="150.6" cy="296.5" r="1.9" fill="#5ad1a8"/> <circle cx="176.0" cy="249.3" r="1.9" fill="#5ad1a8"/> <circle cx="169.3" cy="272.3" r="1.9" fill="#5ad1a8"/> <circle cx="161.0" cy="137.4" r="1.9" fill="#5ad1a8"/> <circle cx="158.7" cy="204.5" r="1.9" fill="#5ad1a8"/> <circle cx="181.4" cy="135.4" r="1.9" fill="#5ad1a8"/> <circle cx="204.0" cy="211.5" r="1.9" fill="#5ad1a8"/> <circle cx="231.8" cy="202.3" r="1.9" fill="#5ad1a8"/> <circle cx="235.1" cy="234.8" r="1.9" fill="#5ad1a8"/> <circle cx="255.5" cy="232.3" r="1.9" fill="#5ad1a8"/> <circle cx="250.7" cy="203.3" r="1.9" fill="#5ad1a8"/> <circle cx="272.7" cy="209.4" r="1.9" fill="#5ad1a8"/> <circle cx="262.0" cy="202.5" r="1.9" fill="#5ad1a8"/> <circle cx="267.0" cy="203.7" r="1.9" fill="#5ad1a8"/> <circle cx="279.2" cy="206.0" r="1.9" fill="#5ad1a8"/> <circle cx="293.2" cy="230.9" r="1.9" fill="#5ad1a8"/> <circle cx="313.6" cy="213.1" r="1.9" fill="#5ad1a8"/> <circle cx="314.1" cy="205.6" r="1.9" fill="#5ad1a8"/> <circle cx="330.8" cy="234.3" r="1.9" fill="#5ad1a8"/> <circle cx="359.6" cy="226.1" r="1.9" fill="#5ad1a8"/> <circle cx="360.5" cy="242.1" r="1.9" fill="#5ad1a8"/> <circle cx="384.2" cy="109.1" r="1.9" fill="#5ad1a8"/> <circle cx="378.1" cy="153.6" r="1.9" fill="#5ad1a8"/> <circle cx="379.4" cy="265.5" r="1.9" fill="#5ad1a8"/> <circle cx="378.8" cy="296.9" r="1.9" fill="#5ad1a8"/> <circle cx="401.3" cy="114.3" r="1.9" fill="#5ad1a8"/> <circle cx="400.7" cy="243.0" r="1.9" fill="#5ad1a8"/> <circle cx="407.2" cy="270.8" r="1.9" fill="#5ad1a8"/> <circle cx="403.0" cy="253.1" r="1.9" fill="#5ad1a8"/> <circle cx="422.3" cy="193.3" r="1.9" fill="#5ad1a8"/> <circle cx="429.5" cy="107.3" r="1.9" fill="#5ad1a8"/> <circle cx="442.7" cy="276.8" r="1.9" fill="#5ad1a8"/> <circle cx="440.0" cy="288.7" r="1.9" fill="#5ad1a8"/> <circle cx="445.9" cy="268.2" r="1.9" fill="#5ad1a8"/> <circle cx="445.8" cy="305.4" r="1.9" fill="#5ad1a8"/> <circle cx="450.0" cy="211.1" r="1.9" fill="#5ad1a8"/> <circle cx="469.8" cy="142.2" r="1.9" fill="#5ad1a8"/> <circle cx="454.2" cy="191.2" r="1.9" fill="#5ad1a8"/> <circle cx="462.2" cy="215.4" r="1.9" fill="#5ad1a8"/> <circle cx="468.2" cy="201.7" r="1.9" fill="#5ad1a8"/> <circle cx="480.0" cy="193.9" r="1.9" fill="#5ad1a8"/> <circle cx="503.0" cy="189.2" r="1.9" fill="#5ad1a8"/> <circle cx="507.1" cy="242.5" r="1.9" fill="#5ad1a8"/> <circle cx="494.5" cy="188.8" r="1.9" fill="#5ad1a8"/> <circle cx="499.7" cy="289.0" r="1.9" fill="#5ad1a8"/> <circle cx="517.1" cy="236.5" r="1.9" fill="#5ad1a8"/> <circle cx="510.2" cy="118.2" r="1.9" fill="#5ad1a8"/> <circle cx="513.4" cy="238.5" r="1.9" fill="#5ad1a8"/> <circle cx="539.1" cy="191.6" r="1.9" fill="#5ad1a8"/> <circle cx="546.1" cy="217.9" r="1.9" fill="#5ad1a8"/>
+          <text x="125" y="326" text-anchor="middle" font-size="9" fill="#8fb4d9">20 个靶标</text>
+          <text x="275" y="326" text-anchor="middle" font-size="9" fill="#8fb4d9">12 个靶标</text>
+          <text x="447" y="326" text-anchor="middle" font-size="9" fill="#8fb4d9">31 个靶标</text>
+          <text x="295" y="342" text-anchor="middle" font-size="9" fill="#8fb4d9">5 km 级场地，每段约 2 小时步行速度</text>
+
+          <rect x="575" y="56" width="305" height="290" rx="9" fill="#141c26" stroke="#4a5566" stroke-width="1.4"/>
+          <text x="590" y="82" font-size="9.5" fill="#e8d57a">真值是怎么来的</text>
+          <text x="590" y="103" font-size="8.5" fill="#8fb4d9">① 全站仪测出这 63 个靶标的位置</text>
+          <text x="590" y="124" font-size="8.5" fill="#8fb4d9">② 只测地图上的对应点，不测轨迹</text>
+          <text x="590" y="145" font-size="8.5" fill="#8fb4d9">③ 先做一次抗外点对齐（MSAC）</text>
+          <text x="590" y="166" font-size="8.5" fill="#8fb4d9">④ 再算点对点的直线距离</text>
+          <text x="590" y="187" font-size="9.5" fill="#9fd8bd">QCAT FlatPack</text>
+          <text x="590" y="208" font-size="8.5" fill="#cfe0f7">Wildcat 0.42 / 0.46 / 0.19 m</text>
+          <text x="590" y="229" font-size="8.5" fill="#8fb4d9">LIO-SAM 0.92 m（41 个）</text>
+          <text x="590" y="250" font-size="8.5" fill="#8fb4d9">FAST-LIO2 1.09 m（53 个）</text>
+          <text x="590" y="271" font-size="9.5" fill="#9fd8bd">QCAT SpinningPack</text>
+          <text x="590" y="292" font-size="8.5" fill="#cfe0f7">Wildcat 0.34 / 0.46 / 0.31 m</text>
+          <text x="590" y="313" font-size="8.5" fill="#8fb4d9">LIO-SAM 1.69 m（38 个）</text>
+          <text x="590" y="334" font-size="8.5" fill="#8fb4d9">FAST-LIO2 0.43 m（53 个）</text>
+
+          <circle cx="44" cy="360" r="3" fill="#e8d57a"/>
+          <text x="54" y="364" font-size="8.5" fill="#8fb4d9">测绘靶标真值（全站仪测过）</text>
+          <circle cx="300" cy="360" r="3" fill="#5ad1a8"/>
+          <text x="310" y="364" font-size="8.5" fill="#8fb4d9">地图上的对应点</text>
+          <line x1="460" y1="360" x2="478" y2="360" stroke="#f0705c" stroke-width="1.6"/>
+          <text x="486" y="364" font-size="8.5" fill="#8fb4d9">一段红线＝一个靶标的误差</text>
+          <text x="860" y="364" text-anchor="end" font-size="8.5" fill="#6b7d94">63 条都画了</text>
+          <text x="20" y="376" font-size="9" fill="#6b7d94">示意图：靶标位置按原文的三个区域重绘</text>
+
+          <text x="20" y="398" font-size="11" fill="#cfe0f7">红线越长，说明这个靶标在地图上的位置偏得越多；把 63 条红线的长度取平均，就是 0.42 m 与 0.34 m。</text>
+          <text x="20" y="422" font-size="11" fill="#8fb4d9">注意：这 63 条量的是「地图上的点准不准」，不是「整条轨迹准不准」。QCAT 是 5 km 级、室内外连通的大场景。</text>
+          <text x="20" y="446" font-size="11" fill="#5ad1a8">所以原文才说：providing an accurate pose ground truth is not feasible —— 精确位姿真值在这种场景里做不到。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是 QCAT 场地的示意平面：左边一块是<b>室内</b>（含三层楼梯），中间一条窄长的是<b>隧道</b>，右边一块是<b>室外场地</b>。场地上散布着 63 个黄色小圆点，每个代表一个测绘靶标（位置用全站仪测过）；绿点是地图上算出来的对应点；<b>红线的长度就是一个靶标的绝对误差</b>。右格是一张对照表：真值怎么来，以及两个数据集上三方方法的误差数字。<br>
+          <b>怎么看这张图：</b>① 先看那些红线——<b>它们都很短</b>，短到只能画成一小段，这正是「亚米级」的直观样子；② 再看靶标的分布：<b>它们横跨室内、隧道、室外三种环境</b>，所以这个平均值是在混合场景上取的，不是挑了个好地方；③ 看右格那几行：Wildcat 后面跟着 63，而 LIO-SAM 与 FAST-LIO2 后面只有 41、38、53——<b>它们没能标出全部靶标</b>，因为它们在隧道里出了问题；④ 最后看最下面那行原文引用：这句话解释了为什么这一篇只量地图、不量轨迹。<br>
+          <b>要记住的一句话：</b>把 63 条红线的长度取平均得到的 0.42 m 与 0.34 m，<b>量的是「地图上这 63 个点的位置准不准」，不是「整条 5 公里轨迹准不准」</b>——这两件事的差别，就是这一节要你记住的全部。
+        </figcaption>
+      </figure>
+
+      <p>原文对这套做法的描述还有一句很讲究的补充：<b>先做一次抗外点的对齐（MSAC），再算点对点距离。</b>意思是先把地图整体「摆正」到真值坐标系上（允许旋转和平移），再去量每个点的残差——也就是说，<b>这 0.42 m 是「对齐之后的形状误差」，不是「绝对位置误差」</b>。这一点在引用时必须说清楚，否则口径又变了。</p>
+
+      <p>把原文 Table II 的数字整张抄下来（正表头写的就是 <b>Absolute Error</b>，绝对误差）：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:22%;">方法</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">QCAT FlatPack（均值 / RMSE / 标准差 / 靶标数）</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">QCAT SpinningPack（均值 / RMSE / 标准差 / 靶标数）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">LIO-SAM</td><td style="padding:.45rem;border:1px solid #cfd9e6;">0.92 m / 1.33 m / 0.97 m / <b>41</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">1.69 m / 2.52 m / 1.90 m / <b>38</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">FAST-LIO2</td><td style="padding:.45rem;border:1px solid #cfd9e6;">1.09 m / 1.38 m / 0.85 m / <b>53</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">0.43 m / 0.64 m / 0.47 m / <b>53</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>Wildcat（作者自报）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>0.42 m</b> / 0.46 m / 0.19 m / <b>63</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>0.34 m</b> / 0.46 m / 0.31 m / <b>63</b></td></tr>
+        </tbody>
+      </table>
+
+      <p><b>这张表要怎么读？</b>三点：① <b>它是作者自报的数字</b>，不是第三方复现；② <b>它在 QCAT 数据集上</b>，量的对象是「地图与测绘靶标之间的点对点距离」，表头注明是<b>绝对误差</b>；③ <b>注意最后一列的靶标数不一样</b>——Wildcat 是 63（全部），LIO-SAM 是 41 与 38，FAST-LIO2 是 53。<b>这意味着三方的数字根本不在同一组靶标上算出来的</b>，直接横比是要打折扣的。原文自己解释了原因：这两个系统在隧道里出了显著误差，很多靶标在它们的地图里根本认不出来。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/82d5009c2b41b13e0df7f0c4dd8bab8958d34777d93c1d7055e476b4622505e9.jpg" alt="Photos from the QCAT (SpinningPack) dataset indoors and outdoors">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Photos from the QCAT (SpinningPack) dataset indoors and outdoors. The QCAT dataset includes various types of environments. The confined areas such as through the tunnel or stair cases challenge SLAM due to the degeneracy of these areas. In some of the photos, surveyed targets can be seen.（QCAT（SpinningPack）数据集室内外的照片。QCAT 数据集包含多种环境类型。隧道或楼梯这类受限区域，会因为几何退化而给 SLAM 带来困难。在部分照片里可以看到测绘靶标。）<br>
+          <b>怎么看这张图：</b>① 这是一组实拍照片，<b>把「纸面上的 QCAT」变成了你能看见的场地</b>：室内房间、楼梯间、狭长通道、室外开阔地；② 原文在图注里点出关键：<b>隧道与楼梯这类受限区域会造成「几何退化」</b>——意思是这些地方的几何形状太单薄，约束不住某些方向的运动；③ <b>找找照片里的测绘靶标</b>：那是那些黑白相间的小板子，它们就是第 6 节那张示意图里黄色小圆点的实物；④ 记住这张图给你的观感：<b>这不是一个干净的数据集，是一个真实、杂乱、混合的场地。</b><br>
+          <b>要记住的一句话：</b>真值不是凭空来的——<b>它是有人扛着全站仪，在这 63 个点上一个个测出来的。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/ffa303b0cff5b07e59f7c7c64233bbd9ac6fac2dc86e300a17215f999c41d929.jpg" alt="A bird's-eye view of the QCAT map from the FlatPack dataset with surveyed targets">
+        <figcaption>
+          <b>原图注（Fig. 12）：</b>A bird's-eye view of the QCAT map, generated from the FlatPack dataset along with the trajectory estimated by Wildcat, overlaid with the location of surveyed targets deployed across the site.（QCAT 地图的鸟瞰图，由 FlatPack 数据集生成，同时叠加了 Wildcat 估计的轨迹，以及场地内已测绘靶标的位置。）<br>
+          <b>怎么看这张图：</b>① 这张图里有三样东西：<b>地图本身（点云的样子）、Wildcat 估出的轨迹、以及 63 个靶标的位置</b>；② 认出规模感：<b>这是一张 5 公里级场地的鸟瞰图</b>，地图从室内一直铺到室外，中间穿过狭长区域；③ 对照上一张示意图看：示意图里的三块区域（室内、隧道、室外）在这里是连成一体的——<b>这正是「提供精确位姿真值不可行」的原因</b>；④ 注意靶标是<b>散布在整条路径上</b>的，不是集中在某一小段，所以它们的平均误差反映的是全场的整体一致性。<br>
+          <b>要记住的一句话：</b>这张图把 0.42 m 这个数字的「适用范围」画得很清楚：<b>它覆盖的是这一整片混合场地，而不是某个局部。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">7. 跨季对账：0.3 m 与 0.42 / 0.34 m</h2>
+
+      <p>现在做这一课的闭环动作。第九季 <a href="0184-WildPlaces-2023-自然场景的地点识别.html">0184</a> 那一课（讲 Wild-Places 数据集）里有这样一句话：<b>Wild-Places 的真值由 Wildcat SLAM 自举生成，原文写明平均误差 0.3 m。</b>这句话没错——它是<b>转引</b>，转引的是 Wild-Places 论文对 Wildcat 的引述。</p>
+
+      <p>本季我们第一次读 Wildcat 本身，就该把两个数字摆到一起对一次账：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:20%;">来源</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">数字与口径</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>第九季 0184 的转引</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">Wild-Places <b>引述</b> Wildcat：测绘对比平均误差 <b>0.3 m</b>。这里只有一个数，<b>没有说在哪个序列上、也没有说是哪种误差</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>本课查到的原文</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">Wildcat 正文给的是 <b>QCAT 绝对误差</b>：FlatPack 均值 <b>0.42 m</b>、SpinningPack 均值 <b>0.34 m</b>（Table II，<b>63 个测绘靶标</b>）</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>对账结论一</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">两个数字<b>不矛盾</b>：<b>0.3 m 就是 0.34 m 的四舍五入</b>，取的是 SpinningPack 那一个</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>对账结论二</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">但它<b>不是轨迹误差</b>，是「地图上 63 个测绘点的位置准不准」——这一点转引里丢掉了</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>为什么会丢</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">因为 QCAT 这种 5 km 级、室内外连通的场景<b>根本拿不到轨迹真值</b>。原文原话：providing an accurate pose ground truth is <b>not feasible</b></td></tr>
+        </tbody>
+      </table>
+
+      <p>那为什么会出现两个数（0.42 与 0.34）？因为 FlatPack 与 SpinningPack 是两种不同的传感器配置：<b>SpinningPack 把 VLP-16 斜装在绕竖直轴以 0.5 Hz 旋转的伺服电机上，垂直视场角从 30 度扩到 120 度</b>；FlatPack 则保持 VLP-16 原有的 30 度。原文的解读是：Wildcat 能从 SpinningPack 提供的额外信息里受益，所以误差更低。</p>
+
+      <p>这里还藏着一个更需要小心的坑：<b>它也不是 DARPA 那个 3 cm。</b>Wildcat 在地下挑战赛上的确报过一个「点对点平均 3 cm」的数字，但那是<b>完全不同的口径</b>——40 cm 分辨率的体素地图对 1 cm 分辨率的真值做最近邻统计。作者自己在正文里就说这个做法<b>因为最近邻数据关联，并不能精确反映地图精度</b>，所以他们后来改用「射线交汇三角化靶标中心」的办法来量 QCAT。<b>换句话说：3 cm 和 0.42 m 是两个不能放在一起比的数</b>——一个是稀疏体素地图对稠密真值的最近邻统计，一个是靶标点对点距离。</p>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>★★ 这次对账想说明什么</h4>
+        <p><b>不是挑第九季的错。</b>第九季写的「0.3 m」忠于它读到的转引，而转引本身也是论文允许的引用方式。这次对账要展示的是另一件事：<b>数字只要离开口径，就会失真。</b></p>
+        <p>同一台系统、同一批实验，一个数字可以写成：</p>
+        <ul>
+          <li>「Wildcat 误差 0.3 m」——<b>信息量最少，也最容易被误用</b>；</li>
+          <li>「Wild-Places 引述 Wildcat 的测绘对比平均误差 0.3 m」——<b>加了来源，但还缺数据集与误差类型</b>；</li>
+          <li>「Wildcat 作者自报，在 QCAT 数据集上，对 63 个测绘靶标的<b>绝对误差</b>：FlatPack 均值 0.42 m、SpinningPack 均值 0.34 m（Table II）」——<b>这才是完整的口径三件套：谁报的、在哪个数据集上、是绝对还是相对。本课从这一节起，一律按这个粒度写数字。</b></li>
+        </ul>
+      </div>
+
+      <h3>接回第九季的核心洞见：够用比准更重要</h3>
+
+      <p>最后一步，把这件事接回第九季 <a href="0184-WildPlaces-2023-自然场景的地点识别.html">0184</a> 的结论。Wild-Places 拿 Wildcat 的自举结果当<b>亚米级真值</b>，去评「检索出来的位置有没有落在 3 米以内」。<b>这个用法完全成立</b>——因为：</p>
+
+      <ul>
+        <li>它的误差是<b>亚米级</b>（0.34 到 0.42 米），而它要判的阈值是<b>米级</b>（3 米），<b>误差比判据小一个量级</b>；</li>
+        <li>它的误差量的是<b>地图点位置</b>，而检索评测关心的正是「查出来的那一段在不在正确的地方」，<b>口径是对得上的</b>；</li>
+        <li>而这样的真值，是<b>唯一可行</b>的选项——同一片 5 公里场地里拿不到轨迹真值，没有更好的替代品。</li>
+      </ul>
+
+      <p>所以那句要在这一课写死的话是：<b>Wild-Places 拿它当亚米级真值去评「检索落在 3 m 内」，完全成立——够用比准更重要。</b>这也正是第九季 <a href="0185-收官-真值精度阶梯与选尺子指南.html">0185</a> 那把「尺子」的用法：<b>不是要找最准的尺子，而是要找比你要判的事高一个量级的那把尺子。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/c713aa22db71dd02f6212189b4590dd7be7bffbecd642f99c0966e68e20a65ba.jpg" alt="Error histogram over QCAT FlatPack versus SpinningPack for Wildcat, LIO-SAM and FAST-LIO2">
+        <figcaption>
+          <b>原图注（Fig. 13）：</b>Error histogram, corresponding to the error statistics reported in Table II, over the QCAT FlatPack dataset (top row) versus QCAT SpinningPack dataset (bottom row) for Wildcat (left), LIO-SAM (middle) and FAST-LIO2 (right). Number of targets being selected in each method is normalised for better comparison. Note that the results of LIO-SAM and FAST-LIO2 only include a subset of targets before these methods failed.（误差直方图，与 Table II 报告的误差统计一一对应：上排是 QCAT FlatPack、下排是 QCAT SpinningPack；左列 Wildcat、中列 LIO-SAM、右列 FAST-LIO2。为了便于比较，各方法选中的靶标数做了归一化。注意 LIO-SAM 与 FAST-LIO2 的结果只包含它们在失效之前的那部分靶标。）<br>
+          <b>怎么看这张图：</b>① 这是一个 <b>3 列 × 2 行</b>的直方图阵列：<b>列＝方法，行＝数据集</b>；② 看每一格的横轴右端——<b>误差尾巴拖得越远，说明有越多的靶标偏得离谱</b>；③ 原文结论是：Wildcat 在「误差小于 0.5 m 的点的占比」以及「最大误差」两项上都优于另外两个系统，在两个数据集上都成立；④ 但务必记住图注最后那句：<b>另外两个系统的统计只覆盖了一部分靶标</b>（因为它们在隧道里失效了），所以这张图的横向比较也要打折扣。<br>
+          <b>要记住的一句话：</b>直方图比一个平均值诚实得多——<b>平均值只告诉你「典型情况有多好」，直方图会告诉你「最差能差到哪里」。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="i">8. 一个重要的反面：它不是全面最强</h2>
+
+      <p>读到这里很容易形成一个印象：Wildcat 赢麻了。但精读材料给出一条<b>必须写进这一课的反面事实</b>——Wildcat 自己的纯里程计，在另一个数据集上<b>比 LIO-SAM 更差</b>。</p>
+
+      <p>数据集是 <b>MulRan 的 DCC03 序列</b>（韩国大田采集的城市驾驶数据，约 <b>5 公里</b>长，用 Ouster OS1-64，并且提供 100 Hz 的六自由度轨迹真值）。原文报的里程计平移漂移是：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:34%;">方法</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">平移漂移（作者自报，MulRan DCC03）</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">旋转误差（deg/m）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>Wildcat</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>2.9%</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">0.01</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>LIO-SAM</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>2.4%</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">0.009</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>FAST-LIO2</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">6.8%</td><td style="padding:.45rem;border:1px solid #cfd9e6;">0.03</td></tr>
+        </tbody>
+      </table>
+
+      <p>看这一行：<b>Wildcat 2.9%，LIO-SAM 2.4%。</b>原文自己承认得很干脆：「LIO-SAM 的里程计漂移在平移与姿态上都<b>略小于</b> Wildcat」。<b>也就是说，在平坦、开阔、几何特征丰富的城市道路场景里，Wildcat 的单帧精度并不占优。</b></p>
+
+      <p>那它为什么能在 QCAT 上把对手甩开？答案在两张图里。原文把它叫 <b>slippage cases</b>（打滑）：LIO-SAM 与 FAST-LIO2 在隧道里失败，<b>不是「不够准」，是「跑不完」</b>。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Wildcat/c62b4876b919e744ca8c4b1034ba31f2ccdc47f0b5d529bc8432cbe4228fda57.jpg" alt="Slippage cases for LIO-SAM and FAST-LIO2 through the tunnel on the QCAT SpinningPack dataset">
+        <figcaption>
+          <b>原图注（Fig. 14）：</b>Slippage cases for LIO-SAM (left) and FAST-LIO2 (right) through the tunnel on the QCAT SpinningPack dataset.（QCAT SpinningPack 数据集上，LIO-SAM（左）与 FAST-LIO2（右）穿过隧道时发生的打滑情形。）<br>
+          <b>怎么看这张图：</b>① 这是两张<b>失败现场</b>的照片、以及它们对应的结果可视化；② 盯住那个关键现象：<b>在隧道里，这两套系统的地图出现了明显的错位或断裂</b>——原文用 slippage（打滑）来形容；③ 把它和 Table II 的最后一列对上：<b>正因为在这里失败，LIO-SAM 与 FAST-LIO2 只能对一部分靶标报误差</b>（41 / 38 / 53，而 Wildcat 是 63）；④ 也把它和上一节那张自绘图对上：<b>隧道是几何退化的典型场所</b>，长直的墙面约束不住沿行进方向的运动。<br>
+          <b>要记住的一句话：</b>这一篇真正赢下来的不是精度，<b>是「对手在这个场景里跑不完，而它跑完了」</b>。
+        </figcaption>
+      </figure>
+
+      <p>把这两节合起来看，能同时打穿两个很常见的误解：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <h4>误解一：用来自举真值的系统一定很准</h4>
+          <p>不一定。Wildcat 被拿来给 Wild-Places 生成真值，靠的是<b>在大尺度、几何退化场景下能跑完全程并保持全局一致</b>，而不是「单帧估计最准」。在 MulRan 那种城市平路上，它的平移漂移（2.9%）还<b>不如</b> LIO-SAM（2.4%）。</p>
+          <p><b>推论：</b>「它能造真值」和「它精度最高」是两件事，前者要的是<b>全局一致性</b>，后者要的是单帧精度。</p>
+        </div>
+        <div class="mini-card">
+          <h4>误解二：SOTA 一定全面最强</h4>
+          <p>也不一定。任何「state-of-the-art」都是<b>在某个场景分布上的</b>。Wildcat 赢的是隧道、楼梯、地下这类<b>几何退化、对手会失效</b>的环境；换到城市道路，它就不是最好那个。</p>
+          <p><b>推论：</b>看到一个「优于 SOTA」的说法，<b>先问在哪几个数据集上、对手有没有跑完</b>——这一篇的对手就没跑完。</p>
+        </div>
+      </div>
+
+      <p>那它到底赢在哪？两件事：<b>鲁棒性</b>（对手跑不完隧道，它跑完了，而且 63 个靶标一个不落）与<b>全局一致性</b>（回环加前面讲过的重力方向约束，把大范围的漂移拉回来）。<b>它赢的是「能跑完且全局自洽」，不是「每一步都更准」。</b></p>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>★ 还有一条必须一起交代的口径问题</h4>
+        <p>这一篇在做横比时，对参数的处理值得说明：<b>Wildcat 对所有数据集用同一套体素滤波参数</b>；而原文自己说，FAST-LIO2 与 LIO-SAM <b>对参数敏感</b>，「我们跑很多次、挑了最好的参数再报」。这句话说明两件事：① 作者对参数公平性有自觉；② 但对手的数字是<b>调优后的</b>，而自己的是<b>一套参数走天下</b>——这个不对称在引用时要一并说明，不能只搬结论。</p>
+        <p>另外，MulRan 上的对比<b>关掉了地点识别</b>（只用固定搜索半径），这是为了公平；但也意味着<b>那个 2.9% 是纯里程计的数字，不含回环</b>。</p>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>既然 Wildcat 的纯里程计在 MulRan 上比 LIO-SAM 差（2.9% 对 2.4%），那它在 QCAT 上凭什么赢？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。QCAT 含隧道与楼梯这类几何退化区域，LIO-SAM 与 FAST-LIO2 在那里直接失败、跑不完，所以只能对一部分靶标报误差（41/38/53，而 Wildcat 是 63）。Wildcat 赢的是鲁棒性与全局一致性（回环加位姿图里的重力方向约束），不是单帧精度。这两件事要分开看。" onclick="lessonKit.answer(this,'q0203b')">赢在对手跑不完与全局一致</button>
+          <button data-correct="no" data-explanation="不对。原文恰恰承认自己的里程计漂移略大于 LIO-SAM。它赢的不是「每一帧都更准」，而是「在对手失效的隧道场景里跑完了全程」并保持全局一致。把 2.9% 与 2.4% 这一行记住，就不会把 SOTA 当成全面最强。" onclick="lessonKit.answer(this,'q0203b')">赢在每一帧都比对手更准</button>
+        </div>
+        <div class="quiz-feedback" id="q0203b"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="j">9. 和前面课程怎么接</h2>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:34%;">接哪一段</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">怎么接</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 第九季 <a href="0184-WildPlaces-2023-自然场景的地点识别.html">0184</a>（Wild-Places）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>本课的闭环对象。</b>第九季站在<b>数据集</b>的角度转引了 0.3 m；本课站在<b>SLAM 系统</b>的角度查到了 0.42 / 0.34 m，并说清了它不是轨迹误差。接回第九季的结论：<b>够用比准更重要。</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 第九季 <a href="0183-Hilti-Oxford-2023-毫米级真值.html">0183</a>（Hilti）与 <a href="0185-收官-真值精度阶梯与选尺子指南.html">0185</a>（真值精度阶梯）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">Hilti 那篇也是「<b>靠布靶标给大场景造真值</b>」，与 Wildcat 的 63 个测绘靶标是同一族做法，只是靶标密度与精度层级不同。放在 0185 那把「尺子」里看，这一篇给的是<b>亚米级</b>那一档。</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 第二季（<a href="0017-导览-第二季开场-打地基.html">0017</a> 起）位姿图与 BA</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">Wildcat 的滑动窗口优化与回环约束，<b>求解的还是位姿图那一类问题</b>，只是它的节点变成了「子图」、它的位姿修正是在流形上做增量。第二季那套最小二乘的骨架在这里原样复用。</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 第四季（<a href="0073-导览-第四季开场-激光主干.html">0073</a> 起）运动畸变</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">第四季讲了「一帧点云是跨时间采集的」，当时的解法是把点<b>推回</b>统一时刻；这一篇给出另一条路：<b>不动点，让位姿变成能按时刻查询的曲线</b>。前面铺的坑，这里填上了。</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 本季 <a href="0202-RecSLAM-2022-算力不够就往上送.html">0202</a>（RecSLAM）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">两篇正好是同一环的两面：0202 问「SLAM 该跑在哪」（把计算送出去），0203 问「SLAM 该怎么做」（连续时间）。面对「算力不够」，0202 换机器，0203 用<b>更少的变量、更低的频率</b>换时间。</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 本季 <a href="0200-Falcon4-2022-把SLAM塞进一架真飞机.html">0200</a>（Falcon 4）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">两篇都强调鲁棒性与传感器冗余，而且都在<b>真实退化场景</b>里做验证：0200 是树冠下的光照剧变，0203 是隧道里的几何退化。<b>「让系统跑完」比「让某一帧更准」更难的这条经验，两篇都对上了。</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>★ 下一课 <a href="0204-撤稿警示-一篇看起来完全正常的论文.html">0204</a></b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">这一课我们做了一次「数字口径」的对账；下一课会把这件事推到底——<b>当一篇论文内部的数字互相打架时，你该怎么核查它。</b>本课学到的「先问谁报的、在哪个数据集上、是绝对还是相对」，正是下一课的起点。</td></tr>
+        </tbody>
+      </table>
+
+      <p>最后回到本季的主问题：<b>它在系统链的哪一环？</b>答案最干脆——<b>它就是「SLAM/里程计」这一环本身，第 ③ 格。</b>它的上游是两种传感器数据，下游是把 6 自由度轨迹与全局一致的子图地图交给导航、规划与控制。它不改进规划，不做控制，也完全不碰执行器。<b>这一季读到这里，你已经看过了三种「站法」：0200 横跨六环、0201 一环都不实现、0202 只碰两环的部署方式，而 0203 是唯一一个「就站在那一环上、把这一环本身做好」的例子。</b></p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="k">10. 读完你应该能回答</h2>
+
+      <p>合上这一课之前，先自己回答下面六个问题。答不上来的，回去看对应的小节。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 它在链的哪一环？</h4><p><b>就是第 ③ 环（SLAM/里程计）本身</b>，并顺带产出第 ④ 环的地图。上游是 VLP-16 与 IMU，下游是导航、规划、控制。</p></div>
+        <div class="mini-card"><h4>② 连续时间解决了什么？</h4><p>解决了<b>运动畸变</b>：一帧点云是跨时间采集的，离散表示把它全归到一帧；连续时间让每个点用自己的采集时刻去曲线上取位姿。顺带还解决了 IMU 与雷达时间戳不对齐的问题。</p></div>
+        <div class="mini-card"><h4>③ B 样条的三点直觉？</h4><p><b>三次</b>（每段由 4 个相邻控制点决定）、<b>控制点</b>（被优化的量）、<b>局部支撑</b>（改一个只影响附近一段）。注意：这几个词的术语级解释是<b>补的</b>，原文没给公式也没给这些词。</p></div>
+        <div class="mini-card"><h4>④ 「在线」的代价是什么？</h4><p>三条：必须在窗口被顶掉前算完（所以采样位姿比窗内 IMU 少一个数量级）、只看局部信息必然累积漂移、板载算力吃力（Jetson AGX Xavier 上里程计只有 1 到 4 Hz）。</p></div>
+        <div class="mini-card"><h4>⑤ 那个 0.3 m 的真实口径？</h4><p>Wild-Places <b>引述</b>的 0.3 m 就是 Wildcat 原文 QCAT <b>SpinningPack 绝对误差均值 0.34 m</b> 的四舍五入；它是<b>63 个测绘靶标的地图点误差</b>，不是轨迹误差——5 km 级室内外场景拿不到轨迹真值。</p></div>
+        <div class="mini-card"><h4>⑥ 它是不是全面最强？</h4><p><b>不是。</b>MulRan DCC03 上它的纯里程计平移漂移 2.9%，<b>略差于</b> LIO-SAM 的 2.4%。它赢在<b>鲁棒性</b>（对手在隧道里跑不完）与<b>全局一致性</b>（回环加重力约束）。</p></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>用「一帧点云不是一个瞬间」这句话，解释激光雷达的运动畸变是怎么产生的；再说明连续时间为什么能消除它。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div><b>畸变怎么来的：</b>激光雷达靠一个旋转的激光束逐点测距，转一圈需要时间，所以一帧点云里每个点的采样瞬间都不同。如果机器人在这一圈里动了（尤其是快速旋转），这些点就是按<b>不同的位姿</b>测出来的；而处理时我们把它们<b>全归到这一帧的某一个位姿</b>上，错配的结果就是形状被扭曲——墙上出现锯齿。<b>连续时间为什么能消除：</b>它把轨迹存成一条<b>能对任意时刻求值的连续曲线</b>（原文记作从时间窗口到 SE(3) 的映射）。于是每个点不需要被「挪」，它直接去问曲线「在我被采集的那一刻，机器人在哪」。点各归各位，畸变从根上消失。附带好处：IMU（100 Hz）与雷达（20 Hz）的时间戳天然不对齐，而曲线同时是两者的公共时间坐标。</div></details>
+          </li>
+          <li>为什么 Wildcat 不可能用 SE(2)？请给出至少两条来自正文的理由。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>三条：① <b>场景是三维的</b>——它的 QCAT 场地含三层楼梯与隧道，地图必须表达竖直墙面，平面三自由度的位姿根本表达不了这些结构；② <b>它的位姿图专门加了重力方向约束</b>（把每个节点在局部坐标系里的竖直方向估计对到世界坐标系的竖直轴 $[0\ 0\ 1]^\top$），这一项的意义就是让姿态在三维里不跑偏，而平面表示不需要这样的约束；③ <b>它的面元匹配代价是三维的 point-to-plane 型</b>，需要三维法向量，也只有 SE(3) 才谈得上。另外补充一句：清单说它用 SE(2) 做「稠密重建」，正文里 SE(2) 出现 0 次，「稠密重建」这个说法也不存在——这是清单的说法，不是论文写的。</div></details>
+          </li>
+          <li>为什么 B 样条的「局部支撑」在优化里很重要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为<b>它决定了雅可比矩阵有多稀疏</b>。三次 B 样条里，每段曲线的形状只由 4 个相邻控制点决定，所以改动一个控制点只影响它附近的一小段——本课的示意图里，把 c3 往下拖了很大一截，曲线的左右两端却完全没动。放到优化的语境里，这意味着<b>一个残差项只会牵涉很少的几个变量</b>，正规方程因此非常稀疏，求解代价大幅下降。这也是原文能让「采样位姿的数量比窗内 IMU 数量少一个数量级」的同时、仍然保持整段连续轨迹的原因。<b>但要记得：</b>「次数、阶数、局部支撑、控制点」这几个词的术语级解释是本课补的，原文没有给出任何 B 样条公式，也没有出现这些术语。</div></details>
+          </li>
+          <li>请把「Wildcat 误差 0.3 m」这句话改写成带完整口径的写法，并说明为什么原写法容易被误用。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div><b>带口径的写法：</b>「<b>Wild-Places 引述</b> Wildcat 的测绘对比平均误差 0.3 m；Wildcat 原文给出的是 <b>QCAT 绝对误差</b>：FlatPack 均值 <b>0.42 m</b>、SpinningPack 均值 <b>0.34 m</b>（Table II，<b>63 个测绘靶标</b>，作者自报）。」<b>为什么原写法容易被误用：</b>「误差 0.3 m」丢掉了三件关键信息——① <b>谁报的</b>（这里其实是转引），② <b>在哪个数据集上、量的是什么</b>（QCAT 上 63 个测绘靶标的点对点距离，不是整条轨迹的误差），③ <b>是绝对还是相对</b>（表头注明是 Absolute Error，而且是先做过一次抗外点对齐之后算的）。丢掉这些之后，读者很容易把 0.3 m 当成「轨迹精度」，进而误以为「这么准的系统做出来的真值可以当厘米级用」。而本课要强调的正是：<b>数字只要离开口径，就会失真。</b></div></details>
+          </li>
+          <li>既然 Wildcat 的纯里程计在 MulRan 上输给 LIO-SAM，为什么它还能成为「自举真值」的来源？这样一句话能同时打穿哪两个误解？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div><b>为什么还能当来源：</b>因为「造真值」需要的不是单帧精度，而是<b>在大尺度、几何退化场景里能跑完全程并保持全局一致</b>。Wildcat 在 QCAT 上 63 个靶标一个不落（对手只标到 41 / 38 / 53），并靠回环与位姿图里的重力方向约束把全局漂移拉回来，所以它产出的地图在整体形状上是自洽的——这正是亚米级真值需要的性质。<b>打穿的两个误解：</b>① <b>「用来自举真值的系统一定很准」</b>——不一定，在 MulRan 那种城市平路上它平移漂移 2.9%，还略差于 LIO-SAM 的 2.4%；② <b>「SOTA 一定全面最强」</b>——也不一定，任何 SOTA 都是某个场景分布上的最强，Wildcat 赢的是隧道、楼梯、地下这类对手会失效的环境，换到城市道路就不是第一。所以看到「优于 SOTA」的说法，先问一句：<b>在哪几个数据集上、对手有没有跑完。</b></div></details>
+          </li>
+        </ol>
+      </section>
+
+      <p>最后留一句这一篇自己的诚实之处：它<b>大方承认自己的里程计会漂、承认不如 LIO-SAM、承认大场景拿不到轨迹真值、也承认对手的参数是调优过的。</b>而在「在线」这件事上它也很坦白——板载算力下里程计只有 1 到 4 Hz。<b>一篇把自己的边界写得这么清楚的系统论文，反而比那些只报最好数字的论文更值得信任。</b></p>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0202-RecSLAM-2022-算力不够就往上送.html">← 0202 RecSLAM（2022）：算力不够就把计算送出去</a>
+        <a class="next" href="0204-撤稿警示-一篇看起来完全正常的论文.html">0204 撤稿警示：一篇看起来完全正常的论文 →</a>
+      </div>
+      <p class="foot-note">你已经能对着一个数字问出「谁报的、在哪个数据集上、是绝对还是相对」——这就是读论文最实用的一件功夫 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

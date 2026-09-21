@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>运动规划综述（2022）：定位之后怎么走 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 K · 应用与相邻领域 / Lesson 0201（单篇 · 综述）</div>
+      <h1>运动规划综述（2022）：定位之后怎么走</h1>
+      <p class="subtitle">SLAM 把「我在哪」答完了，下一步是「我该往哪走」。这一篇不造任何东西，却把整条导航栈拆开放在桌上，告诉你每一格该不该换成机器学习 🧩</p>
+      <div class="hero-meta">
+        <span>🎯 主题：导航栈的「解剖图」——元层面的选型指南</span>
+        <span>👥 作者：Xuesu Xiao、Bo Liu、Garrett Warnell、Peter Stone</span>
+        <span>📅 2022 · <i>Motion planning and control for mobile robot navigation <b>using machine learning: a survey</b></i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它在系统链的哪一环</a>
+        <a href="#b">先看清这篇到底是什么</a>
+        <a href="#c">从卧室走到街心公园</a>
+        <a href="#d">全篇唯一的公式：代价函数 J</a>
+        <a href="#e">74 篇论文的位置地图</a>
+        <a href="#f">学习越窄越有效</a>
+        <a href="#g">它把 SLAM 放在哪，和前面课程怎么接</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清这一篇为什么<b>一环都不实现</b>，以及「横跨全链」和「不实现任何一环」为什么并不矛盾；② 自己讲一遍「<b>从卧室走到街心公园</b>」这个类比，并用它区分全局规划与局部规划；③ 看懂全篇<b>唯一的那个公式</b>——代价函数 J，并理解为什么「调参」会是导航的日常；④ 记住那组关键统计：<b>43 篇端到端 vs 31 篇非端到端</b>、46 篇做经典问题只有 8 篇有提升、12/74 有安全保证、73/74 仍需人工调参；⑤ 知道这篇综述给 <b>SLAM 这个位置</b>的定论是什么。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一篇自己声明 SLAM / VO / SfM 位于流水线的「<b>感知 → 全局表示</b>」环（原文原话），所以它是一只<b>纯下游视角</b>的眼睛：它不改进 SLAM，只关心 SLAM 交出来的东西被谁消费怎么消费——这条线回链第四季的激光主干（<a href="0073-导览-第四季开场-激光主干.html">0073</a> 起那一块）与第五季的融合。它统计出来的「43 篇端到端 vs 31 篇非端到端」，是第七季 <a href="0128-导览-第七季开场-一句话的面试.html">0128</a>–<a href="0151-收官-学习式方法的能与不能.html">0151</a> 全部学习式方法的一张<b>位置地图</b>；而它那句「学习该放在子系统或组件层，不该替换整条栈」，是对第七季最强的一句告诫。上一课 0200 的规划器，正好是这张解剖图的一个真实实例。</p>
+        </div>
+      </div>
+
+      <h2 id="a1">0. 它在系统链的哪一环</h2>
+
+      <p>这是本季最特殊的一节。前面 0200 那篇一篇顶六环，这一篇<b>一环都不实现</b>。先把话说清楚：它不是「覆盖了七环」，而是「<b>讨论了七环</b>」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 250" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="250" fill="#0f1622"/>
+          <text x="450" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">0201 运动规划综述：七格都讨论，七格都不实现</text>
+
+          <rect x="20" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <rect x="145" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <rect x="270" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <rect x="395" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <rect x="520" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <rect x="645" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+          <rect x="770" y="52" width="110" height="96" rx="8" fill="#18222f" stroke="#4f9dff" stroke-width="1.5" stroke-dasharray="7 5"/>
+
+          <text x="75" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">① 传感器</text>
+          <text x="75" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">相机 LiDAR 编码器</text>
+          <text x="75" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">感知的来源之一</text>
+          <text x="75" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="200" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">② 感知/前端</text>
+          <text x="200" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">SLAM VO SfM 在这</text>
+          <text x="200" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">产出全局表示的输入</text>
+          <text x="200" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="325" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">③ SLAM/里程计</text>
+          <text x="325" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">被它归入「感知」</text>
+          <text x="325" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">它不改进 SLAM</text>
+          <text x="325" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="450" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">④ 地图</text>
+          <text x="450" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">它叫「全局表示」</text>
+          <text x="450" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">全局规划器的输入</text>
+          <text x="450" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="575" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">⑤ 规划</text>
+          <text x="575" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">全局 + 局部两级</text>
+          <text x="575" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">它讨论的核心</text>
+          <text x="575" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="700" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">⑥ 控制</text>
+          <text x="700" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">运动指令到电机</text>
+          <text x="700" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">它的下游边界</text>
+          <text x="700" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="825" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">⑦ 执行器</text>
+          <text x="825" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">电机与轮子</text>
+          <text x="825" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">它没往下写</text>
+          <text x="825" y="138" text-anchor="middle" font-size="9" fill="#4f9dff">只讨论</text>
+
+          <text x="20" y="176" font-size="11.5" fill="#8fb4d9">上游：74 篇论文（它综述的对象）</text>
+          <text x="880" y="176" text-anchor="end" font-size="11.5" fill="#8fb4d9">下游：要选型的人</text>
+          <text x="20" y="204" font-size="11.5" fill="#cfe0f7">虚线框的意思是：这一格它讨论过、但不实现。它没有自研系统、没有实验、没有数据集。</text>
+          <text x="20" y="232" font-size="11.5" fill="#4f9dff">所以「横跨所有环」和「一环都不实现」不矛盾——前者说讨论范围，后者说有没有造东西。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把这篇综述放到七环系统链上，一格一格标出它「怎么看待这一格」。和 0200 那篇不同，这里七个格子的边框全是<b>虚线</b>——虚线代表「讨论但不实现」。每格下面写的是它在文中的位置。<br>
+          <b>怎么看这张图：</b>① 先看边框：<b>七格全是虚线</b>，这就是「一环都不实现」；② 看第 ② ③ 格：SLAM / VO / SfM 被它归在「感知」这一侧，作为产出「全局表示」的手段——<b>这正是它把 SLAM 当上游的证据</b>；③ 看最下面的上游与下游：它的上游是 74 篇论文，它的下游是<b>要选型的人</b>，不是一台机器；④ 读最后那行——它解释了本节开头那个看似矛盾的说法。<br>
+          <b>要记住的一句话：</b>这篇论文不是导航栈，<b>它是导航栈的解剖图</b>；它不跑在任何一台机器人上，它只决定「学习该放在哪一格」。
+        </figcaption>
+      </figure>
+
+      <p>那它的价值在哪？在于它做了一件前人没做的事。<b>机器学习圈和机器人圈各说各话已经很多年了</b>：学端到端导航的论文几乎只在学习圈内部互相比较，而机器人圈因为经典方法能真部署，长期忽略学习方法的进展。原文的切入点就是：<b>至今为止，经典范式与新兴学习范式之间缺乏直接对比。</b>它要补的就是这张对照表。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">1. 先看清这篇到底是什么（两处纠正）</h2>
+
+      <p>导览课 <a href="0199-导览-第十一季开场-SLAM站在系统的哪一环.html">0199</a> 立过一句口号：<b>看位置之前，先看清这篇到底是什么。</b>这一节就是那句口号的第一个实战。而这一篇恰好有<b>两处</b>需要纠正的说法。</p>
+
+      <h3>纠正一：它是纯综述，不是「系统类、偏工程」</h3>
+
+      <p>有一份清单把这一篇和其他两篇并列，说它们「<b>都是系统类，偏工程</b>」。这个判断<b>不成立</b>。它的真实标题是 <i>Motion planning and control for mobile robot navigation <b>using machine learning: a survey</b></i>——注意结尾那个 <b>a survey</b>。<b>它是一篇综述</b>：不提出新方法、不含任何自研系统、没有自己的实验、也没有数据集。它做的是把 74 篇别人的论文归类、对照、然后给建议。</p>
+
+      <p>为什么这个区别重要？因为<b>读系统论文和读综述的方法完全不同</b>。读系统论文，你要找它的方法细节、实验条件、消融；读综述，你要找的是<b>它的坐标系和它的统计口径</b>——它按什么维度分类？每一类各多少篇？它的结论有多少是数据支持的、多少是作者的判断？如果拿着读系统论文的期待去读它，你会一直在找「它自己的方法在哪」，然后一直找不到。</p>
+
+      <h3>纠正二：它不是公式最多的，恰恰相反</h3>
+
+      <p>另一处说法是：「运动规划那篇，<b>这是本批公式最多的一篇</b>」。<b>实测正好相反。</b>这一篇全文<b>只有一个独立成行的编号公式</b>（就是下一节要讲的式 1，代价函数 J）。它是这一批三篇应用论文里<b>公式最少的一篇</b>。</p>
+
+      <p>那它的内容靠什么承载？靠<b>表格与分类</b>。原文用结构图而不是公式来表达的东西，列出来很能说明问题：</p>
+
+      <ul>
+        <li><b>全局规划与局部规划的分解</b>——用一张结构图（Fig. 2）表达，无公式；</li>
+        <li><b>DWA、MPC、势场法（PFM）、A*、Dijkstra、D* Lite、RRT、PRM、Theta*</b>——这些经典算法全部<b>只以名词和引文出现</b>，原文<b>没有给出任何一条具体算法公式</b>；</li>
+        <li><b>学习方法的损失函数与奖励函数</b>——也<b>没有公式</b>，只以文字描述（例如奖励塑形、内在奖励、手工设计的奖励）；</li>
+        <li><b>「学习接口」的两种接法</b>——用 Fig. 4 的两张图表达：上面一张是学端到端运动策略，下面一张是学<b>参数策略</b>（学习模块只输出经典规划器的超参数）。</li>
+      </ul>
+
+      <p>所以这一课的讲法也要跟着换：<b>我们不追公式，我们追「坐标系」</b>——它用哪几个轴把 74 篇论文摆开？摆完之后哪一格空了？哪一格挤满了？这些问题的答案，比任何一条公式都更能告诉你「学习该放在哪」。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于这一篇的类型，下面哪一种判断更准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。标题结尾是 a survey，它不提出新方法、没有自研系统、没有实验、没有数据集，全文只有一个编号公式。它的载体是分类表而不是公式，读法要与系统论文区别开。" onclick="lessonKit.answer(this,'q0201a')">它是纯综述，载体是表格分类</button>
+          <button data-correct="no" data-explanation="不对。这是清单里的两处误读：它既不是「系统类、偏工程」，也不是公式最多的一篇。恰恰相反，它是本批三篇里公式最少的一篇（仅 1 个编号式）。" onclick="lessonKit.answer(this,'q0201a')">它是系统论文，公式也最多</button>
+        </div>
+        <div class="quiz-feedback" id="q0201a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">2. 从卧室走到街心公园</h2>
+
+      <p>要讲清楚这一篇，得先讲清楚「导航」这两个字在经典机器人学里是什么意思。而原文自己给了一个非常好的类比，我们直接借用——<b>一个人要从卧室走到街心公园</b>。</p>
+
+      <p><b>第一步，她会先想一个粗略的计划。</b>比如：出卧室门 → 沿走廊走到餐厅 → 出大门右转 → 沿街一直走到第二个路口 → 右转进公园。这个计划之所以能想出来，是因为她脑子里有<b>对世界的表示</b>——她知道家里的布局，也知道街区的地图。</p>
+
+      <p><b>第二步，她上路之后会遇到计划里没有的东西。</b>走廊地上落了几件玩具，要绕开；路过餐厅要和伴侣打个招呼；人行道上新开了一个工地，得避让；走到路口遇到红灯，要让车先过。原文对这些行为的描述很值得抄下来：<b>「这些行为不是事先计划好的，而是对即时情境的反应。」</b></p>
+
+      <p>经典机器人导航的分解方式，和这位出门的人一模一样。<b>全局规划</b>对应那个粗略计划，<b>局部规划</b>对应那些即时反应。两者的技术差别，可以列成一张很清楚的账：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:20%;">对比项</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">全局规划（先想好大致怎么走）</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">局部规划（每一步躲开眼前的）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>任务</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">找一条从当前位置到最终目标的粗路径</td><td style="padding:.45rem;border:1px solid #cfd9e6;">生成可以真正执行的底层运动指令</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>世界的表示</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">相对稀疏：图、概率路线图、快速搜索随机树，或粗的占据栅格 / 代价地图</td><td style="padding:.45rem;border:1px solid #cfd9e6;">要求更精确、但范围更小：分辨率更细、覆盖面积更小的占据栅格或代价地图</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>怎么看待机器人</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>通常当成一个质点，只考虑位置，不考虑朝向</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">要考虑完整模型：全向、差速、阿克曼转向……以及运动学或动力学约束</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>算法例子</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">宽度 / 深度优先搜索、Dijkstra、带启发式的 A*；表示变了要快速重规划就用 D* Lite</td><td style="padding:.45rem;border:1px solid #cfd9e6;">动态窗口法（DWA）、模型预测控制（MPC）、势场法等——原文只给名词不给公式</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>为什么这样做</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">导航问题覆盖的空间大，长时域上生成细粒度运动序列在计算上不可行</td><td style="padding:.45rem;border:1px solid #cfd9e6;">部署时应答要求高，所以只推理机器人<b>眼前的一小片</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>输出给谁</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">一串路点（waypoint），交给局部规划</td><td style="padding:.45rem;border:1px solid #cfd9e6;">离散的高层指令（比如左转 45 度）或连续的线速度与角速度，交给底层电机控制器</td></tr>
+        </tbody>
+      </table>
+
+      <p>这里有一条对 SLAM 读者特别重要的细节，藏在不显眼的地方。<b>原文明确说：感知不仅可能来自机器人自己身上的传感器，也可能来自外部系统——比如 GPS、声学应答器，或者动作捕捉系统。</b>这句话的意思是：<b>「感知」这一格的输入，并不一定来自这台机器人本身。</b>呼应到 0200 那篇，它的感知全部来自机上；而到了 0202 那篇，激光数据会被送出去算——链上同一格，数据的来路可以完全不同。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">一个人从卧室走到街心公园：先想大方向，再躲眼前的东西</text>
+
+          <rect x="20" y="44" width="420" height="256" rx="9" fill="#141c26" stroke="#4f9dff" stroke-width="1.5"/>
+          <rect x="460" y="44" width="420" height="256" rx="9" fill="#141c26" stroke="#c65c47" stroke-width="1.5"/>
+          <text x="230" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#cfe0f7">① 全局：先想好大致怎么走</text>
+          <text x="670" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#f0a08c">② 局部：每一步躲开眼前的东西</text>
+
+          <rect x="40" y="176" width="70" height="58" rx="4" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="75" y="210" text-anchor="middle" font-size="10" fill="#cfe0f7">卧室</text>
+          <rect x="112" y="214" width="118" height="24" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="171" y="231" text-anchor="middle" font-size="9.5" fill="#cfe0f7">走廊</text>
+          <rect x="152" y="126" width="78" height="82" rx="4" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="191" y="170" text-anchor="middle" font-size="10" fill="#cfe0f7">餐厅</text>
+          <rect x="232" y="214" width="204" height="28" fill="#2c2a26"/>
+          <text x="320" y="262" text-anchor="middle" font-size="9.5" fill="#9a917c">街道</text>
+          <line x1="366" y1="214" x2="366" y2="242" stroke="#e8d57a" stroke-width="1.4"/>
+          <line x1="366" y1="214" x2="366" y2="242" stroke="#e8d57a" stroke-width="1.4"/>
+          <rect x="386" y="66" width="52" height="88" rx="4" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="1.2"/>
+          <text x="412" y="182" text-anchor="middle" font-size="10" fill="#9fd8bd">街心公园</text>
+          <polyline points="75,206 168,226 191,172 244,228 364,228 364,140 386,120" fill="none" stroke="#4f9dff" stroke-width="5"/>
+          <polygon points="386,120 368,116 374,132" fill="#4f9dff"/>
+          <circle cx="75" cy="206" r="5" fill="#5ad1a8"/>
+          <text x="256" y="108" text-anchor="middle" font-size="10" fill="#8fb4d9">房子的布局</text>
+          <text x="404" y="252" text-anchor="middle" font-size="10" fill="#8fb4d9">街区地图</text>
+          <text x="46" y="152" font-size="10" fill="#4f9dff">一条粗路线，粗到不用管脚下</text>
+
+          <rect x="480" y="196" width="380" height="56" fill="#2c2a26"/>
+          <text x="806" y="240" text-anchor="middle" font-size="9.5" fill="#9a917c">人行道</text>
+          <circle cx="540" cy="236" r="8" fill="#6b4530"/>
+          <text x="540" y="272" text-anchor="middle" font-size="10" fill="#f0c9a8">玩具</text>
+          <circle cx="622" cy="150" r="10" fill="#3b4a60"/>
+          <rect x="614" y="162" width="16" height="30" rx="5" fill="#3b4a60"/>
+          <text x="622" y="136" text-anchor="middle" font-size="10" fill="#8fb4d9">伴侣</text>
+          <rect x="688" y="176" width="46" height="22" fill="#5a4a38" stroke="#e8d57a" stroke-width="1.2"/>
+          <line x1="694" y1="176" x2="694" y2="198" stroke="#e8d57a" stroke-width="1"/>
+          <line x1="706" y1="176" x2="706" y2="198" stroke="#e8d57a" stroke-width="1"/>
+          <line x1="718" y1="176" x2="718" y2="198" stroke="#e8d57a" stroke-width="1"/>
+          <text x="711" y="166" text-anchor="middle" font-size="10" fill="#e8d57a">新工地</text>
+          <rect x="792" y="120" width="16" height="42" rx="3" fill="#2b3a50" stroke="#8fb4d9" stroke-width="1"/>
+          <circle cx="800" cy="130" r="5" fill="#c65c47"/>
+          <text x="800" y="110" text-anchor="middle" font-size="10" fill="#f0a08c">红灯</text>
+          <rect x="824" y="212" width="34" height="18" rx="4" fill="#4a5566"/>
+          <text x="841" y="252" text-anchor="middle" font-size="10" fill="#8fb4d9">车</text>
+          <polyline points="492,236 520,214 546,254 578,230 602,196 636,240 686,214 722,246 778,226 858,236" fill="none" stroke="#f0705c" stroke-width="2"/>
+          <text x="486" y="152" font-size="10" fill="#f0a08c">走出来的线是碎碎的、一直在抖</text>
+          <text x="150" y="122" text-anchor="middle" font-size="10" fill="#cfe0f7">先想大方向</text>
+          <text x="150" y="288" text-anchor="middle" font-size="10" fill="#4f9dff">全局路径的中间节点</text>
+          <text x="330" y="288" text-anchor="middle" font-size="10" fill="#4f9dff">一条粗路线</text>
+          <text x="46" y="250" font-size="10" fill="#5ad1a8">卧室是起点</text>
+          <text x="486" y="100" font-size="10" fill="#f0a08c">即时情境：计划里没有的东西</text>
+          <text x="486" y="294" font-size="10" fill="#f0705c">局部轨迹：一直在修正，碎碎的</text>
+          <text x="700" y="294" font-size="10" fill="#8fb4d9">局部只推理眼前一小片</text>
+
+          <text x="20" y="332" font-size="11.5" fill="#4f9dff">粗蓝线 = 全局路径：一串路点，只关心「大致怎么走」，机器人在这里被当成一个质点。</text>
+          <text x="20" y="360" font-size="11.5" fill="#f0705c">细红线 = 局部轨迹：每一步都在修正，要考虑朝向、动力学和眼前的障碍物。</text>
+          <text x="20" y="388" font-size="11.5" fill="#8fb4d9">两者频率差得远：全局规划可以几秒才想一次，局部规划必须每秒想很多次。</text>
+          <text x="20" y="416" font-size="11.5" fill="#cfe0f7">原文的关键差异还有一条：全局规划通常假设机器人是质点、不考虑朝向；局部规划必须考虑完整模型。</text>
+          <text x="20" y="444" font-size="11.5" fill="#5ad1a8">作者用这个类比得出的建议是：把学习放在「反应式的局部规划」这一层。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格是一间房子的平面图加一段街道：卧室、走廊、餐厅、大门、街道、第二个路口、街心公园，上面压着一条很粗的蓝色路线——那是「先想好大致怎么走」的全局路径。右格是同一条人行道的放大：地上有玩具、前面有伴侣、路边有新工地、路口有红灯和车，上面是一条细细的、抖来抖去的红色线——那是「每一步躲开眼前东西」的局部轨迹。<br>
+          <b>怎么看这张图：</b>① 先对比两条线的样子：<b>粗线走的是「里程碑」，细线走的是「每一步」</b>；② 看左格那些地标（卧室门、走廊、餐厅、第二个路口）——它们是全局规划的中间节点，对应原文说的「一串路点」；③ 看右格那四样东西：<b>玩具、伴侣、工地、红灯，全是计划时不知道的</b>，这正是原文说的「不是事先计划，而是对即时情境的反应」；④ 最后读最下面那行：作者据此推荐把学习放在反应式的局部规划层，这个建议会在第 5 节被统计数字支撑。<br>
+          <b>要记住的一句话：</b>导航被分成两级，<b>不是为了分而分，而是因为「长时域上细粒度的运动序列在计算上不可行」。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Motion_planning_and_control_for_mobile_robot_navigation_/220de6c0be72e8283a69a1be7524dfbed4ceda637ffc2da00be059447f1a229d.jpg" alt="Classical navigation system">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Classical navigation system: given a global goal (red arrow indicating the final pose) and a global representation (grey area, based on a pre-built map or the robot’s memory), the global planner produces a global path (blue line). Using the perceptual input (red dots indicating LiDAR returns), a finer and smaller local representation (cyan area) is built. Based on all this information, current motion commands (green line) are computed to move the robot (OSRF 2018)（经典导航系统：给定全局目标（红色箭头表示最终位姿）和全局表示（灰色区域，基于预建地图或机器人的记忆），全局规划器产出一条全局路径（蓝线）。利用感知输入（红点表示激光雷达回波），构建一个更精细、更小的局部表示（青色区域）。基于这些信息计算当前的运动指令（绿线）来驱动机器人。图源：ROS 的 move_base。）<br>
+          <b>怎么看这张图：</b>① 按颜色把 Figure 1 的每个元素对号入座：<b>红箭头是目标，灰色是全局表示，蓝线是全局路径，红点是激光回波，青色是局部表示，绿线是运动指令</b>——这张图把整条经典流水线画在了一张平面图上；② 对照上一张自绘图：蓝线对应那条粗路，绿线对应那条碎碎的线；③ 注意灰色与青色的大小对比——<b>全局表示大而粗，局部表示小而细</b>，这就是两级分解在空间上的样子；④ 这是 ROS 的 move_base，也就是原文举的真实系统例子。<br>
+          <b>要记住的一句话：</b>经典导航系统的骨架就是「<b>一张粗的大图 + 一块细的小图</b>」，剩下的所有算法都是在这两块图上做文章。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">3. 全篇唯一的公式：代价函数 J</h2>
+
+      <p>前面说过，这一篇全篇<b>只有一个独立成行的编号公式</b>——原始清单说它「公式最多」，实测正好相反。它就在第 2 节开头，是原文的式 (1)：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$A^{*} = \underset{A \in \mathcal{A}}{\operatorname{argmin}}\ J(E, s, g)$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>所谓「导航」，就是在<b>所有可能的一串串动作里，挑出那一串让代价函数 J 最小的</b>。整篇综述后面讨论的，全是「这个 J、以及求它的那条流水线，哪一段可以换成学习」。</p>
+
+      <p>把符号一个一个拆开看，不要怕，全是熟词：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:16%;">符号</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">它在说什么</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">$A^{*}$</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>最优的那一串运动指令</b>，例如「先以 0.5 m/s 直行 2 秒，再左转 30 度……」——它回答的是「接下来该怎么动」</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">$a_i$</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>单条运动指令</b>：差速机器人是线速度与角速度，阿克曼车是转向角，四旋翼是螺旋桨推力</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">$\mathcal{A}$</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>所有可能动作序列组成的空间</b>，也就是「候选答案的全集」——argmin 就是在它里面翻找</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">$E$</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>环境</b>（二维或三维），来自机器人自己的传感器（LiDAR、相机、轮式编码器、惯性传感器）或者一张预建地图</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">$s$ / $g$</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>起始位姿</b>与<b>目标位姿</b>（位置加朝向）</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;">$J(E,s,g)$</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>待最小化的代价函数</b>，可以塞进运动学约束、避障、最短路径或时间、社交合规、越野稳定性等</td></tr>
+        </tbody>
+      </table>
+
+      <p>请特别盯住 $E$ 和 $s$ 这两个字母——<b>它们正是 SLAM 交出来的东西</b>：环境 $E$ 就是「地图」，起始位姿 $s$ 就是「我在哪」。所以这条式子把这一课和 SLAM 的关系写得一清二楚：<b>等号右边是 SLAM 的输出，等号左边是规划器的输出</b>。SLAM 答完「我在哪、周围是什么」，规划器才拿这两样去算 J。</p>
+
+      <h3>为什么「调参」会是导航的日常</h3>
+
+      <p>$J$ 里的每一项前面通常都挂着一个<b>权重</b>，这些权重就是「旋钮」。同一个路口、同一批候选路线，<b>把哪个旋钮拧大，选出来的路就完全不同</b>。看一个具体例子（<b>下面的数字是教学用的举例，不是原文数字</b>）：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">路线甲（贴着车抄近道） ＝ 0.2 ＋ 3.6 ＋ 0.4 ＋ 0.3 ＝ <b>4.5</b></div>
+        <div class="flow-formula">路线乙（绕远、离车远） ＝ 0.3 ＋ 0.2 ＋ 1.8 ＋ 0.2 ＝ <b>2.5</b></div>
+      </div>
+
+      <p><b>这句话在说什么：</b>把 J 拆成四项——到目标的误差、撞上去的惩罚、走得太慢的惩罚、动作太猛的惩罚。旋钮全是 1 的时候，四项直接相加：<b>甲 4.5、乙 2.5</b>。2.5 更小，所以选<b>乙</b>（绕远那条）。<b>它为什么这么算：</b>因为 J 越小代表「越划算」，规划器只认数字大小，不认你是抄近道还是绕远。</p>
+
+      <p>现在只拧<b>一个</b>旋钮：把「避障项」的权重从 1.0 调到 <b>0.2</b>（＝更不在乎挨近障碍）。甲的避障项从 3.6 缩到 0.72，<b>J ＝ 0.2 ＋ 0.72 ＋ 0.4 ＋ 0.3 ＝ 1.62</b>；乙的避障项从 0.2 缩到 0.04，<b>J ＝ 0.3 ＋ 0.04 ＋ 1.8 ＋ 0.2 ＝ 2.34</b>。<b>1.62 更小，最优解翻了个个儿，改选甲。</b></p>
+
+      <p>同一个路口、同一批候选路线、同一个 J 的定义，<b>只因为一个旋钮从 1.0 拧到 0.2，选出来的路就从「绕远」翻成「抄近道」</b>。这就是这一节要你记住的：<b>J 的形式是死的，旋钮是活的</b>——而拧旋钮，正是导航工程师每天的活。回到第七季那批学习式方法，它们想省掉的往往就是这一步；但这一篇后面统计出 <b>73/74 篇仍需人工调参</b>，等于说：<b>旋钮并没有被省掉，只是换了个人来拧。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 550" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="550" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">同一个路口，J 更小的是哪条？取决于你把四个旋钮拧到哪</text>
+
+          <rect x="20" y="44" width="410" height="340" rx="9" fill="#141c26" stroke="#4f9dff" stroke-width="1.5"/>
+          <text x="225" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#cfe0f7">① J 由四项相加，每项前面挂一个旋钮</text>
+
+          <circle cx="78" cy="114" r="24" fill="#18222f" stroke="#8fb4d9" stroke-width="1.3"/>
+          <line x1="78" y1="114" x2="94" y2="100" stroke="#4f9dff" stroke-width="2"/>
+          <circle cx="78" cy="114" r="3.5" fill="#4f9dff"/>
+          <text x="118" y="110" font-size="12.5" font-weight="700" fill="#cfe0f7">到目标的误差</text>
+          <text x="118" y="128" font-size="9.5" fill="#8fb4d9">旋钮 w_g：越在意到得准，就拧得越大</text>
+          <text x="78" y="152" text-anchor="middle" font-size="11" fill="#5ad1a8">量值 0.2</text>
+
+          <circle cx="78" cy="184" r="24" fill="#18222f" stroke="#8fb4d9" stroke-width="1.3"/>
+          <line x1="78" y1="184" x2="98" y2="178" stroke="#f0705c" stroke-width="2"/>
+          <circle cx="78" cy="184" r="3.5" fill="#f0705c"/>
+          <text x="118" y="180" font-size="12.5" font-weight="700" fill="#cfe0f7">撞上去的惩罚</text>
+          <text x="118" y="198" font-size="9.5" fill="#8fb4d9">旋钮 w_c：离障碍越近，这一项涨得越狠</text>
+          <text x="78" y="222" text-anchor="middle" font-size="11" fill="#5ad1a8">量值 3.6</text>
+
+          <circle cx="78" cy="254" r="24" fill="#18222f" stroke="#8fb4d9" stroke-width="1.3"/>
+          <line x1="78" y1="254" x2="94" y2="240" stroke="#e8d57a" stroke-width="2"/>
+          <circle cx="78" cy="254" r="3.5" fill="#e8d57a"/>
+          <text x="118" y="250" font-size="12.5" font-weight="700" fill="#cfe0f7">走得太慢的惩罚</text>
+          <text x="118" y="268" font-size="9.5" fill="#8fb4d9">旋钮 w_t：越着急，这一项压得越重</text>
+          <text x="78" y="292" text-anchor="middle" font-size="11" fill="#5ad1a8">量值 0.4</text>
+
+          <circle cx="78" cy="324" r="24" fill="#18222f" stroke="#8fb4d9" stroke-width="1.3"/>
+          <line x1="78" y1="324" x2="98" y2="318" stroke="#c65c47" stroke-width="2"/>
+          <circle cx="78" cy="324" r="3.5" fill="#c65c47"/>
+          <text x="118" y="320" font-size="12.5" font-weight="700" fill="#cfe0f7">动作太猛的惩罚</text>
+          <text x="118" y="338" font-size="9.5" fill="#8fb4d9">旋钮 w_s：越要坐得舒服，就拧得越大</text>
+          <text x="78" y="362" text-anchor="middle" font-size="11" fill="#5ad1a8">量值 0.3</text>
+          <text x="225" y="374" text-anchor="middle" font-size="10.5" fill="#cfe0f7">四项加权求和，就是 J</text>
+
+          <rect x="470" y="44" width="410" height="340" rx="9" fill="#141c26" stroke="#c65c47" stroke-width="1.5"/>
+          <text x="675" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#f0a08c">② 同一路口的两条候选路线</text>
+
+          <rect x="490" y="190" width="370" height="64" fill="#2c2a26"/>
+          <text x="496" y="182" font-size="10" fill="#9a917c">车道</text>
+          <rect x="652" y="200" width="52" height="44" rx="5" fill="#6b4530" stroke="#f0c9a8" stroke-width="1.2"/>
+          <text x="678" y="272" text-anchor="middle" font-size="10.5" fill="#f0c9a8">停着的车</text>
+
+          <circle cx="516" cy="222" r="6" fill="#5ad1a8"/>
+          <text x="516" y="272" text-anchor="middle" font-size="10.5" fill="#5ad1a8">起点</text>
+          <circle cx="836" cy="222" r="6" fill="#e8d57a"/>
+          <text x="836" y="272" text-anchor="middle" font-size="10.5" fill="#e8d57a">目标</text>
+
+          <polyline points="516,222 644,222 648,193 708,193 712,222 836,222" fill="none" stroke="#f0705c" stroke-width="2.4"/>
+          <text x="600" y="212" text-anchor="middle" font-size="10.5" fill="#f0a08c">甲：挤过</text>
+          <text x="762" y="204" text-anchor="middle" font-size="11" fill="#f0705c">J ＝ 4.5</text>
+
+          <polyline points="516,222 548,110 800,110 836,222" fill="none" stroke="#4f9dff" stroke-width="4"/>
+          <text x="672" y="100" text-anchor="middle" font-size="10.5" fill="#8fb4d9">乙：绕远</text>
+          <text x="762" y="126" text-anchor="middle" font-size="11" fill="#4f9dff">J ＝ 2.5</text>
+          <text x="490" y="308" font-size="10.5" fill="#8fb4d9">两条路都从起点到目标，只是旋钮一换，谁赢就换。</text>
+          <text x="490" y="348" font-size="10.5" fill="#cfe0f7">旋钮就是权重，连续可调；换一个旋钮，赢家就换。</text>
+
+          <text x="20" y="412" font-size="11.5" fill="#8fb4d9">四项 ＝ 到目标的误差 ＋ 撞上去的惩罚 ＋ 走得太慢的惩罚 ＋ 动作太猛的惩罚（数字为教学举例，非原文数字）</text>
+          <text x="20" y="440" font-size="11.5" fill="#f0a08c">路线甲（贴着车抄近道）：0.2 ＋ 3.6 ＋ 0.4 ＋ 0.3 ＝ 4.5</text>
+          <text x="20" y="468" font-size="11.5" fill="#8fb4d9">路线乙（绕远、离车远）：0.3 ＋ 0.2 ＋ 1.8 ＋ 0.2 ＝ 2.5　→ 默认旋钮下 J 更小，选乙</text>
+          <text x="20" y="496" font-size="11.5" fill="#e8d57a">只拧一个旋钮：避障权重 1.0 调到 0.2 → 甲变 1.62 ／ 乙变 2.34 → 最优解翻成甲</text>
+          <text x="20" y="524" font-size="11.5" fill="#cfe0f7">J 的形式是死的，旋钮是活的——拧旋钮就是导航工程师每天的活</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是代价函数 J 的四个「旋钮仪表」——到目标的误差、撞上去的惩罚、走得太慢的惩罚、动作太猛的惩罚，每个仪表下面写着这一项在举例里的具体量值（0.2 / 3.6 / 0.4 / 0.3）。右边是同一个路口的两条候选路线：起点在左、目标在右，路中间停着一辆车；细红线是「贴着车挤过去」的甲，粗蓝线是「绕远、离车远」的乙。<br>
+          <b>怎么看这张图：</b>① 先看左边四个仪表，理解 J 不是一项而是<b>四项加权相加</b>，四个旋钮就是四个权重；② 再看右边两条路的形状——甲又短又险（时间项低、避障项高），乙又长又稳（时间项高、避障项低）；③ 最后读最下面三行算账：默认旋钮下乙赢（2.5 比 4.5），把避障权重从 1.0 拧到 0.2 之后<b>甲反超</b>（1.62 比 2.34）；④ 注意这组数字是<b>教学举例</b>，作用是让你亲手看到「翻盘」这件事，不是原文数据。<br>
+          <b>要记住的一句话：</b>J 的定义可以一直不变，<b>变的只是旋钮</b>——这就是「调参」为什么是导航的日常，也是后文「73/74 篇仍需人工调参」这条统计的由来。
+        </figcaption>
+      </figure>
+
+      <p>那学习能帮上什么忙？原文给了两条「学习接口」，画在 Fig. 4 里。注意右边那一条——<b>学习模块不直接发运动指令，它只输出经典规划器的超参数</b>，也就是「自动替你拧旋钮」：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Motion_planning_and_control_for_mobile_robot_navigation_/3d1991d9e5156350f75e5ad0cec4219a843fb1a6bf40873b2cd441f38b4c54bc.jpg" alt="Learning end-to-end motion policy versus learning parameter policy">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Learning end-to-end motion policy versus learning parameter policy (reproduced with authors’ permission Xiao et al. 2021d)（学「端到端运动策略」对比学「参数策略」，经作者许可转载自 Xiao et al. 2021d）。<br>
+          <b>怎么看这张图：</b>① 左边黄底那半是「学端到端」：状态 X 进网络，网络直接吐出动作 A，也就是原始动作（线速度 v、角速度 w）；② 右边那半是「学参数」：状态 S 进一个绿色的<b>参数策略网络 π_p</b>，它吐出来的不是速度，而是一串<b>参数 Θ</b>——原文列的是最大速度、采样率、膨胀半径（Inflation Radius）等；这些参数被喂给蓝色的<b>经典运动规划器 G</b>，由 G 去和世界 W 打交道；③ 盯住 Action 那一栏：左边写的是 (v, w)，右边写的是「参数表」——<b>同样叫「动作」，一个改的是运动，一个改的是旋钮</b>；④ 这正是本课第 5 节要说的「学习越窄越有效」的一个具体样貌：学习只碰旋钮，其余交给经典组件。<br>
+          <b>要记住的一句话：</b>让学习直接开车是一种接口，<b>让学习替你拧旋钮是另一种接口</b>——而这篇综述统计下来，后者这种「窄」的用法，成效更好。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">4. 74 篇论文的位置地图</h2>
+
+      <p>这一篇最硬的贡献，不是方法，是<b>坐标系</b>。它把 74 篇论文按「<b>学习占了导航流水线多大一块</b>」摞到同一条流水线上，一摞就摞出了三条档位。先看这张自绘图——它把原文的 Fig. 2 与 Fig. 3 用最直白的方式重画了一遍：</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 540" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="540" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">把 74 篇论文按「学习占了流水线多大一块」摞上去</text>
+          <text x="20" y="58" font-size="11" fill="#8fb4d9">覆盖范围</text>
+
+          <text x="388" y="58" text-anchor="middle" font-size="11.5" fill="#f0a08c">端到端学习：整条栈一起换 → 43/74 篇</text>
+          <rect x="20" y="66" width="736" height="26" rx="4" fill="#5a2f2a" stroke="#c65c47" stroke-width="1.3"/>
+
+          <text x="450" y="108" text-anchor="middle" font-size="11.5" fill="#e8d57a">子系统学习：只换全局规划或局部规划 → 13/74 篇</text>
+          <rect x="268" y="116" width="116" height="26" rx="4" fill="#4a4326" stroke="#e8d57a" stroke-width="1.3"/>
+          <rect x="516" y="116" width="116" height="26" rx="4" fill="#4a4326" stroke="#e8d57a" stroke-width="1.3"/>
+
+          <text x="450" y="158" text-anchor="middle" font-size="11.5" fill="#5ad1a8">组件学习：只换局部表示或规划器参数 → 18/74 篇</text>
+          <rect x="392" y="166" width="116" height="26" rx="4" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="1.3"/>
+          <rect x="516" y="166" width="52" height="26" rx="4" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="1.3"/>
+
+          <text x="78" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">传感器</text>
+          <text x="78" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">LiDAR · 相机</text>
+          <text x="202" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">全局表示</text>
+          <text x="202" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">地图 · SLAM</text>
+          <text x="326" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">全局规划</text>
+          <text x="326" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">Dijkstra · A*</text>
+          <text x="450" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">局部表示</text>
+          <text x="450" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">局部栅格</text>
+          <text x="574" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">局部规划</text>
+          <text x="574" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">DWA · MPC</text>
+          <text x="698" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">运动指令</text>
+          <text x="698" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">线 · 角速度</text>
+          <text x="822" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#cfe0f7">电机</text>
+          <text x="822" y="240" text-anchor="middle" font-size="9.5" fill="#8fb4d9">电机控制器</text>
+
+          <rect x="20" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+          <rect x="144" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+          <rect x="268" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+          <rect x="392" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+          <rect x="516" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+          <rect x="640" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+          <rect x="764" y="186" width="116" height="64" rx="6" fill="#18222f" stroke="#4f9dff" stroke-width="1.2"/>
+
+          <rect x="20" y="276" width="860" height="34" rx="6" fill="#141c26" stroke="#4f9dff" stroke-width="1.3"/>
+          <text x="40" y="298" font-size="11" fill="#f0a08c">端到端 43 篇 → 无一篇超越经典</text>
+          <text x="340" y="298" font-size="11" fill="#e8d57a">子系统 13 篇 → 3 篇做出提升</text>
+          <text x="620" y="298" font-size="11" fill="#5ad1a8">组件 18 篇 → 多数落在改进档</text>
+          <text x="20" y="332" font-size="11.5" fill="#cfe0f7">46 篇做经典导航问题，但只有 8 篇展示了相对经典法的提升；其余 38 篇只在简单环境测试、或压根没跟经典法比。</text>
+
+          <text x="20" y="362" font-size="11.5" fill="#f0a08c">红色块盖住 传感器→运动指令 六格：这是「端到端」，学习把整条栈一起换掉，共 43 篇。</text>
+          <text x="20" y="390" font-size="11.5" fill="#e8d57a">黄色块只盖第 ③ 格或第 ⑤ 格：这是「子系统」，学习只换全局规划或局部规划，13 篇（1 全局 ＋ 12 局部）。</text>
+          <text x="20" y="418" font-size="11.5" fill="#5ad1a8">绿色块只盖第 ④ 格或某几个参数：这是「组件」，学习只换局部表示或规划器参数，18 篇（14 表示 ＋ 4 参数）。</text>
+          <text x="20" y="446" font-size="11.5" fill="#8fb4d9">两套数一验：43 ＋ 31 ＝ 74，13 ＋ 18 ＝ 31 —— 数字自洽，可以放心引用。</text>
+          <text x="20" y="474" font-size="11.5" fill="#cfe0f7">一句话：块越窄，越靠近能被调好、被信任的那一格。</text>
+          <text x="20" y="502" font-size="11.5" fill="#f0a08c">红块最宽、绿块最窄——那 8 篇「真有提升」的论文，几乎都落在绿块那一头。</text>
+          <text x="20" y="528" font-size="11.5" fill="#8fb4d9">注意：这不是定理，是 74 篇摆出来的分布形状（原文自己只称它为 correlation，相关性）。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>横着一条导航流水线，从左到右七个方框：传感器 → 全局表示 → 全局规划 → 局部表示 → 局部规划 → 运动指令 → 电机。上面摞着三层半透明的「覆盖块」：红色一大块盖住前六格（端到端，43 篇）、黄色只盖第 ③ 或第 ⑤ 格（子系统，13 篇）、绿色只盖第 ④ 格或几个参数（组件，18 篇）。下面挂一行「打赢经典法」的账。<br>
+          <b>怎么看这张图：</b>① 先看三块的颜色和宽度——<b>红块最宽、绿块最窄</b>，一眼能读出「学习占的块越窄，越靠近实战」；② 注意第 ② 格「全局表示」写的是「地图 · SLAM」——<b>SLAM 就住在这一格里</b>，而红色块把它整个盖住了，意思是端到端学习试图连 SLAM 一起换掉；③ 再看最下面那行账：红块对应的 43 篇里没有一篇超越经典法，绿块对应的组件档才是提升集中的地方；④ 这三个数字（43 / 13 / 18）和原文的 Fig. 2、Fig. 3 一一对应，是全文最可引用的一组统计。<br>
+          <b>要记住的一句话：</b>这张图就是整篇综述的<b>坐标系</b>——它第一次把「学习式导航」和「经典导航」摆到同一条流水线上逐格对照，而前十季从没有过这张对照表。
+        </figcaption>
+      </figure>
+
+      <p>把这三个档位拆开对着原文的账目念一遍，你会看到数字咬得很紧：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:22%;">档位</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:14%;">篇数</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">拆开看</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>端到端</b>（换整条栈）</td><td style="padding:.45rem;border:1px solid #cfd9e6;">43</td><td style="padding:.45rem;border:1px solid #cfd9e6;">其中 <b>15 篇根本不接受用户指定的目标点</b>——只会「一直往前开 ＋ 躲障碍」，仿佛前面永远挂着一个移动目标。这在经典导航文献里几乎不会出现</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>子系统</b>（换一整段）</td><td style="padding:.45rem;border:1px solid #cfd9e6;">13</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>1 篇</b>学全局规划、<b>12 篇</b>学局部规划；其余子系统仍由经典方法实现，接口留着</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>组件</b>（换一个零件）</td><td style="padding:.45rem;border:1px solid #cfd9e6;">18</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>14 篇</b>学世界表示、<b>4 篇</b>学规划器参数（就是上一节说的「替你拧旋钮」）</td></tr>
+        </tbody>
+      </table>
+
+      <p>验一遍：<b>43 ＋ 31 ＝ 74</b>，<b>13 ＋ 18 ＝ 31</b>，账目完全自洽——这也是精读材料里明确说过「可以放心引用」的一组数字。注意一个反差：<b>端到端占了 43/74 的大多数，却是唯一「无一超越经典」的那一档</b>；而最能到用户指定目标的，恰恰是那 31 篇非端到端的。为什么会这样，就是下一节的正题。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Motion_planning_and_control_for_mobile_robot_navigation_/dfe5003afeb0a90b5fc5233810e0e73a4713dbd9f156c9786320fd4e6b9a552f.jpg" alt="Navigational tasks">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Navigational tasks（导航任务。原文列出的六类是：Waypoint Navigation 路点导航、Obstacle Avoidance 避障、Waypoint Navigation ＋ Obstacle Avoidance 路点导航加避障、Stylistic Navigation 风格化导航、Multi-Robot Navigation 多机器人导航、Exploration 探索；每列下面挂着一串论文作者与年份）。<br>
+          <b>怎么看这张图：</b>① 六列就是原文的第三套分类轴——<b>按「在做哪一类导航任务」分</b>，和前面「学习占多大块」那条轴是正交的；② 看每一列里正文方块的深浅：<b>越黑代表这一类的论文越多</b>，「路点导航加避障」这一列明显最挤，「风格化导航」最空；③ 注意这里只列了作者与年份，<b>原文并没有在正文里给出每一列的具体篇数</b>，所以别自己编数字——需要篇数时只引用正文明确写出的那几处（如 28 篇超越经典里 24 篇是社交导航）；④ 对 SLAM 读者，这张表的价值是让你知道：<b>这 74 篇里大部分做的根本不是「走到一个指定目标」</b>，而这恰恰是 SLAM 最关心的那件事。<br>
+          <b>要记住的一句话：</b>同一个 74 篇，换个轴看就是另一张地图——<b>分类轴越多，越能看清哪一格是空的。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">5. 学习越窄越有效</h2>
+
+      <p>上一节那两个轴一交叉，这一篇最重要的结论就出来了。原文把它画在 Fig. 5 里——按「<b>与经典法的关系</b>」把所有论文再分一次档：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Motion_planning_and_control_for_mobile_robot_navigation_/f414474602299eaac144f77f5821902ff5e0b784a1f55edf2a13127af8a3ed5d.jpg" alt="Comparison to classical approaches with section headings">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Comparison to classical approaches with section headings（与经典方法的对照，带小节标题）。左边一大支是「4.1 经典意义下的学习」，下分 4.1.1 Duplication with Standard Interfaces and Constraints（用标准接口与约束复刻经典）、4.1.2 Duplication with Alternate Interfaces and Constraints（换接口或换约束复刻经典）、4.1.3 Improvement（改进）；右边一支是「4.2 超越经典」，下分 4.2.1 Terrain-Based（越野地形）与 4.2.2 Social Navigation（社交导航）。<br>
+          <b>怎么看这张图：</b>① 先数分支：<b>五个格子，三个在「复刻经典」，只有一格叫「改进」</b>——这个形状本身就是结论；② 看 4.1.3 Improvement 那一格有多空：正文给的数是 <b>46 篇做经典导航问题、只有 8 篇展示了相对经典法的提升</b>；③ 再看 4.2 两支的悬殊：<b>28 篇追求「超越经典」，其中 24 篇挤在社交导航，只有 4 篇做越野地形</b>——作者自己推测是「行人和行人环境比复杂地形好搞」；④ 最后注意：<b>所有端到端方法都落在 4.1.1 或 4.1.2 这两格（复刻），没有一篇落进 4.1.3</b>。<br>
+          <b>要记住的一句话：</b>这张图的形状就是结论——<b>「复刻」那一侧挤满了人，「改进」那一侧门可罗雀</b>，而进「改进」档的，几乎都是把学习用窄的那批。
+        </figcaption>
+      </figure>
+
+      <p>把 Fig. 8 那张「<b>学习范围 × 与经典法的关系</b>」交叉表读出来的结论，原文用了一个很谨慎的词——<b>correlation（相关性）</b>，而不是因果：<b>学习越是把注意力限制在某个子系统或组件上，整体系统表现似乎就越好。</b>它不是证明了「窄一定赢」，而是把 74 篇的分布摊开后，<b>你没法无视那个形状</b>。摊开来看是这几条：</p>
+
+      <ul>
+        <li><b>所有端到端方法都落在「复刻经典」的两档里，没有一篇真正超越经典。</b>原文还给了两个具体的反面例子：Zhou et al. (2019) 的端到端方法<b>始终被用 SLAM 的经典导航压过</b>；MACN 拿 A* 当上界，其探索路径长度比值<b>从未小于 1</b>，也就是从未比经典法更好。</li>
+        <li><b>子系统级有 3 篇真正做到提升</b>：Chiang et al. (2019)、Liu et al. (2021)、Xiao et al. (2021c)。</li>
+        <li><b>组件级几乎全部落在「改进」档</b>，唯一的例外是 Richter and Roy (2017) 的碰撞预测新颖性检测。</li>
+        <li><b>安全保证极稀缺：74 篇里只有 12 篇提供了某种安全保证，而且每一篇都是靠借用一个经典组件来实现的。</b>作者说得很直白：这很可能是学习式方法难以进入关键任务系统的首要原因。</li>
+        <li><b>可解释性几乎是空白：43 篇端到端工作里，没有一篇尝试保留可解释性</b>；其余 31 篇也只是部分保留。</li>
+        <li><b>调参成本被系统性忽略：73/74 篇的方法需要人工超参搜索才能成功</b>；唯一的例外 Chiang et al. (2019) 用自动搜索，花了 <b>12 天</b>。原文还补了一句更扎心的：训练常常需要高端硬件跑几天到几周，而经典法根本不用付这笔账。</li>
+        <li><b>训练与部署仍是分离的：74 篇里只有 1 篇</b>（Liu et al. 2021）真正能在部署中持续改进。</li>
+        <li><b>只有 6/74 篇研究了「用学习提升经典方法的自适应能力」</b>；<b>只有 4/74 篇触及「带挑战性约束的局部导航」</b>——而作者认为后者恰恰是最值得做的方向。</li>
+      </ul>
+
+      <p>于是原文给出了全篇唯一一条明说的「当前最佳实践」：<b>把机器学习用在子系统或组件层。</b>理由有两条，都很好懂：① 学习面对的问题<b>小到能被训好</b>；② 剩下的部分交给<b>可靠的经典组件</b>——经典 MPC 那类方法自带有界不确定性模型，能给硬安全约束，而纯学习给不了。原文把它叫 <b>hybrid system（混合系统）</b>：<b>学习模块负责适应新环境，经典组件负责兜住安全底线。</b></p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>这篇综述统计完 74 篇之后，给出的「当前最佳实践」是哪一条？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文的 Recommendation 说得直接：当前最佳实践是把机器学习用在子系统或组件层。依据是 Fig. 8 的交叉分布——学习范围越窄，整体表现似乎越好；而且这些最好的方案仍高度依赖经典组件，经典组件能提供学习法缺失的安全保证。" onclick="lessonKit.answer(this,'q0201b')">只学子系统或组件，别换整条栈</button>
+          <button data-correct="no" data-explanation="不对。恰恰相反，端到端（整条栈一起换）是 43/74 里的绝大多数，却是唯一「无一篇超越经典」的那一档，且 43 篇里没有一篇保留可解释性，安全保证也几乎为零。原文推荐的是往窄里走。" onclick="lessonKit.answer(this,'q0201b')">直接学整条栈，把经典全换掉</button>
+        </div>
+        <div class="quiz-feedback" id="q0201b"></div>
+      </div>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>★ 这句话是给第七季的告诫</h4>
+        <p>把这条结论放回课程主线：第七季 <a href="0128-导览-第七季开场-一句话的面试.html">0128</a>–<a href="0151-收官-学习式方法的能与不能.html">0151</a> 讲了一整季「学习能替掉 SLAM 的哪一块」。这一篇的统计正好是那一季的<b>位置地图与预后</b>：<b>替整条栈的（43 篇）全军覆没在「复刻」档；替子系统或组件的（31 篇）才是真正在往前走的。</b>所以「学习越窄越有效」不是这一篇自己的口号，而是它从 74 篇里数出来的形状。读第七季时若记得这一句，你会自动去问每篇论文：<b>它把学习用在了哪一格？这一格宽不宽？</b></p>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">6. 它把 SLAM 放在哪，和前面课程怎么接</h2>
+
+      <p>回到本季的主问题：<b>它把 SLAM 放在系统的哪一环？</b>答案在原文里有一句写死的原话——<b>SLAM、VO、SfM 都用来「从传感器数据生成世界表示」（global representation）</b>，也就是流水线的「<b>感知 → 全局表示</b>」这一环。用本季的七环链说：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:24%;">问题</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">这篇的答案</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>它在链的哪一环</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">七格全讨论、<b>一格都不实现</b>。它是元层面的「导航栈解剖图」，不跑在任何一台机器人上（见本课第 0 节的虚线七格图）</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>它把 SLAM 放在哪</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>上游</b>——归在「感知 → 全局表示」环，是产出「世界表示」的手段之一，与 VO、SfM 并列。<b>它不改进 SLAM</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>上游是谁</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">74 篇待归类的论文（它的输入是别人的论文，不是数据）</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>下游给谁</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>要选型的人</b>——决定「学习该放在哪一格」的人。它交出 4 套分类法与 5 条建议，不交出任何可运行的系统</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>它刻意排除了什么</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">只做语义建图但不驱动移动机器人的工作、机械臂操作、以及 gridworld 里的非机器人智能体。收窄范围的理由很实在：它只关心「真的会让机器人动起来」的那些工作</td></tr>
+        </tbody>
+      </table>
+
+      <p>这篇综述还顺手给了 SLAM 读者一张很有用的表——<b>输入模态</b>。毕竟 SLAM 本身吃什么，决定了它能不能给这些规划工作供上料：</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Motion_planning_and_control_for_mobile_robot_navigation_/21a29be906e4de0d0f4ef177d8fc5d6f2975bf563a5f23f6081ecdfef8666d4b.jpg" alt="Input modalities">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Input modalities（输入模态。原文把 74 篇用到的传感器输入分成四类：Geometric Sensors 几何传感器、RGB Cameras 彩色相机、RGB ＋ Geometry 彩色相机加几何、Exteroception 外部感知）。<br>
+          <b>怎么看这张图：</b>① 四列就是第四套分类轴——<b>按「机器人拿什么看世界」分</b>；② 第一列「几何传感器」指的是 LiDAR、声呐这类直接给距离的传感器，第二列是相机，<b>这两列正好对应 SLAM 里激光与视觉两条主干（第四季与第三季）</b>；③ 第四列 Exteroception 是「外部感知」，比如 GPS、动作捕捉——呼应第 2 节那句「感知不一定来自机器人自己身上的传感器」；④ 和 Fig. 6 一样，<b>正文没有给出每一列的具体篇数</b>，只给了这四类的划分，别自己补数字。<br>
+          <b>要记住的一句话：</b>不管这些工作学的是哪一格，<b>它们吃进去的东西，仍然是 SLAM 每天都在处理的那几种传感器数据</b>——这就是「SLAM 在上游」最实在的一层意思。
+        </figcaption>
+      </figure>
+
+      <h3>和前面课程怎么接</h3>
+
+      <ul>
+        <li><b>★ 第四季（激光主干，<a href="0073-导览-第四季开场-激光主干.html">0073</a> 起）与第五季（多传感器融合）</b>：这一篇自己声明 SLAM / VO / SfM 位于「感知 → 全局表示」环，是<b>纯下游视角的综述</b>。翻成一句人话：<b>你辛苦算出来的激光里程计与位姿，在这里被规划器消费掉，变成一条「往哪走」的路线。</b>SLAM 的输出第一次不是终点，而是别人的输入。</li>
+        <li><b>★★★ 第七季（<a href="0128-导览-第七季开场-一句话的面试.html">0128</a>–<a href="0151-收官-学习式方法的能与不能.html">0151</a>）</b>：这一篇的「43 篇端到端 vs 31 篇非端到端」就是第七季学习式方法的一张<b>位置地图</b>；它那句「学习该放在子系统或组件层，不该替换整条栈」，是<b>对第七季最强的一句告诫</b>——上一节已经展开。</li>
+        <li><b>★ 第一季（<a href="0002-PastPresentFuture-2016-SLAM的全景纲领.html">0002</a> 全景纲领）</b>：这一篇的分类法（复刻 / 换接口复刻 / 改进 / 超越）本质上是第一季「方法家族与失效场景」那张老地图在学习时代的重画版，可以对照着看。</li>
+        <li><b>★ 上一课 <a href="0200-Falcon4-2022-把SLAM塞进一架真飞机.html">0200</a></b>：那篇 Falcon 4 的规划器，就是这张解剖图上的一个<b>真实实例</b>——它横跨六环、真机验证、还在树冠下跑通了。这一篇告诉你「解剖图长什么样」，0200 告诉你「图上的零件真装起来是什么样」。</li>
+        <li><b>★ 下一课 <a href="0202-RecSLAM-2022-算力不够就往上送.html">0202</a></b>：如果说这一篇是在链上「看位置」，0202 引入的则是一条全新的<b>横向基础设施轴</b>——「机器人–边缘–云」，它和 A–J 季的算法纵向轴正交，是前十季从未出现过的一环。</li>
+      </ul>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">7. 读完你应该能回答</h2>
+
+      <p>合上这一课之前，先自己回答下面五个问题。答不上来的，回去看对应的小节。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 这篇到底是什么？</h4><p>它是<b>纯综述</b>（标题结尾是 a survey），不是系统类；它是本批<b>公式最少</b>的一篇，全文只有一个编号公式（代价函数 J）。它的载体是<b>表格与分类</b>。</p></div>
+        <div class="mini-card"><h4>② 它在链的哪一环？</h4><p>七格<b>全讨论、一格都不实现</b>——虚线七格图。它把 SLAM 归在「感知 → 全局表示」环的上游，自己不改进 SLAM。</p></div>
+        <div class="mini-card"><h4>③ 全局和局部规划怎么分？</h4><p>借「从卧室走到街心公园」的类比：全局是<b>先想好大致怎么走</b>（粗、把机器人当质点、输出一串路点）；局部是<b>每一步躲开眼前的东西</b>（细、要完整模型、输出可执行的运动指令）。</p></div>
+        <div class="mini-card"><h4>④ 代价函数 J 在说什么？</h4><p>导航 ＝ 在所有可能动作序列里挑一条让 J 最小的。J 的每一项前面挂着<b>旋钮（权重）</b>，拧哪个旋钮决定选哪条路——所以调参是日常。</p></div>
+        <div class="mini-card"><h4>⑤ 它给 SLAM / 学习时代的结论？</h4><p><b>学习越窄越有效</b>：43 篇端到端无一超越经典，31 篇非端到端才在前行；46 篇做经典问题仅 8 篇提升；12/74 有安全保证且全靠借经典组件；73/74 仍需人工调参。最佳实践是<b>把学习放在子系统或组件层</b>。</p></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么说这篇综述「横跨所有环」和「一环都不实现」并不矛盾？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为这两句说的是两件事：<b>「横跨所有环」说的是讨论范围</b>——它把七环逐一讨论、逐格分类；<b>「一环都不实现」说的是有没有造东西</b>——它不提出新方法、没有自研系统、没有实验、没有数据集。所以本课第 0 节把七个格子全画成<b>虚线框</b>：虚线＝讨论过但不实现。原文的性质是 survey，它的输出是给「选型的人」看的建议，而不是一台会跑的机器。</div></details>
+          </li>
+          <li>用「从卧室走到街心公园」这个类比，说清全局规划与局部规划各自的技术特征（至少各写两条）。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>全局规划（＝先想好大致怎么走）：① 输出的是<b>一串路点</b>，「粗到不用管脚下」；② <b>通常把机器人当成质点</b>，不考虑朝向；③ 世界表示相对稀疏（图、概率路线图、RRT，或粗的占据栅格 / 代价地图）；④ 算法如 Dijkstra、A*、D* Lite。局部规划（＝每一步躲开眼前的东西）：① 输出<b>可真正执行的底层运动指令</b>（离散高层指令或连续的线速度 / 角速度）；② <b>必须考虑完整模型</b>与运动学 / 动力学约束；③ 世界表示要求更精确但范围更小；④ 算法如动态窗口法（DWA）、模型预测控制（MPC）、势场法。原文还说清了两者为什么必须分开：导航覆盖的空间大，<b>在长时域上生成细粒度运动序列在计算上不可行</b>。</div></details>
+          </li>
+          <li>原文的 Fig. 8 交叉表读出了什么？为什么作者用的是「相关性」而不是「因果」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>读出的结论是：<b>学习越是把范围限制在某个子系统或组件上，整体系统表现似乎就越好</b>。具体分布是——所有端到端方法都落在「复刻经典」两档，<b>没有一篇真正超越经典</b>；组件级方法几乎全部落在「改进」档（唯一例外是 Richter and Roy 2017 的新颖性检测）；子系统级有 3 篇（Chiang et al. 2019；Liu et al. 2021；Xiao et al. 2021c）做出提升。作者自己用 correlation 这个词，是因为这只是<b>把 74 篇的分布摊开后看到的走势</b>，并没有做受控实验去证明「窄」是「好」的原因——原文也承认这只是一条相关性观察。所以引用时要照抄这个口径：<b>是观察到的相关，不是被证明的因果。</b></div></details>
+          </li>
+          <li>如果让你在设计一台新机器人时决定「学习放哪」，这一篇会给你什么建议？请说明理由，并指出这条建议的边界。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>建议是：<b>把学习放在子系统或组件层，并用经典组件兜住其余部分</b>（hybrid system，混合系统）。理由有两条：① 学习面对的问题变小了，<b>小到能被训好</b>；② 经典组件（如有界不确定性模型的 MPC）能提供学习法缺失的<b>硬安全保证</b>——74 篇里只有 12 篇有安全保证，且全是靠借经典组件实现的。<b>边界</b>：这条建议本身是相关性结论，不是因果证明；而且它受限于被综述文献的评估质量（原文反复批评这些实验的对比既不统一也不完整）。另外，作者也承认学习法有它擅长的地方——28 篇「超越经典」里 24 篇是做社交导航，说明在经典方法本来就难处理的任务上，学习仍有它的空间。</div></details>
+          </li>
+        </ol>
+      </section>
+
+      <p>最后留一句原文自己都没敢说满的话：<b>这张解剖图给的是「当前」的最佳实践，不是永久的定律</b>。它承认安全保证稀缺、可解释性空白、调参成本被忽略、训练与部署分离——这四条每一条都是学习式导航通往关键任务系统的门槛。哪天有人把这几条补上，这张位置地图就要重画。</p>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0200-Falcon4-2022-把SLAM塞进一架真飞机.html">← 0200 Falcon 4（2022）：把 SLAM 塞进一架真飞机</a>
+        <a class="next" href="0202-RecSLAM-2022-算力不够就往上送.html">0202 RecSLAM（2022）：算力不够就把计算送出去 →</a>
+      </div>
+      <p class="foot-note">你已经能在一张解剖图上指着说「学习该放这一格」了——这就是「看位置」的本事 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

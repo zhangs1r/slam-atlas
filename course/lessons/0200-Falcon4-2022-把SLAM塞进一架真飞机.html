@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Falcon 4（2022）：把 SLAM 塞进一架真飞机 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 K · 应用与相邻领域 / Lesson 0200（单篇 · 系统）</div>
+      <h1>Falcon 4（2022）：把 SLAM 塞进一架真飞机</h1>
+      <p class="subtitle">一架 4.2 公斤的四旋翼，要在没有 GPS 的密林树冠底下飞完 10 公里、建出 10897 棵树的地图——它不是「用了 SLAM」，而是把 SLAM 焊进了飞行回路 🛩️</p>
+      <div class="hero-meta">
+        <span>🎯 主题：整机自主飞行系统；SLAM 是内部模块，不是上游黑盒</span>
+        <span>👥 作者：Kumar 实验室一脉；系统与代码开源</span>
+        <span>📅 2022 · <i>Large-Scale Autonomous Flight With Real-Time Semantic SLAM <b>Under Dense Forest Canopy</b></i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">它在系统链的哪一环</a>
+        <a href="#b">题眼在「树冠下」</a>
+        <a href="#c">这台机器：Falcon 4</a>
+        <a href="#d">双参考系解耦</a>
+        <a href="#e">三层地图：2 MB 与 1250 MB</a>
+        <a href="#f">一架真飞机飞出来的数字</a>
+        <a href="#g">它不负责什么，和前面课程怎么接</a>
+        <a href="#h">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清这篇论文在七环系统链上覆盖了<b>哪六环</b>，以及为什么它是全季唯一落到执行器的一篇；② 讲明白密林树冠下为什么<b>必须用激光雷达</b>，而不只是「因为贵所以好」；③ 看懂全篇最漂亮的一招——<b>双参考系解耦</b>：为什么不能把 SLAM 的位姿直接喂给控制器，以及为什么只注入「差值」就能同时保住平滑与无漂；④ 用 2 MB 与 1250 MB 这一对数字解释「<b>抽象与压缩</b>」在系统里值多少钱；⑤ 知道这篇论文<b>不做什么</b>（没有回环、没有后端优化、没有多机）。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一篇的零件几乎全在前十季出现过，接口非常干净：语义 SLAM 内核是 <b>SLOAM</b>，与第八季 <a href="0160-MaskFusion与CoFusion-实例级分割进场.html">0160</a>–<a href="0167-语义块的收束-语义怎么反过来帮定位.html">0167</a> 那块「语义先验怎么进地图」同源；VIO 用的是 <b>S-MSCKF</b> 一类视觉惯性方法，回链第三季视觉主干与第五季多传感器融合（尤其 <a href="0197-3D检测综述-2023下-多模态与度量.html">0197</a> 讲的早 / 中 / 晚融合三分）；两层体素图的取舍可以对照第六季的空间表示；规划器的运动原语路线继承自同一课题组前作。所以本课的主线是：<b>把前十季的零件组装成一台会飞的机器，然后看组装时新冒出来的问题是什么。</b></p>
+        </div>
+      </div>
+
+      <h2 id="a1">0. 它在系统链的哪一环</h2>
+
+      <p>先直接回答。这一篇的答案很奢侈：<b>它把七环里的六环都做进了同一台机器</b>——从感知一直做到执行器。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 250" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="250" fill="#0f1622"/>
+          <text x="450" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">0200 Falcon 4 在系统链上的位置：六环实心，一环涂灰</text>
+
+          <rect x="20" y="52" width="110" height="96" rx="8" fill="#1a1a1a" stroke="#4a5566" stroke-width="1.5"/>
+          <rect x="145" y="52" width="110" height="96" rx="8" fill="#1b2a3d" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="270" y="52" width="110" height="96" rx="8" fill="#1b2a3d" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="395" y="52" width="110" height="96" rx="8" fill="#1b2a3d" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="520" y="52" width="110" height="96" rx="8" fill="#1b2a3d" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="645" y="52" width="110" height="96" rx="8" fill="#1b2a3d" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="770" y="52" width="110" height="96" rx="8" fill="#1b2a3d" stroke="#5ad1a8" stroke-width="2"/>
+
+          <text x="75" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7a8c">① 传感器</text>
+          <text x="75" y="96" text-anchor="middle" font-size="9" fill="#6b7a8c">LiDAR+相机+IMU</text>
+          <text x="75" y="116" text-anchor="middle" font-size="9" fill="#6b7a8c">交给感知</text>
+          <text x="75" y="138" text-anchor="middle" font-size="9" fill="#6b7a8c">涂灰：只选型</text>
+
+          <text x="200" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">② 感知/前端</text>
+          <text x="200" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">RangeNet++</text>
+          <text x="200" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">交给 SLAM</text>
+          <text x="200" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">实心：语义分割</text>
+
+          <text x="325" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">③ SLAM/里程计</text>
+          <text x="325" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">SLOAM + VIO</text>
+          <text x="325" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">交给地图</text>
+          <text x="325" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">实心：无回环</text>
+
+          <text x="450" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">④ 地图</text>
+          <text x="450" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">三层地图</text>
+          <text x="450" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">交给规划</text>
+          <text x="450" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">实心：语义层 2 MB</text>
+
+          <text x="575" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">⑤ 规划</text>
+          <text x="575" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">三层规划器</text>
+          <text x="575" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">交给控制</text>
+          <text x="575" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">实心：2 Hz</text>
+
+          <text x="700" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">⑥ 控制</text>
+          <text x="700" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">UKF 200 Hz</text>
+          <text x="700" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">交给执行器</text>
+          <text x="700" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">实心：含停止策略</text>
+
+          <text x="825" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#cfe0f7">⑦ 执行器</text>
+          <text x="825" y="96" text-anchor="middle" font-size="9" fill="#8fb4d9">Pixhawk 4</text>
+          <text x="825" y="116" text-anchor="middle" font-size="9" fill="#8fb4d9">电机转速</text>
+          <text x="825" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">实心：全季唯一</text>
+
+          <text x="20" y="176" font-size="11.5" fill="#8fb4d9">上游：用户画的多边形测绘边界，以及覆盖路径上的一串目标点</text>
+          <text x="880" y="176" text-anchor="end" font-size="11.5" fill="#8fb4d9">下游：一棵棵树的胸径与总株数</text>
+          <text x="20" y="204" font-size="11.5" fill="#cfe0f7">它不负责的环只有最左边的传感器——它用传感器、还做了最完整的选型论证，但不改进传感器本身。</text>
+          <text x="20" y="232" font-size="11.5" fill="#5ad1a8">注意第 ③ 格那行小字：它没有回环、没有后端优化——漂移只是被「压住」，不是被「消掉」。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>把这篇论文放到七环系统链上，一格一格判断它有没有实体工作。除了最左边的传感器（灰色），其余六格全是实心；每格下面还写了它在这一格具体做了什么。<br>
+          <b>怎么看这张图：</b>① 先数实心格——<b>从感知一直到执行器，六环</b>，这是本季覆盖最满的一篇；② 看灰色那一格：它<b>用传感器、也做了最完整的传感器选型论证，但不改进传感器本身</b>，所以涂灰；③ 看第 ⑦ 格：<b>全季只有这一篇真正落到了执行器</b>（把控制指令交给飞控，最后变成电机转速）；④ 看第 ③ 格下面那行小字，那是这篇论文最诚实的自我限制。<br>
+          <b>要记住的一句话：</b>它不是「一篇用了 SLAM 的论文」，而是一台<b>把 SLAM 焊进飞行回路的机器</b>——SLAM 在它内部，不在它上游。
+        </figcaption>
+      </figure>
+
+      <p>这里要顺带补一个被文件名切掉的关键信息：这篇的完整标题是 <i>Large-Scale Autonomous Flight With Real-Time Semantic SLAM <b>Under Dense Forest Canopy</b></i>。<b>「树冠下」这三个词不是装饰，它是全篇所有技术选择的出发点</b>——为什么用激光雷达、为什么要压漂移、为什么地图要分三层，全都从这三个词长出来。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">1. 题眼在「树冠下」：为什么必须用 LiDAR</h2>
+
+      <p>先讲一个反直觉的事实。<b>大多数人以为「激光雷达比相机好，是因为激光雷达更准」。在这篇论文里，这个理由排在第二位。</b>第一位的原因是：<b>树冠下的光照，会让纯视觉方法在原理上就不成立。</b></p>
+
+      <p>视觉里程计有一个最基本的假设，叫<b>恒亮假设</b>（constant brightness assumption）：同一个空间点，不管我在哪个位置、哪个时刻看它，<b>它在图像里应该是一样亮的</b>。有了这个假设，算法才能说「这两帧里那个亮斑是同一个东西，它移动了多少」。这是光流和特征跟踪的地基。</p>
+
+      <p>而在密林树冠下，这块地基是碎的。原因有三层：<b>第一</b>，阳光从树叶缝里漏下来，在地面上打出斑驳的光斑，<b>同一块地面有的是亮的、有的是暗的</b>；<b>第二</b>，太阳在动、树叶也在动，<b>光斑随时间整体移动</b>，于是同一块地面在相邻两帧里亮度剧变；<b>第三</b>，相机为了同时看清亮处和暗处必须不停调整曝光，<b>而一调曝光，整张图的亮度就全变了</b>。原文把这三点归结成一句话：这违反了恒亮假设，对任何靠跟踪视觉特征的方法都是致命的。</p>
+
+      <p>同一段原文里还给了第二个理由：<b>树冠下还有会动的东西</b>——地面的灌木被风吹着晃，树枝也在晃。这些晃动的纹理同样是「看起来像特征、但其实是噪声」的东西。</p>
+
+      <p>那激光雷达为什么扛得住？原文给了两条，都值得记住：<b>一是量程</b>——三维激光雷达虽然贵，但能给出密集而准确的距离测量，<b>量程可达数百米</b>；<b>二是算力</b>——它<b>相比双目或多视图深度估计，计算开销可以忽略</b>。而且它对直射阳光和剧烈光照变化本身就不敏感——它测的是激光往返时间，不是亮度。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">同一片林子，两种传感器：一个被光照打碎，一个不受影响</text>
+
+          <rect x="20" y="44" width="420" height="356" rx="9" fill="#141c26" stroke="#c65c47" stroke-width="2"/>
+          <rect x="460" y="44" width="420" height="356" rx="9" fill="#141c26" stroke="#5ad1a8" stroke-width="2"/>
+          <text x="230" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#f0a08c">① 树冠下：视觉的恒亮假设被打破</text>
+          <text x="670" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#5ad1a8">② 激光雷达：测距离，不看亮度</text>
+
+          <ellipse cx="80" cy="104" rx="52" ry="26" fill="#1f3a2a"/>
+          <ellipse cx="150" cy="94" rx="48" ry="24" fill="#24422f"/>
+          <ellipse cx="222" cy="106" rx="54" ry="26" fill="#1f3a2a"/>
+          <ellipse cx="300" cy="96" rx="50" ry="26" fill="#24422f"/>
+          <ellipse cx="368" cy="108" rx="52" ry="24" fill="#1f3a2a"/>
+          <line x1="46" y1="74" x2="86" y2="140" stroke="#e8d57a" stroke-width="1.6"/>
+          <line x1="120" y1="76" x2="160" y2="150" stroke="#e8d57a" stroke-width="1.6"/>
+          <line x1="214" y1="74" x2="250" y2="146" stroke="#e8d57a" stroke-width="1.6"/>
+          <line x1="330" y1="76" x2="366" y2="150" stroke="#e8d57a" stroke-width="1.6"/>
+          <text x="58" y="60" font-size="10.5" fill="#e8d57a">阳光</text>
+          <text x="150" y="152" text-anchor="middle" font-size="10" fill="#e8d57a">叶缝</text>
+          <text x="234" y="136" text-anchor="middle" font-size="10.5" fill="#7fae8c">树冠（厚、乱、会动）</text>
+          <rect x="196" y="126" width="24" height="150" rx="4" fill="#3a2d20" stroke="#6b543c" stroke-width="1.2"/>
+          <line x1="200" y1="150" x2="216" y2="150" stroke="#6b543c" stroke-width="1"/>
+          <line x1="200" y1="190" x2="216" y2="190" stroke="#6b543c" stroke-width="1"/>
+          <line x1="200" y1="234" x2="216" y2="234" stroke="#6b543c" stroke-width="1"/>
+          <text x="208" y="292" text-anchor="middle" font-size="10.5" fill="#c9a882">树干</text>
+          <rect x="36" y="276" width="384" height="42" fill="#2c2a26"/>
+          <ellipse cx="88" cy="292" rx="26" ry="8" fill="#6b6250"/>
+          <ellipse cx="172" cy="300" rx="20" ry="7" fill="#6b6250"/>
+          <ellipse cx="296" cy="290" rx="30" ry="9" fill="#6b6250"/>
+          <ellipse cx="378" cy="302" rx="22" ry="7" fill="#6b6250"/>
+          <text x="88" y="316" text-anchor="middle" font-size="9.5" fill="#2c2a26">光斑</text>
+          <text x="296" y="314" text-anchor="middle" font-size="9.5" fill="#2c2a26">光斑</text>
+          <ellipse cx="298" cy="264" rx="26" ry="10" fill="#31452f"/>
+          <ellipse cx="126" cy="266" rx="20" ry="8" fill="#31452f"/>
+          <text x="126" y="252" text-anchor="middle" font-size="10" fill="#7fae8c">灌木</text>
+          <text x="400" y="270" text-anchor="middle" font-size="10" fill="#9a917c">地面</text>
+
+          <text x="36" y="330" font-size="11.5" fill="#f0a08c">光斑随时间移动</text>
+          <text x="240" y="330" font-size="11.5" fill="#f0a08c">曝光自动调整</text>
+          <text x="330" y="330" font-size="11.5" fill="#f0a08c">光照不均匀</text>
+
+          <text x="36" y="344" font-size="10.5" fill="#f0a08c">① 同一块地面，相邻两帧亮度剧变：特征跟踪失去依据</text>
+          <text x="36" y="364" font-size="10.5" fill="#f0a08c">② 相机为兼顾亮暗不停调曝光，整张图亮度又全变一次</text>
+          <text x="36" y="384" font-size="10.5" fill="#f0a08c">③ 风吹灌木与树枝，动的纹理被误当成特征</text>
+
+          <rect x="640" y="100" width="52" height="60" rx="6" fill="#2b3a50" stroke="#8fb4d9" stroke-width="1.5"/>
+          <line x1="666" y1="160" x2="666" y2="176" stroke="#8fb4d9" stroke-width="2"/>
+          <text x="666" y="92" text-anchor="middle" font-size="10.5" fill="#8fb4d9">机上 3D LiDAR</text>
+          <text x="760" y="92" text-anchor="middle" font-size="10" fill="#8fb4d9">机腹朝下扫描</text>
+          <line x1="666" y1="166" x2="500" y2="252" stroke="#5ad1a8" stroke-width="1.4"/>
+          <line x1="666" y1="166" x2="560" y2="268" stroke="#5ad1a8" stroke-width="1.4"/>
+          <line x1="666" y1="166" x2="640" y2="272" stroke="#5ad1a8" stroke-width="1.4"/>
+          <line x1="666" y1="166" x2="726" y2="272" stroke="#5ad1a8" stroke-width="1.4"/>
+          <line x1="666" y1="166" x2="804" y2="252" stroke="#5ad1a8" stroke-width="1.4"/>
+          <line x1="666" y1="166" x2="856" y2="180" stroke="#5ad1a8" stroke-width="1.4"/>
+          <rect x="480" y="126" width="22" height="140" rx="4" fill="#3a2d20" stroke="#6b543c" stroke-width="1.2"/>
+          <rect x="836" y="120" width="22" height="146" rx="4" fill="#3a2d20" stroke="#6b543c" stroke-width="1.2"/>
+          <text x="491" y="288" text-anchor="middle" font-size="10" fill="#c9a882">树干（回波）</text>
+          <text x="847" y="288" text-anchor="middle" font-size="10" fill="#c9a882">树干（回波）</text>
+          <rect x="470" y="266" width="400" height="30" fill="#2c2a26"/>
+          <text x="750" y="287" text-anchor="middle" font-size="10" fill="#8fb4d9">地面（回波）</text>
+          <text x="592" y="212" font-size="10.5" fill="#5ad1a8">扇形扫描</text>
+          <text x="760" y="232" text-anchor="middle" font-size="10" fill="#5ad1a8">数百米</text>
+          <text x="476" y="330" font-size="11.5" fill="#5ad1a8">回波 = 距离</text>
+
+          <text x="476" y="344" font-size="10.5" fill="#5ad1a8">① 量程：可达数百米，一次扫到远处的树干</text>
+          <text x="476" y="364" font-size="10.5" fill="#5ad1a8">② 算力：相比双目 / 多视图深度估计，开销可忽略</text>
+          <text x="476" y="384" font-size="10.5" fill="#5ad1a8">③ 抗光照：它测的是激光往返时间，不是亮度</text>
+
+          <text x="20" y="428" font-size="11.5" fill="#cfe0f7">所以结论不是「激光雷达更准所以要买更好的硬件」，而是：树冠下的光照使纯视觉方案在原理上就不成立。</text>
+          <text x="20" y="456" font-size="11.5" fill="#5ad1a8">这就是「传感器选型是系统设计决策」的意思——它不是采购问题，它决定了后面所有算法能不能工作。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边是密林树冠下的真实场景：厚而杂乱的树冠、从叶缝漏下的阳光、地面上斑驳的光斑、被风吹动的灌木；右边是同一片林子里的激光雷达视角：一条扇形扫描打出去，树干和地面各自返回一个回波。两侧下方各列三条原因。<br>
+          <b>怎么看这张图：</b>① 先看左格中间那几条黄色光线——<b>它们在地上打出深浅不一的光斑</b>，这就是恒亮假设被破坏的实物来源；② 再注意左格下方三条：它们分别对应「光斑本身」「相机调曝光」「灌木在动」三种不同的破坏方式，是三个独立的原因，不是同一件事说三遍；③ 转到右格，注意射线打到树干和地面上都有明确回波，<b>整个过程与「亮不亮」无关</b>；④ 最后看最下面两行——它把「选传感器」从采购问题提升成了系统设计问题。<br>
+          <b>要记住的一句话：</b>树冠下必须用激光雷达，<b>不是因为「更准」，而是因为视觉的恒亮假设在这里根本不成立。</b>
+        </figcaption>
+      </figure>
+
+      <p>顺便说一个常被忽略的事实：<b>这篇论文主张的是「组合」，不是「替代」。</b>原文写得很清楚——为了同时获得鲁棒性、建图精度和里程计更新频率，系统<b>把双目 VIO 和激光雷达结合起来用</b>。原因是相机和 IMU 便宜、轻、频率高；激光雷达贵、但能在树冠下扛住。两者各有各的失效模式，所以谁都替不掉谁。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/637ee9552a325b1d2f044eb3a20265831705ea3c4b99328b149b9f0d86b649f8.jpg" alt="Wharton State Forest under-canopy environment">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Area where the experiments were performed (Wharton State Forest). The left panel is a view from an over-canopy UAV, which shows the scale of the environment and the thick tree canopy; The middle panel is a view from an under-canopy UAV, which illustrates that the environment is highly unstructured and cluttered; The right panel shows that the ground is covered by undergrowth which moves with the wind and is unevenly illuminated. These factors cause traditional VIO or LIDAR odometry systems to drift over time.（实验场地：美国新泽西州 Wharton State Forest。左panel是冠层之上的无人机视角，展示环境尺度与厚实的树冠；中间panel是冠层之下的视角，说明环境高度非结构化、杂乱；右panel显示地面被灌木覆盖，灌木随风移动且光照不均匀。这些因素导致传统的 VIO 或激光里程计随时间漂移。）<br>
+          <b>怎么看这张图：</b>① 左panel一眼看出「冠层有多厚」——这正是「树冠下」这个题眼的地理来源；② 中间panel是重点：<b>树干密密麻麻、没有规则结构</b>，这解释了为什么「几何特征会失效」；③ 右panel看地面：<b>它既不平整、又明暗不均、还在动</b>——三条原因在这一格里物理性地同时出现。把这三张对照着看，就能理解为什么这篇论文要费那么大功夫去压漂移。<br>
+          <b>要记住的一句话：</b>这片林子约 122,880 英亩，而论文说它「树密度、尺寸、形状和灌木状况都有显著变化」——<b>这正是选它做实验场的理由：它够难。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">2. 这台机器：Falcon 4 的零件清单</h2>
+
+      <p>接下来把这台机器拆开看。它是一台自制碳纤维机架的四旋翼，载荷（含电池）约 <b>3 kg</b>，用一块 <b>17,000 mAh</b> 的锂离子电池，在全部传感器和机载电脑都开着的状态下能飞约 <b>30 分钟</b>，总重 <b>4.2 kg</b>。</p>
+
+      <p>注意一个细节：<b>它的算力全在机上。</b>论文明确写了「只用机载感知和计算」完成了大面积建图，没有地面站。这一点在下一节课（0202）会成为一个尖锐的对照——那一篇的思路恰恰相反，是把计算送到机外去。而原文还特意解释了一个零件选择：它用<b>锂离子电池而不是锂聚合物电池</b>，理由是前者单位重量能量更高（Wh/kg）。这个选择的动因来自实验结论，我们到第 5 节会看到原因。</p>
+
+      <p>顺便记一个「必须冗余」的道理。真机实验里，作者还测了另外两个著名的激光惯性里程计（LIO-SAM 与 Fast-LIO2），结果它们<b>失败了</b>——原因不是算法不行，而是<b>激光雷达的连接器故障造成了间歇性丢数据</b>。作者据此论证：长航时的机器人系统必须有传感器冗余，因为这类硬件故障随时可能发生。这是一条非常好的工程笔记：<b>算法评测里看不到的东西，会以硬件故障的形式出现。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/6998f67c0d0afda056491c2f62ddadffe3c43a3634920ebebd981f02036bd0fd.jpg" alt="Falcon 4 UAV platform">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Falcon 4 UAV platform. Our Falcon 4 platform used for this work is the successor of our Falcon 450 platform [1] and is equipped with a 3D LiDAR, an Open Vision Computer (OVC) 3 [2] which has a hardware synchronized IMU and stereo cameras, an Intel NUC onboard computer, and a Pixhawk 4 flight controller. The platform has a total weight of 4.2 kg and a 30-minute flight time.（Falcon 4 无人机平台，是 Falcon 450 的后继机型。配备三维激光雷达、一台带硬件同步 IMU 与双目相机的 Open Vision Computer（OVC）3、一台 Intel NUC 机载电脑，以及一个 Pixhawk 4 飞控。整机总重 4.2 kg，续航 30 分钟。）<br>
+          <b>怎么看这张图：</b>① 对照图注数零件：<b>激光雷达、带双目相机与 IMU 的 OVC 3、Intel NUC 机载电脑、Pixhawk 4 飞控</b>——这四样东西恰好对应系统链的第 ① 环（传感器）、第 ③ 环（算力）和第 ⑥⑦ 环（控制与执行）；② 盯着装在机腹的那一块：激光雷达放在下方，是为了拿到尽量多的地面与树干回波；③ 记住 4.2 kg 与 30 分钟这一对数字——后面所有关于「续航才是主约束」的结论都建立在这两个数上。<br>
+          <b>要记住的一句话：</b>这台机器上<b>没有任何一个部件是「为了做实验临时加的」</b>，每一个都对应链上的一格——这就是「整机系统」这四个字的分量。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/1d7f4472a309f989ffda03e60abaf711b29db348d82360a48579f26b6c4d8563.jpg" alt="Software architecture of the Falcon 4 autonomy stack">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Software architecture. The system uses information from multiple sensors including 3D LIDAR, stereo cameras, and an IMU. It first detects objects in LiDAR scans using RangeNet++ [17]. Object detections are then tracked across the data sequence. This semantic data association is converted into constraints on both the robot poses as well as the object landmark models using the semantic SLAM module, where the relative motion estimated by a stereo VIO algorithm [18] is used as an initial guess, and SLOAM [16] is used to further optimize the UAV pose and landmarks. The output of the semantic SLAM module is used to reduce the odometry drift through a drift-compensation mechanism. This information is then used by the planning module in real-time. The high level planner uses a boustrophedon-based coverage planning algorithm [19] to cover a polygon region. The mid-level global planner relies on a sparse map to plan the shortest collision-free path to each coverage waypoint, and the local trajectory planner uses a small but finely discretized robot-centric map to plan a dynamically feasible and collision-free trajectory. Meanwhile, a UKF that runs at 200 Hz is used for the low-level control loop.（软件架构：多传感器输入 → 用 RangeNet++ 做点云目标检测 → 跨序列跟踪 → 语义 SLAM 模块把语义数据关联转成对位姿和地标模型的约束（VIO 估的相对运动用作初值，SLOAM 进一步优化位姿与地标）→ 漂移补偿模块 → 交给规划模块实时使用。规划分三层：往复式覆盖规划 → 中层全局规划（稀疏地图、最短避障路径）→ 局部轨迹规划（以机器人中心的小而细的图）；同时有一个 200 Hz 的 UKF 跑在底层控制回路。）<br>
+          <b>怎么看这张图：</b>① 这张图<b>就是论文自己画的系统链</b>，对照我们那条七环链读，你会发现它把「感知 → SLAM → 地图 → 规划 → 控制」全部画在一张图里；② 顺着箭头找那条最关键的支路：<b>语义 SLAM → 漂移补偿 → 规划</b>，这条支路就是下一节的主角；③ 注意规划模块被明确分成三层（覆盖 / 全局 / 局部），三层的频率和地图精度都不同；④ 最后看那个 200 Hz 的 UKF——它是控制回路的节拍器，也是「平滑位姿」的来源。<br>
+          <b>要记住的一句话：</b>这是全季<b>唯一一张把整条链画在一张图上的原文图</b>；后面几节课讲的论文，都只覆盖这张图里的一小块。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">3. 双参考系解耦：全篇最漂亮的一招</h2>
+
+      <p>现在到了这篇论文的技术心脏。先说清楚矛盾是什么。</p>
+
+      <p>这台机器上有两个东西在输出位姿：一个是 <b>VIO</b>（视觉惯性里程计，通过一个 200 Hz 的 UKF 输出），一个是 <b>SLOAM</b>（语义激光 SLAM，跑在关键帧上）。两者的脾气完全不同：</p>
+
+      <div class="grid-2">
+        <div class="mini-card">
+          <h3>VIO：平滑，但越走越偏</h3>
+          <p>它在<b>短时间内很准、而且输出非常平滑</b>——因为它是滤波器的输出，天然连续。但树冠下的光照剧变、灌木晃动会让它<b>长时间必然漂移</b>。真机上那次 800 米双方块回环，VIO 的漂移达到了约 <b>60 米</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h3>SLAM：长期准，但一跳一跳</h3>
+          <p>SLOAM 用树干与地面做约束，<b>长期看能把漂移压住</b>；但它的位姿<b>局部并不平滑</b>——原文举的例子是回环（loop closure）：一旦发生回环，位姿会突然被拉一下。</p>
+        </div>
+      </div>
+
+      <p>天真的做法是什么？<b>直接把 SLOAM 的位姿喂给规划器和控制器。</b>原文明确说了这样会出什么事，而且讲得特别具体：无人机已经在跟踪一条轨迹了，位姿突然被拉一下，它就会<b>偏离现有轨迹</b>；一偏离，之前为了加速重规划而缓存的<b>运动原语图就不能再复用了</b>，于是重规划时间变得很长；而重规划期间<b>没有可跟踪的轨迹</b>，无人机就处于危险状态。这一串因果链，是「为什么不能直接把 SLAM 输出接进控制回路」最完整的解释。</p>
+
+      <p>它的解法是：<b>让 SLAM 系和 odometry 系同时存在，谁也不替谁，只把两者的「差值」搬进回路。</b></p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{T}_k^{\mathrm{DRIFT}} = \mathbf{T}_k^{\mathrm{SLOAM}}\cdot\left(\mathbf{T}_k^{\mathrm{VIO}}\right)^{-1},\qquad g^{\mathrm{ODOM}} = \left(\mathbf{T}_k^{\mathrm{DRIFT}}\right)^{-1}\cdot g^{\mathrm{SLOAM}}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>第一个式子在算「两个坐标系差了多少」——把语义 SLAM 给的位姿乘上 VIO 位姿的逆，得到的就是<b>漂移量</b> <span class="en">T_DRIFT</span>。第二个式子在算「目标点该往哪挪」——覆盖路径上的目标点原本定义在 SLAM 系里，把它用漂移量的逆换算到 odometry 系，就得到规划器真正要用的 <span class="en">g_ODOM</span>。<b>它为什么这么算：</b>因为规划器自己的坐标系完全不动，动的只是「目标点被修正了多少」；<b>于是规划器看到的仍然是一条平滑、连续的输入，而 SLAM 的长期修正也照样生效了。</b>这篇论文给这条机制算了一笔账（Table I，1.1 公里回环，起点与终点被手动飞回同一位置）：<b>只用 VIO 时，XY 漂移 7.92 m、Z 漂移 −6.27 m、总漂移 10.10 m；加上语义 SLAM 之后变成 3.93 / 0.71 / 3.99 m。净赚 6.11 m，也就是总漂移降了约 60%；Z 方向尤其干净，从 −6.27 m 收到 0.71 m。</b>原文的措辞是「大部分 Z 向漂移被语义激光框架纠正、XY 漂移被减小」——注意它说的是<b>减小</b>，不是消除。</p>
+
+      <p>原文还有一句很关键的话：<b>这个机制让整套自主飞行系统可以直接配别的 SLAM、甚至 GPS 的位姿来工作。</b>这是一个好设计的标志——它不是为某一个具体的 SLAM 定制的，而是定义了一个<b>接口</b>。原文也解释了为什么这套接口在数学上说得通：VIO 在短时间区间内是一致的，SLOAM 在长时间尺度上更可信，<b>两者各自贡献自己最擅长的那部分。</b></p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">双参考系解耦：两条轨迹，一个差值，只搬差值进回路</text>
+
+          <rect x="20" y="44" width="480" height="264" rx="9" fill="#141c26" stroke="#4f9dff" stroke-width="1.5"/>
+          <rect x="520" y="44" width="360" height="264" rx="9" fill="#141c26" stroke="#f2a65a" stroke-width="1.5"/>
+          <text x="260" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#cfe0f7">① 俯视图：两条轨迹叠在一起</text>
+          <text x="700" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#cfe0f7">② 差值才是要注入的东西</text>
+
+          <polyline points="130,250 400,250 400,120 130,120 168,242" fill="none" stroke="#f0705c" stroke-width="2.5"/>
+          <polyline points="130,250 398,248 396,122 132,124 148,246" fill="none" stroke="#5ad1a8" stroke-width="2" stroke-dasharray="9 5"/>
+          <circle cx="130" cy="250" r="6" fill="#4f9dff"/>
+          <rect x="394" y="244" width="9" height="9" fill="#f0705c"/>
+          <rect x="142" y="240" width="9" height="9" fill="#5ad1a8"/>
+          <rect x="394" y="116" width="8" height="8" fill="#f2a65a"/>
+          <rect x="126" y="116" width="8" height="8" fill="#f2a65a"/>
+          <text x="150" y="272" text-anchor="middle" font-size="10" fill="#4f9dff">起点 = 终点（手动飞回）</text>
+          <text x="266" y="200" text-anchor="middle" font-size="10.5" fill="#f0705c">VIO：平滑，但不闭合</text>
+          <text x="266" y="162" text-anchor="middle" font-size="10.5" fill="#5ad1a8">SLAM：有折角，但闭合得好</text>
+          <text x="220" y="98" text-anchor="middle" font-size="10" fill="#f2a65a">关键帧</text>
+          <text x="424" y="152" font-size="10" fill="#f2a65a">回环跳变</text>
+          <text x="44" y="226" font-size="10" fill="#8fb4d9">1.1 km 回环</text>
+          <text x="44" y="298" font-size="10" fill="#8fb4d9">1157 棵树</text>
+          <text x="418" y="238" font-size="10" fill="#8fb4d9">落点差</text>
+          <text x="418" y="272" font-size="10" fill="#8fb4d9">已放大</text>
+          <text x="300" y="296" text-anchor="middle" font-size="10.5" fill="#f2a65a">落点差就是漂移量</text>
+
+          <line x1="600" y1="220" x2="668" y2="196" stroke="#8fb4d9" stroke-width="1.4"/>
+          <line x1="600" y1="220" x2="600" y2="166" stroke="#8fb4d9" stroke-width="1.4"/>
+          <text x="586" y="160" text-anchor="middle" font-size="9.5" fill="#8fb4d9">y</text>
+          <text x="682" y="194" text-anchor="middle" font-size="9.5" fill="#8fb4d9">x</text>
+          <circle cx="600" cy="220" r="5" fill="#f0705c"/>
+          <text x="600" y="240" text-anchor="middle" font-size="10" fill="#f0705c">odometry 系</text>
+          <line x1="700" y1="248" x2="740" y2="216" stroke="#5ad1a8" stroke-width="1.4"/>
+          <line x1="700" y1="248" x2="700" y2="200" stroke="#5ad1a8" stroke-width="1.4"/>
+          <circle cx="700" cy="248" r="5" fill="#5ad1a8"/>
+          <text x="722" y="266" text-anchor="middle" font-size="10" fill="#5ad1a8">SLAM 系</text>
+          <line x1="607" y1="220" x2="693" y2="248" stroke="#f2a65a" stroke-width="3"/>
+          <polygon points="693,248 679,240 683,252" fill="#f2a65a"/>
+          <text x="646" y="224" text-anchor="middle" font-size="10.5" fill="#f2a65a">T_DRIFT 漂移量</text>
+          <line x1="790" y1="110" x2="790" y2="126" stroke="#4f9dff" stroke-width="2"/>
+          <polygon points="790,104 800,120 780,120" fill="#4f9dff"/>
+          <text x="790" y="96" text-anchor="middle" font-size="10" fill="#4f9dff">目标点</text>
+          <text x="790" y="142" text-anchor="middle" font-size="10" fill="#8fb4d9">g_SLOAM</text>
+          <line x1="790" y1="150" x2="790" y2="176" stroke="#f2a65a" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <text x="838" y="168" text-anchor="middle" font-size="10" fill="#f2a65a">乘漂移量的逆</text>
+          <text x="790" y="196" text-anchor="middle" font-size="10" fill="#8fb4d9">g_ODOM</text>
+          <rect x="730" y="214" width="120" height="34" rx="6" fill="#2a2419" stroke="#f2a65a" stroke-width="1.5"/>
+          <text x="790" y="236" text-anchor="middle" font-size="10.5" fill="#f2a65a">规划器</text>
+          <text x="790" y="276" text-anchor="middle" font-size="10" fill="#8fb4d9">规划器自己的坐标不动</text>
+          <text x="700" y="292" text-anchor="middle" font-size="10.5" fill="#f2a65a">只搬差值</text>
+
+          <text x="20" y="344" font-size="11.5" fill="#cfe0f7">净赚多少（原文 Table I，1.1 公里回环，起点终点手动飞回同一位置）：总漂移 10.10 m → 3.99 m，降了约 60%。</text>
+          <text x="20" y="374" font-size="11.5" fill="#cfe0f7">拆开看：XY 从 7.92 m 降到 3.93 m；Z 从 −6.27 m 收到 0.71 m——语义框架几乎把高度方向的漂移清干净了。</text>
+          <text x="20" y="404" font-size="11.5" fill="#5ad1a8">换来的是什么：规划器吃到的位姿依然平滑连续，运动原语图能复用，重规划时间短，无人机不会因为一次回环跳变而脱离轨迹。</text>
+          <text x="20" y="434" font-size="11.5" fill="#f2a65a">代价是什么：漂移只是被压住，不是被消掉。3.99 m 仍然存在，因为没有回环、没有后端优化。</text>
+          <text x="20" y="462" font-size="11.5" fill="#8fb4d9">注意：上面两条轨迹的落点间隙是放大画的；真实 1.1 公里回环上 8 米左右的偏差，按这个比例根本看不见。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格画同一张俯视图，上面叠了两条轨迹——红色实线是 VIO（平滑、但没有闭合，末端偏出去），绿色虚线是语义 SLAM（有折角，末端更接近起点）；小方块是关键帧，右上角标出「回环跳变」。右格画的是解耦机制：两个坐标系各自有一个原点（红色是 odometry 系，绿色是 SLAM 系），中间那根粗箭头就是漂移量；目标点从 SLAM 系换算到 odometry 系之后，交给规划器。<br>
+          <b>怎么看这张图：</b>① 先看左格两条线的关系——<b>它们大部分时间是重合的，差别只在末端的落点</b>，这个差别就是要被搬走的那个量；② 再看右格：注意<b>规划器接到的不是 SLAM 的位姿，而是「被修正过的目标点」</b>，规划器自己的坐标系一格没动；③ 看下面那四行数字：前两行是收益（10.10 → 3.99 m，Z 几乎清零），第三行是换来什么，第四行是代价；④ 最后一行提醒你：图中的间隙是放大画的，别拿它去估真实比例。<br>
+          <b>要记住的一句话：</b>把两份位姿「合成一份更好的」往往失败，<b>把两份位姿的「差」当成一个慢修正去注入，反而两边的优点都保住了。</b>
+        </figcaption>
+      </figure>
+
+      <p>为完整起见，也把「SLAM 这一边怎么算出来的」补上。SLOAM 的位姿是靠两个<b>各只有 3 个自由度</b>的优化拼出来的：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\underset{\mathbf{T}_k^{\mathrm{CYLINDER}}}{\operatorname{argmin}}\sum_{i=1}^{N_k}\sum_{j=1}^{\delta_{i,k}} d_s\!\left(\mathbf{c}_j^m,\ \mathbf{p}_j\right),\qquad \underset{\mathbf{T}_k^{\mathrm{GROUND}}}{\operatorname{argmin}}\sum_{l=1}^{\gamma_k} d_\pi\!\left(\pi_l,\ \mathbf{p}_l\right),\qquad \mathbf{T}_k^{\mathrm{SLOAM}} = \mathbf{T}_k^{\mathrm{GUESS}}\cdot\mathbf{T}_k^{\mathrm{GROUND}}\cdot\mathbf{T}_k^{\mathrm{CYLINDER}}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>第一个式子在算树干——把当前帧里的树干特征点，和地图上已有的树干圆柱模型做匹配，最小化「点到圆柱面的距离」。第二个式子在算地面——把地面特征点匹配到上一个关键帧拟合出的地面平面，最小化「点到平面的距离」。第三个式子把两个修正乘到初始猜测上，凑出完整位姿。<b>它为什么这么算（形状账 / 自由度账）：</b>因为无人机<b>看不全一整根树干</b>，圆柱在上下方向没有被约束住，所以树干只能纠正 <b>X、Y、航向</b>三个自由度（平移 Z、pitch、roll 被固定）；反过来，<b>地面永远在脚下</b>，所以地面只能纠正 <b>Z、pitch、roll</b>（平移 X、Y、航向被固定）。<b>3 + 3 = 6</b>，两个各三自由度的部分拼起来，正好补出完整的六自由度位姿。<b>净赚多少：</b>原文引用 LeGO-LOAM 的经验说明这类两步拆分能减少约 <b>35%</b> 的计算量；而这篇论文拆分的<b>首要动机不是算得快，而是更鲁棒</b>——当某一侧匹配点太少时，就把那一项设成单位矩阵（相当于「这一侧这次不修正」），<b>于是即使目标检测或数据关联部分失败，位姿依然能拿到另一侧的约束</b>。这是全文最实用的一条工程技巧。</p>
+
+      <p>而给 SLOAM 提供起点的那一步，用的是 VIO 的相对运动：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathbf{T}_k^{\mathrm{REL}} = \left(\mathbf{T}_{k-1}^{\mathrm{VIO}}\right)^{-1}\cdot\mathbf{T}_k^{\mathrm{VIO}},\qquad \mathbf{T}_k^{\mathrm{GUESS}} = \mathbf{T}_k^{\mathrm{REL}}\cdot\mathbf{T}_{k-1}^{\mathrm{SLOAM}}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>先算 VIO 在两个关键帧之间「相对动了多少」（这就是 <span class="en">T_REL</span>），再把这个相对量接到<b>上一次 SLAM 的绝对位姿</b>上，得到这一帧的起点 <span class="en">T_GUESS</span>。<b>它为什么这么算：</b>因为 SLOAM 的数据关联用的是最近邻匹配——如果两个关键帧之间的运动太大，最近邻就会配错或者配出假匹配。用 VIO 的相对运动做初值，就能把「猜的位置」拉得足够近，让最近邻匹配可靠。<b>净赚多少：</b>这一招让 SLOAM <b>不必每一帧都跑</b>——关键帧的触发条件是「VIO 估计出至少 0.5 米的平移」，也就是说 VIO 在 200 Hz 跑、语义分割只在关键帧上以 2 Hz 跑，<b>语义分割只占用 Intel NUC 10 那颗 i7-10710U 的 12 个线程里的 3 个</b>。原文的原话是：这个集成「对节省计算资源至关重要，它使整个系统能实时运行」。</p>
+
+      <p>还有一个 OCR 问题要说明：原文给出轨迹跟踪输出向量时，第 3、4 项被印成了同一个符号（都印成位置的二阶导），<b>重复了</b>。结合原文正文那句「四旋翼平坦输出的位置三阶导（也就是 jerk）被用作控制输入」，第 4 项应当是<b>位置的三阶导（jerk，急动度）</b>。这属于上标 / 导数符号在转换过程中丢失，我们按 jerk 理解，不照抄那个重复的符号。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/17d2774463f5a9aaafc37d59396be9ef0a678f9b9294c3fda5b9e2073593bff4.jpg" alt="Real-time perception and decision making of the autonomy stack">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Visualization of real-time perception and decision making of the autonomy stack in a real-world forest. The green cylinders are tree models estimated by SLOAM, the small bounding box is the local voxel map, and the black line shown at the top of the middle panel is the edge of the global voxel map (1 km × 1 km × 10 m). The left panel shows a zoomed-in view of the SLAM and odometry reference frames. The VIO and SLOAM estimated poses are used to calculate a transform between the two reference frames, which compensates the VIO drift. In the right panel, the drift compensation is used by the planning module to output trajectories that guide the UAV to execute its mission accurately.（真机森林中整套自主系统实时感知与决策的可视化。绿色圆柱是 SLOAM 估计的树模型，小方框是局部体素图，中间panel顶部那条黑线是全局体素图的边界（1 km × 1 km × 10 m）。左panel是 SLAM 参考系与里程计参考系的放大视图：用 VIO 与 SLOAM 各自的位姿算出两个参考系之间的变换，用来补偿 VIO 漂移。右panel中，漂移补偿被规划模块使用，输出轨迹引导无人机准确执行任务。）<br>
+          <b>怎么看这张图：</b>① 这是<b>上一段那张自绘图的原图版本</b>——左边一格正是「两个参考系」的现场截图，可以拿来对照印证；② 看那些绿色圆柱：它们就是这篇论文的「地图」真身——一棵树一个圆柱，而不是一团点云；③ 看中间那个小方框和它上方那条黑线：<b>小方框是局部细体素图，黑线是 1 km × 1 km × 10 m 的全局粗体素图边界</b>，两者的尺度差在画面上一眼可见；④ 最右一格是补偿之后的规划输出，也就是「交给下游」那一步。<br>
+          <b>要记住的一句话：</b>从「两套坐标系的差」到「规划器输出的轨迹」，这条链路在一张真机截图里从头到尾都在——<b>它不是概念图，是运行时画面。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">4. 三层地图：2 MB 与 1250 MB</h2>
+
+      <p>这一节讲的是这篇论文在「地图」这一环上的取舍，也是全篇最好记的一对数字。</p>
+
+      <p>先说要解决的问题。<b>如果地图只是一张巨大的、均匀精细的体素图，那它就装不下。</b>原文给了一个具体数字：一个 <b>1 km × 1 km</b> 的区域，按 <b>0.1 m</b> 的分辨率存成体素图需要 <b>1250 MB</b>；而全局体素图的实际高度范围是 10 m（也就是 1 km × 1 km × 10 m）。<b>一千多兆的地图，一台 4.2 公斤的无人机是背不动的</b>——不只是存不下，后面做规划、更新它也跑不动。</p>
+
+      <p>它的对策是<b>按用途分三层</b>：</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:16%;">层</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:30%;">存什么</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:22%;">量级</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">给谁用</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>顶层：语义模型</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">树干圆柱（位置、半径、生长方向）+ 地面平面</td><td style="padding:.45rem;border:1px solid #cfd9e6;">同规模密林约 <b>2 MB</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">长距离定位；给用户产出胸径与株数</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>中层：全局体素图</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">大而粗的体素占据栅格</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>1250 MB</b>（1 km × 1 km × 10 m，0.1 m 一格）</td><td style="padding:.45rem;border:1px solid #cfd9e6;">中层全局规划器</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>底层：局部体素图</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">小而细、以机器人自己为中心</td><td style="padding:.45rem;border:1px solid #cfd9e6;">只保留周边，以 LiDAR 频率 <b>10 Hz</b> 更新</td><td style="padding:.45rem;border:1px solid #cfd9e6;">局部轨迹规划器</td></tr>
+        </tbody>
+      </table>
+
+      <p>请注意这三层的<b>逻辑</b>：不是「把同一张地图压缩三次」，而是<b>三种不同的用途各自要一种精度的地图</b>。全局规划只需要知道「大概哪里过不去」，粗一点就够，但它范围大，所以贵；局部规划要立刻躲开眼前的树，必须细，但它范围小，所以便宜；而语义模型是给人和长期定位用的，它最抽象、最省，却能支撑最长的任务。</p>
+
+      <p><b>2 MB 与 1250 MB 并排的意义就在这里：约 600 倍（1250 ÷ 2 = 625）。</b>同样一片密林，用「一棵树一个圆柱」的抽象方式存，比用「0.1 米一格填满」的方式存，省了将近三个数量级。这不是调参调出来的，是<b>换了一种表示</b>换来的。这件事在第六季（神经隐式与 3D 高斯）里从另一个角度讲过一遍——<b>同一件事在不同精度需求下，有完全不同的存法</b>，而选哪种存法，取决于下游是谁要用它。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 510" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="500" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#e8eef7">同一片树林的三份存档：一棵树一个圆柱，还是一格一格填满</text>
+
+          <rect x="20" y="46" width="272" height="272" rx="9" fill="#141c26" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="314" y="46" width="272" height="272" rx="9" fill="#141c26" stroke="#f2a65a" stroke-width="2"/>
+          <rect x="608" y="46" width="272" height="272" rx="9" fill="#141c26" stroke="#4f9dff" stroke-width="2"/>
+          <text x="156" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#5ad1a8">顶层 · 语义模型</text>
+          <text x="450" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#f2a65a">中层 · 全局粗体素图</text>
+          <text x="744" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="#4f9dff">底层 · 局部细体素图</text>
+
+          <polygon points="46,150 266,150 236,196 16,196" fill="#3b3228" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="140" y="182" text-anchor="middle" font-size="10" fill="#cfe0f7">地面平面</text>
+          <rect x="66" y="84" width="20" height="66" rx="4" fill="#2e5c46" stroke="#5ad1a8" stroke-width="1.5"/>
+          <rect x="128" y="92" width="18" height="58" rx="4" fill="#2e5c46" stroke="#5ad1a8" stroke-width="1.5"/>
+          <rect x="188" y="80" width="22" height="70" rx="4" fill="#2e5c46" stroke="#5ad1a8" stroke-width="1.5"/>
+          <text x="76" y="168" text-anchor="middle" font-size="9" fill="#9fd8bd">树</text>
+          <text x="137" y="168" text-anchor="middle" font-size="9" fill="#9fd8bd">树</text>
+          <text x="199" y="168" text-anchor="middle" font-size="9" fill="#9fd8bd">树</text>
+          <text x="156" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#5ad1a8">约 2 MB</text>
+          <text x="156" y="248" text-anchor="middle" font-size="10" fill="#8fb4d9">一棵树 = 一个圆柱</text>
+          <text x="156" y="268" text-anchor="middle" font-size="10" fill="#8fb4d9">位置 + 半径 + 朝向</text>
+          <text x="156" y="292" text-anchor="middle" font-size="10" fill="#cfe0f7">同规模密林的总量</text>
+          <text x="156" y="312" text-anchor="middle" font-size="10" fill="#5ad1a8">给用户看的清单</text>
+
+          <g stroke="#f2a65a" stroke-width="0.8" opacity="0.85">
+            <line x1="352" y1="96" x2="560" y2="96"/><line x1="352" y1="118" x2="560" y2="118"/>
+            <line x1="352" y1="140" x2="560" y2="140"/><line x1="352" y1="162" x2="560" y2="162"/>
+            <line x1="352" y1="184" x2="560" y2="184"/><line x1="352" y1="206" x2="560" y2="206"/>
+            <line x1="352" y1="228" x2="560" y2="228"/><line x1="352" y1="250" x2="560" y2="250"/>
+            <line x1="374" y1="80" x2="374" y2="266"/><line x1="398" y1="80" x2="398" y2="266"/>
+            <line x1="422" y1="80" x2="422" y2="266"/><line x1="446" y1="80" x2="446" y2="266"/>
+            <line x1="470" y1="80" x2="470" y2="266"/><line x1="494" y1="80" x2="494" y2="266"/>
+            <line x1="518" y1="80" x2="518" y2="266"/><line x1="542" y1="80" x2="542" y2="266"/>
+          </g>
+          <rect x="398" y="140" width="24" height="22" fill="#3a2d1c" stroke="#f2a65a" stroke-width="1"/>
+          <rect x="470" y="184" width="24" height="22" fill="#3a2d1c" stroke="#f2a65a" stroke-width="1"/>
+          <text x="410" y="157" text-anchor="middle" font-size="9" fill="#f0c9a8">占</text>
+          <text x="482" y="201" text-anchor="middle" font-size="9" fill="#f0c9a8">占</text>
+          <text x="450" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#f2a65a">1250 MB</text>
+          <text x="450" y="248" text-anchor="middle" font-size="10" fill="#8fb4d9">1 km × 1 km × 10 m</text>
+          <text x="450" y="268" text-anchor="middle" font-size="10" fill="#8fb4d9">0.1 m 一格，一律填满</text>
+          <text x="450" y="292" text-anchor="middle" font-size="10" fill="#cfe0f7">给中层全局规划器用</text>
+          <text x="450" y="312" text-anchor="middle" font-size="10" fill="#f2a65a">覆盖整片任务区</text>
+
+          <rect x="700" y="180" width="90" height="72" rx="4" fill="#16202c" stroke="#4f9dff" stroke-width="1.5"/>
+          <line x1="700" y1="198" x2="790" y2="198" stroke="#4f9dff" stroke-width="0.8"/>
+          <line x1="700" y1="216" x2="790" y2="216" stroke="#4f9dff" stroke-width="0.8"/>
+          <line x1="700" y1="234" x2="790" y2="234" stroke="#4f9dff" stroke-width="0.8"/>
+          <line x1="722" y1="180" x2="722" y2="252" stroke="#4f9dff" stroke-width="0.8"/>
+          <line x1="744" y1="180" x2="744" y2="252" stroke="#4f9dff" stroke-width="0.8"/>
+          <line x1="766" y1="180" x2="766" y2="252" stroke="#4f9dff" stroke-width="0.8"/>
+          <rect x="722" y="198" width="22" height="18" fill="#24365a" stroke="#4f9dff" stroke-width="1"/>
+          <rect x="744" y="216" width="22" height="18" fill="#24365a" stroke="#4f9dff" stroke-width="1"/>
+          <circle cx="706" cy="142" r="7" fill="#2b3a50" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="744" y="132" text-anchor="middle" font-size="10" fill="#8fb4d9">机器人自己</text>
+          <text x="744" y="274" text-anchor="middle" font-size="12" font-weight="700" fill="#4f9dff">10 Hz 更新</text>
+          <text x="744" y="296" text-anchor="middle" font-size="10" fill="#8fb4d9">只留机器人周边，细得多</text>
+          <text x="744" y="314" text-anchor="middle" font-size="10" fill="#4f9dff">只留周边</text>
+
+          <text x="20" y="334" font-size="11.5" fill="#8fb4d9">把两种存法并排放到同一把尺子上（条形长度按数值画）：</text>
+          <rect x="150" y="344" width="20" height="18" fill="#5ad1a8"/>
+          <text x="182" y="358" font-size="11" fill="#5ad1a8">语义模型 2 MB</text>
+          <rect x="150" y="378" width="625" height="18" fill="#f2a65a"/>
+          <text x="785" y="392" font-size="11" fill="#f2a65a">1250 MB</text>
+          <text x="450" y="432" text-anchor="middle" font-size="12" font-weight="700" fill="#e8eef7">约 600 倍（1250 ÷ 2 = 625）</text>
+          <text x="20" y="464" font-size="11.5" fill="#cfe0f7">同一片林子，换一种表示就省下将近三个数量级——这不是调参省出来的，是「换表示」省出来的。</text>
+          <text x="20" y="490" font-size="11.5" fill="#5ad1a8">三层不是「同一张图压缩三遍」，而是三种用途各自要一种精度：全局规划粗而大，局部规划细而小。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边一格是顶层语义模型：几根绿色圆柱代表树干、一块斜放的平面代表地面，标注约 2 MB。中间一格是中层全局体素图：一整片橙色方格阵列，每一格都「填满」，标注 1250 MB 与「0.1 m 一格」。右边一格是底层局部细体素图：只有机器人周边一小块被划成格子，标注 10 Hz 更新。最下面用同一把尺子把 2 MB 和 1250 MB 并排画成两根条形。<br>
+          <b>怎么看这张图：</b>① 先看左格：<b>一棵树只占一个圆柱的位置</b>——树干内部、树与树之间的空气，全都没有被存；② 再看中格：<b>每一格都存了，不管那里有没有东西</b>，这就是 1250 MB 的来源；③ 再看右格：格子的范围被限制在机器人周围，<b>细，但面积小</b>；④ 最后看下面两根条形，注意它们的长度差了两个多数量级——条形长度是按数值画的，不是随手画的。<br>
+          <b>要记住的一句话：</b>地图贵不贵，不取决于场景多大，取决于<b>你用什么表示去存它，以及下游是谁要用它。</b>
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/c7786abc48c13634e5b9a0c15e92eace2fb9415c7dc78aa96122ef9b634a67b6.jpg" alt="Semantic map vs voxel map">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Semantic map vs voxel map. The green cylinders show the semantic map, the black bounding box shows a local voxel map with a 0.1 m resolution, and the blue curve shows the SLOAM-estimated trajectory. It requires 1250 MB to store such a voxel map for a 1 km × 1 km region. However, storing individual tree models requires ∼2 MB for a dense forest of the same size.（语义地图对比体素地图。绿色圆柱是语义地图，黑色方框是 0.1 米分辨率的局部体素图，蓝色曲线是 SLOAM 估计的轨迹。这样一张体素图存 1 km × 1 km 需要 1250 MB；而存单独的树模型，同样大小的密林只需要约 2 MB。）<br>
+          <b>怎么看这张图：</b>① 绿色圆柱就是「语义地图」的真身——<b>每一根都对应一棵真树</b>；② 黑框里那一块是局部体素图，<b>注意它的范围相对整个场景有多小</b>，这就是「底层只留周边」的可视化；③ 蓝色曲线是 SLOAM 估出来的轨迹，可以顺着它想象无人机的飞行路线；④ 两个数字（1250 MB 与约 2 MB）就写在图注里，这也是本课最值得记住的一对数字。<br>
+          <b>要记住的一句话：</b>同一片林子，一边是「一棵树一根圆柱」，一边是「一格一格填满」——<b>差别不在精度，在表示。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">5. 一架真飞机飞出来的数字</h2>
+
+      <p>这篇论文的实验分三批：仿真里的覆盖实验、仿真里的密度实验，以及两次真机实验。逐批看，每一批都留下一两个值得记住的数。</p>
+
+      <h3>5.1 仿真覆盖实验：0.77 平方公里，10897 棵树</h3>
+
+      <p>仿真场地是从真树林的树位置建出来的：<b>面积约 0.77 km²（190 英亩），放了 10,692 棵树</b>。用户画一个多边形指定测绘区域，覆盖算法自动生成一条往复蛇形（boustrophedon）的路径。无人机在<b>没有任何人工干预</b>的情况下，<b>1 小时内</b>飞完<b>约 10 公里</b>的轨迹，平均速度约 <b>2.9 m/s</b>，最后建出的语义地图里有 <b>10,897 个树干圆柱</b>——和放进去的 10,692 棵是同一个量级。原文强调，这个语义分割模型<b>和真机实验用的是同一个</b>。</p>
+
+      <h3>5.2 密度实验：最大速度不是生效的设计变量</h3>
+
+      <p>第二批实验把同一片真树林的树位置按比例缩放，造出 <b>10 种不同密度</b>的环境，每种跑 <b>4 次</b>任务，加起来直线长度约 <b>1 km</b>，最大速度设定到 <b>11.0 m/s</b>。最密的环境里，<b>树与树之间的平均间隙只有 2.19 米</b>。</p>
+
+      <p>结果有三条，第三条最有价值：<b>一是</b>树越密，平均速度越低；<b>二是</b>树越密，实际飞行的距离越长（因为要绕）；<b>三是</b>这两条叠加起来，完成任务时间的增长<b>比单看任何一条曲线都要剧烈</b>。作者的结论很硬：在密冠层下，无人机的平均速度<b>是被环境限制的，而不是被你的最大速度设定限制的</b>。所以<b>续航才是决定任务范围的主导因素，最大速度不是一个生效的设计变量</b>。这也解释了前面那个零件选择：正因为要拼续航，才选了单位重量能量更高的锂离子电池。</p>
+
+      <h3>5.3 真机实验：10.10 米变成 3.99 米</h3>
+
+      <p>第一次真机实验的目的很直接：<b>证明只用 VIO 会失败</b>。任务是飞两个约 800 米的方块回环然后回家。按 VIO 自己的说法，任务「成功了」；但用 SLOAM 和 GPS 一看，<b>VIO 漂了约 60 米</b>（SLOAM 与 GPS 彼此的差别在 10 到 20 米以内）。作者给出的可能原因非常反直觉：<b>这次飞行的运动太平滑、接近匀速，可能恰好构成了 VIO 的退化情形。</b>换句话说——<b>飞得越稳，越容易漂。</b></p>
+
+      <p>第二次真机实验就是第 3 节那笔账：<b>1.1 公里回环，检测并建模 1157 棵树</b>，总漂移从 <b>10.10 米压到 3.99 米</b>。但这次实验有一个必须说明的缺口：<b>GPS 没有锁定</b>，所以这次实验里没有全局参考，起点与终点是<b>靠人手动飞回同一位置</b>来制造「真值」的。这个细节很重要，它决定了 10.10 与 3.99 这两个数的口径是「起终点位置差」，而不是「整条轨迹的误差」。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\text{只用 VIO}:\ \mathrm{XY}\ 7.92,\ \mathrm{Z}\ -6.27,\ \text{总}\ 10.10\ \mathrm{m}\qquad\longrightarrow\qquad \text{SLOAM}+\text{VIO}:\ \mathrm{XY}\ 3.93,\ \mathrm{Z}\ 0.71,\ \text{总}\ 3.99\ \mathrm{m}$$</div>
+      </div>
+      <p><b>这句话在说什么：</b>这是原文 Table I 的完整内容（单位米）——它量的是「1.1 公里回环结束时的最终位姿，离轨迹起点的距离」：只用 VIO 是 XY 差 7.92 米、Z 差 −6.27 米、合起来 10.10 米；加上语义 SLAM 之后，XY 差 3.93 米、Z 差 0.71 米、合起来 3.99 米。<b>它为什么这么量：</b>因为这次飞行是手动起飞降落、刻意回到同一个点，所以「终点离起点多远」就等于「这一圈累积了多少漂移」。<b>净赚多少：</b>总漂移下降 6.11 米（降幅约 60%），其中高度方向几乎被清干净（−6.27 → 0.71 米），水平方向减半多一点（7.92 → 3.93 米）。<b>口径提醒：</b>这是「起终点位置差」，不是整条轨迹的绝对轨迹误差。另外原文把第二次真机实验描述成「覆盖了大半 <b>200 m²</b> 的区域」——但一条 1.1 公里的闭合回环<b>不可能装进 200 平方米</b>，这个数字的量纲或数量级必然有误（疑为平方英尺、英亩，或转换时丢了数量级），<b>所以本课不引用它。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/30550d6a3923f234b2a92789d950dd893852117e27ac9b44a85792d243568c38.jpg" alt="Large-scale coverage experiment">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Large-scale coverage experiment. The upper left panel shows the overhead LiDAR data of a 0.77 km² forest stand that is used to create the simulated environment. The upper right panel shows the automatically generated coverage plan based on a user-defined coverage region. The UAV is able to finish this mission autonomously within 1 h, without any human intervention. The trajectory length is ∼10 km and the average flight speed is ∼2.9 m/s. The lower left panel shows the semantic map generated by SLOAM consisting of 10,897 tree models, where the semantic segmentation uses the same model as we use for the physical experiments. The lower right panel shows a close-up of the semantic map.（大规模覆盖实验。左上panel是用于构建仿真环境的 0.77 km² 林分冠层激光数据；右上panel是基于用户定义区域自动生成的覆盖计划；无人机在 1 小时内无人工干预自主完成任务，轨迹长约 10 公里、平均速度约 2.9 m/s。左下panel是 SLOAM 生成的含 10,897 个树模型的语义地图，其语义分割使用的模型与真机实验相同；右下panel是语义地图的局部放大。）<br>
+          <b>怎么看这张图：</b>① 四格按「输入 → 计划 → 结果 → 细节」的顺序读：左上是从真实树林采到的冠层激光数据，右上是一圈圈往复的覆盖路径；② 右上那张路径图是<b>整篇论文任务逻辑的缩影</b>——用户只画了一个多边形，剩下的都是自动的；③ 左下与右下是最终产品：<b>密密麻麻的点，每一个都是一棵被建模成圆柱的树</b>；④ 注意图注最后一句：这个分割模型<b>真机和仿真共用同一个，全程不重训</b>——这是泛化性最硬的一条证据。<br>
+          <b>要记住的一句话：</b>10 公里、1 小时、2.9 m/s、10897 棵树，全部是在<b>没有 GPS、没有人工干预</b>的仿真密林里跑出来的；而它用的分割模型，训练数据全部来自<b>另一片林子</b>。
+        </figcaption>
+      </figure>
+
+      <p>关于这个「另一片林子」，值得单独强调，因为它是全文最有说服力的一条细节：分割网络<b>完全没用 Wharton State Forest 的任何标注数据</b>。作者在<b>美国阿肯色州的另一片松林</b>采集数据，只标了 <b>50 帧</b>激光扫描（<b>37 帧训练、13 帧验证</b>）去微调模型，然后<b>在所有实验里全程不重训</b>。参照一下尺度：Wharton State Forest 约 <b>122,880 英亩</b>。用 50 帧、另一片林子的数据，去跑一片 12 万英亩的林场——这就是「泛化」这两个字的实际含义。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Large-Scale_Autonomous_Flight_With_Real-Time_Semantic_SL/c76acd69872995aabdf37084660919008d3267f623fd3550a2dc8139706693ae.jpg" alt="Top-down view of the 1.1 km trajectory">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Top-down view of the 1.1 km trajectory. In this experiment, the UAV is manually piloted to guarantee returning to take-off position, so that the drift can be quantified. The black dots represent the tree trunks detected by our mapping algorithm.（1.1 公里轨迹的俯视图。这次实验中无人机由人工操控，以保证回到起飞位置，从而可以量化漂移。黑点代表建图算法检测到的树干。）<br>
+          <b>怎么看这张图：</b>① 先看那条闭合的轨迹——它是<b>人工操控飞出来的</b>，目的就是「精确回到起点」，这样终点离开起点多远就等于累积漂移；② 看那些黑点：<b>每一个黑点都是一棵被检测出来的树干</b>，全程共 1157 棵；③ 这张图<b>没有 GPS 参考</b>（原文说这次实验 GPS 未能锁定），所以它的「真值」是「手动飞回同一点」这个人为约定，不是外部测量——读 Table I 那两个数时一定要带上这个口径。<br>
+          <b>要记住的一句话：</b>1.1 公里、1157 棵树、总漂移 10.10 米压到 3.99 米——<b>而这里的「米」是起终点位置差，不是整条轨迹的误差。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">6. 它不负责什么，和前面课程怎么接</h2>
+
+      <p>一篇论文的价值，一半在于它做了什么，另一半在于它<b>不做什么</b>。这篇的边界划得很清楚，而且作者自己写在了未来工作里。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h3>没有回环，没有后端优化</h3>
+          <p>没有因子图、没有 SAM（Smoothing and Mapping）那样的后端。作者明确把「把 LIO-SAM 式的 SAM 框架扩展到语义地图上、进一步压全局漂移」列为未来工作，理由是<b>大地图做回环的计算量太高</b>。所以 3.99 米是「减小」，不是「消除」。</p>
+        </div>
+        <div class="mini-card">
+          <h3>只有两类语义</h3>
+          <p>语义对象只有<b>树干和地面平面</b>两类。换个场景（比如果园、城市峡谷）就得重新训练分割网络。语义在这里的角色是「约束加建图产物」，<b>不是决策依据</b>。</p>
+        </div>
+        <div class="mini-card">
+          <h3>不做多机，不做主动感知</h3>
+          <p>它是一台机器在飞。而且它<b>飞完才拿到地图</b>——用语义地图主动选动作、降低信息不确定性，也被作者列为未来工作。</p>
+        </div>
+        <div class="mini-card">
+          <h3>非关键帧全靠惯性递推</h3>
+          <p>语义分割只在关键帧上跑（2 Hz），其余时刻的位姿完全靠 VIO 惯性递推。也就是说，<b>两帧语义之间发生的事，SLAM 是不知道的。</b></p>
+        </div>
+      </div>
+
+      <h3>6.1 和前面课程怎么接</h3>
+
+      <p>这一篇的接口特别干净，几乎所有零件都能在前十季找到出处：</p>
+
+      <p><b>语义 SLAM 内核（第 ②③ 环）</b>——它把语义当成「位姿的约束」，这条思路与第八季 <a href="0160-MaskFusion与CoFusion-实例级分割进场.html">0160</a>–<a href="0167-语义块的收束-语义怎么反过来帮定位.html">0167</a> 那块语义建图同源：语义先验怎么进地图、怎么变成约束，那一季讲过原理，这一篇给了它在真机上的落地。而这篇用的 SLOAM 本身来自 2020 年的另一篇工作，也就是第八季那条线的上游。</p>
+
+      <p><b>VIO 部分（第 ③ 环）</b>——它用的是 S-MSCKF 一类视觉惯性方法，回链第三季的视觉 VIO 与第五季的多传感器融合：为什么视觉要和惯性挂在一起、为什么滤波器的输出天然平滑，那两季讲过。而「VIO 局部准但长期漂、SLAM 长期准但不平滑」这条戏剧冲突，正是本课第 3 节那一招的来源。<a href="0197-3D检测综述-2023下-多模态与度量.html">0197</a> 讲的早 / 中 / 晚融合三分在这里也能对上号：这一篇是在两套估计各自独立的前提下只交换一个修正量，可以理解成一种很松的融合。</p>
+
+      <p><b>三层地图（第 ④ 环）</b>——第六季讲空间表示时反复出现过「同一件事在不同精度需求下有不同的存法」这个母题（TSDF、体素、隐式、高斯……）。这一篇的语义 / 全局粗体素 / 局部细体素三层，是同一个母题在系统层的版本；<b>而它划分三层的依据不是算法偏好，是下游谁要用。</b></p>
+
+      <p><b>规划与控制（第 ⑤⑥ 环）</b>——这两环前十季没拆过，这一篇是本季第一次见到实体：高层用往复式覆盖规划、中层用跳点搜索（JPS）做全局最短路、局部用运动原语生成动力学可行的轨迹（2 Hz）；控制侧是一个非线性几何控制器配合 200 Hz 的 UKF，输出推力、姿态与体速率给飞控。另外有一条细节值得学：当无人机偏离轨迹达到 <b>0.5 米</b>时，状态机会自动触发停止策略，尽快把速度减到零再重新规划——<b>这是「控制器里带安全兜底」的具体样子</b>。</p>
+
+      <p><b>执行器（第 ⑦ 环）</b>——全季唯一。控制器的输出交给飞控，飞控再跑一遍机载滤波与姿态控制，最后算出<b>电机转速</b>。链在这里真正闭环：算法算出来的东西，最后变成了螺旋桨转多快。</p>
+
+      <p>最后，把这节课和导览课 <a href="0199-导览-第十一季开场-SLAM站在系统的哪一环.html">0199</a> 立的那条链对一次账：<b>这一篇是本季唯一一台自洽闭环的整机系统，也是唯一落到执行器的一篇。</b>下一节课（0201）会换一个完全相反的极端——那篇论文一格都不实现，却把整条链拆开讲清楚了；再下一课（0202）又是另一种：它把 SLAM 整块搬到机外去算。三篇放在一起，你就能看出「系统」这个词在不同论文里有多不一样。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于这篇论文的「双参考系解耦」，下面哪一种说法更准确？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。它保留两套各自的坐标系：VIO 继续负责平滑连续的局部运动，语义 SLAM 只提供「两个坐标系差了多少」这个慢修正量，然后用这个修正量去改目标点。规划器自己看到的输入始终是平滑的。" onclick="lessonKit.answer(this,'q0200a')">只把两系的差值当慢修正注入</button>
+          <button data-correct="no" data-explanation="不对。原文明确讲了这样做的后果：位姿一跳，无人机就脱离轨迹，运动原语图不能复用，重规划来不及，于是处于危险状态。正因为不能这样做，才发明了双参考系解耦。" onclick="lessonKit.answer(this,'q0200a')">直接把 SLAM 位姿喂给规划控制</button>
+        </div>
+        <div class="quiz-feedback" id="q0200a"></div>
+      </div>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>关于密林树冠下为什么用激光雷达，哪一种理由才是原文放在第一位的原因？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。原文明写：光照剧变会让相机不停调曝光，这违反了视觉特征跟踪所依赖的恒亮假设；而激光雷达测的是往返时间，不受亮度影响。量程与算力是第二组理由。" onclick="lessonKit.answer(this,'q0200b')">光照剧变让恒亮假设不再成立</button>
+          <button data-correct="no" data-explanation="不对。激光雷达确实更准、量程更远，但原文把它排在第二位。第一位是原理性的：树冠下的光照环境让纯视觉方案在最基本的假设上就不成立。" onclick="lessonKit.answer(this,'q0200b')">激光雷达的测距精度一直更高</button>
+        </div>
+        <div class="quiz-feedback" id="q0200b"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">读完你应该能回答</h2>
+
+      <div class="summary-grid">
+        <div class="mini-card">
+          <h3>① 它在链的哪几环？</h3>
+          <p>感知 → SLAM → 地图 → 规划 → 控制 → 执行器六环实心，传感器涂灰（用但只做选型）。<b>全季唯一落到执行器的一篇。</b></p>
+        </div>
+        <div class="mini-card">
+          <h3>② 上游是谁，下游给谁？</h3>
+          <p><b>上游</b>是用户画的测绘多边形和覆盖目标点；<b>下游</b>有两个：规划器（拿到漂移补偿后的目标点）与用户（拿到树干圆柱地图，产出胸径与株数）。</p>
+        </div>
+        <div class="mini-card">
+          <h3>③ 为什么树冠下必须用 LiDAR？</h3>
+          <p>因为光斑移动、相机调曝光、灌木晃动破坏了视觉的恒亮假设，纯视觉在原理上站不住；激光雷达测往返时间，不受光照影响，且量程可达数百米、算力开销可忽略。</p>
+        </div>
+        <div class="mini-card">
+          <h3>④ 双参考系解耦解决了什么矛盾？</h3>
+          <p>VIO 平滑但长期漂、SLAM 长期准但不平滑。直接换用 SLAM 位姿会让无人机脱离轨迹、重规划来不及。<b>只注入两者的差值</b>，就同时保住了平滑与长期修正。</p>
+        </div>
+        <div class="mini-card">
+          <h3>⑤ 2 MB 与 1250 MB 说明什么？</h3>
+          <p>同一片密林，表示方式不同，存储差约 600 倍。三层地图不是压缩三遍，而是三种用途各自要一种精度。</p>
+        </div>
+        <div class="mini-card">
+          <h3>⑥ 它没有做什么？</h3>
+          <p>没有回环与后端优化（所以 3.99 米是「减小」不是「消除」）；语义只有树干与地面两类；不多机、不主动感知；非关键帧全靠 VIO 递推。</p>
+        </div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>如果把这套漂移补偿机制里的 VIO 换成 GPS，它还成立吗？请说出依据。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>成立。原文明确写了这条机制「让整套自主飞行系统可以直接配别的 SLAM、甚至 GPS 的位姿来工作」。原因在于它只依赖一个前提：<b>两个位姿源各有一套自己的坐标系，且其中一套局部平滑、另一套长期更可信</b>。GPS 在局部噪声大（原文的 800 米实验里 X / Y 标准差约 10 米）但不随时间漂移，正好可以和 VIO 互补。不过要注意：<b>原文只说了「可以工作」，没有给出 GPS 版本的具体实验数字</b>，所以这个结论是原文的接口声明，不能当成已验证的性能。</div></details>
+          </li>
+          <li>为什么「两步拆分最小二乘」这件事，原文说是为了鲁棒性而不是为了速度？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为拆开之后，<b>两个子问题的失败是独立的</b>。树干优化（3 自由度：X、Y、航向）和地面优化（3 自由度：Z、pitch、roll）各自匹配点不足时，可以只把失败的那一项设成单位矩阵，让另一侧继续提供约束。原文写得很清楚：这种形式「即使在目标检测或数据关联部分失败的观测里，也能为机器人位姿的一部分提供约束」。如果只做一次六自由度联合求解，一边失败就会把整个解带坏。原文只是顺带引用 LeGO-LOAM 说这类拆分能省约 35% 计算量，那不是它的主要动机。</div></details>
+          </li>
+          <li>Wharton 那片林子和阿肯色州那片松林的关系说明了什么？为什么这件事比精度数字更重要？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>说明这套语义分割的<b>泛化能力</b>：分割网络只用阿肯色州另一片松林的 50 帧标注数据（37 训 / 13 验）微调，<b>完全没用 Wharton State Forest 的任何标注数据</b>，然后全程不重训跑遍所有实验。它之所以比精度数字重要，是因为精度只说明「在这一片林子里表现好」，而跨林场不重训说明的是「换一片林子仍然能用」——对要部署的系统来说，后者才是能不能落地的条件。</div></details>
+          </li>
+          <li>原文把第二次真机实验说成「覆盖了大半 200 m²」，本课为什么不引用这个数字？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为它在量级上不可能：同一段话里说这是<b>一条 1.1 公里的闭合回环</b>，而 200 平方米差不多是一间 14 米见方的屋子，一条 1.1 公里的回环不可能装进去。所以这个数的<b>量纲或数量级必然有一处出错</b>（可能是平方英尺、英亩，或者转换时丢了数量级）。本项目的纪律是：<b>原文自相矛盾的数字要显式标注出来并且不引用</b>，而不是替它猜一个合理值——因为猜出来的值就成了我们编的数据。</div></details>
+          </li>
+        </ol>
+      </section>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0199-导览-第十一季开场-SLAM站在系统的哪一环.html">← 0199 导览：SLAM 站在系统的哪一环</a>
+        <a class="next" href="0201-运动规划综述-2022-定位之后怎么走.html">0201 运动规划综述：定位之后怎么走 →</a>
+      </div>
+      <p class="foot-note">定位准了，接下来呢？下一课换一个完全相反的极端：一篇一格都不实现的论文，却把整条导航栈拆开讲清楚了 🧩</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

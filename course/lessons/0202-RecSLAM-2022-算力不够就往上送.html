@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RecSLAM（2022）：算力不够就把计算送出去 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 K · 应用与相邻领域 / Lesson 0202（单篇 · 系统）</div>
+      <h1>RecSLAM（2022）：算力不够就把计算送出去</h1>
+      <p class="subtitle">上一课说「学习越窄越有效」，这一课干脆把算力本身挪了个位置：机器人不跑 SLAM 了，它只负责采集和打包，剩下的活儿交给边缘服务器 📦</p>
+      <div class="hero-meta">
+        <span>🎯 主题：多机激光 SLAM 的计算卸载与层次融合，算法零改动</span>
+        <span>🧪 形态：真机（3 台 TurtleBot3 ＋ 1 个边缘节点）与仿真双验证</span>
+        <span>📅 2022 · <i>Edge Robotics: Edge-Computing-Accelerated Multirobot <b>Simultaneous Localization and Mapping</b></i></span>
+      </div>
+      <div class="toc">
+        <a href="#a1">开课即纠正：「仿真」是误读</a>
+        <a href="#b">它在系统链的哪一环</a>
+        <a href="#c">它要解决什么：两个瓶颈</a>
+        <a href="#d">四段时延：用传输换算力</a>
+        <a href="#e">三级融合链：只传原始帧</a>
+        <a href="#f">调度：两个子问题</a>
+        <a href="#g">onboard 还是 offboard</a>
+        <a href="#h">它是横向的基础设施轴</a>
+        <a href="#i">和前面课程怎么接</a>
+        <a href="#j">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout">
+          <h4>本节目标</h4>
+          <p>读完你应该能：① 说清论文真实标题是什么、<b>「仿真」为什么是误读</b>，并知道它有真机原型；② 在七环系统链上指出它只碰<b>哪两环</b>，以及它碰的是这两环的「跑在哪、怎么合」而不是算法；③ 把<b>打包 → 传输 → 计算 → 融合</b>四段时延画出来，并讲明白「边缘计算不是白赚的，它是用传输换算力」；④ 说清<b>三级融合链</b>与「机器人只传原始帧」这个关键设计；⑤ 说出面对「算力不够」时，<b>onboard 与 offboard 这两条相反的路</b>各自的代价。</p>
+        </div>
+        <div class="callout">
+          <h4>和前面课程怎么接</h4>
+          <p>这一篇的「多机器人」与第八季的多机协同块（<a href="0168-多机为什么难-假回环会毁掉两台地图.html">0168</a> 起）同源，但它<b>一个多机 SLAM 的算法问题都不解决</b>——地图一致性、回环、通信受限，它全都不碰；它把「多机 ＋ SLAM」整体当成<b>一份待调度的算力负载</b>。它用的 SLAM 内核是现成的 <b>GMapping</b>，也就是第四季讲的激光 SLAM 经典实现（<a href="0073-导览-第四季开场-激光主干.html">0073</a> 起那一块），<b>算法零改动</b>。而它跟本季 <a href="0200-Falcon4-2022-把SLAM塞进一架真飞机.html">0200</a> 是<b>正面冲突</b>：0200 把算力往机上堆，0202 把算力往机外送。上一课 <a href="0201-运动规划综述-2022-定位之后怎么走.html">0201</a> 刚给了一条七环链当坐标系，这一课就正好用那条链来量它的位置。</p>
+        </div>
+      </div>
+
+      <h2 id="a1">0. 开课即纠正：把「仿真」这件事说清楚</h2>
+
+      <p>导览课 <a href="0199-导览-第十一季开场-SLAM站在系统的哪一环.html">0199</a> 立过一句口号：<b>看位置之前，先看清这篇到底是什么。</b>上一课 <a href="0201-运动规划综述-2022-定位之后怎么走.html">0201</a> 兑现过一次（它是综述、不是系统论文），这一课要兑现第二次，而且这一次是<b>一个字符造成的误读</b>。</p>
+
+      <h3>一、「仿真」这个词是从哪来的</h3>
+
+      <p>有一份清单把这一篇标成「边缘计算加速多机器人<b>仿真</b>」。这个说法是错的，而错的源头很小：<b>语料库里的文件名被截断了。</b></p>
+
+      <p>它的真实一级标题是：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">Edge Robotics: Edge-Computing-Accelerated Multirobot <b>Simultaneous Localization and Mapping</b></div>
+      </div>
+
+      <p><b>这句话在说什么：</b>这不是一个「仿真平台」的名字，这是一句完整的工作陈述——<b>「同时定位与建图」，也就是 SLAM 的全称</b>。而语料库里的文件名是 <code>2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim.md</code>，那个 <code>_Sim</code> 是被 66 字符长度限制切掉之后剩下的残骸：<b>它正好切在 Simultaneous 的第三个字母上</b>。于是 <code>Simultaneous</code> 变成了 <code>Sim</code>，<code>Sim</code> 又被顺理成章地读成了 <code>simulation</code>。</p>
+
+      <p>这不是这一篇独有的问题。<b>本季这三篇应用论文的文件名尾部全部被切过</b>：自主飞行那篇切在 <code>..._Semantic_SL.md</code>、运动规划那篇切在 <code>..._navigation_.md</code>、这一篇切在 <code>..._Multirobot_Sim.md</code>。所以在语料库里按清单给的名字去找文件是找不到的，只能按前缀匹配——这件事本身值得记住：<b>文件名的截断是一种系统性失真，不是个别事故。</b></p>
+
+      <h3>二、而且它不只是仿真：它有真机原型</h3>
+
+      <p>就算把 <code>_Sim</code> 读对了，还有第二个坑：会以为它「只做仿真」。<b>不是。</b>这一篇是<b>真机 ＋ 仿真双验证</b>的系统论文：真机部分用了 <b>3 台 TurtleBot3 加 1 台边缘服务器</b>（边缘侧是 Jetson TX2），机器人侧的算力模块是一块 <b>Raspberry Pi</b>，车顶装 RPLIDAR A1 做激光扫描；仿真部分则是 Gazebo 里的公寓场景（主场景 <b>13×18 m²</b>，配 <b>3 台边缘服务器</b>），另外还有 <b>4×4 m²</b> 对称场景与 <b>5×5 m²</b> 非对称场景。真机测试场是自建的会议室，约 <b>6×5.5 m²</b>。</p>
+
+      <p>两种验证的份量也不一样：<b>规模与调度实验跑在仿真里</b>（机器人规模从 10 台一路到 50 台），<b>可行性证明跑在真机上</b>（论文把真机那组叫 proof-of-concept，概念验证）。所以这一课真正该讲的重点是<b>卸载粒度、层次融合、调度算法</b>——而不是「仿真怎么加速」。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:20%;">对照项</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">清单的说法</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">论文正文的事实</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>主题词</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">「边缘计算加速多机器人<b>仿真</b>」</td><td style="padding:.45rem;border:1px solid #cfd9e6;">「边缘计算加速多机器人<b>同时定位与建图</b>」（Simultaneous Localization and Mapping，即 SLAM）</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>错的来源</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">无，清单直接这么写的</td><td style="padding:.45rem;border:1px solid #cfd9e6;">文件名在第 66 个字符处截断，<code>Simultaneous</code> 只剩 <code>Sim</code></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>验证方式</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">暗示只有仿真</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>真机 ＋ 仿真双验证</b>：真机 3 台 TurtleBot3 ＋ 1 台边缘服务器；仿真 13×18 m² 公寓配 3 台边缘服务器</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>该讲的重点</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">会往「仿真器性能」上偏</td><td style="padding:.45rem;border:1px solid #cfd9e6;">卸载粒度（传地图还是传原始帧）、层次融合（在边缘先合一次）、调度算法</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>年份</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">2022</td><td style="padding:.45rem;border:1px solid #cfd9e6;">2022 无误（正文脚注：投稿 2021-10-01、接收 2022-01-19、<code>date of current version 25 July 2022</code>）</td></tr>
+        </tbody>
+      </table>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 380" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="380" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">文件名里的 _Sim 不是 simulation，是 Simultaneous 被切掉了</text>
+
+          <rect x="20" y="44" width="430" height="262" rx="9" fill="#141c26" stroke="#c65c47" stroke-width="1.5"/>
+          <text x="235" y="68" text-anchor="middle" font-size="12.5" font-weight="700" fill="#f0a08c">① 清单上的名字 对比 论文上的名字</text>
+          <text x="40" y="96" font-size="10.5" fill="#8fb4d9">清单与文件名：...Multirobot_Sim.md</text>
+          <text x="40" y="120" font-size="10.5" fill="#8fb4d9">论文一级标题：</text>
+          <text x="40" y="144" font-size="10.5" fill="#cfe0f7">Edge Robotics: Edge-Computing-</text>
+          <text x="40" y="166" font-size="10.5" fill="#cfe0f7">Accelerated Multirobot Simultaneous</text>
+          <text x="40" y="188" font-size="10.5" fill="#cfe0f7">Localization and Mapping</text>
+          <rect x="40" y="204" width="120" height="26" rx="4" fill="#2a1f1f" stroke="#c65c47" stroke-width="1.2"/>
+          <text x="100" y="221" text-anchor="middle" font-size="10" fill="#f0a08c">误读：simulation</text>
+          <rect x="175" y="204" width="126" height="26" rx="4" fill="#1f2a2a" stroke="#5ad1a8" stroke-width="1.2"/>
+          <text x="238" y="221" text-anchor="middle" font-size="10" fill="#5ad1a8">正读：Simultaneous</text>
+          <text x="40" y="252" font-size="10" fill="#8fb4d9">两个词只差几个字母，课程重点却完全相反：</text>
+          <text x="40" y="272" font-size="10" fill="#8fb4d9">一个讲「仿真跑得快」，一个讲「真机上怎么省算力」。</text>
+          <text x="40" y="294" font-size="10" fill="#e8d57a">截断发生在第 66 个字符处，本项目三篇应用论文都这样。</text>
+
+          <rect x="470" y="44" width="410" height="262" rx="9" fill="#141c26" stroke="#5ad1a8" stroke-width="1.5"/>
+          <text x="675" y="68" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9fd8bd">② 论文里真正有的东西：真机 ＋ 仿真</text>
+          <rect x="486" y="88" width="130" height="44" rx="5" fill="#1a2430" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="551" y="106" text-anchor="middle" font-size="9.5" fill="#8fb4d9">Gazebo 仿真</text>
+          <text x="551" y="122" text-anchor="middle" font-size="8.5" fill="#6b7d94">13×18 m² 公寓</text>
+          <rect x="632" y="88" width="120" height="44" rx="5" fill="#1f2a38" stroke="#4f9dff" stroke-width="1.2"/>
+          <text x="692" y="106" text-anchor="middle" font-size="9.5" fill="#9fc4f0">边缘服务器</text>
+          <text x="692" y="122" text-anchor="middle" font-size="8.5" fill="#8fb4d9">Jetson TX2</text>
+          <rect x="766" y="88" width="100" height="44" rx="5" fill="#22303f" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="816" y="106" text-anchor="middle" font-size="9.5" fill="#8fb4d9">云实例</text>
+          <text x="816" y="122" text-anchor="middle" font-size="8.5" fill="#8fb4d9">8 vCPU</text>
+          <line x1="534" y1="150" x2="774" y2="150" stroke="#e8d57a" stroke-width="1.4"/>
+          <line x1="534" y1="172" x2="534" y2="150" stroke="#e8d57a" stroke-width="1.4"/>
+          <line x1="654" y1="172" x2="654" y2="150" stroke="#e8d57a" stroke-width="1.4"/>
+          <line x1="774" y1="172" x2="774" y2="150" stroke="#e8d57a" stroke-width="1.4"/>
+          <line x1="692" y1="150" x2="692" y2="132" stroke="#e8d57a" stroke-width="1.4"/>
+          <text x="600" y="166" text-anchor="middle" font-size="8.5" fill="#e8d57a">原始激光帧</text>
+          <rect x="486" y="172" width="96" height="40" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="534" y="196" text-anchor="middle" font-size="9" fill="#cfe0f7">TurtleBot 3</text>
+          <circle cx="510" cy="212" r="5" fill="#4a5566"/>
+          <circle cx="558" cy="212" r="5" fill="#4a5566"/>
+          <text x="534" y="234" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR A1</text>
+          <rect x="606" y="172" width="96" height="40" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="654" y="196" text-anchor="middle" font-size="9" fill="#cfe0f7">TurtleBot 3</text>
+          <circle cx="630" cy="212" r="5" fill="#4a5566"/>
+          <circle cx="678" cy="212" r="5" fill="#4a5566"/>
+          <text x="654" y="234" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR A1</text>
+          <rect x="726" y="172" width="96" height="40" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="774" y="196" text-anchor="middle" font-size="9" fill="#cfe0f7">TurtleBot 3</text>
+          <circle cx="750" cy="212" r="5" fill="#4a5566"/>
+          <circle cx="798" cy="212" r="5" fill="#4a5566"/>
+          <text x="774" y="234" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR A1</text>
+          <text x="486" y="258" font-size="9" fill="#9fd8bd">真机原型：3 台 TurtleBot3 ＋ 1 个边缘节点，不是纯仿真</text>
+          <text x="486" y="278" font-size="9" fill="#8fb4d9">机器人端：Raspberry Pi 3b＋（1.4 GHz、1 GB，无 GPU）</text>
+          <text x="486" y="298" font-size="9" fill="#8fb4d9">调度实验的规模从 10 台机器人一直做到 50 台</text>
+
+          <text x="20" y="332" font-size="11" fill="#8fb4d9">一句话：截断切掉的正好是 Simultaneous 的前三个字母 —— 一个词，把「真机系统论文」读成了「仿真论文」。</text>
+          <text x="20" y="356" font-size="11" fill="#4f9dff">所以这一课的重点是卸载粒度、层次融合、调度算法，而不是「仿真怎么加速」。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左格把「清单上的名字」和「论文一级标题」并排放在一起，下面两个小方框标出两种读法——红色的「误读：simulation」和绿色的「正读：Simultaneous」。右格画的是论文里真正存在的东西：一台 Gazebo 仿真窗口，三台 TurtleBot3 小车（车顶 RPLIDAR、车内 Raspberry Pi）把原始激光帧送上一条总线，总线接到一台 Jetson TX2 边缘服务器，再往上送到云端实例。<br>
+          <b>怎么看这张图：</b>① 先看左格那两行标题：论文标题里的 Multirobot Simultaneous Localization and Mapping 就是 SLAM 的英文全称，和「仿真」一点关系都没有；② 再看右格：<b>三台小车是实物，不是动画</b>，它们在论文里对应真机原型那一组实验，旁边的 Gazebo 窗口对应仿真那一组；③ 注意那条黄色总线标的是「原始激光帧」——这是全篇最关键的四个字，第 4 节会展开讲为什么传的不是地图；④ 最下面两行给出结论：这个误读是怎么来的、正确的重点应该放在哪。<br>
+          <b>要记住的一句话：</b>看一篇论文之前，先确认自己读到的是<b>它的真名</b>——文件名会截断，清单会误读，只有一级标题不会骗你。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>文件名 <code>2022_Edge_Robotics__..._Multirobot_Sim.md</code> 里的 <code>_Sim</code> 是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。论文一级标题写的是 Multirobot Simultaneous Localization and Mapping，_Sim 是 Simultaneous 被 66 字符长度限制切断后剩下的前三个字母。而且这一篇既做 Gazebo 仿真，也做了 3 台 TurtleBot3 加 1 台 Jetson TX2 的真机原型，是真机加仿真双验证。" onclick="lessonKit.answer(this,'q0202a')">是 Simultaneous 的截断痕迹</button>
+          <button data-correct="no" data-explanation="不对。这正是清单里的误读：把截断出来的 Sim 当成 simulation，于是整篇被读成「边缘计算加速多机器人仿真」。真实标题写的是 Simultaneous Localization and Mapping，也就是 SLAM 全称。" onclick="lessonKit.answer(this,'q0202a')">是 simulation 的缩写简写</button>
+        </div>
+        <div class="quiz-feedback" id="q0202a"></div>
+      </div>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">1. 它在系统链的哪一环</h2>
+
+      <p>把上一课 <a href="0201-运动规划综述-2022-定位之后怎么走.html">0201</a> 立的那条七环链搬出来——<b>传感器 → 感知/前端 → SLAM/里程计 → 地图 → 规划 → 控制 → 执行器</b>——然后问一句：这一篇占哪几格？</p>
+
+      <p>答案是<b>两格：第三格（SLAM/里程计）和第四格（地图）</b>。但这里有一个很要紧的状语：<b>它改的是这两格的「算力部署与融合方式」，不是这两格的算法。</b>换句话说，它没有发明任何新的 SLAM，也没有发明任何新的地图融合数学——它做的是把「SLAM 计算跑在哪台机器上」和「多张地图在哪一层合并」这两件事重新安排了一遍。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 250" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="250" fill="#0f1622"/>
+          <text x="450" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">0202 RecSLAM：只负责第 ③ ④ 两环的「跑在哪、怎么合」</text>
+
+          <rect x="20" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="145" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="270" y="52" width="110" height="96" rx="8" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="395" y="52" width="110" height="96" rx="8" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="2"/>
+          <rect x="520" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="645" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+          <rect x="770" y="52" width="110" height="96" rx="8" fill="#171d24" stroke="#4a5566" stroke-width="1.4"/>
+
+          <text x="75" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">① 传感器</text>
+          <text x="75" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">RPLIDAR A1 ＋ IMU</text>
+          <text x="75" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">它的输入来源</text>
+          <text x="75" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="200" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">② 感知/前端</text>
+          <text x="200" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">不做分割不做特征</text>
+          <text x="200" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">原样打包往外传</text>
+          <text x="200" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="325" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9fd8bd">③ SLAM/里程计</text>
+          <text x="325" y="96" text-anchor="middle" font-size="9" fill="#cfe0f7">GMapping 当黑盒</text>
+          <text x="325" y="116" text-anchor="middle" font-size="9" fill="#cfe0f7">从机器人搬到边缘</text>
+          <text x="325" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">★ 负责「跑在哪」</text>
+
+          <text x="450" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9fd8bd">④ 地图</text>
+          <text x="450" y="96" text-anchor="middle" font-size="9" fill="#cfe0f7">机器人地图到边缘地图</text>
+          <text x="450" y="116" text-anchor="middle" font-size="9" fill="#cfe0f7">再到云全局地图</text>
+          <text x="450" y="138" text-anchor="middle" font-size="9" fill="#5ad1a8">★ 负责「怎么合」</text>
+
+          <text x="575" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">⑤ 规划</text>
+          <text x="575" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">只按预设路线走</text>
+          <text x="575" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">不实时重规划</text>
+          <text x="575" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="700" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">⑥ 控制</text>
+          <text x="700" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">线速度 0.20 m/s</text>
+          <text x="700" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">只做定速行驶</text>
+          <text x="700" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="825" y="74" text-anchor="middle" font-size="12.5" font-weight="700" fill="#6b7d94">⑦ 执行器</text>
+          <text x="825" y="96" text-anchor="middle" font-size="9" fill="#6b7d94">轮子与电机</text>
+          <text x="825" y="116" text-anchor="middle" font-size="9" fill="#6b7d94">它只到全局地图</text>
+          <text x="825" y="138" text-anchor="middle" font-size="9" fill="#6b7d94">不负责</text>
+
+          <text x="20" y="176" font-size="11.5" fill="#8fb4d9">上游：机器人传感器的原始数据（LaserScan 的时间戳与测距、IMU）</text>
+          <text x="880" y="176" text-anchor="end" font-size="11.5" fill="#8fb4d9">下游：云端全局地图</text>
+          <text x="20" y="204" font-size="11.5" fill="#cfe0f7">灰格＝它明确不碰的环。全篇没有回环检测、没有语义、没有规划与控制的改动。</text>
+          <text x="20" y="232" font-size="11.5" fill="#5ad1a8">绿格＝它真正动过的两环，但动的是「部署与融合方式」：SLAM 换机器跑，地图换层级合。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>七环系统链一字排开，第 ③ 格（SLAM/里程计）和第 ④ 格（地图）用绿色描边高亮，其余五格全部涂灰。绿格里面写的是它具体改了什么：③ 格里 GMapping 从机器人搬到了边缘服务器上跑；④ 格里地图被拆成机器人地图、边缘地图、云全局地图三层来合。<br>
+          <b>怎么看这张图：</b>① 先数灰格：<b>七格里五格是灰的</b>，说明它的覆盖面很窄，它不做感知、不做规划、不做控制，连执行器都没摸到；② 再看两格绿：<b>注意绿格里的措辞是「跑在哪」和「怎么合」，不是「怎么算」</b>，这就是「算法零改动」的意思；③ 看最下面那两行字，左边是它的输入（机器人传感器的原始数据），右边是它的输出（云端全局地图），<b>它自己不消费这张地图</b>，地图是交给云端下游应用的；④ 把它和 <a href="0200-Falcon4-2022-把SLAM塞进一架真飞机.html">0200</a> 那篇的覆盖图对比一下：那篇横跨六环，这一篇只碰两环，而两篇的年份都是 2022。<br>
+          <b>要记住的一句话：</b>它不是一篇 SLAM 论文，<b>它是一篇「SLAM 该跑在哪」的论文</b>——把算法当黑盒，把整件事当成一份待调度的算力负载。
+        </figcaption>
+      </figure>
+
+      <p>那它到底交出了什么、又没碰什么？原文自己的界定很清楚：<b>「我们对 SLAM 计算整体封装成一个函数模块来处理机器人原始数据」</b>——这句话是全篇的立场声明。它不改进 SLAM 前端、不做回环检测、不做语义；它不做机器人自主性，机器人端只保留轻量的采集与打包。它也<b>不解决多机 SLAM 的算法问题</b>——地图一致性、回环、通信受限，这三样在多机 SLAM 里是老大难，而这一篇一个都不碰。</p>
+
+      <p>那它在地图上画的是哪一笔？原文 Related Work 里给了一句自评：CCM-SLAM、EdgeSLAM、Edge-SLAM 这些已有工作<b>要么只做单机器人、要么忽略多边缘的情况</b>，而 RecSLAM 是<b>首个用边缘计算优化多机器人激光 SLAM 的工作</b>。这句话的分量要放在第八季那个语境里才看得出来：第八季多机协同块解决的是「多个机器人怎么一起把一张地图做对」，而这一篇解决的是「多个机器人加一台 SLAM，怎么在算力与通信上跑得动」。<b>一个是算法问题，一个是基础设施问题。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim/d3542b3173fedcbd65c5a1f923c3bc15d2f54179f7e54ed0b5dc6ba85cbda7e8.jpg" alt="Example multirobot SLAM application at the edge">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Example multirobot SLAM application at the edge, where the robots are navigated to walk in the apartment (a) and perform SLAM to construct the corresponding geometric indoor map (b).（边缘侧多机器人 SLAM 的一个应用示例：机器人在公寓里被导航行走（a），并执行 SLAM 构建出对应的几何室内地图（b）。）<br>
+          <b>怎么看这张图：</b>① 原文的 Fig. 1 分成 (a)(b) 两张子图，<b>此处展示的是按原文顺序推断的 (a) 子图</b>，机器人在公寓平面图里被安排着走；② 盯着那些<b>行走路线</b>看：它们不是自由探索出来的，而是「被导航到走」（navigated to walk），对应本课后面要讲的「预设路线」；③ 右半张的几何地图是 (b) 子图的内容，本图里看不到，它的作用是告诉你这一篇的最终产物是<b>一张几何栅格地图</b>，不是语义地图；④ 提醒一句：这张图里的公寓就是仿真与真机实验共同使用的场景原型。<br>
+          <b>要记住的一句话：</b>这一篇的输入是「按路线走出来的激光数据」，输出是「一张合起来的几何地图」——<b>中间那一步（SLAM）它一点没改，只是换了台机器跑。</b>
+        </figcaption>
+      </figure>
+    </section>
+    <section class="section-card">
+      <h2 id="c">2. 它要解决什么：传统云方案的两个瓶颈</h2>
+
+      <p>要理解一篇系统论文，最好的入口是看它<b>先量了谁的问题</b>。这一篇的第二节做了一件很实在的事：<b>把当时最主流的方案——「机器人各自跑 SLAM、把局部地图通过广域网传上云、云端合并」——拿来做了一遍实测</b>，然后把两个瓶颈摆出来。</p>
+
+      <h3>瓶颈一：机器人被自己的 SLAM 压死</h3>
+
+      <p>原文监听了机器人在跑 SLAM 时的 CPU 负载：<b>最低 83.60%、平均 93.82%，有时直接顶到 100.00%</b>。注意这是「最低」就有 83.60%，也就是这台机器人在整段任务里几乎没有喘气的空隙。<b>一台机器人如果在跑 SLAM 时 CPU 已经打满，那它就没有余量再做任何别的事情</b>——避障、通信、异常处理都挤不进去。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim/d3c6f0de5202ea0d5f0ecad821965a7e58e25cc5b0a93ce9eed31ab82b936d8a.jpg" alt="Monitored background load level during SLAM runtime on the robot">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Monitored background load level during SLAM runtime on the robot. The load curve consistently lies at a high level with a minimum of 83.60% and an average of 93.82%, indicating the robot is overloaded.（机器人在 SLAM 运行期间的背景负载监测。负载曲线始终处在高位，最低 83.60%、平均 93.82%，说明机器人已经过载。）<br>
+          <b>怎么看这张图：</b>① 横轴是时间，纵轴是 CPU 负载百分比；② 盯住这条曲线<b>离 100% 有多近、以及它掉下来过几次</b>——原文特意点出「最低 83.60%」，意思是它从来没真正空闲过；③ 记住这两个数：<b>平均 93.82%、最低 83.60%</b>，它们后面会作为基线，与 RecSLAM 的数字对照；④ 这张图的用途是给「卸载」提供理由：<b>不是想不想卸载，是不卸载就跑不动。</b><br>
+          <b>要记住的一句话：</b>这是全篇的第一个动因：<b>机器人算力不够，而且不是差一点，是打满。</b>
+        </figcaption>
+      </figure>
+
+      <h3>瓶颈二：通信时延又大又不稳</h3>
+
+      <p>第二个瓶颈在链路这一侧。原文实测的传统云方案总时延是：<b>WiFi 下 3.83 s，5G 下反而涨到 5.36 s</b>。这两个数字放在一起很有意思——<b>换了更快的网络，时延反而变大了</b>，原文的解读是这段时延的波动主要来自通信侧，而广域网的通信时延本身就不受你控制。这正是摘要里那句话的来源：<b>实测表明数据卸载的通信开销使它难以实际部署。</b></p>
+
+      <p>把两个瓶颈合起来看，就得到了这一篇的问题定义：<b>主流云方案的瓶颈同时出现在「机器人的算力」和「机器人的通信」两侧</b>，而它要做的，是把这两侧的压力同时降下来。</p>
+
+      <div class="callout" style="margin-top:1rem;">
+        <h4>⚠️ 精读时发现的原文疑点（引用时请留意）</h4>
+        <p>这一篇的正文里有几处数字与单位对不上。精读阶段已逐条核实，这里如实列出，<b>不要照抄错的那一个</b>：</p>
+        <ul>
+          <li><b>上传时延的单位印错了。</b>原文把上传时延写成 <code>3.13, 2.35, and 1.88 ms</code>（4G / 5G / WiFi）。<b>毫秒不成立</b>：1.88 ms 不可能成为总时延 3.83 s 的主要部分，也无法与紧邻的 1.51 s 本地计算相加凑到 3.83 s。按数量级应为<b>秒</b>——1.88 s 加 1.51 s 约 3.39 s，再加云端合并约 3.83 s，才自洽。</li>
+          <li><b>百分比口径不自洽。</b>原文称本地计算 1.51 s 占 WiFi 总时延的 <b>49.74%</b>，但 1.51 除以 3.83 等于 <b>39.4%</b>；要得到 49.74%，分母应约为 3.04 s。这两个数<b>至少有一个与它标注的口径不符</b>，引用时请只取一个并注明口径。</li>
+          <li><b>通道名前后不一致。</b>一处说联系云有三条通道 <code>3G, 4G, and WiFi</code>，后面报的数据却是 <b>4G、5G、WiFi</b>——3G 出现后消失、5G 未经介绍就出现。</li>
+          <li><b>角速度的单位错了。</b>一处把角速度写成 <code>0.20–0.80 m/s²</code>，角速度单位不可能含 m/s²，应为 rad/s 或度每秒。</li>
+          <li><b>一句话里混了两个指标。</b>原文有一句写「相对贪心策略平均降低 <b>58.71%</b>、最高降低 <b>12.16%</b>」——平均值大于上限，逻辑不可能。结合上下文，58.71% 来自算法运行开销那张图、12.16% 来自执行时延那张图，<b>不可当作单一加速比引用</b>。</li>
+          <li><b>扫描域的形状前后矛盾。</b>一处说机器人扫描域「用圆表示（因为能 360 度扫描）」，而正文某张图的图注说扫描域「抽象为扇形（sector）」。</li>
+        </ul>
+        <p>另外，原文 Algorithm 3 第 2 行的下标印成了 $i \in \mathcal{E}$，但那一行里被遍历、被移除的变量其实是<b>边缘服务器</b>，且同一行的左端已经用了 $j$；按正文的英文描述（pick an edge server $j$ such that…）<b>下标应为 $j \in \mathcal{E}$</b>，属笔误。</p>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">3. 四段时延：边缘计算不是白赚的</h2>
+
+      <p>这一节是全课的枢纽。要讲清「把计算送出去」到底赚了什么、又付出了什么，原文给了一个很好用的最小模型：<b>把从「数据产生」到「地图可用」的整段时间，拆成四段。</b>先用一张图把它摆出来。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">同一帧激光数据：在机器人上算 对比 送到边缘算</text>
+          <text x="20" y="52" font-size="11" fill="#8fb4d9">横轴是时间。四段拆开看：打包 pack，传输 trans，计算 compute，融合 fuse</text>
+
+          <text x="20" y="90" font-size="9" fill="#8fb4d9">时间轴</text>
+          <text x="146" y="126" text-anchor="end" font-size="11" fill="#f0a08c">① 在机器人上算</text>
+          <text x="146" y="232" text-anchor="end" font-size="11" fill="#9fd8bd">② 送到边缘算</text>
+          <text x="846" y="132" font-size="9" fill="#f0a08c">3.83 s</text>
+          <text x="846" y="238" font-size="9" fill="#9fd8bd">2.33 s</text>
+
+          <rect x="150" y="104" width="39" height="44" fill="#4f9dff"/>
+          <rect x="189" y="104" width="339" height="44" fill="#e8d57a"/>
+          <rect x="528" y="104" width="272" height="44" fill="#f0705c"/>
+          <rect x="800" y="104" width="40" height="44" fill="#5ad1a8"/>
+          <text x="169" y="98" text-anchor="middle" font-size="9" fill="#4f9dff">pack</text>
+          <text x="358" y="98" text-anchor="middle" font-size="9" fill="#e8d57a">trans</text>
+          <text x="664" y="98" text-anchor="middle" font-size="9" fill="#f0705c">compute</text>
+          <text x="820" y="98" text-anchor="middle" font-size="9" fill="#5ad1a8">fuse</text>
+          <text x="169" y="170" text-anchor="middle" font-size="9" fill="#8fb4d9">约 0.2 s 级</text>
+          <text x="358" y="170" text-anchor="middle" font-size="9" fill="#8fb4d9">上传整张地图 1.88 s</text>
+          <text x="664" y="170" text-anchor="middle" font-size="9" fill="#8fb4d9">本地 SLAM 1.51 s</text>
+          <text x="820" y="170" text-anchor="middle" font-size="9" fill="#8fb4d9">云端合并</text>
+
+          <rect x="150" y="210" width="39" height="44" fill="#4f9dff"/>
+          <rect x="189" y="210" width="300" height="44" fill="#e8d57a"/>
+          <rect x="489" y="210" width="45" height="44" fill="#f0705c"/>
+          <rect x="534" y="210" width="35" height="44" fill="#5ad1a8"/>
+          <text x="169" y="204" text-anchor="middle" font-size="9" fill="#4f9dff">pack</text>
+          <text x="339" y="204" text-anchor="middle" font-size="9" fill="#e8d57a">trans</text>
+          <text x="511" y="204" text-anchor="middle" font-size="9" fill="#f0705c">compute</text>
+          <text x="551" y="204" text-anchor="middle" font-size="9" fill="#5ad1a8">fuse</text>
+          <text x="169" y="276" text-anchor="middle" font-size="9" fill="#8fb4d9">打包还是那点活</text>
+          <text x="339" y="276" text-anchor="middle" font-size="9" fill="#8fb4d9">每帧传原始帧，变长</text>
+          <text x="511" y="276" text-anchor="middle" font-size="9" fill="#8fb4d9">机器人不算了</text>
+
+          <rect x="150" y="300" width="14" height="14" fill="#4f9dff"/>
+          <text x="172" y="312" font-size="10" fill="#8fb4d9">pack 打包</text>
+          <rect x="330" y="300" width="14" height="14" fill="#e8d57a"/>
+          <text x="352" y="312" font-size="10" fill="#8fb4d9">trans 传输</text>
+          <rect x="510" y="300" width="14" height="14" fill="#f0705c"/>
+          <text x="532" y="312" font-size="10" fill="#8fb4d9">compute 计算</text>
+          <rect x="690" y="300" width="14" height="14" fill="#5ad1a8"/>
+          <text x="712" y="312" font-size="10" fill="#8fb4d9">fuse 融合</text>
+
+          <text x="20" y="348" font-size="11" fill="#8fb4d9">两条柱子按同一比例尺画：左柱约 3.83 s（原文 WiFi 口径的端到端总时延），右柱按最高 39.31% 的降幅折算约 2.33 s。</text>
+          <text x="20" y="372" font-size="11" fill="#cfe0f7">要看清的是段与段之间的搬运：机器人侧的 compute 从 1.51 s 缩到几乎为零，代价是 trans 段变长。</text>
+          <text x="20" y="396" font-size="11" fill="#5ad1a8">边缘计算不是白赚的，它是用传输换算力。</text>
+          <text x="20" y="420" font-size="11" fill="#8fb4d9">负载也印证同一件事：机器人 CPU 平均负载 93.82% 降到 53.91%（原文口径，云方案最低 83.60%、有时到 100%）。</text>
+          <text x="20" y="444" font-size="11" fill="#8fb4d9">注意：四段里只有 compute 与 trans 有原文数值，其余为示意；原文的 1.51 s 与 49.74% 两个口径本身不自洽。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>两根横向的时延柱，用同一条时间轴对齐。上面那根是「在机器人上算」（传统云方案）：打包一小段蓝色、传输一段黄色（最后把地图传上云）、计算一大段红色（机器人本地跑 SLAM 1.51 s）、融合一小段绿色。下面那根是「送到边缘算」（RecSLAM）：蓝色的打包几乎没变，黄色的传输段明显变长（每帧原始数据都要往外送），红色的计算段大幅缩短（机器人不算了），整根柱子总长也短了一截。<br>
+          <b>怎么看这张图：</b>① 先看红段：<b>它是唯一一段被真正搬走的</b>，从机器人的时间轴搬到了边缘服务器的时间轴上；② 再看黄段：<b>搬运不是免费的</b>，机器人侧的红段缩短，全靠黄段变长来换；③ 最后看总长：两根柱子按同一比例尺画，下面那根短了约三成，这就是「净赚」的部分，但赚的是<b>机器人自己的时间</b>，全局总时延的账要另算（原文报的是最高降 39.31%）；④ 图里写的 1.51 s 与 1.88 s 两个数来自原文，其中上传那一个的单位在原文里印成了 ms，属排印错误，详见本课第 2 节的疑点清单。<br>
+          <b>要记住的一句话：</b>卸载的本质是一次交换：<b>把机器人的计算压力，换成链路的传输压力</b>——所以它能不能成立，完全取决于链路稳不稳、以及传的东西有多大。
+        </figcaption>
+      </figure>
+
+      <p>现在把这个模型写成公式。原文用工整的三段式把端到端时延拆了下来。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$t_r = t_r^{\mathrm{pack}} + t_{r\to e}^{\mathrm{trans}} + t_e^{\mathrm{frame}}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>一台机器人拿到「自己那张机器人地图」要等三件事：<b>打包</b>（把原始激光帧和 IMU 数据装成可以发出去的样子）、<b>上传</b>（从机器人 $r$ 传到它所属的边缘服务器 $e$）、<b>边缘上做一次坐标变换</b>（把数据对齐到统一的坐标框架里）。<b>它为什么这么算：</b>因为在这个设计里机器人已经不计算地图了，所以「算地图」那一段被从机器人身上彻底摘掉了，留下的是采集与搬运动作。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$t_e = \max_{r\in e} t_r + t_e^{\mathrm{fuse}}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>一台边缘服务器要等它名下<b>最慢</b>的那台机器人把数据送到，才能开始融合。<b>它为什么这么算：</b>因为融合需要所有输入齐了才能做，这就是为什么后面要专门做「负载均衡」：只要有<b>一台</b>机器人拖后腿，整个边缘节点就跟着慢。$\max$ 这个符号是整篇调度算法的根源。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$t_c = \max_{e}\left(t_e + t_{e\to c}^{\mathrm{trans}}\right) + t_c^{\mathrm{fuse}}$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>同理，云端也要等<b>最慢的那条边缘支路</b>，然后才能做全局融合。<b>它为什么这么算：</b>$t_c$ 就是这一篇要压的唯一目标——<b>从原始数据采集到全局地图完成的端到端总时延</b>。于是整篇的优化目标可以写成一句话：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\min\ t_c \quad \mathrm{s.t.}\ (2),(3)$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>全篇所有的调度算法，只为压缩这一件事——最慢那条支路的总时间。<b>净赚多少：</b>原文报的最终结果是<b>相对当时最先进的云方案最高降低 39.31% 的处理时延</b>；分机器人规模看是 <b>6 台机器人 39.31%、8 台 26.50%、10 台 12.96%</b>。同时机器人侧的 CPU 平均负载从 <b>93.82% 降到 53.91%</b>（最低 36.18%）。这两个数字一个是「快了多少」，一个是「轻了多少」，<b>要一起看才完整</b>：只快不轻，说明只是把压力挪走了；既快又轻，才说明账算得过来。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>把 SLAM 计算从机器人卸到边缘服务器之后，机器人身上发生的直接变化是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="对。compute 段被搬到了边缘，机器人侧的计算压力大幅下降（CPU 平均负载 93.82% 降到 53.91%），但代价是 trans 段变长——每帧原始数据都要往外传。卸载不是白赚，而是用传输换算力，能不能成立取决于链路稳不稳、传的东西大不大。" onclick="lessonKit.answer(this,'q0202b')">计算段搬走，传输段变长</button>
+          <button data-correct="no" data-explanation="不对。计算卸载不会让总时延自动归零，也不会把传输成本消掉。恰恰相反：机器人侧 compute 缩短的同时，trans 段会明显变长，这就是卸载的代价。原文报的是端到端时延最高降 39.31%，是一个具体降幅，不是「全部消失」。" onclick="lessonKit.answer(this,'q0202b')">计算与传输同时都归零</button>
+        </div>
+        <div class="quiz-feedback" id="q0202b"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">4. 三级融合链：机器人只传原始帧</h2>
+
+      <p>上一节讲了「算被送到了边缘」，这一节要讲一个更隐蔽、也更有意思的设计：<b>机器人往外送的，到底是一张「算好的地图」，还是「没算过的原始帧」？</b></p>
+
+      <p>直觉上你会觉得应该送地图——地图已经压缩过了，肯定比原始帧小。但这一篇选的是<b>送原始帧</b>。原因是原文自己给的：SLAM 计算<b>本质上是紧耦合的</b>，强行把它拆开会导致复杂度爆炸。<b>那就干脆不拆：把整个 SLAM 当作一个黑盒整体搬到边缘去。</b>代价是往上游多传了数据，收益是上游那一步完全不用改算法。然后它在<b>下游</b>把账找回来——<b>在边缘先合并一次，去掉重叠冗余，往云上传的数据量就小了。</b>这是一个「往上游多传、往下游少传」的净收益论证。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 520" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="520" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">三级融合链：机器人只传原始帧，地图在边缘和云上合</text>
+
+          <text x="20" y="82" font-size="10" fill="#8fb4d9">云端</text>
+          <text x="20" y="98" font-size="8.5" fill="#6b7d94">范围：全场</text>
+          <text x="20" y="234" font-size="10" fill="#8fb4d9">边缘</text>
+          <text x="20" y="250" font-size="8.5" fill="#6b7d94">范围：本边缘</text>
+          <text x="20" y="384" font-size="10" fill="#8fb4d9">机器人</text>
+          <text x="20" y="400" font-size="8.5" fill="#6b7d94">范围：单机</text>
+
+          <rect x="320" y="56" width="280" height="56" rx="8" fill="#1b2734" stroke="#8fb4d9" stroke-width="1.4"/>
+          <text x="460" y="80" text-anchor="middle" font-size="11" fill="#cfe0f7">云：全局地图</text>
+          <text x="460" y="98" text-anchor="middle" font-size="8.5" fill="#8fb4d9">把两张边缘地图合成全场一张</text>
+
+          <rect x="100" y="178" width="330" height="104" rx="8" fill="#1f2a38" stroke="#4f9dff" stroke-width="1.4"/>
+          <text x="265" y="198" text-anchor="middle" font-size="10" fill="#9fc4f0">边缘服务器 1（Jetson TX2）</text>
+          <rect x="116" y="210" width="64" height="34" rx="4" fill="#233046" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="148" y="231" text-anchor="middle" font-size="8.5" fill="#cfe0f7">机器人地图 a</text>
+          <rect x="190" y="210" width="64" height="34" rx="4" fill="#233046" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="222" y="231" text-anchor="middle" font-size="8.5" fill="#cfe0f7">机器人地图 b</text>
+          <line x1="258" y1="227" x2="286" y2="227" stroke="#5ad1a8" stroke-width="2"/>
+          <polygon points="292,227 284,223 284,231" fill="#5ad1a8"/>
+          <rect x="294" y="210" width="122" height="34" rx="4" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="1.2"/>
+          <text x="355" y="231" text-anchor="middle" font-size="8.5" fill="#9fd8bd">边缘地图 1（去重后）</text>
+          <text x="265" y="266" text-anchor="middle" font-size="8.5" fill="#8fb4d9">两台机器人各跑一个独立的 GMapping 实例</text>
+
+          <rect x="470" y="178" width="330" height="104" rx="8" fill="#1f2a38" stroke="#4f9dff" stroke-width="1.4"/>
+          <text x="635" y="198" text-anchor="middle" font-size="10" fill="#9fc4f0">边缘服务器 2（Jetson TX2）</text>
+          <rect x="486" y="210" width="64" height="34" rx="4" fill="#233046" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="518" y="231" text-anchor="middle" font-size="8.5" fill="#cfe0f7">机器人地图 c</text>
+          <rect x="560" y="210" width="64" height="34" rx="4" fill="#233046" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="592" y="231" text-anchor="middle" font-size="8.5" fill="#cfe0f7">机器人地图 d</text>
+          <line x1="628" y1="227" x2="656" y2="227" stroke="#5ad1a8" stroke-width="2"/>
+          <polygon points="662,227 654,223 654,231" fill="#5ad1a8"/>
+          <rect x="664" y="210" width="122" height="34" rx="4" fill="#1f3a2a" stroke="#5ad1a8" stroke-width="1.2"/>
+          <text x="725" y="231" text-anchor="middle" font-size="8.5" fill="#9fd8bd">边缘地图 2（去重后）</text>
+          <text x="635" y="266" text-anchor="middle" font-size="8.5" fill="#8fb4d9">先合一次，把重叠冗余去掉</text>
+
+          <line x1="265" y1="178" x2="380" y2="114" stroke="#5ad1a8" stroke-width="2"/>
+          <polygon points="386,110 375,111 380,118" fill="#5ad1a8"/>
+          <line x1="635" y1="178" x2="540" y2="114" stroke="#5ad1a8" stroke-width="2"/>
+          <polygon points="534,110 540,118 545,111" fill="#5ad1a8"/>
+          <text x="450" y="150" text-anchor="middle" font-size="8.5" fill="#9fd8bd">去重后的边缘地图，线细表示数据量小</text>
+
+          <rect x="80" y="360" width="130" height="44" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="145" y="388" text-anchor="middle" font-size="9.5" fill="#cfe0f7">TurtleBot3 1</text>
+          <text x="145" y="420" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR ＋ Raspberry Pi</text>
+          <rect x="250" y="360" width="130" height="44" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="315" y="388" text-anchor="middle" font-size="9.5" fill="#cfe0f7">TurtleBot3 2</text>
+          <text x="315" y="420" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR ＋ Raspberry Pi</text>
+          <rect x="490" y="360" width="130" height="44" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="555" y="388" text-anchor="middle" font-size="9.5" fill="#cfe0f7">TurtleBot3 3</text>
+          <text x="555" y="420" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR ＋ Raspberry Pi</text>
+          <rect x="660" y="360" width="130" height="44" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="725" y="388" text-anchor="middle" font-size="9.5" fill="#cfe0f7">TurtleBot3 4</text>
+          <text x="725" y="420" text-anchor="middle" font-size="8" fill="#8fb4d9">RPLIDAR ＋ Raspberry Pi</text>
+
+          <line x1="145" y1="360" x2="145" y2="290" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="145,284 140,293 150,293" fill="#e8d57a"/>
+          <line x1="315" y1="360" x2="285" y2="290" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="284,284 280,293 290,292" fill="#e8d57a"/>
+          <line x1="555" y1="360" x2="555" y2="290" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="555,284 550,293 560,293" fill="#e8d57a"/>
+          <line x1="725" y1="360" x2="700" y2="290" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="699,284 695,293 705,292" fill="#e8d57a"/>
+
+          <text x="20" y="452" font-size="11" fill="#e8d57a">关键设计：机器人只传原始帧（LaserScan 与 IMU），不传地图，所以它不要求各机器人跑同样的算法。</text>
+          <text x="20" y="476" font-size="11" fill="#cfe0f7">边缘上的 GMapping 是现成的黑盒，算法零改动：换的是这些计算跑在哪、地图在哪一层合。</text>
+          <text x="20" y="500" font-size="11" fill="#8fb4d9">对比：传统云方案是机器人各自跑 SLAM 再上传整张地图，RecSLAM 把「合」这一步提前了一段到边缘。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三层结构。最下层是四台 TurtleBot3（每台只带 RPLIDAR 和一块 Raspberry Pi），黄色箭头从它们身上往上走，送出的是<b>原始帧</b>而不是地图。中间层是两台边缘服务器，每台里面先排出两张「机器人地图」小方块（代表每个机器人各跑一个独立的 GMapping 实例），再用一个绿色箭头合并成一张「边缘地图」，这一步叫准备性融合。最上层是云，只接收两张边缘地图，合成一张全场全局地图；从边缘到云的箭画得比下面的细，表示数据量已经因为去重而变小。<br>
+          <b>怎么看这张图：</b>① 先看<b>最下面那排黄色箭头</b>：它们送的是「原始帧」，这是全篇最反直觉的一步——传统云方案送的是算好的地图，看起来更省带宽，但那样就得先把 SLAM 拆开；② 再看<b>中间层那个绿色合并箭头</b>：这是 RecSLAM 新加的「准备性融合」，它的作用是去重，所以越往上的数据越少；③ 注意每台边缘服务器里面有<b>两张机器人地图</b>而不是一张，说明一个边缘节点可以同时服务多台机器人，这也是为什么要做负载均衡；④ 最后看最上面那条细箭头：<b>「往上游多传、往下游少传」</b>就是这一篇的净收益逻辑。<br>
+          <b>要记住的一句话：</b>它送的是<b>没算过的原始帧</b>，不是<b>算好的地图</b>——正因如此，SLAM 算法一行都不用改，只要换一台机器跑。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim/62136d3f8b13008ffac939822739b27213a68b3d5978a8b84344807151dc416b.jpg" alt="RecSLAM architecture overview">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>RecSLAM architecture overview. Each robot individually collects its sensory data and directly packs and transfers to a dedicated edge server. Each edge server runs SLAM using the received data and performs a preparative fusion to aggregate an edge map with its owned robot maps. All the edge maps will be sent to a centralized cloud for global map fusion.（RecSLAM 架构总览。每台机器人各自采集传感数据，直接打包并传输给一台专属的边缘服务器。每台边缘服务器用收到的数据运行 SLAM，并执行一次准备性融合，把它名下的机器人地图聚合成一张边缘地图。所有边缘地图将被送到一台集中式云端做全局地图融合。）<br>
+          <b>怎么看这张图：</b>① 找三种层次的排布：<b>底层是机器人、中层是边缘服务器、顶层是云</b>，和你刚看的自绘图一一对应；② 盯住「dedicated edge server」这个措辞——<b>一个机器人固定连一台边缘服务器</b>，这是原文写死的假定，也是后面分组算法的基础；③ 找「preparative fusion」这个词出现的位置：它在<b>边缘这一层</b>，不在云端，这就是「把融合拆成两段」的视觉证据；④ 对比一下：如果只有「机器人到云」两层，那就是传统云方案（论文里另有一张图画的就是它）。<br>
+          <b>要记住的一句话：</b>这张官方架构图和上一张自绘图是同一件事的两种画法，<b>一个是论文的、一个是给零基础读者的</b>；两张都指向同一个关键词：准备性融合。
+        </figcaption>
+      </figure>
+    </section>
+    <section class="section-card">
+      <h2 id="f">5. 调度：两个子问题</h2>
+
+      <p>架构定了，剩下的就是一个纯排班问题：<b>哪几台机器人分给哪台边缘服务器？</b>原文把它拆成两个子问题，各配一个算法。</p>
+
+      <h3>子问题一：均衡分组</h3>
+
+      <p>它要同时满足两个目标，而这两个目标的方向还不太一样：</p>
+
+      <ul>
+        <li><b>组内机器人数量要尽量均衡。</b>因为地图融合要做两两匹配，$k$ 张图就是 $k(k-1)/2$ 次检查，复杂度是二次的——<b>把太多机器人塞给一台边缘服务器会拖垮整体完成时间</b>，原文叫它「长尾效应」。这是「数量」这个维度。</li>
+        <li><b>组内重叠度要尽量大。</b>因为重叠度越高，融合后剩下的冗余越少，边缘地图越小、上传越省。原文测过：两个<b>等大小</b>的输入在<b>重叠度 50%（即完全重合）</b>时，融合出的边缘地图<b>就等于其中一张输入的大小</b>；重叠度越高，融合后体积越小。这是「体积」这个维度。</li>
+      </ul>
+
+      <p>原文为此先建了一张<b>重叠图</b>：每个顶点是一台机器人的地图，两个顶点之间有边就表示这两张地图有重叠，边的权重就是<b>重叠度</b>（没重叠就不连边）。然后在这张图上做两件事：</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$\mathrm{gain}(\nu) = \sum_{u\in P_i} w(u,\nu) - \sum_{u\in C\backslash\{\nu\}} w(u,\nu)$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>把候选顶点 $\nu$ 拉进第 $i$ 组，能<b>增加多少组内重叠、减少多少组间重叠</b>，这个差值就是它的「收益」。<b>它为什么这么算：</b>因为组内越重叠、融合后体积越小；组间越不重叠，说明冗余都被关在组里没有漏出去。第一项越大越好、第二项越小越好，所以用减法把两者捏成一个可比较的数。</p>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$f\!\left(\langle P_1,P_2,\dots,P_N\rangle\right) = \sum_{u\in P_i,\ \nu\in P_j,\ i\neq j} w(u,\nu)$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>这是「<b>跨组的加权边总和</b>」，也就是所有被留在组与组之间的重叠量。<b>越小越好</b>——越小说明重叠都被收进组里了。<b>它为什么这么算：</b>把它当成打分函数之后，分组问题就变成一个可以拿来搜索的目标：Tabu 搜索（原文 Algorithm 2）就是不停地交换不同组里的顶点，让这个值一路降下去。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim/3c67de1fa4ce38fb48086a3879f90ee4fa088dd60116c763e2d0526dc8d8b0f7.jpg" alt="Example abstraction flow of the overlapping graph">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>Example abstraction flow of the overlapping graph. For the robots in the factory scene (a), we first abstract robot maps in (b) and then derive the overlapping graph in (c).（重叠图抽象流程的一个示例。对工厂场景中的机器人（a），我们先把机器人地图抽象出来（b），再据此导出重叠图（c）。）<br>
+          <b>怎么看这张图：</b>① 三步走：<b>(a) 一个工厂平面布局，(b) 每台机器人的扫描域被抽象成一块区域，(c) 一张带权无向图</b>；② 在 (c) 里，<b>每个顶点是一台机器人、每条边表示两张地图有重叠、边的权重是重叠度</b>，这就是上一节那两个公式里 $w(u,\nu)$ 的来历；③ 注意没有边连着的顶点对：它们的扫描域不重叠，融合时互不影响；④ 有了这张图，分组就变成了「在图上做划分」这个标准问题，Tabu 搜索才有东西可以搜。<br>
+          <b>要记住的一句话：</b>调度算法的第一件事不是排班，而是<b>先把「谁和谁重叠」这件事量化成一张图</b>——有了图，排班才变成一个可解的数学问题。
+        </figcaption>
+      </figure>
+
+      <h3>子问题二：资源感知卸载</h3>
+
+      <div class="formula-box">
+        <div class="flow-formula">$$j \leftarrow \arg\min_{j\in\mathcal{E}}\left(L_j(P_i) + \frac{\mathcal{D}(P_i)}{B_j}\right)$$</div>
+      </div>
+
+      <p><b>这句话在说什么：</b>给第 $i$ 组挑一台边缘服务器 $j$：把「<b>这一组在 $j$ 上的计算时延预测</b> $L_j(P_i)$」和「<b>这一组的输出数据量除以 $j$ 到云的带宽</b>」加起来，谁的和小就选谁。<b>它为什么这么算：</b>因为端到端时延里同时包含计算和传输两部分，一台算力强但带宽窄的服务器，可能还不如一台算力中等但带宽宽的。选完就把这台服务器从候选列表里移除，是一对一的贪心匹配。<b>净赚多少：</b>两层调度的开销都很小——原文报<b>10 台机器人时调度耗时不到 1 ms，50 台机器人时 36 ms</b>，而复杂度分别是 $O(V+L)$（$V$ 顶点、$L$ 边）与 $O(N)$（$N$ 为组数）。<b>也就是说调度本身可以放心地在线跑</b>，它并不是瓶颈。</p>
+
+      <p>还有一个实现层面的细节值得记下来：<b>重叠度矩阵是周期性算出来的</b>，用的工具是一个基于 ROS <code>multirobot_map_merge</code> 改造的包。这意味着调度器的输入<b>不是实时精确值，而是周期性估计值</b>——原文承认这依赖「重叠面积估计误差在可容忍范围内」这个假设，并说明由于机器人数较少、估计误差可以接受。换句话说：<b>这套调度在小规模时误差可控，规模一大就未必。</b></p>
+
+      <p>另外，原文自己列的局限里还有两条值得记住：<b>它的调度是集中式的</b>（实现上选一台边缘服务器当协调者，负责收集信息、估重叠度、跑调度算法），以及<b>机器人到边缘的链路被假定稳定</b>（同一局域网内）。真实的链路抖动与失败被列为未来工作，可能要靠多接入移动边缘计算做部分卸载。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">6. onboard 还是 offboard：与 0200 的正面冲突</h2>
+
+      <p>现在把两课并排放在一起看，你会看到一个非常干净的对立。<b>0200 那篇 Falcon 4 说：算力不够？那就把算力往机上堆。</b>它换了 i7-10710U，坚持全部计算 onboard，连地面站都不要，理由是它在密林树冠下飞，链路本来就不可靠。而<b>这一篇说：算力不够？那就把计算往机外送。</b>机器人端只剩一块 Raspberry Pi，SLAM 全部搬到边缘服务器上，理由同样硬：机器人 CPU 已经打满到 93.82%。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 480" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="480" fill="#0f1622"/>
+          <text x="450" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#e8eef7">面对「算力不够」，两条方向相反的解法</text>
+          <text x="450" y="60" text-anchor="middle" font-size="9.5" fill="#e8d57a">两条路的分岔</text>
+          <line x1="450" y1="70" x2="450" y2="344" stroke="#4a5566" stroke-width="1.4" stroke-dasharray="7 5"/>
+          <text x="450" y="352" text-anchor="middle" font-size="9" fill="#e8d57a">同一个问题</text>
+
+          <rect x="20" y="44" width="420" height="300" rx="9" fill="#141c26" stroke="#4f9dff" stroke-width="1.5"/>
+          <text x="230" y="68" text-anchor="middle" font-size="13" font-weight="700" fill="#9fc4f0">① 算力往机上堆：0200</text>
+          <text x="60" y="96" font-size="9.5" fill="#cfe0f7">把语义 SLAM 实时接进飞行回路</text>
+          <text x="60" y="116" font-size="9" fill="#8fb4d9">4.2 kg 机身，30 分钟续航</text>
+          <text x="60" y="132" font-size="8.5" fill="#6b7d94">Falcon 4 机体</text>
+          <text x="60" y="150" font-size="8.5" fill="#6b7d94">机腹 LiDAR ＋ 双目相机 ＋ IMU</text>
+          <text x="60" y="170" font-size="8.5" fill="#6b7d94">语义 SLAM（SLOAM）全部机上算</text>
+          <text x="60" y="190" font-size="8.5" fill="#6b7d94">四旋翼：4 个旋翼 ＋ Pixhawk 4</text>
+          <ellipse cx="130" cy="186" rx="26" ry="7" fill="#3b4a60" stroke="#8fb4d9" stroke-width="1.2"/>
+          <ellipse cx="330" cy="186" rx="26" ry="7" fill="#3b4a60" stroke="#8fb4d9" stroke-width="1.2"/>
+          <ellipse cx="130" cy="258" rx="26" ry="7" fill="#3b4a60" stroke="#8fb4d9" stroke-width="1.2"/>
+          <ellipse cx="330" cy="258" rx="26" ry="7" fill="#3b4a60" stroke="#8fb4d9" stroke-width="1.2"/>
+          <line x1="190" y1="214" x2="134" y2="190" stroke="#8fb4d9" stroke-width="3"/>
+          <line x1="270" y1="214" x2="326" y2="190" stroke="#8fb4d9" stroke-width="3"/>
+          <line x1="190" y1="230" x2="134" y2="254" stroke="#8fb4d9" stroke-width="3"/>
+          <line x1="270" y1="230" x2="326" y2="254" stroke="#8fb4d9" stroke-width="3"/>
+          <rect x="185" y="206" width="90" height="32" rx="9" fill="#2b3a50" stroke="#cfe0f7" stroke-width="1.4"/>
+          <text x="230" y="226" text-anchor="middle" font-size="9.5" fill="#e8eef7">Falcon 4</text>
+          <text x="60" y="282" font-size="9" fill="#8fb4d9">算力往机上堆：全部 onboard，没有地面站</text>
+          <rect x="60" y="294" width="340" height="40" rx="6" fill="#1f2a38" stroke="#4f9dff" stroke-width="1.2"/>
+          <text x="230" y="312" text-anchor="middle" font-size="9.5" fill="#9fc4f0">机载计算机 i7-10710U（12 线程）</text>
+          <text x="230" y="328" text-anchor="middle" font-size="8.5" fill="#8fb4d9">语义分割只占其中不超过 3 个线程</text>
+
+          <rect x="460" y="44" width="420" height="300" rx="9" fill="#141c26" stroke="#5ad1a8" stroke-width="1.5"/>
+          <text x="670" y="68" text-anchor="middle" font-size="13" font-weight="700" fill="#9fd8bd">② 算力往机外送：0202</text>
+          <text x="500" y="96" font-size="9.5" fill="#cfe0f7">把 SLAM 计算送出去</text>
+          <text x="500" y="116" font-size="9" fill="#8fb4d9">3 台 TurtleBot3 ＋ 1 个边缘节点</text>
+          <text x="500" y="132" font-size="8.5" fill="#6b7d94">TurtleBot3 车队</text>
+          <text x="500" y="152" font-size="8.5" fill="#6b7d94">车顶 RPLIDAR A1（360 度扫描）</text>
+          <rect x="560" y="170" width="110" height="44" rx="6" fill="#233046" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="615" y="198" text-anchor="middle" font-size="9.5" fill="#cfe0f7">TurtleBot3</text>
+          <circle cx="588" cy="214" r="6" fill="#4a5566"/>
+          <circle cx="642" cy="214" r="6" fill="#4a5566"/>
+          <rect x="572" y="226" width="86" height="24" rx="4" fill="#2a2f36" stroke="#6b7d94" stroke-width="1.2"/>
+          <text x="615" y="241" text-anchor="middle" font-size="8" fill="#8fb4d9">Raspberry Pi 1 GB</text>
+          <text x="500" y="268" font-size="8.5" fill="#6b7d94">机器人只做采集 ＋ 打包 ＋ 上传</text>
+          <line x1="672" y1="192" x2="738" y2="192" stroke="#e8d57a" stroke-width="2"/>
+          <polygon points="746,192 736,187 736,197" fill="#e8d57a"/>
+          <text x="705" y="184" text-anchor="middle" font-size="8.5" fill="#e8d57a">原始帧</text>
+          <rect x="742" y="168" width="118" height="62" rx="6" fill="#1f2a38" stroke="#4f9dff" stroke-width="1.2"/>
+          <text x="801" y="188" text-anchor="middle" font-size="9" fill="#9fc4f0">边缘节点</text>
+          <text x="801" y="204" text-anchor="middle" font-size="8.5" fill="#8fb4d9">Jetson TX2</text>
+          <text x="801" y="220" text-anchor="middle" font-size="8.5" fill="#8fb4d9">跑 GMapping</text>
+          <rect x="742" y="88" width="118" height="52" rx="6" fill="#1b2734" stroke="#8fb4d9" stroke-width="1.2"/>
+          <text x="801" y="110" text-anchor="middle" font-size="9" fill="#cfe0f7">云</text>
+          <text x="801" y="128" text-anchor="middle" font-size="8.5" fill="#8fb4d9">全局地图</text>
+          <line x1="801" y1="168" x2="801" y2="148" stroke="#8fb4d9" stroke-width="1.6"/>
+          <polygon points="801,142 796,151 806,151" fill="#8fb4d9"/>
+          <text x="500" y="288" font-size="9" fill="#9fd8bd">算力往机外送：原始帧卸载到边缘</text>
+          <rect x="500" y="294" width="360" height="40" rx="6" fill="#1f2a38" stroke="#5ad1a8" stroke-width="1.2"/>
+          <text x="680" y="312" text-anchor="middle" font-size="9.5" fill="#9fd8bd">机器人侧只剩采集与打包</text>
+          <text x="680" y="328" text-anchor="middle" font-size="8.5" fill="#8fb4d9">CPU 平均负载 93.82% 降到 53.91%</text>
+
+          <text x="20" y="376" font-size="11" fill="#cfe0f7">同一个问题——机器人算力不够——有两条方向相反的解法：一条把算力搬到机器人身上，一条把计算送出机器人。</text>
+          <text x="20" y="400" font-size="11" fill="#8fb4d9">它们各自都有代价：往机上堆要换更强的机载计算机（重量、功耗、钱）；往机外送要用传输换算力（链路一断就没了）。</text>
+          <text x="20" y="424" font-size="11" fill="#8fb4d9">0200 那篇连地面站都不要，因为它在密林里、链路本来就不可靠；0202 把机器人放在同一局域网的公寓里，链路是稳的。</text>
+          <text x="20" y="448" font-size="11" fill="#5ad1a8">所以「onboard 还是 offboard」不是一个技术偏好，而是一个场景判断。</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两格并排。左格是「算力往机上堆」：一架四旋翼（机身里装着 i7-10710U 机载计算机、机腹挂 LiDAR 与双目相机），所有计算都在机上完成，图中没有出现地面站。右格是「算力往机外送」：一台 TurtleBot3 只带一块 Raspberry Pi，一支黄色箭头把「原始帧」送到右侧的 Jetson TX2 边缘节点，边缘算完再往上的云里汇成全局地图。<br>
+          <b>怎么看这张图：</b>① 先看两格中间那条虚线：<b>它把两种思路切开</b>，左边的一切都发生在载具内部，右边有一条箭头穿出了载具边界；② 看左格那块蓝色计算机方块：那是 0200 花在「机上算力」上的代价，换来的是完全不依赖外部；③ 看右格那条黄色箭头：那是 0202 付出的代价（每帧都要传），换来的是机器人自己几乎不用算；④ 最下面四行把两边的账摊开——<b>一个有链路风险，一个有机重与功耗成本</b>，选哪条取决于任务场景，而不是技术品味。<br>
+          <b>要记住的一句话：</b>面对同一个「算力不够」，一条路往里加，一条路往外送——<b>把这两篇并读，才看得出系统设计真正的张力在哪。</b>
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">7. 它是横向的基础设施轴</h2>
+
+      <p>这一节要回答本季的核心问题：<b>把它放回前十季的坐标里，它到底添了什么新东西？</b></p>
+
+      <p>先说它<b>没有</b>添什么。多机器人 SLAM 有三件老大难：<b>地图一致性</b>（几台机器人各自建的地图怎么保证能对齐）、<b>回环</b>（跨机器人的回环怎么检测与优化）、<b>通信受限</b>（带宽不够时怎么取舍）。这三件事第八季多机协同块（<a href="0168-多机为什么难-假回环会毁掉两台地图.html">0168</a> 起）都正面处理过，而这一篇<b>一个都不碰</b>——它把「多机器人 ＋ SLAM」整体打包，当成一份<b>可以被切分、被分配、被调度的算力负载</b>。</p>
+
+      <p>它添的是另一条轴：<b>机器人 → 边缘 → 云</b>。这条轴和 A 到 J 季一直在讲的那条「算法纵向轴」是<b>正交</b>的。</p>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:22%;">对比项</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">A 到 J 季的算法纵向轴</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">这一篇引入的基础设施横向轴</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>问的问题</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">这个算法怎么算得更准、更快、更鲁棒？</td><td style="padding:.45rem;border:1px solid #cfd9e6;">这些计算跑在哪台机器上、哪一层合？</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>改的东西</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">模型、损失、前端后端、优化策略</td><td style="padding:.45rem;border:1px solid #cfd9e6;">卸载粒度、融合层级、调度策略</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>SLAM 的地位</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">是被改进的对象</td><td style="padding:.45rem;border:1px solid #cfd9e6;">是一个黑盒函数，一行不改整体搬运（GMapping）</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>成功的判据</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">精度、鲁棒性、轨迹误差</td><td style="padding:.45rem;border:1px solid #cfd9e6;">端到端时延、CPU 负载、调度开销</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>前十季覆盖过吗</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">主干七季都在讲这条轴</td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>没有</b>。这是前十季从未出现过的一环</td></tr>
+        </tbody>
+      </table>
+
+      <p>为什么要强调「正交」？因为这两条轴可以<b>互相独立地组合</b>。你完全可以把一套新的 SLAM 算法（纵向轴上的进步）装进 RecSLAM 的框架里，让它在边缘上跑——这正是原文自己承认的边界：<b>它的 SLAM 内核只验证了 GMapping，语义与视觉 SLAM 都没涉及。</b>反过来说，一个算法再准，如果机器人的 CPU 打满到 93.82%，它在真机上就跑不出应有的表现。<b>这就是「基础设施轴」的分量：它不决定你能算得多好，它决定你算不算得动。</b></p>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim/3aa1e7f3748c1c9b72d94d21421ab43ad756cce2cb99dc06a350167ad3f3b30b.jpg" alt="Prototype employs Turtlebot 3 as the robot and Jetson TX2 as the edge server">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Our prototype employs Turtlebot 3 as the robot and Jetson TX2 as the edge server. The Turtlebot is equipped with a RPLIDAR A1 as the laser scan and a Raspberry Pi as the processing module.（我们的原型用 Turtlebot 3 作机器人、Jetson TX2 作边缘服务器。Turtlebot 上装了 RPLIDAR A1 做激光扫描，用一块 Raspberry Pi 做处理模块。）<br>
+          <b>怎么看这张图：</b>① 图中是实拍，<b>不是渲染图也不是仿真截图</b>——这正是「它不是仿真论文」的最直接证据；② 找两样东西：车顶那个会转的 <b>RPLIDAR A1</b>，和车上那块 <b>Raspberry Pi</b>（注意文中把它写作「处理模块」，但整篇的设计里它只负责采集与打包，不算地图）；③ 再看 Jetson TX2：它带 Pascal GPU、<b>256 个 CUDA 核心、8 GB 内存</b>，是承接卸载过来的 SLAM 计算的边缘节点；④ 对比一下机器人端与边缘端的硬件差距——<b>一边是 1.4 GHz、1 GB、无 GPU，一边是带 256 核 GPU 的机器</b>，这个差距就是这一篇全部收益的来源。<br>
+          <b>要记住的一句话：</b>这一篇在真机上验证的其实只有一件事：<b>把 SLAM 从一块 Raspberry Pi 搬到一台 Jetson 上，整套系统跑得起来</b>——论文把它叫概念验证，措辞很诚实。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="i">8. 和前面课程怎么接</h2>
+
+      <table style="width:100%;border-collapse:collapse;font-size:.92rem;">
+        <thead>
+          <tr style="background:#eef3fa;">
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;width:34%;">接哪一段</th>
+            <th style="padding:.45rem;border:1px solid #cfd9e6;text-align:left;">怎么接</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>第八季多机协同块（<a href="0168-多机为什么难-假回环会毁掉两台地图.html">0168</a> 起）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">「多机器人」这个题目同源，但<b>处理的问题完全不同</b>：第八季问「多台机器人怎么把一张地图做对」（一致性、回环、通信受限），这一篇问「多台机器人加一台 SLAM 怎么跑得动」。<b>读完第八季再看这一篇，最该带走的一句是：算法对了不等于跑得动。</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>第四季激光主干（<a href="0073-导览-第四季开场-激光主干.html">0073</a> 起）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">它用的 SLAM 内核是现成的 <b>GMapping</b>，也就是第四季讲过的激光 SLAM 经典实现。<b>「算法零改动」这句话的分量就在这里</b>：第四季里那些前端匹配、栅格建图、粒子滤波，在这一篇里一行都没变，变的只是它跑在哪个 CPU 上。</td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>本季 <a href="0200-Falcon4-2022-把SLAM塞进一架真飞机.html">0200</a>（自主飞行）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>正面冲突，务必并读。</b>0200 把算力往机上堆（i7-10710U、全部 onboard、无地面站），0202 把算力往机外送（Raspberry Pi 采集、SLAM 搬到边缘）。两条路的代价完全不同：<b>一个赌链路不可靠，一个赌链路可靠。</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>本季 <a href="0201-运动规划综述-2022-定位之后怎么走.html">0201</a>（运动规划综述）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">0201 给了一张七环链当坐标系，并且强调「感知的输入不一定来自机器人自己身上的传感器」。这一篇把这个说法推到了极致：<b>连计算都可以不在机器人身上。</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>本季 <a href="0203-Wildcat-2022-连续时间的激光惯性SLAM.html">0203</a>（下一课）</b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">下一课回到「SLAM/里程计这一环本身」——Wildcat 是一套真正的激光惯性 SLAM，它和这一篇正好构成一对：<b>一篇讲这一环里的算法怎么做，一篇讲这一环的计算该放哪。</b></td></tr>
+          <tr><td style="padding:.45rem;border:1px solid #cfd9e6;"><b>本季导览 <a href="0199-导览-第十一季开场-SLAM站在系统的哪一环.html">0199</a></b></td><td style="padding:.45rem;border:1px solid #cfd9e6;">导览课预告的两处纠正，这一课落实了第一处（「仿真」是误读）。<b>「看位置之前，先看清这篇到底是什么」这句话，在这里有了一个极端的例证：一个字读错，整课讲歪。</b></td></tr>
+        </tbody>
+      </table>
+
+      <p>最后补一句这一篇自己的位置声明。它把「机器人只传原始帧」这个决定解释得很清楚：因为 SLAM 计算本质上是紧耦合的，强行拆分会导致复杂度爆炸。所以它宁可往上游多传一点、在下游靠融合去重找回来。<b>这是一次很典型的工程权衡：不去动那个最复杂的东西，而是在它周围重新排布数据流。</b></p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="j">9. 读完你应该能回答</h2>
+
+      <p>合上这一课之前，先自己回答下面五个问题。答不上来的，回去看对应的小节。</p>
+
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 这篇到底是什么？</h4><p>它是一篇<b>真机 ＋ 仿真双验证的系统论文</b>，标题里的 Simultaneous Localization and Mapping 就是 SLAM 全称。清单里的「<b>仿真</b>」是文件名 66 字符截断造成的误读。</p></div>
+        <div class="mini-card"><h4>② 它在链的哪一环？</h4><p>只碰<b>第 ③ 环（SLAM/里程计）与第 ④ 环（地图）</b>，而且改的是这两环的「跑在哪、怎么合」，不是算法。上游是机器人传感器原始帧，下游是云端全局地图。</p></div>
+        <div class="mini-card"><h4>③ 四段时延是什么？</h4><p><b>打包 pack → 传输 trans → 计算 compute → 融合 fuse</b>。卸载让机器人侧的 compute 从 1.51 s 缩到几乎为零，代价是 trans 段变长。<b>边缘计算是用传输换算力。</b></p></div>
+        <div class="mini-card"><h4>④ 它赚到了什么？</h4><p>端到端时延<b>最高降 39.31%</b>（6/8/10 台机器人分别是 39.31/26.50/12.96%）；机器人 CPU 平均负载从 <b>93.82% 降到 53.91%</b>；调度本身很轻（10 台不到 1 ms、50 台 36 ms）。</p></div>
+        <div class="mini-card"><h4>⑤ onboard 还是 offboard？</h4><p>「算力不够」有<b>两条方向相反的解法</b>：0200 往机上堆（赌链路不可靠），0202 往机外送（赌链路可靠）。<b>这是场景判断，不是技术偏好。</b></p></div>
+      </div>
+
+      <section class="exercise-box">
+        <h3>课后练习</h3>
+        <ol>
+          <li>为什么说这一篇「不是一篇 SLAM 论文」？请从它的输入输出、以及它和 SLAM 内核的关系两方面说明。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>三方面：① <b>输入</b>是机器人传感器的<b>原始帧</b>（LaserScan 的时间戳与测距、以及做坐标变换用的 IMU），不是任何中间表示；② <b>输出</b>是云端全局地图，交给云端下游应用（原文举例是导航与家具设计），<b>它自己不消费这张地图</b>；③ 它用的 SLAM 内核是现成的 GMapping，原文原话是「我们对 SLAM 计算整体封装成一个函数模块来处理机器人原始数据」——<b>算法零改动</b>：它不改进前端后端、不做回环检测、不做语义。所以它论文的主体是架构（机器人、边缘、云三层）加两个调度算法，而不是任何 SLAM 算法。</div></details>
+          </li>
+          <li>用四段时延（pack / trans / compute / fuse）解释：为什么说「边缘计算不是白赚的，它是用传输换算力」？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div>因为卸载只做了<b>一次搬移</b>：把 compute 段从机器人的时间轴搬到边缘服务器的时间轴上。机器人侧原本要付的 1.51 s 本地 SLAM 计算几乎消失，但代价是每一帧原始数据都要往外传，所以 trans 段明显变长。<b>整个系统的端到端时延能不能降，取决于「省下的计算时间」是否大于「多付的传输时间」</b>——原文实测的结果是能降，最高降低 39.31%（6 台机器人时）。这也解释了为什么这一篇要费那么大力气做调度：<b>它必须把传输这一侧的代价压到最小，这笔交换才划算。</b>另外要注意，原文的三段式（机器人侧、边缘侧、云侧）里都有 max 算子：任何一条支路上有一台机器或一台服务器拖后腿，整体时延就被它卡住，这正是负载均衡存在的理由。</div></details>
+          </li>
+          <li>为什么 RecSLAM 宁可传「原始帧」也不传「算好的地图」？请说明理由，并指出它用什么办法把因此增加的通信负担补回来。
+            <details class="exercise-answer"><summary>展开查看答案</summary><div><b>理由：</b>原文说 SLAM 计算<b>本质上是紧耦合的</b>，强行拆开会导致复杂度爆炸。所以它不拆——把整个 SLAM 当作黑盒整体搬到边缘，代价是上游多传了数据，收益是上游一步算法都不用改（对多机器人来说，这还意味着<b>不要求各机器人跑同样的算法</b>）。<b>补回来的办法：</b>在下游做一次<b>准备性融合</b>（preparative fusion）——边缘服务器先把它名下多台机器人的地图合并、去掉重叠冗余，得到体积更小的边缘地图，再上传到云。原文还给了定量依据：两个等大小的输入在重叠度 50%（完全重合）时，融合结果就等于其中一张输入的大小，重叠度越高、融合后越小。<b>所以它是一个「往上游多传、往下游少传」的净收益论证</b>，也解释了为什么分组算法要追求「组内重叠度尽量大」。</div></details>
+          </li>
+          <li>把这一篇和 0200 并读：「算力不够」这件事有哪两条相反的解法？各自押注在什么前提上？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div><b>两条解法：</b>① <b>往机上堆</b>——0200 换了 i7-10710U，坚持全部计算 onboard、连地面站都不要；② <b>往机外送</b>——0202 让机器人只留一块 Raspberry Pi 做采集与打包，SLAM 全部搬到边缘。两者面对的是同一个问题（机器人算力不足），但方向相反。<b>各自的前提：</b>0200 押的是「<b>链路不可靠</b>」——它在密林树冠下飞，长期任务里任何对外依赖都是风险，所以它宁可付机重、功耗与散热成本；0202 押的是「<b>链路可靠</b>」——它把机器人放在同一个局域网的公寓里、一个机器人固定连一台边缘服务器，原文也承认真实部署中链路可能抖动甚至失败，把这件事列为未来工作。<b>所以选哪条不是技术品味问题，而是先回答「我的链路靠不靠得住」。</b></div></details>
+          </li>
+          <li>这一篇引入的「机器人到边缘到云」这条轴，和前十季的「算法纵向轴」是什么关系？为什么说它正交？
+            <details class="exercise-answer"><summary>展开查看答案</summary><div><b>关系：正交</b>——两条轴可以互相独立地组合。纵向轴问的是「这个算法怎么算得更准、更快、更鲁棒」，改的是模型、损失、前后端与优化策略；横向轴问的是「这些计算跑在哪台机器上、地图在哪一层合」，改的是卸载粒度、融合层级与调度策略。<b>正交的证据有两条：</b>① 你可以把一套新的 SLAM 算法装进 RecSLAM 的框架里让它在边缘跑——原文自己承认它的 SLAM 内核只验证了 GMapping，语义与视觉 SLAM 都没涉及，这正好说明框架与算法是可分离的；② 反过来说，一个算法再准，如果机器人 CPU 打满到 93.82%，它在真机上一样跑不出应有的表现。所以这一篇的分量在于：<b>它不决定你能算得多好，它决定你算不算得动。</b>而这也是本季「看位置」的另一层含义——不仅要看 SLAM 在链上占哪一格，还要看这一格的计算放在哪。</div></details>
+          </li>
+        </ol>
+      </section>
+
+      <p>最后留一句这一篇自己划出的边界：<b>它的 SLAM 内核只验证了 GMapping，它不解决多机 SLAM 的算法问题，它的调度是集中式的，它的链路被假定稳定。</b>这四条边界并不削弱它的价值——恰恰相反，正因为把边界划得这么清楚，「首个用边缘计算优化多机器人激光 SLAM」这句话才站得住。</p>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0201-运动规划综述-2022-定位之后怎么走.html">← 0201 运动规划综述（2022）：定位之后怎么走</a>
+        <a class="next" href="0203-Wildcat-2022-连续时间的激光惯性SLAM.html">0203 Wildcat（2022）：连续时间的激光惯性 SLAM →</a>
+      </div>
+      <p class="foot-note">你已经能在同一条链上，看出「算法」和「算力部署」是两条互相垂直的轴了 🙂</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>
