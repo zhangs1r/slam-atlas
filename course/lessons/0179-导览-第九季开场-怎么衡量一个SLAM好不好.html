@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>导览：怎么衡量一个 SLAM 好不好 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 I · 数据集与评测 / Lesson 0179</div>
+      <h1>导览：怎么衡量一个 SLAM 好不好</h1>
+      <p class="subtitle">前八季在讲「怎么做 SLAM」，这一季只讲一把尺子——「怎么衡量一个 SLAM 做得好不好」。📏 三件事先说清：真值从哪来、指标怎么算、为什么排行榜上的数字不能直接横比。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：建立「评测坐标系」四维度，画出真值精度阶梯，给全季导航</span>
+        <span>👥 作者：第九季导览（本季不围绕单篇论文，而是把五把尺子摆在一起看）</span>
+        <span>📅 年份 · 阶段 I · 数据集与评测（0179–0185）</span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：这一季为什么只讲尺子</a>
+        <a href="#b">回链第一季 0013：那句警告</a>
+        <a href="#c">评测坐标系：四个维度</a>
+        <a href="#d">真值精度阶梯（全季地图）</a>
+        <a href="#e">本季题眼：够用比准更重要</a>
+        <a href="#f">全季课表</a>
+        <a href="#g">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清「为什么评测也是一门学问」；用四个维度（真值从哪来、精度到哪一级、测什么指标、覆盖什么场景）给任何一篇数据集论文定位；画出真值精度的三档阶梯并说出每档用什么设备、覆盖多大空间；记住本季题眼「够用比准更重要」；跟着全季课表知道接下来七节分别讲什么。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本季是 <b>第一季 0013</b> 那句「注意评测口径」警告的正面展开——当年只提了一句，这一季把它做成完整一课（尤其 0180 把 ATE/RPE 讲透）。★ 第三季 <b>0043–0045 ORB-SLAM</b> 的论文就在用 TUM 评测，本季补上「那些表格背后的真值从哪来」。★ 第四季 <b>0073–0079 LOAM / KITTI</b> 的真值来自 RTK-GPS，厘米级，和 TUM 的毫米级不是一回事。★ 第八季 <b>0175 VECtor</b> 是把「数据集怎么测」做成正式课的开端；本季做法与它一致。★ 多机（<b>0168–0174</b>）、动态环境（<b>0153–0158</b>）、场景识别（<b>0134–0140</b>）都回链得到。</p></div>
+      </div>
+
+      <h2>1. 开场：这一季为什么只讲尺子</h2>
+      <p>前八季回答的是「怎么做 SLAM」：从滤波、BA、位姿图，到视觉、激光、多传感器、神经隐式、事件相机——一条方法主线走到黑。可有一个问题一直被默认略过：<b>我们凭什么说某个方法「好」？</b></p>
+      <p>答案听起来简单：拿它跑出来的轨迹，和「真实的轨迹」比一比，差多少就是多准。但这三步里藏着三个坑——「真实轨迹」从哪来（真值本身有误差）、「差多少」怎么定义（ATE 和 RPE 是两种完全不同的差法）、「和谁比」才有意义（不同尺子的数字不能横比）。这一季就是<b>专门把「尺子」这件事讲清楚</b>。</p>
+      <p>本季五篇，按「真值怎么获得」正好排成一个阶梯：动捕/靶标的毫米级 → 扫描仪/RTK 的厘米级 → SLAM 自举的亚米级。阶梯越往下，空间越大、越便宜，但精度越粗、能评的任务也越少。记住这条主线，后面五篇你都能一眼归位。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="30" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">评测坐标系：给每篇数据集论文定位的四个维度</text>
+          <text x="450" y="54" text-anchor="middle" fill="#9fb4ff" font-size="13">拿起任何一篇数据集论文，先问这四个问题——本季每篇都按它定位（维度顺序即分析框架）</text>
+          <rect x="40" y="80" width="400" height="168" rx="10" fill="#16203a" stroke="#5cffb0"/>
+          <text x="56" y="104" fill="#5cffb0" font-size="15" font-weight="700">① 真值从哪来</text>
+          <text x="56" y="128" fill="#cdd6ff" font-size="12">动捕房：红外相机阵列（毫米级）</text>
+          <text x="56" y="150" fill="#cdd6ff" font-size="12">测绘扫描仪 + ICP（厘米级）</text>
+          <text x="56" y="172" fill="#cdd6ff" font-size="12">RTK-GNSS：机器人顶上天线（厘米级）</text>
+          <text x="56" y="194" fill="#cdd6ff" font-size="12">SLAM 自举：自己建图当真值（亚米）</text>
+          <text x="56" y="216" fill="#9fb4ff" font-size="12">例：TUM / Hilti-Oxford</text>
+          <text x="56" y="238" fill="#ffe9a8" font-size="12">→ 不同来源，能量出的量不同</text>
+          <rect x="460" y="80" width="400" height="168" rx="10" fill="#16203a" stroke="#ffd166"/>
+          <text x="476" y="104" fill="#ffd166" font-size="15" font-weight="700">② 精度到哪一级</text>
+          <text x="476" y="128" fill="#cdd6ff" font-size="12">毫米级：&lt; 0.01 m（动捕 / 靶标）</text>
+          <text x="476" y="150" fill="#cdd6ff" font-size="12">厘米级：0.01–0.10 m（扫描 / RTK）</text>
+          <text x="476" y="172" fill="#cdd6ff" font-size="12">亚米级：0.3–0.95 m（SLAM 自举）</text>
+          <text x="476" y="194" fill="#9fb4ff" font-size="12">例：Newer College / Wild-Places</text>
+          <text x="476" y="216" fill="#ffe9a8" font-size="12">→ 精度越高，空间越小、越贵</text>
+          <text x="476" y="238" fill="#ffe9a8" font-size="12">→ 精度决定能信到哪一步</text>
+          <rect x="40" y="262" width="400" height="168" rx="10" fill="#16203a" stroke="#8fd4ff"/>
+          <text x="56" y="286" fill="#8fd4ff" font-size="15" font-weight="700">③ 测什么指标</text>
+          <text x="56" y="310" fill="#cdd6ff" font-size="12">ATE：整条轨迹的绝对误差</text>
+          <text x="56" y="332" fill="#cdd6ff" font-size="12">RPE：逐段相对位姿误差</text>
+          <text x="56" y="354" fill="#cdd6ff" font-size="12">R1 / F1 / MRR：地点识别</text>
+          <text x="56" y="376" fill="#9fb4ff" font-size="12">例：Hilti 挑战赛评分函数</text>
+          <text x="56" y="398" fill="#ffe9a8" font-size="12">→ 指标决定暴露哪类毛病</text>
+          <text x="56" y="420" fill="#ffe9a8" font-size="12">→ 见 0180 把 ATE/RPE 讲透</text>
+          <rect x="460" y="262" width="400" height="168" rx="10" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="476" y="286" fill="#ff9f6b" font-size="15" font-weight="700">④ 覆盖什么场景</text>
+          <text x="476" y="310" fill="#cdd6ff" font-size="12">室内小范围：动捕房装不下</text>
+          <text x="476" y="332" fill="#cdd6ff" font-size="12">室外大场景：要抬头看天</text>
+          <text x="476" y="354" fill="#cdd6ff" font-size="12">自然环境：没有 GPS 信号</text>
+          <text x="476" y="376" fill="#cdd6ff" font-size="12">退化场景：白墙 / 长走廊</text>
+          <text x="476" y="398" fill="#ffe9a8" font-size="12">→ 场景决定真值能不能拿到</text>
+          <text x="476" y="420" fill="#ffe9a8" font-size="12">→ 见 0181–0184 逐篇对照</text>
+          <text x="450" y="452" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：四个维度里「真值从哪来」排第一，它决定这把尺子能量出什么、量不出什么</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一个 2×2 的「评测坐标系」：① 真值从哪来（动捕、扫描仪、RTK、SLAM 自举）；② 精度到哪一级（毫米、厘米、亚米）；③ 测什么指标（ATE、RPE、检索指标）；④ 覆盖什么场景（室内、室外、自然、退化）。每个格子都给了例子论文。<br>
+          <b>怎么看这张图：</b>① 先读第一行：<b>真值和精度是两个独立问题</b>——真值是「用啥设备量」，精度是「量到多细」；② 再读第二行：<b>指标和场景决定这把尺子适合评什么</b>——评轨迹用 ATE/RPE，评检索用 R1/F1；③ 最后看底部那句：四个维度有顺序，<b>真值来源是一切的前提</b>，没有真值就谈不上精度。<br>
+          <b>要记住的一句话：</b>本季每篇论文，都先把这四维问一遍，再决定它该放在阶梯的哪一档。
+        </figcaption>
+      </figure>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 回链第一季 0013：当年那句警告，这一季正面回答</h2>
+      <p>第一季 <b>0013 课（视觉场景识别教程）</b>里，我们撞见过两个评测口径的坑：一个是 <b>GT^soft</b>（「软真值」——用另一套算法生成的、本身带误差的「真值」当标准），一个是 <b>R@100P</b>（「前 100 名里命中率」这种被调过口径的召回率）。那节课的结论是：<b>评测口径一变，同一个方法能从「世界第一」变成「不及格」</b>，所以看论文先看清它拿什么当尺子。</p>
+      <p>当时那只是<b>一句提醒</b>。这一季我们把它做成<b>完整的一课</b>：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>0013 留下的坑</h4><p>GT^soft 假真值、R@100P 口径游戏——数字的「好看」可能只是尺子选得好。</p></div>
+        <div class="mini-card"><h4>本季的展开</h4><p>0180 把 ATE/RPE 这两个指标的定义与算法讲透；本季把五把尺子的真值来源、精度、场景全部摊开。</p></div>
+        <div class="mini-card"><h4>收官课结账</h4><p>0185 正面回答「排行榜上的数字为什么不能直接横比」——至少四条理由，一条都不饶。</p></div>
+      </div>
+      <p>换句话说：<b>0013 教你看穿坑，本季教你造尺子</b>。等你读完 0185，再回头看任何一篇 SLAM 论文的「SOTA」标语，都会先去翻它的评测协议。</p>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>第一季 0013 警告过的「GT^soft」指的是什么？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="正确：GT^soft 是用另一套算法生成的、本身带误差的「软真值」，拿它当标准去评测，误差会被悄悄吸收，数字会虚高。" onclick="lessonKit.answer(this,'q0179a')">带误差的算法生成真值</button>
+          <button data-correct="no" data-explanation="不对：高帧率采集的真值如果来自独立测量设备（如动捕），反而是硬真值；GT^soft 的关键是「由算法推算、本身不独立」。" onclick="lessonKit.answer(this,'q0179a')">采集帧率太高的真值</button>
+        </div>
+        <div class="quiz-feedback" id="q0179a"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. 评测坐标系：四个维度，本季的分析框架</h2>
+      <p>上面那张四象限图就是本季的<b>统一分析框架</b>。这里把四个维度各自讲一句人话，后面五篇你会反复看到它们。</p>
+      <ul>
+        <li><b>① 真值从哪来（最要紧）</b>：真值是「尺子的材质」。动捕房用红外相机阵列三角测量机器人身上的反光点；测绘扫描仪用激光扫出整张点云地图再反推位姿；RTK 用卫星差分定位；而 Wild-Places 这种「没信号、没动捕、也布不了靶标」的地方，只能让 SLAM 自己建图、自己当自己的参考（这就是「自举」，也最不可信）。</li>
+        <li><b>② 精度到哪一级</b>：毫米（&lt;1 cm）、厘米（1–10 cm）、亚米（0.3–0.95 m）。精度不是越高越好，越高意味着设备越贵、能覆盖的空间越小。</li>
+        <li><b>③ 测什么指标</b>：评轨迹用 ATE（看整体漂了多远）和 RPE（看每一小段漂了多少）；评地点识别用 R1 / F1 / MRR（看「找没找对地方」）。指标选错，暴露的毛病就错。</li>
+        <li><b>④ 覆盖什么场景</b>：室内小范围动捕装得下；室外大场景得抬头看天（RTK 要卫星可见）；自然环境连 GPS 都没有；退化场景（长走廊、白墙）连视觉激光都容易没信息。场景决定了真值「拿不拿得到」。</li>
+      </ul>
+      <p>这四个维度里，<b>① 真值从哪来</b>排第一。一句话记住：<b>真值本身有误差、有适用范围——「真值」不等于「真理」</b>。下一节那张阶梯图，就是把这四个维度画成一把真实的尺子。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. 真值精度阶梯：一把真实的尺子（全季地图）</h2>
+      <p>把上一节的「精度」维度单独拉出来，画成一把从左到右越来越粗的尺子。三档刻度——毫米、厘米、亚米——每档旁边标着<b>真实的测量设备</b>和它<b>能覆盖多大空间</b>。这张图是全季的地图：五篇论文，就是这把尺子上的五个刻度点。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 500" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="500" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">真值精度阶梯：尺子越准，能覆盖的空间越小、越贵</text>
+          <text x="450" y="52" text-anchor="middle" fill="#9fb4ff" font-size="13">（全季地图）每一档对应一批论文；精度是物理天花板，不是论文偷懒</text>
+          <text x="60" y="92" text-anchor="middle" fill="#cdd6ff" font-size="11">0</text>
+          <text x="320" y="92" text-anchor="middle" fill="#cdd6ff" font-size="11">0.01 m</text>
+          <text x="580" y="92" text-anchor="middle" fill="#cdd6ff" font-size="11">0.1 m</text>
+          <text x="840" y="92" text-anchor="middle" fill="#cdd6ff" font-size="11">1 m</text>
+          <rect x="60" y="100" width="780" height="44" rx="6" fill="#1b2440" stroke="#3a4a78"/>
+          <rect x="60" y="100" width="260" height="44" fill="#1d3a2a" stroke="#5cffb0"/>
+          <rect x="320" y="100" width="260" height="44" fill="#3a3320" stroke="#ffd166"/>
+          <rect x="580" y="100" width="260" height="44" fill="#3a2418" stroke="#ff9f6b"/>
+          <text x="190" y="128" text-anchor="middle" fill="#5cffb0" font-size="15" font-weight="700">毫米级</text>
+          <text x="450" y="128" text-anchor="middle" fill="#ffd166" font-size="15" font-weight="700">厘米级</text>
+          <text x="710" y="128" text-anchor="middle" fill="#ff9f6b" font-size="15" font-weight="700">亚米级</text>
+          <circle cx="78" cy="174" r="9" fill="#16203a" stroke="#5cffb0"/>
+          <text x="110" y="170" fill="#cdd6ff" font-size="12">动捕房红外相机阵列</text>
+          <text x="110" y="188" fill="#9fb4ff" font-size="11">帧间 &lt; 1 mm，但空间几米见方</text>
+          <circle cx="78" cy="210" r="9" fill="#16203a" stroke="#5cffb0"/>
+          <text x="110" y="206" fill="#cdd6ff" font-size="12">全站仪三脚架</text>
+          <text x="110" y="224" fill="#9fb4ff" font-size="11">逐点测、毫米级、但很慢</text>
+          <circle cx="78" cy="246" r="9" fill="#16203a" stroke="#5cffb0"/>
+          <text x="110" y="242" fill="#cdd6ff" font-size="12">Hilti 地面靶标（蓝十字）</text>
+          <text x="110" y="260" fill="#9fb4ff" font-size="11">手工放置误差 &lt; 1 mm</text>
+          <text x="110" y="290" fill="#ffe9a8" font-size="12">覆盖：几米 × 几米（动捕房大小）</text>
+          <text x="110" y="312" fill="#5cffb0" font-size="12">论文：TUM / Hilti-Oxford / M2DGR 室内</text>
+          <circle cx="338" cy="174" r="9" fill="#16203a" stroke="#ffd166"/>
+          <text x="370" y="170" fill="#cdd6ff" font-size="12">测绘扫描仪 + ICP 配准</text>
+          <text x="370" y="188" fill="#9fb4ff" font-size="11">需后期配准，约 3 cm</text>
+          <circle cx="338" cy="210" r="9" fill="#16203a" stroke="#ffd166"/>
+          <text x="370" y="206" fill="#cdd6ff" font-size="12">RTK-GNSS 天线（机器人顶上）</text>
+          <text x="370" y="224" fill="#9fb4ff" font-size="11">需抬头看天，约 2 cm</text>
+          <text x="370" y="290" fill="#ffe9a8" font-size="12">覆盖：数十 ~ 数百米（室外大场景）</text>
+          <text x="370" y="312" fill="#ffd166" font-size="12">论文：Newer College / M2DGR 户外</text>
+          <circle cx="598" cy="186" r="9" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="630" y="182" fill="#cdd6ff" font-size="12">SLAM 自举（自己建图当真值）</text>
+          <text x="630" y="206" fill="#9fb4ff" font-size="11">用 SLAM 评 SLAM，有循环论证风险</text>
+          <text x="630" y="232" fill="#ffe9a8" font-size="12">覆盖：公里级（森林步道）</text>
+          <text x="630" y="254" fill="#ff9f6b" font-size="12">但只评地点识别，不评轨迹精度</text>
+          <text x="630" y="276" fill="#ff9f6b" font-size="12">论文：Wild-Places（亚米 0.3–0.95 m）</text>
+          <text x="450" y="330" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">★ 强制纠正：Wild-Places 是亚米级，且评的是「地点识别」不是轨迹</text>
+          <text x="450" y="354" text-anchor="middle" fill="#ffd1d8" font-size="12">它不能和 TUM / Hilti 放在同一精度梯队（详见 0184 / 0185）</text>
+          <text x="450" y="452" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：尺子越准，能覆盖的空间越小、越贵——这是物理天花板</text>
+          <text x="450" y="476" text-anchor="middle" fill="#9fb4ff" font-size="12">所以选尺子不是「越准越好」，而是「够用就行」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一把横向的尺子，左段绿（毫米级）、中段黄（厘米级）、右段橙（亚米级）。每段下方列着对应的真实设备、它的精度、能覆盖的空间，以及用它的论文。最底部用红字点出本季的强制纠正：Wild-Places 是亚米级、且只评地点识别。<br>
+          <b>怎么看这张图：</b>① 从左往右读：<b>精度每一档下降，覆盖空间就涨一个数量级</b>——毫米级只能塞在几米见方的动捕房，亚米级能走公里级的森林；② 看每档的「设备」：毫米靠昂贵的人工/相机阵列，亚米靠 SLAM 自己；③ 看底部红字：<b>Wild-Places 虽然也能「评 SLAM」，但它评的是检索不是轨迹，精度差着一千倍</b>，所以单独放一排。<br>
+          <b>要记住的一句话：</b>真值精度阶梯就是全季的地图；五篇论文各自落在哪个刻度，决定了它能信到哪一步。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. 本季题眼：够用比准更重要</h2>
+      <p>上面那张阶梯图引出一个反直觉的洞见，也是本季的<b>题眼</b>：</p>
+      <div class="formula-box">
+        <div class="flow-formula">任务不同 → 对真值精度的要求就不同 → 「真值越准越好」是外行话，「够用」才是工程标准</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「选尺子之前，先问要测什么」——测精确轨迹就得毫米/厘米级硬真值，测地点识别只需要知道「检索结果落在几米内」；② 为什么这样才对——因为更准的真值意味着更贵的设备、更小的空间，<b>为一个本不需要高精度的任务去追求高精度，是浪费</b>；③ 选错了会怎样——拿亚米级真值去评精确轨迹，会放过真实存在的厘米级漂移；拿毫米级真值去评检索，又贵又没必要。</p>
+      <p>这一季最漂亮的反例在 <b>0184 Wild-Places</b>：它身处没有 GPS、没有动捕、也布不了靶标的密林，只能让 SLAM 自己建图当参考，真值只有亚米级（0.3–0.95 m）。但<b>它评的是「地点识别」——检索到的子图落在 3 米内就算成功</b>。对「3 米判据」这个任务来说，亚米级真值<b>完全够用</b>。所以 Wild-Places 不是「精度差」，而是「尺子选对了任务」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 460" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="460" fill="#0f1424"/>
+          <text x="450" y="28" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">任务决定真值要求：够用，不追最准</text>
+          <text x="450" y="52" text-anchor="middle" fill="#9fb4ff" font-size="13">左边是任务，右边是它真正需要的真值精度——两者用箭头对应</text>
+          <rect x="40" y="90" width="300" height="70" rx="10" fill="#16203a" stroke="#5cffb0"/>
+          <text x="60" y="118" fill="#5cffb0" font-size="15" font-weight="700">精确轨迹评测</text>
+          <text x="60" y="142" fill="#cdd6ff" font-size="12">想知道整条路偏了多远</text>
+          <rect x="40" y="190" width="300" height="70" rx="10" fill="#16203a" stroke="#8fd4ff"/>
+          <text x="60" y="218" fill="#8fd4ff" font-size="15" font-weight="700">地点识别（检索）</text>
+          <text x="60" y="242" fill="#cdd6ff" font-size="12">想知道「这是不是来过的地方」</text>
+          <rect x="40" y="290" width="300" height="70" rx="10" fill="#16203a" stroke="#ff9f6b"/>
+          <text x="60" y="318" fill="#ff9f6b" font-size="15" font-weight="700">退化 / 鲁棒性</text>
+          <text x="60" y="342" fill="#cdd6ff" font-size="12">想知道「跟丢没跟丢」</text>
+          <rect x="560" y="90" width="300" height="70" rx="10" fill="#16203a" stroke="#ffd166"/>
+          <text x="580" y="118" fill="#ffd166" font-size="15" font-weight="700">需要 毫米 / 厘米级真值</text>
+          <text x="580" y="142" fill="#cdd6ff" font-size="12">TUM / Hilti / Newer College</text>
+          <rect x="560" y="190" width="300" height="70" rx="10" fill="#16203a" stroke="#ffd166"/>
+          <text x="580" y="218" fill="#ffd166" font-size="15" font-weight="700">米级真值就够（判据 3 m 内）</text>
+          <text x="580" y="242" fill="#cdd6ff" font-size="12">Wild-Places 亚米级已足够</text>
+          <rect x="560" y="290" width="300" height="70" rx="10" fill="#16203a" stroke="#ffd166"/>
+          <text x="580" y="318" fill="#ffd166" font-size="15" font-weight="700">不在精度档，看「是否失败」</text>
+          <text x="580" y="342" fill="#cdd6ff" font-size="12">M2DGR 的电梯 / 全黑场景</text>
+          <line x1="345" y1="125" x2="555" y2="125" stroke="#5cffb0" stroke-width="2.4"/>
+          <path d="M555 125 l-10 -5 l0 10 z" fill="#5cffb0"/>
+          <line x1="345" y1="225" x2="555" y2="225" stroke="#8fd4ff" stroke-width="2.4"/>
+          <path d="M555 225 l-10 -5 l0 10 z" fill="#8fd4ff"/>
+          <line x1="345" y1="325" x2="555" y2="325" stroke="#ff9f6b" stroke-width="2.4"/>
+          <path d="M555 325 l-10 -5 l0 10 z" fill="#ff9f6b"/>
+          <text x="450" y="150" text-anchor="middle" fill="#9fb4ff" font-size="11">对应 →</text>
+          <text x="450" y="250" text-anchor="middle" fill="#9fb4ff" font-size="11">对应 →</text>
+          <text x="450" y="350" text-anchor="middle" fill="#9fb4ff" font-size="11">对应 →</text>
+          <rect x="40" y="384" width="820" height="40" rx="8" fill="#241a2a" stroke="#ff5d73"/>
+          <text x="450" y="409" text-anchor="middle" fill="#ffd1d8" font-size="13" font-weight="700">反例：Wild-Places 只有亚米级，却足以评地点识别——证明「够用」比「准」重要</text>
+          <text x="450" y="430" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：先定任务，再选尺子；尺子选对任务，亚米也是好尺子</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边三块是三类评测任务（精确轨迹、地点识别、退化鲁棒），右边三块是它们各自真正需要的真值精度，中间的箭头把「任务」和「该用的尺子」连起来。底部红框是 Wild-Places 反例。<br>
+          <b>怎么看这张图：</b>① 看第一条箭头：评精确轨迹，必须毫米/厘米级硬真值（TUM、Hilti）；② 看第二条箭头：评地点识别，<b>米级真值就够</b>——因为成功判据本就是「3 米内」；③ 看底部红框：Wild-Places 虽只有亚米级，但正好匹配「地点识别」这个任务，所以它不是精度差，是尺子选对了。<br>
+          <b>要记住的一句话：</b>任务不同，对真值精度的要求就不同；「真值越准越好」是外行话，工程标准是「够用」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 全季课表：接下来七节讲什么</h2>
+      <p>本季 7 节、覆盖 5 篇。导航顺序（文件名照 `i_lesson_list.txt` 定死，不许改名）：</p>
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0;">
+        <thead>
+          <tr style="background:#16203a;color:#e8ecff;">
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">课号</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">文件名</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">主题</th>
+            <th style="padding:.6rem;border:1px solid #3a4a78;text-align:left;">真值精度</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0179</td><td style="padding:.6rem;border:1px solid #3a4a78;">导览-第九季开场-怎么衡量一个SLAM好不好</td><td style="padding:.6rem;border:1px solid #3a4a78;">导览：怎么衡量一个 SLAM 好不好</td><td style="padding:.6rem;border:1px solid #3a4a78;">—</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0180</td><td style="padding:.6rem;border:1px solid #3a4a78;">TUM-RGBD-2012-ATE与RPE的出处</td><td style="padding:.6rem;border:1px solid #3a4a78;">TUM RGB-D（2012）：ATE 与 RPE 是这么来的</td><td style="padding:.6rem;border:1px solid #3a4a78;">毫米级（动捕）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0181</td><td style="padding:.6rem;border:1px solid #3a4a78;">NewerCollege2020-手持激光与退化场景</td><td style="padding:.6rem;border:1px solid #3a4a78;">Newer College（2020）：手持激光与退化场景</td><td style="padding:.6rem;border:1px solid #3a4a78;">厘米级（扫描+ICP）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0182</td><td style="padding:.6rem;border:1px solid #3a4a78;">M2DGR-2022-地面机器人的致命场景</td><td style="padding:.6rem;border:1px solid #3a4a78;">M2DGR（2022）：地面机器人的致命场景</td><td style="padding:.6rem;border:1px solid #3a4a78;">毫米/厘米（三源切换）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0183</td><td style="padding:.6rem;border:1px solid #3a4a78;">Hilti-Oxford-2023-毫米级真值</td><td style="padding:.6rem;border:1px solid #3a4a78;">Hilti-Oxford（2023）：毫米级真值</td><td style="padding:.6rem;border:1px solid #3a4a78;">毫米级（靶标）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0184</td><td style="padding:.6rem;border:1px solid #3a4a78;">WildPlaces-2023-自然场景的地点识别</td><td style="padding:.6rem;border:1px solid #3a4a78;">Wild-Places（2023）：亚米级真值也能评地点识别</td><td style="padding:.6rem;border:1px solid #3a4a78;">亚米级（SLAM 自举）</td></tr>
+          <tr><td style="padding:.6rem;border:1px solid #3a4a78;">0185</td><td style="padding:.6rem;border:1px solid #3a4a78;">收官-真值精度阶梯与选尺子指南</td><td style="padding:.6rem;border:1px solid #3a4a78;">收官：真值精度阶梯与选尺子指南</td><td style="padding:.6rem;border:1px solid #3a4a78;">—</td></tr>
+        </tbody>
+      </table>
+      <p>注意：<b>只有 0180 是「评测方法」论文</b>（定义 ATE/RPE），其余四篇是「数据集」（各自带一把尺子）。收官课 0185 要回答一个你读完一定会问的问题——</p>
+      <div class="formula-box">
+        <div class="flow-formula">预告：排行榜上的数字为什么不能直接横比？（真值精度不同 / 对齐方式不同 / 序列不同 / RMSE 与中位数选择不同 / 跟丢算不算的规则不同）</div>
+      </div>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>为什么「评测」本身也是一门学问，而不只是「跑一下看结果」？</li>
+        <li>评测坐标系的四个维度分别是什么？为什么「真值从哪来」排第一？</li>
+        <li>真值精度阶梯的三档（毫米 / 厘米 / 亚米）各对应什么设备、覆盖多大空间？</li>
+        <li>本季题眼「够用比准更重要」是什么意思？Wild-Places 为什么是反例？</li>
+        <li>第一季 0013 警告过的 GT^soft、R@100P 坑，本季是用哪一课正面回答的？</li>
+        <li>全季七节分别覆盖哪五篇论文、哪一篇是方法论、哪四篇是数据集？</li>
+        <li>收官课 0185 承诺要回答的「排行榜为什么不能横比」，你先能猜出几条理由？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>如果让你评测一个「仓库巡检机器人」的建图精度，你会优先选毫米级还是厘米级真值？为什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>看任务：如果只要求机器人「别撞货架、知道自己在哪排货架」，厘米级（RTK 或扫描仪）就够，因为仓库空间大、动捕房装不下；如果要求重建出货架每层螺丝的位置做精细质检，才需要毫米级。这正好印证本季节题眼「先定任务，再选尺子」。所以没有「越准越好」，只有「够用就好」。</div></details>
+        </li>
+        <li>为什么 Wild-Places 的亚米级真值不能和 TUM 的毫米级真值放在同一精度梯队比较？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两层原因：① 精度差着近一千倍（0.3–0.95 m vs &lt; 0.01 m），不是同一档；② 更关键的是任务不同——TUM 评的是精确轨迹误差，Wild-Places 评的是地点识别（检索结果落在 3 米内算成功），它根本不声称能量出精确轨迹。所以两者不是「谁更好」，而是「量不同的东西」，不能横比。这正是 0184 / 0185 要反复点明的强制纠正。</div></details>
+        </li>
+        <li>第一季 0013 的 GT^soft 坑，在这一季的哪一篇里能找到最像的影子？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>在 0184 Wild-Places——它的真值由 Wildcat SLAM 自举生成（用 SLAM 建图当参考去评 SLAM），本质就是一种「软真值」：它可信，但天花板由 SLAM 自己决定，约 0.3–0.95 m。区别是 Wild-Places 作者诚实说明了这一点、并把它限定在「地点识别」任务上，而不是拿去评精确轨迹。所以看任何「自举真值」都要先问：它评的是什么任务？</div></details>
+        </li>
+        <li>用一句话概括「评测坐标系」四个维度，并各举一个本季论文。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>① 真值从哪来：TUM 用动捕房红外相机阵列；② 精度到哪一级：Hilti-Oxford 用地面靶标做到毫米级；③ 测什么指标：TUM（0180）定义 ATE/RPE，Wild-Places 用 R1/F1；④ 覆盖什么场景：Newer College 覆盖公里级室外手持，M2DGR 覆盖电梯/全黑等致命室内场景。四个维度合起来，就能把任意一篇数据集论文准确定位。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0178-事件双目VIO与全季收官.html">← 上一课：事件双目 VIO 与全季收官</a>
+        <a class="next" href="0180-TUM-RGBD-2012-ATE与RPE的出处.html">下一课：TUM RGB-D（2012）ATE 与 RPE 的出处 →</a>
+      </div>
+      <p class="foot-note">第九季（阶段 I · 数据集与评测）开场了。这一季我们不学任何新算法，只学一件事：<b>怎么判断一个 SLAM 到底好不好</b>。把尺子看明白，前面八季那些「SOTA」标语你也就有了拆穿的底气 📏</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

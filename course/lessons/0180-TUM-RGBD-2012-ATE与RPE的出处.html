@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TUM RGB-D（2012）：ATE 与 RPE 是这么来的 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 I · 数据集与评测 / Lesson 0180</div>
+      <h1>TUM RGB-D（2012）：ATE 与 RPE 是这么来的</h1>
+      <p class="subtitle">这一篇是整季唯一的「评测方法」论文——ATE 和 RPE 两个沿用至今的指标，就是它定义的。📐 这一课把两个指标的定义、算法、对齐方式和统计口径，一次性讲透。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：规范性地定义 ATE / RPE，并给出自动评测脚本与 RGB-D 基准</span>
+        <span>👥 作者：Sturm 等（德国慕尼黑工业大学 / TUM）</span>
+        <span>📅 年份 · <i>A Benchmark for the Evaluation of RGB-D SLAM Systems (IROS 2012)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场：为什么需要一把尺子</a>
+        <a href="#b">先铺垫：估计轨迹与真值轨迹是两条线</a>
+        <a href="#c">ATE：绝对轨迹误差</a>
+        <a href="#d">RPE：相对位姿误差</a>
+        <a href="#e">ATE 与 RPE 的区别（本季题眼）</a>
+        <a href="#f">对齐方式：SE(3) 还是 Sim(3)</a>
+        <a href="#g">时间戳关联：采样时刻不同怎么办</a>
+        <a href="#h">RMSE 与中位数：离群点怎么处理</a>
+        <a href="#i">其他贡献：数据集与基准结果</a>
+        <a href="#j">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：写清 ATE 与 RPE 各自的定义、算法步骤与公式；说出「先对齐、再逐点比」的含义；讲清 SE(3) 对齐与 Sim(3) 对齐的区别以及为什么单目必须用 Sim(3)；解释时间戳关联和「时钟慢 0.1 秒」会虚假放大误差；看懂 RMSE 与中位数为何要同时报；把这把尺子和第三季你用过的 TUM 评测表格对上号。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本篇是 <b>第一季 0013</b> 那句「注意评测口径」的正面落地——ATE/RPE 就是那节课想让你警惕的「口径」本身。★ 第三季 <b>0043–0045 ORB-SLAM</b> 论文里的 TUM 评测表格，背后就是这一篇的指标。★ 被比较的「轨迹」是 <b>第二季 0020 位姿图优化</b>的输出——不先讲清这点，读者不知道在比什么。★ <b>0002 SLAM 全景</b>里「优化的目标函数」与「评测的指标」是两回事，本课会点明。★ <b>0048 DSO</b> 对光度标定敏感，标定误差会污染评测，可回链。</p></div>
+      </div>
+
+      <h2>1. 开场：为什么需要一把尺子</h2>
+      <p>2012 年之前，RGB-D SLAM（用 Kinect 这类深度相机做 SLAM）的方法很多，但<b>各家用自己的数据、自己的指标，谁也说不服谁</b>。TUM 这篇论文做的事很简单也很关键：① 录一批带真值的室内序列；② <b>规范性地定义两个误差指标 ATE 与 RPE</b>；③ 给出自动评测脚本。从此，「你的方法准不准」有了统一答案。</p>
+      <p>这一篇的特殊之处在于：<b>它既是数据集，更是「尺子」的本源</b>。其余四篇（Newer College、M2DGR、Hilti-Oxford、Wild-Places）是「数据尺子」，而 TUM 是「定义怎么量」的那把母尺。所以本季把它单独列为一节方法论。</p>
+      <p>在读公式之前，先建立一个最朴素的画面——</p>
+    </main>
+
+    <section class="section-card" id="b">
+      <h2>2. 先铺垫：估计轨迹与真值轨迹是两条线</h2>
+      <p>SLAM 跑完，你得到的是一条<b>估计轨迹</b>：一串带时间戳的位姿（x, y, z 加朝向）。而「真实轨迹」是<b>真值轨迹</b>，由动捕系统这类独立设备测出来。两条线都在同一个世界里，但几乎不会完全重合。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>真值轨迹</h4><p>独立设备测的「标准答案」。TUM 用动捕房：Kinect 上贴 4 个反光点，8 台红外相机三角测量，100 Hz。它本身也有误差（帧间 &lt; 1 mm）。</p></div>
+        <div class="mini-card"><h4>估计轨迹</h4><p>SLAM 算法算出来的位姿序列。它带着算法的所有毛病：漂移、尺度错、偶尔跟丢。</p></div>
+        <div class="mini-card"><h4>评测 = 把两条线比一比</h4><p>难点在「怎么比」：先让两条线对齐（消除起点/朝向差异），再定义「差多少」。ATE 和 RPE 是两种完全不同的「差法」。</p></div>
+      </div>
+      <p>生活类比：你蒙眼在走廊里走一条直线，朋友拿皮尺量了「真实路线」。把你走的（估计）和朋友量的（真值）叠在一起——<b>整体偏了多少</b>（ATE），和<b>每一步迈得准不准</b>（RPE），说的根本不是一件事。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 490" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="490" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">ATE：整条轨迹和真值差了多少（全局量）</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="13">真实走廊里两条轨迹：真值（浅色实线）与估计（红色虚线）；竖线长度 = 那一刻的误差</text>
+          <line x1="60" y1="104" x2="840" y2="104" stroke="#33406b"/>
+          <text x="70" y="98" fill="#9fb4ff" font-size="11">走廊顶（天花板）</text>
+          <line x1="60" y1="386" x2="840" y2="386" stroke="#33406b"/>
+          <text x="70" y="404" fill="#9fb4ff" font-size="11">走廊地面</text>
+          <polyline points="80,250 160,248 240,252 320,249 400,251 480,250 560,252 640,249 720,251 800,250" fill="none" stroke="#cdd6ff" stroke-width="3"/>
+          <polyline points="80,212 160,210 240,214 320,211 400,213 480,212 560,214 640,211 720,213 800,212" fill="none" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <line x1="120" y1="212" x2="120" y2="250" stroke="#ffd166" stroke-width="2"/>
+          <line x1="200" y1="210" x2="200" y2="248" stroke="#ffd166" stroke-width="2"/>
+          <line x1="280" y1="214" x2="280" y2="252" stroke="#ffd166" stroke-width="2"/>
+          <line x1="360" y1="211" x2="360" y2="249" stroke="#ffd166" stroke-width="2"/>
+          <line x1="440" y1="213" x2="440" y2="251" stroke="#ffd166" stroke-width="2"/>
+          <line x1="520" y1="212" x2="520" y2="250" stroke="#ffd166" stroke-width="2"/>
+          <line x1="600" y1="214" x2="600" y2="252" stroke="#ffd166" stroke-width="2"/>
+          <line x1="680" y1="211" x2="680" y2="249" stroke="#ffd166" stroke-width="2"/>
+          <line x1="760" y1="213" x2="760" y2="251" stroke="#ffd166" stroke-width="2"/>
+          <text x="120" y="204" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="200" y="202" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="280" y="206" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="360" y="203" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="440" y="205" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="520" y="204" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="600" y="206" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="680" y="203" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="760" y="205" text-anchor="middle" fill="#ffd1d8" font-size="11">Δ0.09</text>
+          <text x="120" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t1</text>
+          <text x="200" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t2</text>
+          <text x="280" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t3</text>
+          <text x="360" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t4</text>
+          <text x="440" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t5</text>
+          <text x="520" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t6</text>
+          <text x="600" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t7</text>
+          <text x="680" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t8</text>
+          <text x="760" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t9</text>
+          <text x="450" y="172" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">整体平移偏移 ≈ 0.09 m（两条线平行，处处差这么多）</text>
+          <rect x="620" y="120" width="240" height="54" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <line x1="636" y1="138" x2="690" y2="138" stroke="#cdd6ff" stroke-width="3"/>
+          <text x="700" y="142" fill="#cdd6ff" font-size="11">真值（浅色实线）</text>
+          <line x1="636" y1="158" x2="690" y2="158" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <text x="700" y="162" fill="#ff5d73" font-size="11">估计（红色虚线）</text>
+          <text x="80" y="150" fill="#ff9f6b" font-size="12" font-weight="700">ATE 大：整条轨迹都偏了同一截</text>
+          <text x="80" y="300" fill="#5cffb0" font-size="12" font-weight="700">RPE 小：每段形状都对，只是整体挪了</text>
+          <text x="80" y="332" fill="#9fb4ff" font-size="11">误差竖线 = 真值 − 估计（同一时刻）</text>
+          <text x="80" y="356" fill="#9fb4ff" font-size="11">采样时刻 t1…t9 沿走廊均匀分布</text>
+          <text x="450" y="466" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：ATE 是全局量，先对齐两条线再逐点比，能看出整体漂移</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条真实走廊，地上两条轨迹——真值（浅色实线，沿 y=250）和估计（红色虚线，整体向上平移约 0.09 m）。黄色竖线在 9 个采样时刻把两条线连起来，每条长度都差不多，标着 Δ0.09。顶部黄字说这是「整体平移偏移」。<br>
+          <b>怎么看这张图：</b>① 竖线长度处处相近 → <b>每一小段都没怎么变形，但整条线被平移了一截</b>；② 这种「形状对、整体偏」的情况，<b>ATE 会很大（因为逐点都差 0.09）</b>，但 RPE 会很小（因为每段相对运动都差不多）；③ 这正是 ATE 的本职：<b>它看的是全局一致性，能暴露整体漂移</b>。<br>
+          <b>要记住的一句话：</b>ATE = 先让两条轨迹对齐、再逐点算平移误差的 RMSE；它管「整体偏了多少」，不管「每段抖不抖」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="c">
+      <h2>3. ATE：绝对轨迹误差（Absolute Trajectory Error）</h2>
+      <p><b>ATE</b> 回答的是：「<b>我的整条轨迹，和真值整条轨迹，平均差多远？</b>」它是一个<b>全局量</b>——把所有时刻的误差合起来看。算法分四步：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>① 时间戳关联</h4><p>把估计轨迹的每个时刻，配到真值里时间最近的那一帧（见第 7 节）。</p></div>
+        <div class="mini-card"><h4>② 轨迹对齐</h4><p>用 SE(3) 刚体变换 S 把估计轨迹整体挪/转到真值坐标系（Horn 闭式解，最小二乘）。</p></div>
+        <div class="mini-card"><h4>③ 逐点求差</h4><p>每个时刻算估计与真值之间的相对位姿 F_i = Q_i^{-1} S P_i，取平移分量。</p></div>
+        <div class="mini-card"><h4>④ 统计</h4><p>把所有点的平移误差取 RMSE（均方根），得到一个数字。</p></div>
+      </div>
+      <p>定义（原文 Eq.4–5，Q 为真值位姿、P 为估计位姿、S 为对齐变换）：</p>
+      <div class="formula-box">
+        $$ \mathbf{F}_i \;:=\; \mathbf{Q}_i^{-1}\,\mathbf{S}\,\mathbf{P}_i, \qquad \mathrm{ATE} \;=\; \mathrm{RMSE}(\mathbf{F}_{1:n}) \;=\; \Big(\tfrac{1}{n}\sum_{i=1}^{n}\|\,\mathrm{trans}(\mathbf{F}_i)\|^2\Big)^{1/2} $$
+        <div class="flow-formula">输入：真值位姿序列 Q、估计位姿序列 P → 处理：先用 S 把 P 整体刚体对齐到 Q，再逐点算相对位姿 F_i，取平移部分 → 输出：所有点平移误差的均方根 = ATE</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「对齐之后，估计轨迹每个点离真值平均多远」——$\mathbf{Q}_i^{-1}\mathbf{S}\mathbf{P}_i$ 就是「把第 i 个估计点先经 S 变换、再反过来看它相对真值差多少」，trans() 只取平移（不关心朝向）；② 为什么这样才算对——<b>必须先对齐</b>，否则起点不同、朝向不同会让误差被无意义地放大；对齐后剩下的差才是方法真正的漂移；③ <b>S 的选择会改写数字</b>：对已知尺度的 RGB-D 用 SE(3) 即可，对单目 SLAM 必须用允许缩放的 Sim(3)，否则尺度差会被算成巨大平移误差（见第 6 节）。论文因 RGB-D 已知尺度，统一用 SE(3)。</p>
+      <p>原文还提醒：Δ = n（拿首尾直接比）是「poor choice」，会偏向惩罚轨迹起始端的旋转误差；所以 RPE 要对所有间隔 Δ 取平均。</p>
+    </section>
+
+    <section class="section-card" id="d">
+      <h2>4. RPE：相对位姿误差（Relative Pose Error）</h2>
+      <p><b>RPE</b> 回答的是：「<b>在固定时间间隔（或固定位移）内，我每一步走准了没有？</b>」它是一个<b>局部量</b>——只看相邻 Δ 步的相对运动，所以能暴露<b>漂移率</b>，但看不出整条偏了多少。</p>
+      <p>定义（原文 Eq.1–2，比较真值与估计中相邻 Δ 步的相对运动）：</p>
+      <div class="formula-box">
+        $$ \mathbf{E}_i \;:=\; \big(\mathbf{Q}_i^{-1}\mathbf{Q}_{i+\Delta}\big)^{-1}\big(\mathbf{P}_i^{-1}\mathbf{P}_{i+\Delta}\big), \qquad \mathrm{RPE} \;=\; \mathrm{RMSE}(\mathbf{E}_{1:n},\Delta) \;=\; \Big(\tfrac{1}{m}\sum_{i=1}^{m}\|\,\mathrm{trans}(\mathbf{E}_i)\|^2\Big)^{1/2} $$
+        <div class="flow-formula">输入：真值相对运动 Q_i→Q_{i+Δ}、估计相对运动 P_i→P_{i+Δ} → 处理：把两段相对运动相除，得到这一步的误差 E_i，取平移 → 输出：所有段的 RMSE = RPE（再对全部 Δ 取平均得到总 RPE）</div>
+      </div>
+      <p><b>这句话在说什么：</b>① 这个式子在算「走同样一步，真值挪了 A、估计挪了 B，B 和 A 差多少」——它根本不关心整条线在哪，只关心<b>每一步的相对位移对不对</b>；② 为什么这样才算对——里程计（视觉/激光里程计）的本职工作就是「预测下一小段Motion」，所以 RPE 直接量它的核心能力；③ <b>Δ 的选择会改写数字</b>：论文为消除 Δ 偏置，对 Δ = 1…n 全部取平均（Eq.3，复杂度 O(n²)，可采样近似）。另外原文指出 RPE 含旋转+平移、ATE 只含平移，故 <b>RPE ≥ ATE</b>（无旋转误差时相等）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 490" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="490" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">RPE：每一小段和真值差多少（局部量）</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="13">逐段比「真值走 1.00 m，估计走 1.05 m」；看漂移率，看不出整体偏了多少</text>
+          <line x1="60" y1="104" x2="840" y2="104" stroke="#33406b"/>
+          <text x="70" y="98" fill="#9fb4ff" font-size="11">走廊顶（天花板）</text>
+          <line x1="60" y1="386" x2="840" y2="386" stroke="#33406b"/>
+          <text x="70" y="404" fill="#9fb4ff" font-size="11">走廊地面</text>
+          <polyline points="80,250 160,248 240,252 320,249 400,251 480,250 560,252 640,249 720,251 800,250" fill="none" stroke="#cdd6ff" stroke-width="3"/>
+          <polyline points="80,212 160,222 240,232 320,242 400,252 480,262 560,272 640,282 720,292 800,300" fill="none" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <text x="160" y="116" text-anchor="middle" fill="#cdd6ff" font-size="11">真 1.00</text>
+          <text x="160" y="132" text-anchor="middle" fill="#ffd1d8" font-size="11">估 1.05</text>
+          <text x="400" y="116" text-anchor="middle" fill="#cdd6ff" font-size="11">真 1.00</text>
+          <text x="400" y="132" text-anchor="middle" fill="#ffd1d8" font-size="11">估 1.05</text>
+          <text x="640" y="116" text-anchor="middle" fill="#cdd6ff" font-size="11">真 1.00</text>
+          <text x="640" y="132" text-anchor="middle" fill="#ffd1d8" font-size="11">估 1.05</text>
+          <text x="280" y="150" text-anchor="middle" fill="#cdd6ff" font-size="11">真 1.00</text>
+          <text x="280" y="166" text-anchor="middle" fill="#ffd1d8" font-size="11">估 1.05</text>
+          <text x="520" y="150" text-anchor="middle" fill="#cdd6ff" font-size="11">真 1.00</text>
+          <text x="520" y="166" text-anchor="middle" fill="#ffd1d8" font-size="11">估 1.05</text>
+          <text x="760" y="150" text-anchor="middle" fill="#cdd6ff" font-size="11">真 1.00</text>
+          <text x="760" y="166" text-anchor="middle" fill="#ffd1d8" font-size="11">估 1.05</text>
+          <text x="160" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t1</text>
+          <text x="280" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t2</text>
+          <text x="400" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t3</text>
+          <text x="520" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t4</text>
+          <text x="640" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t5</text>
+          <text x="760" y="410" text-anchor="middle" fill="#9fb4ff" font-size="11">t6</text>
+          <rect x="620" y="186" width="240" height="54" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <line x1="636" y1="204" x2="690" y2="204" stroke="#cdd6ff" stroke-width="3"/>
+          <text x="700" y="208" fill="#cdd6ff" font-size="11">真值（浅色实线）</text>
+          <line x1="636" y1="224" x2="690" y2="224" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <text x="700" y="228" fill="#ff5d73" font-size="11">估计（红色虚线）</text>
+          <text x="80" y="180" fill="#5cffb0" font-size="12" font-weight="700">RPE 小：每段只差一点（1.00 vs 1.05）</text>
+          <text x="80" y="334" fill="#ff9f6b" font-size="12" font-weight="700">但累积起来 = 漂移（这只有 ATE 才看得到）</text>
+          <text x="80" y="358" fill="#9fb4ff" font-size="11">固定间隔 Δ 内的相对位移，逐段比</text>
+          <text x="80" y="380" fill="#9fb4ff" font-size="11">误差 = 估计相对运动 − 真值相对运动</text>
+          <text x="450" y="466" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：RPE 是局部量，看漂移率；能看出「每段漂多少」，看不出「整体偏多少」</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>同样一条走廊，真值（浅色）基本走直，估计（红色虚线）每一段都轻微偏长（标「真 1.00 / 估 1.05」），累积下来越走越偏。每个分段标注了真值与估计的相对位移。<br>
+          <b>怎么看这张图：</b>① 每一段的差都很小（1.00 vs 1.05）→ <b>RPE 很小</b>，说明每步都走得挺准；② 但小误差一路累加，到结尾估计已经明显偏离真值 → <b>这是漂移率问题，ATE 才会暴露</b>；③ 所以 <b>RPE 适合评视觉/激光里程计</b>（它的本职就是预测下一小段），ATE 适合评完整 SLAM（要看全局一致性）。<br>
+          <b>要记住的一句话：</b>RPE 管「每步走得准不准」，ATE 管「整条走到哪」——两个指标揭示的是两种完全不同的毛病。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="e">
+      <h2>5. ATE 与 RPE 的区别（本季题眼）</h2>
+      <p>这是全季最重要的一张图。同样两条轨迹，用 ATE 和 RPE 两把尺子量，结论可能<b>完全相反</b>——这正是「评测口径决定结论」的最佳示范。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">题眼：同一轨迹，两把尺子结论可能相反</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="13">左：整体偏移一大截但形状对（ATE 大、RPE 小）｜右：整体位置对但中间飘一段（ATE 可能不大、RPE 大）</text>
+          <rect x="40" y="70" width="400" height="40" rx="8" fill="#16203a" stroke="#ffd166"/>
+          <text x="240" y="96" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">左：整体偏移，形状对</text>
+          <rect x="460" y="70" width="400" height="40" rx="8" fill="#16203a" stroke="#ffd166"/>
+          <text x="660" y="96" text-anchor="middle" fill="#ffd166" font-size="14" font-weight="700">右：位置对，中间飘一段</text>
+          <line x1="60" y1="150" x2="420" y2="150" stroke="#33406b"/>
+          <line x1="480" y1="150" x2="840" y2="150" stroke="#33406b"/>
+          <text x="64" y="144" fill="#9fb4ff" font-size="11">走廊顶</text>
+          <text x="484" y="144" fill="#9fb4ff" font-size="11">走廊顶</text>
+          <polyline points="70,300 130,298 190,302 250,299 310,301 370,300 420,300" fill="none" stroke="#cdd6ff" stroke-width="3"/>
+          <polyline points="70,262 130,260 190,264 250,261 310,263 370,262 420,262" fill="none" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <line x1="100" y1="262" x2="100" y2="300" stroke="#ffd166" stroke-width="2"/>
+          <line x1="160" y1="260" x2="160" y2="298" stroke="#ffd166" stroke-width="2"/>
+          <line x1="220" y1="264" x2="220" y2="302" stroke="#ffd166" stroke-width="2"/>
+          <line x1="280" y1="261" x2="280" y2="299" stroke="#ffd166" stroke-width="2"/>
+          <line x1="340" y1="263" x2="340" y2="301" stroke="#ffd166" stroke-width="2"/>
+          <text x="100" y="254" text-anchor="middle" fill="#ffd1d8" font-size="10">Δ0.09</text>
+          <text x="160" y="252" text-anchor="middle" fill="#ffd1d8" font-size="10">Δ0.09</text>
+          <text x="220" y="256" text-anchor="middle" fill="#ffd1d8" font-size="10">Δ0.09</text>
+          <text x="280" y="253" text-anchor="middle" fill="#ffd1d8" font-size="10">Δ0.09</text>
+          <text x="340" y="255" text-anchor="middle" fill="#ffd1d8" font-size="10">Δ0.09</text>
+          <text x="240" y="340" text-anchor="middle" fill="#ff9f6b" font-size="12" font-weight="700">ATE 大：整条都偏 0.09</text>
+          <text x="240" y="362" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">RPE 小：每段形状都对</text>
+          <text x="240" y="384" text-anchor="middle" fill="#9fb4ff" font-size="11">看得出整体漂移</text>
+          <polyline points="490,300 550,298 610,300 670,261 730,263 790,300 840,300" fill="none" stroke="#cdd6ff" stroke-width="3"/>
+          <polyline points="490,300 550,298 610,300 670,300 730,300 790,300 840,300" fill="none" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <line x1="670" y1="261" x2="670" y2="300" stroke="#ffd166" stroke-width="2"/>
+          <text x="670" y="253" text-anchor="middle" fill="#ffd1d8" font-size="10">Δ0.39</text>
+          <text x="660" y="340" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">ATE 可能不大：首尾都对</text>
+          <text x="660" y="362" text-anchor="middle" fill="#ff9f6b" font-size="12" font-weight="700">RPE 大：中段飘了 0.39</text>
+          <text x="660" y="384" text-anchor="middle" fill="#9fb4ff" font-size="11">看不出整体偏，但局部抖</text>
+          <text x="450" y="436" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：报一个数字前，先问「用的是 ATE 还是 RPE」——两者可能唱反调</text>
+          <text x="450" y="460" text-anchor="middle" fill="#9fb4ff" font-size="12">这就是第一季 0013 那句「看清代评测口径」最硬核的注脚</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图：估计轨迹整体向上平移 0.09 m，但每一段形状都对（5 条竖线都≈0.09）→ ATE 大、RPE 小。右图：估计轨迹首尾都和真值重合，但中间猛地飘出去一截（竖线 0.39）→ ATE 可能不大（首尾抵消）、RPE 大。<br>
+          <b>怎么看这张图：</b>① 左图代表「有整体尺度/对齐误差但局部很稳」的方法，ATE 会把它判得很差；② 右图代表「局部抖动但整体侥幸回来」的方法，ATE 可能放过它，RPE 才会抓住；③ 两把尺子<b>衡量的是不同维度的能力</b>，一个数字好看不等于全面好。<br>
+          <b>要记住的一句话：</b>拿到任何「ATE=多少」或「RPE=多少」的宣传，先确认它报的是哪一把尺子——这是本季题眼。
+        </figcaption>
+      </figure>
+
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>一个方法「首尾都和真值重合，但中间有一段猛地飘出去又回来」，用哪个指标最容易抓到它的毛病？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对：ATE 先整体对齐再逐点比，首尾重合会把它「拉平」，中间那段飘移容易被平均掉，数字可能不大。" onclick="lessonKit.answer(this,'q0180b')">ATE（绝对轨迹误差）</button>
+          <button data-correct="yes" data-explanation="正确：RPE 逐段比相对运动，中间那段飘移会让对应段的相对位移明显出错，所以 RPE 大、会被抓住；而 ATE 因首尾重合可能显示不大。" onclick="lessonKit.answer(this,'q0180b')">RPE（相对位姿误差）</button>
+        </div>
+        <div class="quiz-feedback" id="q0180b"></div>
+      </div>
+    </section>
+
+    <section class="section-card" id="f">
+      <h2>6. 对齐方式：SE(3) 还是 Sim(3)</h2>
+      <p>算 ATE 的第一步是把估计轨迹「对齐」到真值坐标系。对齐方式有两种，选错会让数字差很多：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>SE(3) 刚体对齐</h4><p>只允许<b>旋转 + 平移</b>，尺度锁死。适合 RGB-D、双目这类已知尺度的系统。TUM 因 RGB-D 已知尺度，统一用 SE(3)（Horn 闭式解）。</p></div>
+        <div class="mini-card"><h4>Sim(3) 相似对齐</h4><p>额外允许<b>整体缩放</b>一个尺度因子。单目 SLAM 天生缺尺度，必须用 Sim(3) 才公平。</p></div>
+        <div class="mini-card"><h4>为什么单目缺尺度</h4><p>单目相机只有图像，从一张图无法知道「眼前 1 米还是 10 米」——轨迹的尺度是任意的，只有相对形状确定。</p></div>
+      </div>
+      <p>如果拿单目轨迹强行用 SE(3) 对齐：因为尺度锁死，系统只能靠旋转/平移去硬凑，结果把<b>尺度差整个吸收成巨大的平移误差</b>，ATE 会被虚假地放大几倍甚至更多。用 Sim(3) 先让尺度对齐，剩下的才是真实漂移。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">对齐方式：只允许旋转平移，还是额外允许缩放</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="13">单目 SLAM 轨迹天生缺尺度；用错对齐方式，数字会差很多</text>
+          <rect x="40" y="70" width="400" height="38" rx="8" fill="#16203a" stroke="#ff5d73"/>
+          <text x="240" y="95" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">SE(3)：只允许旋转 + 平移</text>
+          <rect x="460" y="70" width="400" height="38" rx="8" fill="#16203a" stroke="#5cffb0"/>
+          <text x="660" y="95" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">Sim(3)：额外允许缩放</text>
+          <rect x="60" y="130" width="360" height="170" rx="8" fill="#131a2e" stroke="#3a4a78"/>
+          <text x="240" y="152" text-anchor="middle" fill="#9fb4ff" font-size="12">同一个房间 · 单目轨迹（偏大 2×）</text>
+          <polyline points="100,260 180,250 260,270 340,255" fill="none" stroke="#cdd6ff" stroke-width="3"/>
+          <text x="100" y="280" fill="#cdd6ff" font-size="11">真值（小，正确尺度）</text>
+          <polyline points="100,200 180,190 260,210 340,195" fill="none" stroke="#ff5d73" stroke-width="3" stroke-dasharray="8 5"/>
+          <text x="100" y="186" fill="#ff5d73" font-size="11">估计（大，尺度错）</text>
+          <line x1="100" y1="200" x2="100" y2="260" stroke="#ffd166" stroke-width="2"/>
+          <line x1="180" y1="190" x2="180" y2="250" stroke="#ffd166" stroke-width="2"/>
+          <line x1="260" y1="210" x2="260" y2="270" stroke="#ffd166" stroke-width="2"/>
+          <line x1="340" y1="195" x2="340" y2="255" stroke="#ffd166" stroke-width="2"/>
+          <text x="240" y="300" text-anchor="middle" fill="#ffd1d8" font-size="11">竖线 = 尺度差被硬算成平移误差</text>
+          <text x="240" y="322" text-anchor="middle" fill="#ff9f6b" font-size="12" font-weight="700">ATE 虚假放大：尺度差全进了平移</text>
+          <rect x="480" y="130" width="360" height="170" rx="8" fill="#131a2e" stroke="#3a4a78"/>
+          <text x="660" y="152" text-anchor="middle" fill="#9fb4ff" font-size="12">同一个房间 · 先缩放再对齐</text>
+          <polyline points="520,260 600,250 680,270 760,255" fill="none" stroke="#cdd6ff" stroke-width="3"/>
+          <text x="520" y="280" fill="#cdd6ff" font-size="11">真值（小，正确尺度）</text>
+          <polyline points="520,255 600,246 680,265 760,251" fill="none" stroke="#5cffb0" stroke-width="3" stroke-dasharray="8 5"/>
+          <text x="520" y="240" fill="#5cffb0" font-size="11">估计（缩放后贴合）</text>
+          <line x1="520" y1="255" x2="520" y2="260" stroke="#ffd166" stroke-width="2"/>
+          <line x1="600" y1="246" x2="600" y2="250" stroke="#ffd166" stroke-width="2"/>
+          <line x1="680" y1="265" x2="680" y2="270" stroke="#ffd166" stroke-width="2"/>
+          <line x1="760" y1="251" x2="760" y2="255" stroke="#ffd166" stroke-width="2"/>
+          <text x="660" y="300" text-anchor="middle" fill="#ffd1d8" font-size="11">竖线很短 = 只剩真实漂移</text>
+          <text x="660" y="322" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">ATE 公平：尺度已先消去</text>
+          <text x="240" y="360" text-anchor="middle" fill="#ff9f6b" font-size="12" font-weight="700">单目必须用 Sim(3)，否则 ATE 被尺度差主导</text>
+          <text x="660" y="360" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">RGB-D / 双目已知尺度，用 SE(3) 即可</text>
+          <text x="450" y="436" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：对齐方式（SE3 vs Sim3）是 ATE 数字的前置开关，换了它数字就变</text>
+          <text x="450" y="460" text-anchor="middle" fill="#9fb4ff" font-size="12">回链第四季 KITTI：它用 RTK 真值，尺度已知，对齐方式和本文一致</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左图：单目估计轨迹比真值大了一倍（尺度错）。用 SE(3) 对齐时尺度锁死，只能硬靠旋转/平移凑，结果尺度差全变成竖直的平移误差，ATE 被虚假放大。右图：改用 Sim(3)，先让尺度缩放贴合，再对齐，竖线变得很短，ATE 只剩真实漂移。<br>
+          <b>怎么看这张图：</b>① 左图的红虚线明显比真值「胖一圈」，这是尺度问题不是漂移问题；② SE(3) 看不到尺度维度，就把这圈差全记到平移账上；③ Sim(3) 先把尺度这维放开，账才公平。<br>
+          <b>要记住的一句话：</b>报 ATE 前必须说明用哪种对齐——这是「排行榜不可横比」的理由之一（收官课 0185 会汇总）。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="g">
+      <h2>7. 时间戳关联：采样时刻不同怎么办</h2>
+      <p>真值和估计通常不是在同一时刻采样：真值（动捕）100 Hz，估计（Kinect SLAM）30 Hz，二者的时刻错开。要算误差，得先把它们<b>配到同一时刻</b>——这就是<b>时间戳关联</b>。论文提供 associate.py 做这件事。</p>
+      <p>做法：对估计的每个时刻，找真值里时间最近的那个帧配对。TUM 还预先校正了动捕与彩色相机之间约 20 ms 的延迟。但若校正错了——比如<b>时钟慢了 0.1 秒</b>——会发生什么？</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">时间戳关联：两条时间轴，采样时刻不同</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="13">上：真值时间轴（100 Hz）｜下：估计时间轴（30 Hz）｜错开时刻要找最近配对</text>
+          <text x="70" y="92" fill="#cdd6ff" font-size="12" font-weight="700">真值轴（100 Hz）</text>
+          <line x1="60" y1="100" x2="840" y2="100" stroke="#3a4a78"/>
+          <line x1="120" y1="92" x2="120" y2="108" stroke="#cdd6ff"/>
+          <line x1="240" y1="92" x2="240" y2="108" stroke="#cdd6ff"/>
+          <line x1="360" y1="92" x2="360" y2="108" stroke="#cdd6ff"/>
+          <line x1="480" y1="92" x2="480" y2="108" stroke="#cdd6ff"/>
+          <line x1="600" y1="92" x2="600" y2="108" stroke="#cdd6ff"/>
+          <line x1="720" y1="92" x2="720" y2="108" stroke="#cdd6ff"/>
+          <line x1="840" y1="92" x2="840" y2="108" stroke="#cdd6ff"/>
+          <text x="120" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.00</text>
+          <text x="240" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.01</text>
+          <text x="360" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.02</text>
+          <text x="480" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.03</text>
+          <text x="600" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.04</text>
+          <text x="720" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.05</text>
+          <text x="840" y="124" text-anchor="middle" fill="#9fb4ff" font-size="10">0.06</text>
+          <text x="70" y="172" fill="#ff5d73" font-size="12" font-weight="700">估计轴（30 Hz，时刻错开）</text>
+          <line x1="60" y1="180" x2="840" y2="180" stroke="#3a4a78"/>
+          <line x1="150" y1="172" x2="150" y2="188" stroke="#ff5d73"/>
+          <line x1="350" y1="172" x2="350" y2="188" stroke="#ff5d73"/>
+          <line x1="550" y1="172" x2="550" y2="188" stroke="#ff5d73"/>
+          <line x1="750" y1="172" x2="750" y2="188" stroke="#ff5d73"/>
+          <text x="150" y="204" text-anchor="middle" fill="#ffd1d8" font-size="10">0.005</text>
+          <text x="350" y="204" text-anchor="middle" fill="#ffd1d8" font-size="10">0.025</text>
+          <text x="550" y="204" text-anchor="middle" fill="#ffd1d8" font-size="10">0.045</text>
+          <text x="750" y="204" text-anchor="middle" fill="#ffd1d8" font-size="10">0.065</text>
+          <line x1="120" y1="108" x2="150" y2="172" stroke="#5cffb0" stroke-width="2" stroke-dasharray="4 3"/>
+          <line x1="240" y1="108" x2="350" y2="172" stroke="#5cffb0" stroke-width="2" stroke-dasharray="4 3"/>
+          <line x1="480" y1="108" x2="550" y2="172" stroke="#5cffb0" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="250" y="148" text-anchor="middle" fill="#5cffb0" font-size="11">找最近配对</text>
+          <rect x="40" y="228" width="400" height="160" rx="8" fill="#241a2a" stroke="#ff5d73"/>
+          <text x="240" y="252" text-anchor="middle" fill="#ff5d73" font-size="13" font-weight="700">时钟慢了 0.1 秒会怎样</text>
+          <text x="60" y="282" fill="#ffd1d8" font-size="11">真值本在 t=1.00 的位置</text>
+          <text x="60" y="306" fill="#ffd1d8" font-size="11">估计却在 t=1.10 才采到</text>
+          <text x="60" y="330" fill="#ffd1d8" font-size="11">配对的其实是「0.1 秒后的真值」</text>
+          <text x="60" y="354" fill="#ff9f6b" font-size="11">→ 把运动本身算进误差</text>
+          <text x="60" y="378" fill="#ff9f6b" font-size="12" font-weight="700">误差被虚假放大</text>
+          <rect x="460" y="228" width="400" height="160" rx="8" fill="#13241c" stroke="#5cffb0"/>
+          <text x="660" y="252" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">TUM 的做法</text>
+          <text x="480" y="282" fill="#cdd6ff" font-size="11">动捕与相机约 20 ms 延迟</text>
+          <text x="480" y="306" fill="#cdd6ff" font-size="11">已预先校正（保留原始时间戳）</text>
+          <text x="480" y="330" fill="#cdd6ff" font-size="11">associate.py 找最近真值帧</text>
+          <text x="480" y="354" fill="#5cffb0" font-size="11">→ 误差只来自方法本身</text>
+          <text x="480" y="378" fill="#5cffb0" font-size="12" font-weight="700">配对公平</text>
+          <text x="450" y="436" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：时间戳关联是误差计算的前置步，时钟错一点就会把运动算成误差</text>
+          <text x="450" y="460" text-anchor="middle" fill="#9fb4ff" font-size="12">回链第五季多传感器融合：时间同步正是融合系统的老问题</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上面是真值时间轴（密，100 Hz），下面是估计时间轴（疏，30 Hz，时刻错开）。绿色虚线把每个估计时刻连到最近的真实值时刻（「找最近配对」）。右下红框演示「时钟慢 0.1 秒」：估计在 t=1.10 才采到，却和 t=1.00 的真值配对，于是把 0.1 秒的运动也算成了误差。<br>
+          <b>怎么看这张图：</b>① 绿色虚线说明关联的本质——<b>不是时刻相等，而是时刻最近</b>；② 红框的「0.1 秒」是一个夸张示意：真实机器人运动时，时间错配会直接把位移塞进误差；③ 右下绿框是 TUM 的正解：先校正延迟再做关联，误差才只反映方法本身。<br>
+          <b>要记住的一句话：</b>时间戳关联做错，误差会被虚假放大——这也是不同论文数字难横比的一个隐藏原因。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="h">
+      <h2>8. RMSE 与中位数：离群点怎么处理</h2>
+      <p>ATE/RPE 默认报 <b>RMSE（均方根误差）</b>——它对大误差平方加权，所以特别怕「跟丢」那几次极大误差。论文也建议同时看<b>中位数 / 均值</b>，因为中位数对离群点不敏感。下面是用 100 次误差画的真实分布（绝大多数很小，少数极大）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="19" font-weight="700">RMSE 与中位数：离群点怎么影响统计量</text>
+          <text x="450" y="50" text-anchor="middle" fill="#9fb4ff" font-size="13">100 次误差的柱状分布：绝大多数很小，少数极大（跟丢）；RMSE 被尾巴拖高，中位数不受影响</text>
+          <text x="70" y="230" fill="#9fb4ff" font-size="11">次数</text>
+          <text x="815" y="418" text-anchor="end" fill="#9fb4ff" font-size="11">误差（米）</text>
+          <line x1="90" y1="400" x2="820" y2="400" stroke="#4a5a88"/>
+          <rect x="90" y="220" width="80" height="180" fill="#5cffb0"/>
+          <rect x="190" y="388" width="80" height="12" fill="#5cffb0"/>
+          <rect x="290" y="391" width="80" height="9" fill="#5cffb0"/>
+          <rect x="390" y="391" width="80" height="9" fill="#5cffb0"/>
+          <rect x="490" y="395" width="80" height="5" fill="#5cffb0"/>
+          <rect x="590" y="398" width="80" height="2" fill="#5cffb0"/>
+          <rect x="690" y="386" width="80" height="14" fill="#ff9f6b"/>
+          <text x="135" y="214" text-anchor="middle" fill="#cdd6ff" font-size="11">78</text>
+          <text x="235" y="380" text-anchor="middle" fill="#cdd6ff" font-size="10">5</text>
+          <text x="335" y="383" text-anchor="middle" fill="#cdd6ff" font-size="10">4</text>
+          <text x="435" y="383" text-anchor="middle" fill="#cdd6ff" font-size="10">4</text>
+          <text x="535" y="387" text-anchor="middle" fill="#cdd6ff" font-size="10">2</text>
+          <text x="635" y="390" text-anchor="middle" fill="#cdd6ff" font-size="10">1</text>
+          <text x="735" y="378" text-anchor="middle" fill="#ffd1d8" font-size="10">6</text>
+          <text x="135" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0–0.1</text>
+          <text x="235" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0.1–0.2</text>
+          <text x="335" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0.2–0.3</text>
+          <text x="435" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0.3–0.4</text>
+          <text x="535" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0.4–0.5</text>
+          <text x="635" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0.5–0.6</text>
+          <text x="735" y="418" text-anchor="middle" fill="#9fb4ff" font-size="10">0.6–0.7</text>
+          <line x1="90" y1="308" x2="820" y2="308" stroke="#ff5d73" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="815" y="300" text-anchor="end" fill="#ff5d73" font-size="11">RMSE = 0.214 m（被尾巴拖高）</text>
+          <line x1="90" y1="374" x2="820" y2="374" stroke="#ffd166" stroke-width="2" stroke-dasharray="7 5"/>
+          <text x="815" y="366" text-anchor="end" fill="#ffd166" font-size="11">中位数 = 0.060 m（不受影响）</text>
+          <text x="135" y="188" text-anchor="middle" fill="#5cffb0" font-size="11">绝大多数误差很小</text>
+          <text x="520" y="358" text-anchor="start" fill="#ff9f6b" font-size="11">跟丢的少数几次</text>
+          <text x="450" y="448" text-anchor="middle" fill="#cdd6ff" font-size="14" font-weight="700">要记住：RMSE 怕离群点，中位数不怕——论文有时两个都报才诚实</text>
+          <text x="450" y="466" text-anchor="middle" fill="#9fb4ff" font-size="12">红虚线 = RMSE，黄虚线 = 中位数；两者差很多，说明有跟丢</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>100 次误差的柱状分布：第一根柱子（0–0.1 m）有 78 次，占了绝大多数；右侧 0.6–0.7 m 有 6 次是「跟丢」造成的极大误差。红色虚线是 RMSE=0.214 m（被右侧尾巴拖高），黄色虚线是中位数=0.060 m（几乎不受尾巴影响）。柱子高度由真实样本统计得出。<br>
+          <b>怎么看这张图：</b>① 78 次小误差构成的「主体」很小，中位数只代表这个主体；② 但 RMSE 把 6 次大误差平方后放大，整体被拉到 0.214；③ 两个数字差近 4 倍，说明<b>分布有重尾</b>——这时只报 RMSE 会显得方法很糟，只报中位数又会掩盖跟丢。<br>
+          <b>要记住的一句话：</b>看评测数字时，RMSE 和中位数要一起看；两者差很多，往往意味着方法偶尔会跟丢。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="i">
+      <h2>9. 其他贡献：数据集本身与基准结果</h2>
+      <p>除了定义指标，这篇论文还发布了<b>第一套带真值的 RGB-D SLAM 基准</b>。了解它，才能看懂第三季你用过的那些 TUM 评测表格。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>序列构成</h4><p>Microsoft Kinect 录 39 条序列（640×480@30Hz，RGB+Depth），其中 19 条为 training。场景分办公室「fr1」（约 6×6 m²）与工业厅「fr2」（约 10×12 m²）。</p></div>
+        <div class="mini-card"><h4>动捕真值</h4><p>MotionAnalysis 8 相机，100 Hz，Kinect 贴 4 个反光点。帧间相对误差 &lt; 1 mm 与 0.5°，全场绝对误差 &lt; 10 mm（捕捉区 7×7 m²——原文 OCR 把「7×7 m²」印成了「7×7From this」，已纠正）。</p></div>
+        <div class="mini-card"><h4>场景多样性</h4><p>含静态/动态（有人持续动物体）、有环路（多数序列）/无环路（fr2/large_no_loop 测长期漂移）、传感器遮挡（fr2/360_kidnap 测恢复能力）、手持 6-DOF 与机器人平台。</p></div>
+        <div class="mini-card"><h4>防刷榜</h4><p>刻意分 train/test，test 只能在官网提交评测，防止在测试集上过拟合——早期「防刷榜」设计。</p></div>
+      </div>
+      <p>作者自述的局限也要如实写：① <b>只评轨迹、不评地图</b>（好轨迹≠好地图，门口障碍可能漏掉）；② 动捕局限在小室内，长程巡游一旦离开动捕区，真值只在首尾存在；③ 真值精度虽够评当前 SOTA，但<b>不足以评测亚毫米级 3D 模型</b>（5 m 处模型误差可达 30–43 mm）。</p>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_A_benchmark_for_the_evaluation_of_RGB-D_SLAM_systems/b0009ca9d6ecadaa10653d8f177954b39d0bfbfe60d05916b7a20fa1777ebfd3.jpg" alt="Motion capture system tracking the Kinect">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>We use an external motion capture system from MotionAnalysis to track the camera pose of the Kinect.（中译：我们用 MotionAnalysis 的外部动捕系统来跟踪 Kinect 的相机位姿。）<br>
+          <b>怎么看这张图：</b>这就是「真值从哪来」的实物——四面八方架着红外相机，Kinect 上贴着反光标记点，相机通过三角测量这些点得到位姿。注意它<b>只在小室内有效</b>（捕捉区 7×7 m²），这正解释了为什么 TUM 序列都不大。<br>
+          <b>要记住的一句话：</b>TUM 的真值是动捕给的毫米级硬真值；它的精度上限，就是这套设备的物理天花板。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_A_benchmark_for_the_evaluation_of_RGB-D_SLAM_systems/43197e60d798c387f4a947db507f0518e911a11798a3d502f8de6ade208e1e05.jpg" alt="RPE of two visual odometry approaches on fr1/desk">
+        <figcaption>
+          <b>原图注（Fig. 6）：</b>Evaluating the drift by means of the relative pose error (RPE) of two visual odometry approaches on the fr1/desk sequence. As can be seen from this plot, RBM has lower drift and fewer outliers than GICP. For more details, see [44].（中译：用相对位姿误差 RPE 评测两种视觉里程计方法在 fr1/desk 序列上的漂移；可见 RBM 比 GICP 漂移更低、离群更少。）<br>
+          <b>怎么看这张图：</b>这正是第 4 节 RPE 指标的实战——横轴是时间、纵轴是 RPE。两条曲线谁更贴近 0、谁更少冒尖，谁就更稳。它证明 RPE 能区分「哪种里程计每一步走得更准」。<br>
+          <b>要记住的一句话：</b>Fig. 6 是 RPE 的官方示范图；你第三季看 ORB-SLAM 论文时遇到的 TUM 表格，底层就是这类图算出来的数字。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2012_A_benchmark_for_the_evaluation_of_RGB-D_SLAM_systems/550fcac4644b841f694917fc959db513fddcd8fa06d39306cb74a8305ccad1df.jpg" alt="ATE visualization on fr1/desk2 and ATE/RPE comparison">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>(a) Visualization of the absolute trajectory error (ATE) on the “fr1/desk2” sequence. (b) Comparison of ATE and RPE measures. Both plots were generated from trajectories estimated by the RGB-D SLAM system [47].（中译：(a) fr1/desk2 序列上的绝对轨迹误差 ATE 可视化；(b) ATE 与 RPE 两种度量的比较。两者都由 RGB-D SLAM 系统估计的轨迹生成。）<br>
+          <b>怎么看这张图：</b>(a)(b) 子图对应关系按原文顺序推断——(a) 把 ATE 画成轨迹上逐点的误差颜色，(b) 把 ATE 与 RPE 两个数字摆在一起比。它和第 5 节「题眼图」是同一件事的论文原版：<b>两个指标常常不一致</b>。<br>
+          <b>要记住的一句话：</b>Fig. 7 是 ATE 的官方示范图，也是「ATE 与 RPE 会唱反调」的原文证据——回链第一季 0013 的评测口径警告。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card" id="j">
+      <h2>读完你应该能回答</h2>
+      <ul>
+        <li>ATE 与 RPE 各自在回答什么question？算法四步分别是什么？</li>
+        <li>ATE 公式里 S 是什么？为什么必须先对齐再逐点比？</li>
+        <li>为什么 RPE ≥ ATE？两者在实验中排序通常一致吗？</li>
+        <li>SE(3) 与 Sim(3) 对齐的区别是什么？为什么单目 SLAM 必须用 Sim(3)？</li>
+        <li>时间戳关联在做什么？时钟慢 0.1 秒会把误差怎么虚假放大？</li>
+        <li>RMSE 与中位数对离群点（跟丢）的敏感度有何不同？为什么论文有时两个都报？</li>
+        <li>TUM 的真值从哪来、精度多少、覆盖多大空间？它只评轨迹还是也评地图？</li>
+        <li>这篇论文除了定义指标，还发布了什么？它的序列怎么防刷榜？</li>
+      </ul>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>一个单目 SLAM 方法，轨迹形状完全正确，但整体比真值大了 2 倍。若误用 SE(3) 对齐报 ATE，会发生什么？正确做法是什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>SE(3) 只允许旋转+平移、尺度锁死，所以系统只能靠旋转/平移去硬凑那条大 2 倍的轨迹，尺度差会被整个吸收成巨大的平移误差，ATE 被虚假放大几倍。正确做法是用 Sim(3)（相似变换）对齐，先让尺度缩放贴合，再算 ATE——这样 ATE 只剩真实漂移。这正是第 6 节的核心：对齐方式是 ATE 数字的前置开关。</div></details>
+        </li>
+        <li>为什么「首尾都和真值重合、中间飘一段」的方法，用 ATE 可能显示不大，却该被 RPE 抓住？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>ATE 先整体对齐再逐点比，首尾重合会把中间那段飘移在平均时被部分抵消，所以整体 RMSE 可能不大；但 RPE 逐段比相对运动，中间那段飘移会让对应段的相对位移明显出错，RMSE 立刻变大。两者衡量不同维度，一个好看不等于全面好——这也是第 5 节题眼图的要点。</div></details>
+        </li>
+        <li>时间戳关联如果错了 0.1 秒，对误差数字的具体影响是什么？用生活类比说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>估计在 t=1.10 才采到一帧，却和 t=1.00 的真值配对，于是把「这 0.1 秒内机器人实际移动的距离」也算成了误差——等于把运动本身塞进评测。类比：你朋友每 0.1 秒报一次位置，你却拿他 0.1 秒前的位置当下一次来比，差出来的全是他正常走的那段路。TUM 用 20 ms 延迟预校正 + associate.py 找最近帧来避免。</div></details>
+        </li>
+        <li>某方法 RMSE=0.21 m 但中位数=0.06 m，说明什么？只看其中一个会漏掉什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>两者差近 4 倍，说明误差分布有重尾——绝大多数时候误差很小（中位数 0.06），但偶尔（跟丢）会出现极大误差把 RMSE 拖到 0.21。只看 RMSE 会显得方法很糟、冤枉了它平时的表现；只看中位数会掩盖跟丢这种致命失败。所以论文通常两个都报才诚实。</div></details>
+        </li>
+        <li>第三季 ORB-SLAM 论文里的 TUM 评测表格，底层用的就是这一篇的哪两个指标？它评的是轨迹还是地图？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>底层就是 ATE 与 RPE（这一篇定义的）。TUM 基准<b>只评轨迹、不评地图</b>——好轨迹不等于好地图（比如门口的障碍可能漏建）。回链第一季 0013：这些表格背后的「尺子」正是 0013 提醒你要看清的评测口径。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0179-导览-第九季开场-怎么衡量一个SLAM好不好.html">← 上一课：导览 怎么衡量一个 SLAM 好不好</a>
+        <a class="next" href="0181-NewerCollege2020-手持激光与退化场景.html">下一课：Newer College（2020）手持激光与退化场景 →</a>
+      </div>
+      <p class="foot-note">这一课是全季的「尺子母本」：ATE 与 RPE 之后被所有 SLAM 论文沿用至今。把这两个指标、两种对齐、时间戳关联和离群统计都吃透，下一季再看任何排行榜，你都会先去翻它的评测协议 📐</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

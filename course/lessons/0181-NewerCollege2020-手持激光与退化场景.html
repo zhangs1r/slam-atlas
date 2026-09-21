@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Newer College（2020）：手持激光与退化场景 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 I · 数据集与评测 / Lesson 0181</div>
+      <h1>Newer College（2020）：手持激光与退化场景</h1>
+      <p class="subtitle">它是一把什么样的尺子？——用「测绘级扫描仪建先验地图 + ICP 把每条扫描注册进去」生成约 3 cm 的真值，专门量大规模手持激光 SLAM 准不准。🚶 这一课搞清：为什么大场景里它只能做到厘米级，以及「退化场景」到底退在哪。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：大规模手持激光 SLAM 的厘米级参考真值</span>
+        <span>👥 作者：牛津大学团队（正文未列出完整作者名单）</span>
+        <span>📅 年份 · <i>The Newer College Dataset: Handheld LiDAR, Inertial and Vision with Ground Truth (IROS 2020)</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场与定位</a>
+        <a href="#b">它长什么样：手持设备与传感器</a>
+        <a href="#c">★ 真值是怎么来的</a>
+        <a href="#d">★ 真值精度是多少（为什么是厘米级）</a>
+        <a href="#e">★ 覆盖哪些场景（退化场景）</a>
+        <a href="#f">基准任务与评测协议</a>
+        <a href="#g">什么时候该用它 / 不该用它</a>
+        <a href="#h">作者自述的局限</a>
+        <a href="#i">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Newer College 的真值「两步走」是怎么造出来的（测绘扫描仪建图 + ICP 注册）；给出具体精度数字（约 3 cm，并解释为什么做不到毫米级）；指出它最能暴露的「退化场景」是什么；把它的厘米级真值和 TUM 的毫米级、KITTI 的 RTK 厘米级区分开；判断自己手头的任务该不该用它。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 全前八季都在用 <b>KITTI / EuRoC / TUM</b>，却从没交代真值从哪来——<b>第一季 0013</b> 警告过「注意评测口径」，本季把它正面展开，这篇补上 Newer College 这一把。★ <b>第四季 0073</b> 说 KITTI 真值来自 RTK-GPS（厘米级），同样是厘米级，但来源完全不同（RTK 看天 vs 这里看测绘地图），不要拿数字互比。★ <b>0180 TUM</b> 给的是毫米级动捕真值，本篇是厘米级，精度差一档，比较时要心里有数。★ <b>第八季 0153–0158</b> 讲动态环境评测难处，本篇也含「动态运动补充序列」，可对照。★ 和 <b>0175 VECtor</b> 同属「讲清测什么、真值多准、何时该用」的数据集课。</p></div>
+      </div>
+
+      <h2>1. 一句话定位：一把厘米级的尺子</h2>
+      <p>前面 <b>0180</b> 把「量轨迹的母尺」ATE/RPE 讲透了，但那把尺要能比，得有真值。TUM 的真值是动捕房里测的，精度到毫米，可动捕房只有几米见方。问题来了：<b>我想评一个在几公里大校园里手持走一圈的激光 SLAM，去哪找真值？</b></p>
+      <p>Newer College（2020）的回答很巧：它<strong>不靠动捕、也不靠 GPS</strong>，而是先用一台测绘级激光扫描仪把整个园区扫成一张「毫米级先验地图」，再把你 handheld 设备实时扫的每一条线，用 ICP 注册回这张地图，反推出你每一刻的 6-DoF 位姿。这样得到的真值精度约 <strong>3 cm</strong>——一把<strong>厘米级</strong>的尺子，能覆盖 2.2 km 的步行轨迹。</p>
+      <p>生活类比：你要在整个校园里画一张「我走了哪条路」的精确路线图。你没法在天上挂满摄像头（那是动捕），也别想在楼里用 GPS。于是你先请测绘队把校园量成一张超精细底图，再拿你手里的扫描笔边走边对底图，底图告诉你「此刻你在底图的这个位置」。底图越准，告诉你位置就越准——但底图本身也是量出来的，有上限。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 它长什么样：手持设备、传感器与场景</h2>
+      <p>平台是<strong>人拎着走的</strong>——一台自制的手持设备，步行约 1 m/s，清晨到中午在牛津新学院录了约 2.2 km。这带来一个关键好处：<b>人能进车去不了的地方</b>，比如楼梯、窄道、台阶、以及建筑之间的夹缝。也正因为它不是车，轨迹上会留下明显的「人走路周期扰动」，这反而成了检验真值够不够细的试金石。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>激光雷达</h4><p>Ouster OS1-64，64 线，10 Hz，120 m 量程，45° 垂直视场，1024 水平分辨率。自带 ICM-20948 IMU（100 Hz）。</p></div>
+        <div class="mini-card"><h4>视觉 + IMU</h4><p>Intel RealSense D435i：30 Hz 立体相机 + BMI055 IMU（400 Hz）。提供彩色/深度/惯性三路。</p></div>
+        <div class="mini-card"><h4>同步方式</h4><p>无硬件同步，靠软件/网络时间同步；Ouster 用 PTP（亚微秒），两 IMU 相对漂移约 58 ms/小时。</p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2020_NewerCollege/c5cd0fef2dea282cefbeed9d814feb691841f9c7f37568a7c1ac734d73795f9b.jpg" alt="Devices used in our dataset">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Devices used in our dataset. Top left: our custom built handheld device; Top right: front view of the 3D CAD model with reference frames; Middle: isometric and top-down views of the URDF model; Bottom: Leica BLK360 for creating the ground truth map.<br>
+          <b>怎么看这张图：</b>左边是你手持的那台设备（激光+相机+IMU 一体），右下角那台三脚架上的大方块就是用来造真值的 Leica BLK360 测绘扫描仪——注意它<strong>不参与实时录制</strong>，只在建先验地图阶段用。中间是设备的坐标系定义（真值参考系特意取「左相机中心」，方便插值出 30 Hz 相机位姿）。
+        </figcaption>
+      </figure>
+      <figure class="figure">
+        <img src="../../md/images/2020_NewerCollege/34159106fd28eeda1538e1081507946ad42d90eb45b8158036c2585839a0705a.jpg" alt="Bird's eye view of 3D model and ground truth trajectory">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Top: a bird's eye view of the 3D model of New College generated with a Leica BLK360 scanner and the ground truth trajectory obtained by the proposed approach. Bottom: image samples and corresponding 3D LiDAR scans from the Quad / Mid-Section / Parkland show varied environments.<br>
+          <b>怎么看这张图：</b>这张图是整篇的「名片」——上方俯视图里那条彩色线就是他们造出来的<strong>真值轨迹</strong>，叠加在测绘扫描仪建出的 3D 模型上；下方三组样例分别来自 Quad（结构化建筑立面）、Mid-Section（开阔地+光照骤变）、Parkland（茂密植被）。盯着那条轨迹看：它绕了园区一大圈，这正是动捕房装不下的尺度。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ 真值是怎么来的：两步，不直接用动捕或 GPS</h2>
+      <p>核心方法就两步，论文强调这在公开数据集里之前没被用过：</p>
+      <p><strong>第一步，建先验地图。</strong>用一台测绘级扫描仪 Leica BLK360，在园区里架了 <strong>47 个静态站点</strong>扫描，配准成一张约 <strong>2.9 亿点</strong>的先验地图（匹配 inliers &gt; 90%）。地图本身精度很高：BLK360 单点精度 6 mm@10 m、8 mm@20 m，因为大部分点离某个扫描站 ≤ 20 m，所以「地图多数点精度优于 1 cm」。</p>
+      <p><strong>第二步，把实时扫描注册回地图。</strong>把手持设备里 Ouster 扫的每条实时线，用 ICP（libpointmatcher 滤波链）注册到这张先验地图，得到 10 Hz 的 6-DoF 位姿真值，再插值到 30 Hz。注册残差本身就被拿来做精度评估。多个来源互相校验：47 站之间互配准、扫描对地图的残差。</p>
+      <p>一句话：<b>真值 = 测绘地图（高精度底图） + ICP（把你的扫描对回底图）。</b>它既不是动捕、也不是 GPS，所以能用于大面积、半室外的园区。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">真值是怎么来的：测绘扫描仪建图 + ICP 注册</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">两步把「厘米级先验地图」变成「每条扫描的 6-DoF 位姿」</text>
+          <rect x="40" y="78" width="260" height="150" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="170" y="100" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">① 测绘级扫描仪 BLK360</text>
+          <text x="170" y="122" text-anchor="middle" fill="#9fb4ff" font-size="11">架三角架，47 站静态扫描</text>
+          <text x="170" y="144" text-anchor="middle" fill="#9fb4ff" font-size="11">单点精度 6 mm@10m</text>
+          <text x="170" y="164" text-anchor="middle" fill="#9fb4ff" font-size="11">8 mm@20m（静态高精度）</text>
+          <text x="170" y="186" text-anchor="middle" fill="#9fb4ff" font-size="11">配准成先验地图</text>
+          <text x="170" y="210" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">约 2.9 亿点</text>
+          <text x="170" y="230" text-anchor="middle" fill="#5cffb0" font-size="11">地图多数点 &lt; 1 cm</text>
+          <rect x="40" y="240" width="260" height="166" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="170" y="262" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">② 实时扫描 Ouster</text>
+          <text x="170" y="284" text-anchor="middle" fill="#9fb4ff" font-size="11">10 Hz 每条扫描</text>
+          <text x="170" y="304" text-anchor="middle" fill="#9fb4ff" font-size="11">ICP 注册到先验地图</text>
+          <text x="170" y="324" text-anchor="middle" fill="#9fb4ff" font-size="11">libpointmatcher 滤波链</text>
+          <text x="170" y="344" text-anchor="middle" fill="#9fb4ff" font-size="11">注册残差 → 评估</text>
+          <text x="170" y="368" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">输出 6-DoF 位姿真值</text>
+          <text x="170" y="390" text-anchor="middle" fill="#9fb4ff" font-size="11">10 Hz（插值到 30 Hz）</text>
+          <rect x="330" y="78" width="540" height="328" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="600" y="100" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">牛津新学院园区（约 135 × 225 m）</text>
+          <text x="345" y="128" fill="#9fb4ff" font-size="10">多源校验：47 站互配准 + 扫描对地图残差</text>
+          <text x="345" y="148" fill="#9fb4ff" font-size="10">降采样到 1 cm（1700 万点）</text>
+          <text x="345" y="168" fill="#9fb4ff" font-size="10">参考系：左相机中心</text>
+          <text x="345" y="188" fill="#ff9f6b" font-size="10">真值天花板 ≈ 3 cm</text>
+          <text x="345" y="208" fill="#9fb4ff" font-size="10">适合大规模室外 / 半室外</text>
+          <text x="345" y="228" fill="#9fb4ff" font-size="10">不是动捕、不是 GPS</text>
+          <polygon points="360,318 360,150 600,160 600,318" fill="#1b2748" stroke="#3a4a78"/>
+          <polygon points="840,318 840,150 600,160 600,318" fill="#1b2748" stroke="#3a4a78"/>
+          <rect x="360" y="150" width="480" height="168" fill="#16203a" opacity="0.4"/>
+          <text x="600" y="180" text-anchor="middle" fill="#9fb4ff" font-size="11">建筑立面（Quad）</text>
+          <text x="430" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">开阔地</text>
+          <text x="770" y="300" text-anchor="middle" fill="#9fb4ff" font-size="11">植被区</text>
+          <circle cx="600" cy="244" r="6" fill="#ff5d73"/>
+          <text x="614" y="248" fill="#ff9f6b" font-size="11">BLK360 站点之一</text>
+          <line x1="290" y1="330" x2="372" y2="300" stroke="#5cffb0" stroke-width="2"/>
+          <text x="300" y="350" fill="#5cffb0" font-size="11">ICP 注册</text>
+          <line x1="600" y1="256" x2="600" y2="300" stroke="#ffd166" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="614" y="290" fill="#ffd166" font-size="11">注册箭头</text>
+          <text x="600" y="408" text-anchor="middle" fill="#9fb4ff" font-size="10">灰 = 先验地图点云 ｜ 红 = 当前实时扫描</text>
+          <text x="450" y="438" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：真值来自「高精度底图 + 对回底图」，不是动捕也不是 GPS</text>
+          <text x="450" y="454" text-anchor="middle" fill="#9fb4ff" font-size="10">底图定上限：底图厘米级 → 真值到不了毫米；ICP 把当前扫描对回底图</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边两个框分别是「测绘扫描仪建先验地图」（47 站、2.9 亿点、多数点 &lt;1 cm）和「实时 Ouster 扫描用 ICP 注册回地图」得到 6-DoF 位姿。右边是园区俯视：灰色是先验地图点云，红色是当前扫描，二者用虚线箭头表示「对回」关系。右栏还列了多源校验、降采样、参考系等要点。<br>
+          <b>怎么看这张图：</b>① 真值的精度<strong>上限由底图决定</strong>——底图是厘米级，真值就到不了毫米；② <strong>ICP 是把「你的扫描」和「底图」对齐</strong>，对齐残差直接反映了真值能多准；③ 这种造法能在几公里尺度上工作，是它相对动捕的最大优势。<br>
+          <b>要记住的一句话：</b>Newer College 的真值 = 测绘底图 + ICP 注册；它绕开了动捕的小房间和 GPS 的遮挡，代价是真值天花板被钉在厘米级。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. ★ 真值精度是多少：约 3 cm，且做不到毫米级</h2>
+      <p>论文给的数字很具体：位姿真值精度 <strong>约 3 cm</strong>（摘要原文写作「approximately 3 cm accuracy」）。静止 10 秒实测标准差 x=2 cm、y=1.6 cm、z=2 cm，整体约 3 cm。地图单点精度 6 mm@10 m，但因为是「扫描对地图」的间接法，最终位姿真值是 3 cm 档。</p>
+      <p><strong>为什么做不到毫米级？</strong>三个原因叠加：① 底图虽好，但它是「多站拼接 + 降采样到 1 cm」得到的，本身有厘米级不确定度；② 实时扫描注册到地图时，ICP 残差带来厘米级误差；③ <strong>运动中还有 LiDAR 运动畸变</strong>（手在抖、设备在动），论文坦承这会进一步拉低精度，但没给运动中具体数字。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>地图单点</h4><p>6 mm@10 m，8 mm@20 m；多数点 &lt; 1 cm（这是底图的精度，不是最终位姿）。</p></div>
+        <div class="mini-card"><h4>位姿真值</h4><p>约 3 cm（静止 σ≈3 cm）。这是你拿来比 SLAM 的「尺」的上限。</p></div>
+        <div class="mini-card"><h4>对照 TUM</h4><p>TUM 动捕全场 &lt;10 mm、帧间 &lt;1 mm——比这里准约一个数量级，但只在几米小房。</p></div>
+      </div>
+      <p>生活类比：用一把「最小刻度 1 cm 的卷尺」去量一条 2 公里长的路，你能量到厘米，但量不到毫米。Newer College 就是这把卷尺——它能量得足够细，看得出你走路的周期性抖动，但别指望它去评「亚厘米级 3D 模型」。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">真值精度阶梯：Newer College 站在「厘米级」</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">同样评轨迹误差，三档尺子的精度差一个数量级，能覆盖的空间也完全不同</text>
+          <rect x="60" y="88" width="780" height="40" rx="6" fill="#16203a" stroke="#3a4a78"/>
+          <rect x="60" y="88" width="200" height="40" fill="#2e7d5b"/>
+          <rect x="260" y="88" width="320" height="40" fill="#b9892f"/>
+          <rect x="580" y="88" width="260" height="40" fill="#8a3b3b"/>
+          <text x="160" y="113" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="700">毫米级</text>
+          <text x="420" y="113" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="700">厘米级</text>
+          <text x="710" y="113" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="700">亚米级</text>
+          <text x="160" y="146" text-anchor="middle" fill="#9fb4ff" font-size="11">1 mm ~ 10 mm</text>
+          <text x="420" y="146" text-anchor="middle" fill="#9fb4ff" font-size="11">1 cm ~ 10 cm</text>
+          <text x="710" y="146" text-anchor="middle" fill="#9fb4ff" font-size="11">0.3 m ~ 1 m</text>
+          <text x="160" y="176" text-anchor="middle" fill="#cdd6ff" font-size="11">TUM 动捕</text>
+          <text x="160" y="194" text-anchor="middle" fill="#cdd6ff" font-size="11">Hilti 靶标</text>
+          <text x="160" y="212" text-anchor="middle" fill="#cdd6ff" font-size="11">M2DGR 室内</text>
+          <text x="420" y="176" text-anchor="middle" fill="#ffd166" font-size="13" font-weight="700">Newer College ≈3 cm</text>
+          <text x="420" y="196" text-anchor="middle" fill="#cdd6ff" font-size="11">M2DGR 户外(RTK)</text>
+          <text x="420" y="214" text-anchor="middle" fill="#cdd6ff" font-size="11">Hilti 稠密(1~2cm)</text>
+          <text x="710" y="176" text-anchor="middle" fill="#cdd6ff" font-size="11">Wild-Places 0.3~0.95m</text>
+          <text x="710" y="196" text-anchor="middle" fill="#9fb4ff" font-size="11">（评地点识别）</text>
+          <text x="160" y="246" text-anchor="middle" fill="#5cffb0" font-size="11">覆盖：几米小房</text>
+          <text x="420" y="246" text-anchor="middle" fill="#5cffb0" font-size="11">覆盖：公里级步行</text>
+          <text x="710" y="246" text-anchor="middle" fill="#5cffb0" font-size="11">覆盖：数十公里自然域</text>
+          <text x="500" y="298" fill="#9fb4ff" font-size="11" font-weight="700">要点速记</text>
+          <text x="500" y="320" fill="#cdd6ff" font-size="11">① 直接法（动捕）：误差小、空间小</text>
+          <text x="500" y="342" fill="#cdd6ff" font-size="11">② 间接法（扫描对底图）：空间大、让一档</text>
+          <text x="500" y="364" fill="#cdd6ff" font-size="11">③ 精度 ↔ 覆盖：此消彼长</text>
+          <rect x="60" y="276" width="780" height="150" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="80" y="302" fill="#ff9f6b" font-size="13" font-weight="700">为什么 Newer College 卡在厘米级，上不到毫米：</text>
+          <text x="80" y="330" fill="#cdd6ff" font-size="12">① 底图是「多站拼接 + 降采样到 1 cm」——本身就有厘米级不确定度</text>
+          <text x="80" y="356" fill="#cdd6ff" font-size="12">② 实时扫描 ICP 注册到地图，残差带来厘米级误差</text>
+          <text x="80" y="382" fill="#cdd6ff" font-size="12">③ 手持运动产生 LiDAR 运动畸变，论文坦承会再降精度（未量化）</text>
+          <text x="80" y="408" fill="#9fb4ff" font-size="12">对比：TUM 用动捕直接三角测量反光点，是「直接法」，所以能到 &lt;1 mm</text>
+          <text x="450" y="438" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：同样评轨迹，精度档位决定这把尺能信到多细</text>
+          <text x="450" y="454" text-anchor="middle" fill="#9fb4ff" font-size="10">厘米级是「大场景 + 间接真值」的诚实天花板；别拿它的 3 cm 去和 TUM 的 &lt;1 mm 比</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一把横放的「精度阶梯尺」，分毫米 / 厘米 / 亚米三档，每档标出代表数据集和能覆盖的空间大小。Newer College 被标在厘米档（≈3 cm），并单独列出它上不到毫米的三条原因。<br>
+          <b>怎么看这张图：</b>① 精度档位和「能覆盖多大空间」是<strong>此消彼长</strong>的——越准的尺，空间越小；② Newer College 用「间接法（扫描对底图）」换来了公里级覆盖，代价是精度让一档到厘米；③ 它和 TUM 不是一回事：TUM 是动捕直接测，所以更准但走不出小房。<br>
+          <b>要记住的一句话：</b>厘米级是「大场景 + 间接真值」的诚实天花板；别拿它的 3 cm 去和 TUM 的 &lt;1 mm 比。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. ★ 覆盖哪些场景：退化场景是题眼</h2>
+      <p>场景在牛津新学院，按 2009 年原 New College 数据集的路径分三段：<strong>Quad</strong>（椭圆草坪 + 重复建筑立面，结构化）、<strong>Mid-Section</strong>（短隧道 + 光照骤变 + 两侧建筑的开阔地，非结构化/光照变化）、<strong>Parkland</strong>（花园、碎石泥路、茂密植被边界，无建筑结构，对视觉极难）。规模约 <strong>2.2 km、总时长 2300 s</strong>，还含光照对比与剧烈运动的补充序列。</p>
+      <p>本篇最该被记住的是它专门含<strong>退化场景</strong>：长走廊、隧道等几何退化段。所谓「退化」，就是传感器<strong>拿不到足够约束</strong>——比如一条两侧都是白墙的长走廊，激光打上去回波都差不多、视觉也找不到特征点，于是算法既不敢确定自己前进了多少、也分不清左右。这种地方恰恰是 SLAM 最容易漂的地方。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">退化场景：一条真实的长走廊（两侧白墙、无特征）</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">激光/视觉在这里都拿不到约束 → 这就是「退化」；人手持能进车去不了的地方</text>
+          <polygon points="40,90 860,150 860,360 40,420" fill="#11192e" stroke="#3a4a78"/>
+          <polygon points="40,90 860,150 860,210 40,150" fill="#1b2748" stroke="#3a4a78"/>
+          <polygon points="40,420 860,360 860,300 40,360" fill="#16203a" stroke="#3a4a78"/>
+          <polygon points="40,150 860,210 860,300 40,360" fill="#0e1626" stroke="#2a3a66"/>
+          <line x1="40" y1="90" x2="860" y2="150" stroke="#33406b"/>
+          <line x1="40" y1="420" x2="860" y2="360" stroke="#33406b"/>
+          <text x="120" y="132" fill="#9fb4ff" font-size="11">走廊天花板</text>
+          <text x="120" y="402" fill="#9fb4ff" font-size="11">走廊地面</text>
+          <text x="280" y="240" fill="#9fb4ff" font-size="11" transform="rotate(90 280 240)">左侧白墙（无纹理）</text>
+          <text x="640" y="240" fill="#9fb4ff" font-size="11" transform="rotate(90 640 240)">右侧白墙（无纹理）</text>
+          <text x="858" y="258" text-anchor="end" fill="#9fb4ff" font-size="11">灭点（远处尽头）</text>
+          <text x="180" y="78" fill="#9fb4ff" font-size="10">透视灭点 → 远处收敛</text>
+          <text x="700" y="78" fill="#9fb4ff" font-size="10">墙面平整、无几何变化</text>
+          <circle cx="120" cy="350" r="12" fill="#ffd166"/>
+          <rect x="110" y="362" width="20" height="34" rx="6" fill="#ffd166"/>
+          <text x="120" y="416" text-anchor="middle" fill="#ffd166" font-size="11">人（手持传感器）</text>
+          <rect x="110" y="338" width="26" height="16" rx="3" fill="#ff5d73"/>
+          <text x="150" y="344" fill="#ff9f6b" font-size="11">Ouster 64 线</text>
+          <text x="150" y="360" fill="#9fb4ff" font-size="10">RealSense</text>
+          <text x="150" y="374" fill="#9fb4ff" font-size="10">IMU</text>
+          <line x1="136" y1="346" x2="300" y2="250" stroke="#5cffb0" stroke-width="2"/>
+          <line x1="136" y1="346" x2="500" y2="262" stroke="#5cffb0" stroke-width="2" stroke-dasharray="4 4"/>
+          <text x="220" y="300" fill="#5cffb0" font-size="10">激光束</text>
+          <text x="430" y="248" fill="#ff5d73" font-size="13" font-weight="700">特征点 = 0</text>
+          <text x="430" y="270" fill="#ff5d73" font-size="11">视觉特征？无</text>
+          <text x="430" y="288" fill="#ff5d73" font-size="11">几何结构单一</text>
+          <text x="430" y="306" fill="#ff5d73" font-size="11">无法三角化</text>
+          <text x="700" y="200" fill="#ff5d73" font-size="15" font-weight="700">退化！</text>
+          <text x="700" y="222" fill="#9fb4ff" font-size="10">打到白墙→回波相似</text>
+          <text x="700" y="320" fill="#ff9f6b" font-size="12" font-weight="700">车去不了的地方：</text>
+          <text x="700" y="342" fill="#cdd6ff" font-size="11">楼梯</text>
+          <text x="700" y="360" fill="#cdd6ff" font-size="11">窄道</text>
+          <text x="700" y="378" fill="#cdd6ff" font-size="11">台阶</text>
+          <text x="700" y="398" fill="#5cffb0" font-size="11">手持能进去 ✓</text>
+          <text x="300" y="388" fill="#9fb4ff" font-size="10">隧道段：短隧道 + 光照骤变（Mid-Section）</text>
+          <text x="300" y="408" fill="#9fb4ff" font-size="10">植被区：无建筑结构，视觉定位极难（Parkland）</text>
+          <text x="560" y="392" fill="#5cffb0" font-size="10">手持步行约 1 m/s</text>
+          <text x="560" y="412" fill="#9fb4ff" font-size="10">约 2.2 km · 总时长 2300 s</text>
+          <text x="40" y="438" fill="#cdd6ff" font-size="11">含隧道 / 长走廊等退化段 ｜ 真值另谋出路：测绘扫描仪建图 + ICP，约 3 cm ｜ 运动畸变会再降精度</text>
+          <text x="450" y="454" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：退化 = 传感器无约束；这正是 Newer College 想逼出来的难点</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一条透视的长走廊，两侧是白墙、地面和天花板都是单调平面。左下角一个手持设备的人，激光束打向白墙。右侧用红字标出「特征点 = 0 / 视觉特征无 / 无法三角化 / 退化」。下方列出车进不去、但人手持能进的楼梯窄道台阶。<br>
+          <b>怎么看这张图：</b>① 白墙、长廊意味着<strong>每一处看起来都差不多</strong>，算法没法用「角点/边缘」定位自己；② 激光在平行白墙间也只能得到「差不多的回波」，<strong>缺乏横向约束</strong>；③ 这种「信息匮乏」就是退化，SLAM 在这里最容易 silently 漂走——所以真值得够准才能暴露它。<br>
+          <b>要记住的一句话：</b>退化场景 = 传感器拿不到约束的地方；Newer College 专门收了这类段，用来逼 SLAM 现原形。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 它给出什么基准任务与评测协议</h2>
+      <p>这篇<strong>不定义新误差指标</strong>（指标是 TUM 的 ATE / 相对误差），它给的是一套<strong>基准任务 + 评测协议</strong>：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>任务集</h4><p>① LiDAR-SLAM；② 视觉回环（DBoW2+ORB）；③ 3D 重建（Poisson 等）；④ 视觉(惯性)里程计（ORB-SLAM2、VILENS）。</p></div>
+        <div class="mini-card"><h4>真值形式</h4><p>6-DoF 位姿（30 Hz 插值）直接提供，用户自己用 ATE / 相对误差去比。</p></div>
+        <div class="mini-card"><h4>协议核心</h4><p>真值是「扫描对先验地图的 ICP 注册」，所以比较时要<strong>记住 ~3 cm 天花板</strong>，别指望评亚厘米。</p></div>
+      </div>
+      <p>论文还给了基线：ORB-SLAM2（关回环）、VILENS 在首 1483 s 的轨迹可视化对比，LiDAR-SLAM 在全长 2 Hz 建图。这些基线不是「标准答案」，而是告诉你「拿这把尺能量出什么」。</p>
+      <figure class="figure">
+        <img src="../../md/images/2020_NewerCollege/aa119dc13105ac9d265cb48d96bd1255cd73f951e2568bb35587ce232767c783.jpg" alt="Plan and perspective view of the Quad registration">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Plan and perspective view of the Quad when current laser scan (in maroon) is registered against the reference cloud (in blue). The reference cloud is part of the prior map (in gray) cropped around the pose.<br>
+          <b>怎么看这张图：</b>这张图展示了「真值是怎么验的」——栗色是你当前扫描，蓝色是它注册到的参考云（来自灰色先验地图的局部裁切）。两者贴合得好，说明 ICP 注册成功、真值可信。盯着看：扫描（红）几乎严丝合缝地盖在参考云（蓝）上，这正是 ~3 cm 精度的直观证据。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 什么时候该用它 / 不该用它</h2>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>✅ 该用</h4><p>评「大规模室外/半室外手持激光或视觉-惯性 SLAM」的定位精度；想测退化场景（长走廊、隧道、植被边界）下的表现；需要厘米级、公里级覆盖的真值。</p></div>
+        <div class="mini-card"><h4>❌ 不该用</h4><p>评亚毫米级 3D 模型（论文自述真值不够）；评纯室内小空间高精度（用 TUM 更合适）；当「轨迹真值金标准」去横向压别的数据集——它和 TUM 不是一档。</p></div>
+      </div>
+      <p>使用口诀：<b>要厘米、要公里、要退化 → 找 Newer College；要毫米、要小房 → 找 TUM；要室外车辆 → 找 KITTI。</b></p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">8. 作者自述的局限</h2>
+      <p>论文自己点了三条：① 真值精度在 Mid-Section 受限空间与 Parkland 自然环境中<strong>更难评估</strong>；② 运动中因 LiDAR 运动畸变，ICP 精度下降（未量化）；③ 设备<strong>无硬件同步</strong>，依赖软件时间同步，两 IMU 还有 58 ms/小时的相对漂移。</p>
+      <p>另外值得记的几点：它重走了 2009 年 New College 同一条 2.2 km 路径（原数据集只有 5-DoF 里程计、无真值）；步行步态在轨迹上留下周期性扰动，说明 3 cm 真值「看得见」人的走路频率；因为手持抖动类似无人机/四足，作者认为该数据可近似代替飞行/腿式平台。</p>
+      <p><b>OCR 订正说明：</b>论文补充序列一节里原文印作「1.5msec/:」，明显是「1.5 m/s」的抽取错误（指的是补充序列的步行速度），本课已按「约 1 m/s」表述。另：论文 Table I（相关工作对比表）多列串行、内容被截断，属原表排版问题，本课未引用该表数字。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>有人说「Newer College 真值约 3 cm，所以任何 SLAM 在这上面的 ATE 小于 3 cm 都算完美」。这句话对吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对：3 cm 是真值自身的天花板，不是方法的上限。方法 ATE 小于 3 cm 可能只是和真值误差同量级、看不出谁更准，不能叫完美。" onclick="lessonKit.answer(this,'q0181a')">常见误解</button>
+          <button data-correct="yes" data-explanation="对：3 cm 是真值误差上限，方法误差被真值噪声淹没时就失去分辨力，所以比较要在真值够细的段上进行。" onclick="lessonKit.answer(this,'q0181a')">正确看法</button>
+        </div>
+        <div class="quiz-feedback" id="q0181a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="i">9. 读完你应该能回答</h2>
+      <ol>
+        <li>Newer College 的真值为何「不直接用动捕或 GPS」，而是走「建先验地图 + ICP 注册」两步？</li>
+        <li>它的真值精度约多少？为什么明确做不到毫米级（列三条原因）？</li>
+        <li>什么是「退化场景」？这篇用哪些真实场景来逼 SLAM 现原形？</li>
+        <li>它和 TUM（毫米级）、KITTI（RTK 厘米级）在「真值来源」和「适用空间」上有什么本质不同？</li>
+        <li>如果你要评一个在园区步行 2 公里的手持激光 SLAM，为什么 Newer College 比 TUM 更合适？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>为什么 Newer College 的真值精度上不到毫米级？请按顺序说明三条限制，并指出哪一条和「运动」有关。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>三条：① 底图是「多站拼接 + 降采样到 1 cm」，本身有厘米级不确定度；② 实时扫描 ICP 注册到地图，残差带来厘米级误差；③ 手持运动产生 LiDAR 运动畸变，论文坦承会再降精度（未量化）。第 ③ 条与运动有关。</div></details>
+        </li>
+        <li>「退化场景」在 Newer College 里指什么？为什么长走廊/隧道会让 SLAM 漂？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>退化指传感器拿不到足够约束。长走廊两侧白墙无纹理，视觉找不到特征点，激光回波也高度相似，缺乏横向/纵深约束，算法无法可靠定位自己，于是容易静默漂移。</div></details>
+        </li>
+        <li>真值是怎么从「测绘扫描仪」变成「每条扫描的 6-DoF 位姿」的？ICP 在这一步干什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>先用 Leica BLK360 在 47 站静态扫描配准成约 2.9 亿点的先验地图（多数点 &lt;1 cm）；再把 Ouster 实时扫描用 ICP（libpointmatcher 滤波链）注册回这张地图，反推出每时刻 6-DoF 位姿（10 Hz，插值 30 Hz）。ICP 负责把「当前扫描」和「底图」对齐，其残差也被用于评估精度。</div></details>
+        </li>
+        <li>下面三个任务，分别该选哪个数据集的真值？A) 评亚毫米 3D 模型；B) 评车辆在城市里跑 10 km 的激光 SLAM；C) 评人在园区步行 2 km 的手持激光 SLAM。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>A 选 TUM 动捕（&lt;1 mm，但仅小房）；B 选 KITTI（RTK 厘米级，户外车辆）；C 选 Newer College（厘米级 + 公里级覆盖 + 退化段）。三者精度档位和适用空间不同，不能互换。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0180-TUM-RGBD-2012-ATE与RPE的出处.html">← 0180 TUM RGB-D：ATE 与 RPE 的出处</a>
+        <a class="next" href="0182-M2DGR-2022-地面机器人的致命场景.html">0182 M2DGR：地面机器人的致命场景 →</a>
+      </div>
+      <p class="foot-note">真值不是真理，它有自己的天花板——学会看这把尺的刻度，才算真正读懂一篇数据集论文。📏</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

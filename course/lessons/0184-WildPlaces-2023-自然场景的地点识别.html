@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wild-Places（2023）：亚米级真值也能评地点识别 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 I · 数据集与评测 / Lesson 0184</div>
+      <h1>Wild-Places（2023）：亚米级真值也能评地点识别</h1>
+      <p class="subtitle">它是一把什么样的尺子？——首个面向非结构化自然环境的 LiDAR 地点识别数据集，真值由 SLAM 自己建图得到，精度只有约 0.3–0.95 m（亚米级）。🌲 这一课点明全季最重要的洞见：任务不同，对真值精度的要求就不同——它评的是「检索」，亚米级真值完全够用，不能和 TUM/Hilti 放在同一精度梯队。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：自然域 LiDAR 地点识别的亚米级基准</span>
+        <span>👥 作者：澳洲团队（正文未标注发表处）</span>
+        <span>📅 年份 · <i>Wild-Places: A Large-Scale Dataset for Lidar Place Recognition in Unstructured Natural Environments</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场与定位（含纠正）</a>
+        <a href="#b">它长什么样：手持载荷与传感器</a>
+        <a href="#c">★ 真值是怎么来的（SLAM 自举）</a>
+        <a href="#d">★ 真值精度是多少（亚米级 · 显式纠正）</a>
+        <a href="#e">★ 覆盖哪些场景（自然密林）</a>
+        <a href="#f">评测协议：R@1 / MRR / F1 与成功判据</a>
+        <a href="#g">共享点泄漏与「1 秒时间窗」</a>
+        <a href="#h">什么时候该用 / 不该用</a>
+        <a href="#i">作者自述的局限</a>
+        <a href="#j">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Wild-Places 真值由 Wildcat SLAM 自举得到、精度仅约 0.3–0.95 m；<strong>明确它不能与 TUM/Hilti 同精度梯队</strong>；讲出「任务不同 → 真值精度要求不同」这层道理；复述 R@1、MRR、max-F1 的定义与「成功判据半径 3 m」的前提；解释「用 SLAM 评 SLAM」的循环论证风险与共享点泄漏问题。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ 本篇是 <b>§八第①条</b> 必须显式纠正的那处：清单把 5 篇并列，但 Wild-Places 真值只有亚米级、且评的是<strong>地点识别</strong>而非轨迹精度。★ <b>第七季 0134–0140</b> 讲场景识别时用了 Recall@1——本篇回链它，并补上 <strong>MRR、F1、以及「成功判据是几米」这个关键前提</strong>；「召回率」没有前缀（R@1 / R@1% / 判据半径）就没有意义。★ <b>0180/0181/0183</b> 都是轨迹精度真值（毫米/厘米），本篇说明<strong>评检索不需要那么准</strong>。★ <b>第一季 0013</b> 警告的评测口径问题，在这里落到「别拿不同任务的真值互比」。</p></div>
+      </div>
+
+      <h2>1. 一句话定位：一把「亚米级」的尺子（先纠正一个常见误判）</h2>
+      <p>先看一个<strong>必须纠正的认知</strong>：清单把 5 篇并列，容易让人以为它们的真值精度差不多。实际不符——<strong>Wild-Places 的真值只有亚米级</strong>，原文写明 Wildcat 平均误差 <strong>0.3 m</strong>，机间 ICP 配准「95% 对应点误差 &lt; 0.95 m」，地点识别成功判据是「检索结果落在 <strong>3 米内</strong>」。它评的是<strong>地点识别（检索）</strong>，不是轨迹精度，<strong>不能与 TUM（毫米级）、Hilti（毫米级）放在同一精度梯队</strong>。</p>
+      <p>这恰恰是全季最重要的洞见：<strong>任务不同 → 对真值精度的要求就不同</strong>。「真值越准越好」是外行话，<strong>够用</strong>才是工程标准。Wild-Places 评的是「这段激光子图是不是之前来过的地方」，判据本来就是米级，所以亚米级真值完全够用。</p>
+      <p>生活类比：你要考的不是「这个人每步走得准不准到毫米」，而是「他有没有回到昨天那条小径」——只要知道他大概在 3 米内，就判对了。用毫米级卷尺去量这个，是杀鸡用牛刀。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 它长什么样：手持载荷与传感器</h2>
+      <p>平台是<strong>人背着的传感器载荷</strong>（handheld payload），在澳大利亚布里斯班两个国家公园（Venman、Karawatha）的密林小径上走。传感器：Velodyne <strong>VLP-16</strong>（16 线，20 Hz，120 m）；4 相机 e-CAM130A（15 Hz）；IMU Microstrain 3DM-CV5-25（100 Hz）；一个无刷电机以 0.5 Hz 把激光<strong>倾斜 45° 旋转</strong>，把原 VLP-16 仅 30° 的垂直视场扩展到 <strong>120°</strong>；Nvidia Jetson AGX Xavier；<strong>PPS 时间同步</strong>。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>激光</h4><p>VLP-16，16 线，20 Hz；靠 0.5 Hz 倾斜旋转得 120° 垂直 FOV（原仅 30°）。</p></div>
+        <div class="mini-card"><h4>平台</h4><p>人背手持载荷，走自然非结构化小径；PPS 硬同步。</p></div>
+        <div class="mini-card"><h4>规模</h4><p>32.87 km、8 h 51 m、63 319 个子图（平均 &gt;300 K 点/子图）。</p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2023_Wild-Places__A_Large-Scale_Dataset_for_Lidar_Place_Recog/a9a0ab72a244a40c42c0b2da35288626ab435db38561f04c6ec269cf61f4c4da.jpg" alt="Image of sequence V-04 data collection and sensor payload">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Left: image of sequence V-04 data collection depicting the dense forest trails which are not accessible using vehicle or robotic platforms. Right: the sensor payload consists of a spinning lidar sensor mounted at an angle of 45 to maximise field of view, a motor, encoder, an IMU, and four cameras.<br>
+          <b>怎么看这张图：</b>左边是密林小径——注意它「车辆和机器人进不去」，只能人背；右边是载荷，重点看那台<strong>倾斜 45° 旋转的激光雷达</strong>，正是它把垂直视场撑到 120°。盯着看：这种环境既无 GNSS 信号、也布不了靶标，所以后面真值只能靠 SLAM 自己来。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ 真值是怎么来的：SLAM 自举（不是外部设备）</h2>
+      <p>它<strong>不依赖动捕、不依赖测绘扫描仪</strong>——在密林里这俩都用不了。真值来自 <strong>Wildcat SLAM 自举</strong>：① 用 Wildcat（连续时间轨迹表示 + 因子图 + 回环）为每条序列生成全局一致地图与轨迹；② 序列间用 <strong>ICP + MSAC</strong> 把各全局地图互相对齐，得到跨序列变换。真值即这些 6-DoF 位姿（每 0.5 s 采一个 60 m 直径子图 + 位姿）。</p>
+      <p>这意味着真值天花板由 SLAM 本身决定——所以它是<strong>亚米级</strong>，不是厘米/毫米级。这种「用 SLAM 评 SLAM」存在<strong>循环论证风险</strong>：你拿方法来造真值，又拿这真值去评方法。作者用与外部测量交叉比对来缓解（论文说明其误差与独立测绘吻合在 0.3 m 量级）。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">SLAM 自举真值：用 SLAM 评 SLAM 的循环论证</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">密林里没有动捕、没有 GPS、也布不了靶标 → 只能让 SLAM 自己建图当参考</text>
+          <rect x="40" y="66" width="820" height="142" rx="10" fill="#08101c" stroke="#2a3a66"/>
+          <text x="60" y="88" fill="#5cffb0" font-size="11">森林步道 · 人背载荷</text>
+          <text x="860" y="88" text-anchor="end" fill="#9fb4ff" font-size="10">无 GNSS · 无动捕 · 布不了靶标</text>
+          <text x="60" y="126" fill="#9fb4ff" font-size="10">密林：无可辨认地标</text>
+          <text x="200" y="126" text-anchor="middle" fill="#5cffb0" font-size="10">密林小径</text>
+          <text x="700" y="126" text-anchor="middle" fill="#5cffb0" font-size="10">树冠遮挡</text>
+          <path d="M40,196 Q250,178 450,192 T860,186" fill="none" stroke="#3a4a78" stroke-width="4"/>
+          <rect x="107" y="150" width="6" height="46" fill="#2e7d5b"/>
+          <polygon points="85,150 110,104 135,150" fill="#2e7d5b" opacity="0.7"/>
+          <rect x="270" y="158" width="6" height="38" fill="#2e7d5b"/>
+          <polygon points="248,158 273,116 298,158" fill="#2e7d5b" opacity="0.7"/>
+          <rect x="640" y="146" width="6" height="50" fill="#2e7d5b"/>
+          <polygon points="618,146 643,100 668,146" fill="#2e7d5b" opacity="0.7"/>
+          <rect x="778" y="156" width="6" height="40" fill="#2e7d5b"/>
+          <polygon points="756,156 781,114 806,156" fill="#2e7d5b" opacity="0.7"/>
+          <rect x="436" y="166" width="28" height="12" rx="3" fill="#ffd166"/>
+          <circle cx="450" cy="186" r="6" fill="#ffd166"/>
+          <rect x="444" y="191" width="12" height="16" rx="3" fill="#ffd166"/>
+          <text x="474" y="170" fill="#ffd166" font-size="10">倾转 45° 的 VLP-16</text>
+          <text x="474" y="190" fill="#9fb4ff" font-size="10">垂直 FOV 30° → 120°</text>
+          <text x="60" y="178" fill="#9fb4ff" font-size="10">泥地 / 水体 → 无激光回波</text>
+          <text x="300" y="200" fill="#9fb4ff" font-size="10">重复树结构：干扰地点识别</text>
+          <rect x="80" y="222" width="200" height="64" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <text x="180" y="244" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">① SLAM 建图</text>
+          <text x="180" y="262" text-anchor="middle" fill="#9fb4ff" font-size="10">Wildcat：连续时间轨迹</text>
+          <text x="180" y="280" text-anchor="middle" fill="#9fb4ff" font-size="10">因子图 + 回环 → 全局一致</text>
+          <line x1="290" y1="254" x2="330" y2="254" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="334,254 324,249 324,259" fill="#ffd166"/>
+          <rect x="340" y="222" width="200" height="64" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <text x="440" y="244" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">② 地图当真值</text>
+          <text x="440" y="262" text-anchor="middle" fill="#9fb4ff" font-size="10">每 0.5 s 一个 60 m 子图</text>
+          <text x="440" y="280" text-anchor="middle" fill="#9fb4ff" font-size="10">亚米级：平均误差 0.3 m</text>
+          <line x1="550" y1="254" x2="590" y2="254" stroke="#ffd166" stroke-width="2"/>
+          <polygon points="594,254 584,249 584,259" fill="#ffd166"/>
+          <rect x="600" y="222" width="200" height="64" rx="8" fill="#16203a" stroke="#3a4a78"/>
+          <text x="700" y="244" text-anchor="middle" fill="#cdd6ff" font-size="11" font-weight="700">③ 用真值评 SLAM</text>
+          <text x="700" y="262" text-anchor="middle" fill="#9fb4ff" font-size="10">评的是检索 / 回环</text>
+          <text x="700" y="280" text-anchor="middle" fill="#9fb4ff" font-size="10">不是精确轨迹误差</text>
+          <path d="M700,288 L700,302 L180,302 L180,292" fill="none" stroke="#ffd166" stroke-width="2" stroke-dasharray="5 4"/>
+          <polygon points="180,286 174,296 186,296" fill="#ffd166"/>
+          <text x="450" y="320" text-anchor="middle" fill="#ff9f6b" font-size="10">空转一圈：方法既是真值来源，又是被测对象</text>
+          <rect x="40" y="330" width="390" height="56" rx="8" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="60" y="350" fill="#ff5d73" font-size="11" font-weight="700">循环论证风险</text>
+          <text x="60" y="368" fill="#9fb4ff" font-size="10">误差会被自我印证，天花板 = SLAM 自身</text>
+          <text x="60" y="380" fill="#9fb4ff" font-size="10">不能用来评精确轨迹精度</text>
+          <rect x="470" y="330" width="390" height="56" rx="8" fill="#16203a" stroke="#5cffb0"/>
+          <text x="490" y="350" fill="#5cffb0" font-size="11" font-weight="700">作者怎么缓解</text>
+          <text x="490" y="368" fill="#9fb4ff" font-size="10">与外部测量数据交叉比对，确认 0.3 m 量级</text>
+          <text x="490" y="380" fill="#9fb4ff" font-size="10">序列间用 ICP + MSAC 配准做约束</text>
+          <rect x="40" y="396" width="820" height="62" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="60" y="418" fill="#cdd6ff" font-size="11">真值来源 = SLAM 自己 → 精度上限被钉在 SLAM 自身水平（约 0.3 m）</text>
+          <text x="60" y="438" fill="#cdd6ff" font-size="11">所以它只能评检索 / 回环，不能评精确轨迹误差——这就是它的定位</text>
+          <text x="450" y="456" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：用 SLAM 评 SLAM 必须承认循环风险，并做独立校验</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一片森林步道，人背着载荷（黄点），四周是树。右边红框写「环状论证风险」三步（Wildcat 建图→当真值→评 SLAM）。左边绿框写「缓解方式」（与外部测量交叉比对、ICP+MSAC 配准）。中间黄色虚线箭头表示「建图→真值→评 SLAM」的回路。<br>
+          <b>怎么看这张图：</b>① 在密林里<strong>没有独立测量设备</strong>，只能让 SLAM 自己造真值；② 这就形成<strong>循环</strong>——方法既是被测对象，又是真值来源，误差会被「自我印证」；③ 作者用<strong>外部测量交叉比对</strong>来打破循环，确认误差约 0.3 m，属亚米级。<br>
+          <b>要记住的一句话：</b>「用 SLAM 评 SLAM」可行，但必须承认它的真值天花板就是 SLAM 自己的精度，并做独立校验。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Wild-Places__A_Large-Scale_Dataset_for_Lidar_Place_Recog/6c443774d8c32971d31eb7ecbff30ea11da99a28d18471c685543f54fb5541c0.jpg" alt="Bird's eye view of the global map for two sequences">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Bird's eye view of the global map for two sequences from the Wild-Places dataset. The bold line represents the trajectory of the lidar sensor payload; colourisation of the global pointcloud is based on height of points.<br>
+          <b>怎么看这张图：</b>这张俯视图里的彩色粗线就是「SLAM 自举」出来的轨迹，叠在自建全局点云上。它直观说明：真值不是外部量出来的，而是 Wildcat 自己建出来的——这正是上面那张环状箭头图的「实物证据」。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. ★ 真值精度是多少：亚米级（显式纠正，不能同梯队）</h2>
+      <p><strong>必须如实写：它不是厘米/毫米级。</strong>具体数字（原文）：Wildcat 对比测绘真值报告<strong>平均误差 0.3 m</strong>（用于序列内）；序列间 ICP 配准 <strong>&gt;95% 对应点误差 &lt; 0.95 m</strong>（用于序列间）。整体<strong>亚米到米级（约 0.3–0.95 m）</strong>。原文称「accurate 6DoF ground truth」是<strong>相对地点识别任务而言</strong>；对精确轨迹误差评测来说太粗。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>❌ 错误认知</h4><p>「Wild-Places 和 TUM/Hilti 一样是毫米/厘米级真值，可以横向比轨迹精度。」</p></div>
+        <div class="mini-card"><h4>✅ 正确认知</h4><p>它是<strong>亚米级（0.3–0.95 m）</strong>，评的是<strong>地点识别</strong>，不与 TUM/Hilti 同精度梯队。</p></div>
+      </div>
+      <p><strong>全季核心洞见：</strong>任务不同 → 对真值精度的要求就不同。城市地点识别（Oxford/KITTI）R@1 已被刷到 &gt;99%，而自然域（Wild-Places）R@1 仅约 70–80% 且长期退化严重。这里「真值准到亚米」已经绰绰有余，因为成功判据是「检索结果落在 3 米内」——<strong>「真值越准越好」是外行话，「够用」才是工程标准</strong>。</p>
+      <p>下面这张原文图就是「亚米级」这三个字的直接证据：它画的是两条序列的全局地图配准之后，<strong>每一对对应点之间还差多远</strong>。如果真值是毫米级，这张图应该几乎全黑；而它实际呈现出明显的颜色梯度，正说明对应点之间有几十厘米到接近 1 米的距离。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_Wild-Places__A_Large-Scale_Dataset_for_Lidar_Place_Recog/bc0724bd4678981b3bd1fc0a127aab26e2848e3f6f14880f67ec62f4ea33a450.jpg" alt="Visualisation of point-to-point distances after registration between the global maps">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>Visualisation of point-to-point distances after registration between the global maps of two sequences of Venman (left) and Karawatha (right). Colour bar shows the distance between correspondences.<br>
+          <b>怎么看这张图：</b>左、右分别是 Venman 与 Karawatha 两个公园里「两条序列的全局地图互相配准」的结果，颜色条给出的是<strong>对应点之间的距离</strong>。盯着颜色条看：如果真值真到厘米级，这里应该几乎全是接近零的深色；实际上它铺开到了<strong>接近 1 米</strong>的量级，与原文「95% 的对应点误差 &lt; 0.95 m」正好对上。你要记住的是：<strong>这张图本身就在告诉你「别拿它评毫米/厘米级的轨迹误差」</strong>。<br>
+          <b>补充说明：</b>左图对应 Venman、右图对应 Karawatha，是按原文图注的先后顺序推断的。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. ★ 覆盖哪些场景：自然密林与长期重访</h2>
+      <p>两个国家公园（Venman、Karawatha），<strong>纯自然非结构化</strong>——密林小径、垂枝、不规则地形、偶有水体/泥地（无 LiDAR 回波）。8 条序列跨越 <strong>14 个月</strong>，含序列内正/反向重访与序列间短期/长期（&gt;1 年）重访。规模 <strong>32.87 km、8 h 51 m、63 319 子图</strong>。它是 Table I 中唯一同时满足「自然环境 + 含序列内/间 + 长期(&gt;1 年)重访」的数据集。</p>
+      <p>长期退化显著：以 02 为 query 对比 01/03/04（同日/6 月/14 月），R@1 因时间差最大下降 <strong>45.1%(Venman) / 24%(Karawatha)</strong>。V-03 因反向重访最多而最难；Karawatha 整体比 Venman 难。</p>
+      <figure class="figure">
+        <img src="../../md/images/2023_Wild-Places__A_Large-Scale_Dataset_for_Lidar_Place_Recog/811ab2d0a14856b85f0beaa9ce9e0d7e57d4fec952b7703f9daee55be05170ad.jpg" alt="Training and testing splits visualised on the trajectories">
+        <figcaption>
+          <b>原图注（Fig. 4）：</b>Training and testing splits visualised on the trajectories. Red = queries during test; blue = training; orange = withheld to prevent information leaking between queries and the training set.<br>
+          <b>怎么看这张图：</b>这张图是「怎么防作弊」的直观说明——红是测试查询、蓝是训练、<strong>橙是被 withholding（扣留）的区域</strong>，专门防止查询和训练集之间信息泄漏。后面第 7 节「共享点泄漏」会接着讲他们怎么用「1 秒时间窗」进一步切干净。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 评测协议：R@1 / MRR / F1 与「成功判据半径」</h2>
+      <p>任务 = LiDAR 地点识别（回环 + 重定位），分两类：</p>
+      <ul>
+        <li><strong>序列间（重定位）</strong>：query 取自 withholding 区，database 为同环境其他序列子图；<strong>成功 = 检索子图在 3 m 内</strong>；指标 top-1 Recall (R1) 与 MRR。</li>
+        <li><strong>序列内（回环）</strong>：子图匹配同序列历史，排除时间差 &lt; 600 s 的邻近项；成功同样 3 m 内；报 max F1 与 R1。</li>
+      </ul>
+      <p>定义式（务必记住<strong>成功判据半径</strong>这个前提）：</p>
+      <div class="formula-box"><div class="flow-formula">$$\mathrm{R1}=\frac{1}{N}\sum_{i=1}^{N}\mathbb{1}[\,\text{rank}_i=1\ \text{且距离}&lt;3\,\text{m}\,]\qquad \mathrm{MRR}=\frac{1}{N}\sum_{i=1}^{N}\frac{1}{\mathrm{rank}_i}\qquad \mathrm{F1}=2\frac{\mathrm{P}\cdot\mathrm{R}}{\mathrm{P}+\mathrm{R}}$$</div></div>
+      <p><strong>这句话在说什么：</strong>R1（top-1 Recall）数的是「检索第一名是否落在 3 米内」的比例——<strong>没有「3 米」这个判据半径，R1 毫无意义</strong>。MRR（平均倒数排名）把第一名的排名取倒数再平均，越靠前越高。F1 是准确率 P 和召回率 R 的调和平均，max-F1 是扫不同距离阈值后的最佳值。这三个指标都<strong>建立在「成功 = 3 米内」之上</strong>。</p>
+      <p><strong>回链第七季：</strong><b>0134–0140</b> 讲场景识别时反复用到 Recall@1，但当时没强调「判据半径」。这里补上关键前提：<strong>召回率如果没有前缀（R@1 / R@1% / 判据半径），是没有意义的</strong>——城市数据集 R@1&gt;99% 和自然域 R@1≈70% 不能直接比，因为判据、场景、时间跨度都不同。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">地点识别的成功判据：检索结果落在 3 米内</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">没有「3 米」这个判据半径，R@1 / MRR / F1 都没有意义</text>
+          <!-- 查询子图 -->
+          <circle cx="150" cy="240" r="40" fill="#16203a" stroke="#4ea8ff" stroke-width="3"/>
+          <text x="150" y="244" text-anchor="middle" fill="#4ea8ff" font-size="12" font-weight="700">查询子图</text>
+          <text x="150" y="290" text-anchor="middle" fill="#9fb4ff" font-size="10">当前位置</text>
+          <!-- 数据库候选 -->
+          <circle cx="430" cy="160" r="22" fill="#16203a" stroke="#5cffb0" stroke-width="3"/>
+          <text x="430" y="164" text-anchor="middle" fill="#5cffb0" font-size="10">候选 A</text>
+          <circle cx="470" cy="300" r="22" fill="#16203a" stroke="#5cffb0" stroke-width="3"/>
+          <text x="470" y="304" text-anchor="middle" fill="#5cffb0" font-size="10">候选 B</text>
+          <circle cx="600" cy="220" r="22" fill="#16203a" stroke="#ff5d73" stroke-width="3"/>
+          <text x="600" y="224" text-anchor="middle" fill="#ff5d73" font-size="10">候选 C</text>
+          <circle cx="720" cy="340" r="22" fill="#16203a" stroke="#ff5d73" stroke-width="3"/>
+          <text x="720" y="344" text-anchor="middle" fill="#ff5d73" font-size="10">候选 D</text>
+          <!-- 3米判据圈 -->
+          <circle cx="150" cy="240" r="150" fill="none" stroke="#ffd166" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="150" y="92" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">3 米判据半径</text>
+          <!-- 成功/失败标注 -->
+          <line x1="150" y1="240" x2="470" y2="300" stroke="#5cffb0" stroke-width="2"/>
+          <text x="320" y="280" fill="#5cffb0" font-size="11">✓ A/B 在圈内 = 成功</text>
+          <line x1="150" y1="240" x2="600" y2="220" stroke="#ff5d73" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="380" y="200" fill="#ff5d73" font-size="11">✗ C/D 在圈外 = 失败</text>
+          <!-- 指标注释 -->
+          <rect x="600" y="380" width="260" height="70" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="730" y="404" text-anchor="middle" fill="#cdd6ff" font-size="11">R1：第一名在 3m 内？</text>
+          <text x="730" y="424" text-anchor="middle" fill="#cdd6ff" font-size="11">MRR：1/rank 平均</text>
+          <text x="730" y="444" text-anchor="middle" fill="#cdd6ff" font-size="11">F1：P 与 R 调和平均</text>
+          <text x="450" y="456" text-anchor="middle" fill="#ffd166" font-size="12" font-weight="700">要记住：判据半径决定真值需要多准——3 m 判据下亚米级已够</text>
+          <text x="450" y="66" text-anchor="middle" fill="#9fb4ff" font-size="11">没有 3m 判据，R@1 无意义</text>
+          <text x="450" y="84" text-anchor="middle" fill="#9fb4ff" font-size="11">亚米级真值对检索已够</text>
+          <text x="350" y="110" fill="#9fb4ff" font-size="10">成功判据：落在 3 米内</text>
+          <text x="550" y="110" fill="#9fb4ff" font-size="10">真值不必精确到厘米</text>
+          <text x="350" y="130" fill="#9fb4ff" font-size="10">圈内 = 判同一地点</text>
+          <text x="350" y="150" fill="#9fb4ff" font-size="10">圈外 = 判不同地点</text>
+          <text x="550" y="130" fill="#9fb4ff" font-size="10">A/B 近邻 → 成功</text>
+          <text x="550" y="150" fill="#9fb4ff" font-size="10">C/D 远距 → 失败</text>
+          <text x="40" y="330" fill="#9fb4ff" font-size="10">R@1 只数第一名</text>
+          <text x="40" y="350" fill="#9fb4ff" font-size="10">MRR 奖励更靠前</text>
+          <text x="40" y="370" fill="#9fb4ff" font-size="10">F1 平衡 P 与 R</text>
+          <text x="40" y="390" fill="#9fb4ff" font-size="10">max-F1 扫阈值最佳</text>
+          <text x="40" y="410" fill="#9fb4ff" font-size="10">城市 R@1&gt;99% 已饱和</text>
+          <text x="40" y="430" fill="#9fb4ff" font-size="10">自然域 R@1≈70% 未饱和</text>
+          <text x="40" y="450" fill="#9fb4ff" font-size="10">判据半径定真值需求</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左边「查询子图」画一个 3 米半径的黄色虚线判据圈；数据库里四个候选，A/B 在圈内标绿「成功」、C/D 在圈外标红「失败」。右下角列出三个指标（R1 / MRR / F1）都建立在「3 米内」之上。<br>
+          <b>怎么看这张图：</b>① 「成功」的定义完全由<strong>那个 3 米圈</strong>决定——圈的半径就是判据半径；② 只要真值能把「是不是 3 米内」判对，<strong>真值本身不必精确到厘米</strong>；③ 所以亚米级真值对检索任务绰绰有余。<br>
+          <b>要记住的一句话：</b>召回率/R@1 没有「判据半径」这个前缀，就是没有意义的数字。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Wild-Places__A_Large-Scale_Dataset_for_Lidar_Place_Recog/0e2f9efdefba76308d211d485b704777bf89608992ea055b8f5c85fd6200b308.jpg" alt="Impact of time elapsed on Recall@1">
+        <figcaption>
+          <b>原图注（Fig. 7）：</b>Impact of time elapsed between query and database sets on Recall@1 performance. We use sequence-01 as the query and sequences 02, 03 and 04 for the database sets for time gaps of a same-day revisit, a 6-month revisit and a 14-month revisit.<br>
+          <b>怎么看这张图：</b>这张图把「长期退化」量化了——横轴是查询与数据库的时间差（同日/6 月/14 月），纵轴是 R@1。盯着看：时间差越大，R@1 掉得越狠（最大降 45.1%）。它说明自然域地点识别远未饱和，也再次印证「判据半径 + 时间跨度」共同决定数字。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 共享点泄漏与「1 秒时间窗」</h2>
+      <p>地点识别有个隐蔽陷阱——<strong>共享点泄漏</strong>：如果两段序列共享了同一批点云（比如同一条小径正反向各走一遍），检索时相当于「用自己的一部分去认自己」，结果虚高、作弊。Wild-Places 用<strong>「1 秒时间窗」</strong>把共享点切开：排除时间差 &lt; 600 s（序列内）或 withholding 橙色区（序列间），确保查询和数据库不共享同一批点。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">共享点泄漏：两段路线共享点云会作弊</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">用「1 秒时间窗」把共享点切开，防止查询集合里混进数据库自己的一部分</text>
+          <rect x="40" y="66" width="820" height="172" rx="10" fill="#08101c" stroke="#2a3a66"/>
+          <text x="60" y="88" fill="#5cffb0" font-size="11">同一片密林，正着走一遍、反着再走一遍</text>
+          <text x="860" y="88" text-anchor="end" fill="#9fb4ff" font-size="10">人背载荷 · 0.5 Hz 倾斜旋转</text>
+          <path d="M60,132 Q260,92 450,132 T840,132" fill="none" stroke="#4ea8ff" stroke-width="4"/>
+          <path d="M60,202 Q260,242 450,202 T840,202" fill="none" stroke="#ff9f6b" stroke-width="4"/>
+          <text x="70" y="112" fill="#4ea8ff" font-size="11" font-weight="700">序列 A（正向）</text>
+          <text x="70" y="226" fill="#ff9f6b" font-size="11" font-weight="700">序列 B（反向）</text>
+          <text x="790" y="112" fill="#4ea8ff" font-size="10">A 段</text>
+          <text x="790" y="226" fill="#ff9f6b" font-size="10">B 段</text>
+          <ellipse cx="450" cy="167" rx="112" ry="58" fill="#3a2a10" stroke="#ff5d73" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="450" y="160" text-anchor="middle" fill="#ff5d73" font-size="12" font-weight="700">共享点云区</text>
+          <text x="450" y="180" text-anchor="middle" fill="#ff9f6b" font-size="10">两段扫到同一批点</text>
+          <text x="450" y="198" text-anchor="middle" fill="#9fb4ff" font-size="10">同一批树干 · 同一片地面</text>
+          <text x="450" y="216" text-anchor="middle" fill="#9fb4ff" font-size="10">子图 = 60 m 直径点云 + 位姿</text>
+          <text x="620" y="160" fill="#ff5d73" font-size="11">泄漏：A 把 B 认成自己</text>
+          <text x="620" y="180" fill="#9fb4ff" font-size="10">不去重 → R@1 虚高</text>
+          <rect x="40" y="252" width="820" height="92" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="60" y="274" fill="#cdd6ff" font-size="11" font-weight="700">子图时间轴（同一条序列）</text>
+          <rect x="270" y="284" width="380" height="26" fill="#3a1820" stroke="#ff5d73" stroke-dasharray="4 3"/>
+          <text x="460" y="302" text-anchor="middle" fill="#ff5d73" font-size="10">排除带：时间差 &lt; 600 s 的邻近子图</text>
+          <line x1="80" y1="322" x2="840" y2="322" stroke="#3a4a78" stroke-width="2"/>
+          <line x1="270" y1="284" x2="270" y2="334" stroke="#ffd166" stroke-width="2"/>
+          <text x="80" y="338" fill="#9fb4ff" font-size="10">0 s</text>
+          <text x="270" y="338" text-anchor="middle" fill="#ffd166" font-size="10">查询子图</text>
+          <text x="650" y="338" text-anchor="middle" fill="#9fb4ff" font-size="10">900 s</text>
+          <text x="840" y="338" text-anchor="end" fill="#9fb4ff" font-size="10">1200 s</text>
+          <text x="460" y="338" text-anchor="middle" fill="#ff9f6b" font-size="10">这一段全部排除</text>
+          <text x="860" y="126" text-anchor="end" fill="#9fb4ff" font-size="10">树干重复 → 极易误匹配</text>
+          <rect x="40" y="356" width="400" height="62" rx="8" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="60" y="376" fill="#ff5d73" font-size="11" font-weight="700">不切开会怎样</text>
+          <text x="60" y="394" fill="#9fb4ff" font-size="10">查询与数据库共享同一批点云</text>
+          <text x="60" y="410" fill="#9fb4ff" font-size="10">等于用自己的一部分认自己，数字虚高</text>
+          <rect x="460" y="356" width="400" height="62" rx="8" fill="#16203a" stroke="#5cffb0"/>
+          <text x="480" y="376" fill="#5cffb0" font-size="11" font-weight="700">切开之后</text>
+          <text x="480" y="394" fill="#9fb4ff" font-size="10">1 秒时间窗 + withholding 橙色区</text>
+          <text x="480" y="410" fill="#9fb4ff" font-size="10">查询与数据库不再共享点云，评测诚实</text>
+          <text x="450" y="440" text-anchor="middle" fill="#cdd6ff" font-size="12" font-weight="700">要记住：地点识别数据集必须先切断共享点，否则数字好看但是作弊</text>
+          <text x="450" y="458" text-anchor="middle" fill="#9fb4ff" font-size="10">原文 Fig.4 的橙色 withheld 区，就是为防信息泄漏而扣留的</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>上下两条路线（序列 A 正向、序列 B 反向）在中间重叠出一个红色「共享点云区」，红虚线表示「A 检索时把 B 当成自己」的泄漏。右下绿框写「1 秒时间窗」：切掉 &lt;600 s 邻近项，并 withholding 橙色区。<br>
+          <b>怎么看这张图：</b>① 正反向走同一条小径，<strong>两段扫到的是同一批点</strong>；② 若把 A 当查询、B 当数据库，等于<strong>用自己的一部分认自己</strong>，R@1 虚高、失去意义；③ 用时间窗 + withheld 区把共享点隔开，评测才诚实。<br>
+          <b>要记住的一句话：</b>地点识别数据集必须防「共享点泄漏」，否则数字好看但作弊。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">8. 什么时候该用 / 不该用</h2>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>✅ 该用</h4><p>评<strong>自然非结构化环境</strong>下的 LiDAR 地点识别 / 回环 / 重定位；想测<strong>长期（&gt;1 年）重访</strong>退化；不需要精确轨迹真值，只需「认不认得出地方」。</p></div>
+        <div class="mini-card"><h4>❌ 不该用</h4><p>评<strong>精确 SLAM 轨迹误差</strong>（真值仅亚米级，太粗）；评城市/结构化场景（它有城市数据集可刷 &gt;99%）；当「金标准真值」去和 TUM/Hilti 横比。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="i">9. 作者自述的局限</h2>
+      <p>论文自己点了三条，每一条都正好落在这个数据集的定位上：</p>
+      <ol>
+        <li><strong>真值来自 Wildcat SLAM 自举，不是独立测绘</strong>——精度只有亚米级，所以它<strong>不适合做精确 SLAM 轨迹误差评测</strong>。这一条最关键：它等于作者亲自承认「我这不是一把毫米级的尺」。</li>
+        <li><strong>序列间配准误差 &lt; 0.95 m</strong>——跨序列那部分真值的精度上限就在这里，用它做序列间（重定位）评测时，判据半径不可能比这更细。</li>
+        <li><strong>只覆盖自然环境，人造结构尽量少</strong>——这是它的卖点（城市域已被刷到 &gt; 99% R@1），也是它的边界：想评结构化场景就得换数据集。</li>
+      </ol>
+      <p>把这三条和前面几节的数字放在一起看，结论很清楚：<strong>Wild-Places 的「准」是相对于「检索任务」而言的准</strong>。原文用「accurate 6DoF ground truth」这个词，放在地点识别的上下文里完全站得住；但如果有人把它抄进「精确轨迹误差评测」的段落，就错了。这正是<b>第一季 0013</b> 那句「注意评测口径」在今天的又一次兑现。</p>
+      <p><b>OCR 订正说明：</b>论文相关工作一节里的「ORDF」应为「ORFD」（一个开集道路可行驶区域分割数据集），本课未引用；论文 Table IV（benchmark 结果表）在抽取时严重错列（出现「01.01 03.31」这类串行数字），所以本课一律以正文叙述的数字为准（LoGG3D-Net 序列内平均 F1 = 70.8%、R@1 = 69.8%；序列间 Venman R@1 = 79.84%、Karawatha R@1 = 74.67%）。</p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="j">10. 读完你应该能回答</h2>
+      <ol>
+        <li>为什么 Wild-Places 不能和 TUM/Hilti 放在同一精度梯队？它的真值精度到底是多少？</li>
+        <li>「用 SLAM 评 SLAM」的循环论证风险是什么？作者怎么缓解？</li>
+        <li>什么是「共享点泄漏」？他们用「1 秒时间窗」怎么解决？</li>
+        <li>R@1 / MRR / F1 分别是什么？为什么「成功判据半径 3 米」是它们的前提？</li>
+        <li>全季核心洞见「任务不同 → 真值精度要求不同」在 Wild-Places 上怎么体现？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>Wild-Places 的真值来源和精度是多少？为什么说它「不能与 TUM/Hilti 同梯队」？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>真值由 Wildcat SLAM 自举（建全局地图 + ICP/MSAC 跨序列配准）得到，平均误差约 0.3 m，序列间 95% 对应点 &lt;0.95 m，属亚米级。它评的是地点识别而非轨迹精度，而 TUM/Hilti 是毫米级轨迹真值，精度档和任务都不同，故不能同梯队横比。</div></details>
+        </li>
+        <li>「用 SLAM 评 SLAM」有哪些风险？Wild-Places 如何缓解循环论证？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>风险：方法既是被测对象又是真值来源，误差会被自我印证（循环论证），真值天花板被钉在 SLAM 自身精度。缓解：与外部测量做交叉比对，确认误差约 0.3 m；用 ICP+MSAC 做序列间配准；承认它只能评检索、不能评精确轨迹。</div></details>
+        </li>
+        <li>解释共享点泄漏，并说明「1 秒时间窗」如何防止它。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>正反向走同一条小径时两段共享同一批点云，若一段当查询、另一段当数据库，等于「自己认自己」，R@1 虚高。他们用「1 秒时间窗」排除时间差 &lt;600 s 的邻近项（序列内），并 withholding 橙色区域（序列间），把共享点隔开。</div></details>
+        </li>
+        <li>如果某论文报告「Wild-Places 上 R@1 = 75%」，这个数字单独看有意义吗？需要哪些前缀才完整？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>单独看不完整。必须说明：① 成功判据半径（这里是 3 m）；② 是序列内还是序列间；③ 时间跨度（同日/6 月/14 月，长期退化会让数字掉到约 45%）。没有这些前缀，R@1 无法与城市数据集的 &gt;99% 比较。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0183-Hilti-Oxford-2023-毫米级真值.html">← 0183 Hilti-Oxford：毫米级真值</a>
+        <a class="next" href="0185-收官-真值精度阶梯与选尺子指南.html">0185 收官：真值精度阶梯与选尺子指南 →</a>
+      </div>
+      <p class="foot-note">真值不是越准越好，够用才是工程标准——任务决定了你需要多细的尺子。🌲</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

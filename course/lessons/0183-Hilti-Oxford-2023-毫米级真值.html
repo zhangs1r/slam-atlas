@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hilti-Oxford（2023）：把评测推向绝对精度 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 I · 数据集与评测 / Lesson 0183</div>
+      <h1>Hilti-Oxford（2023）：把评测推向绝对精度</h1>
+      <p class="subtitle">它是一把什么样的尺子？——用「测绘级扫描仪建图 + 地面手工放置的毫米级靶标」给出毫米级稀疏真值，再把评测从「相对排名」升级成「绝对精度 + 是否跟丢」的一杆天平。🏗️ 这一课讲透：毫米级真值是怎么在数十米场景里做出来的，以及为什么「跟丢」比「不准」扣得狠得多。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：毫米级基准 + Hilti SLAM Challenge 评分函数</span>
+        <span>👥 作者：Hilti 与牛津大学联合（正文未标注发表处）</span>
+        <span>📅 年份 · <i>Hilti-Oxford Dataset: A Millimeter-Accurate Benchmark for SLAM</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场与定位</a>
+        <a href="#b">它长什么样：Phasma 平台与传感器</a>
+        <a href="#c">★ 真值是怎么来的（三层真值）</a>
+        <a href="#d">★ 真值精度是多少（分区域的毫米级）</a>
+        <a href="#e">★ 覆盖哪些场景（退化序列）</a>
+        <a href="#f">挑战赛评分函数：一杆天平</a>
+        <a href="#g">什么时候该用 / 不该用</a>
+        <a href="#h">作者自述的局限</a>
+        <a href="#i">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 Hilti-Oxford 的「三层真值」（先验地图 / 稀疏毫米靶标 / 稠密开发真值）各是什么、精度多少；解释为什么毫米级精度是「分区域的」（靶标附近准、两靶标之间靠插值）；复述挑战赛评分函数怎么给分、为什么「跟丢」比「不准」扣得重；把它的毫米级和 TUM、Newer College 的精度档对上号。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ <b>0180 TUM</b> 用 ATE 做「相对排名」；Hilti 进一步用控制点把评测推到<strong>绝对精度</strong>，并发明评分函数——这是 ATE 的升级版。★ <b>0181 Newer College</b> 是厘米级间接真值，本篇是毫米级、但靠「布靶标 + 后期处理」换来的，精度档高一级、代价是稀疏。★ <b>第四季 0073</b> 的 KITTI 排名是相对排名，本篇说明「绝对精度」才是更硬的标准。★ 第八季 <b>0170 / 0173</b> 附近曾点到 Hilti SLAM Challenge，本篇正是那场比赛背后的数据基座与评分规则。★ <b>第一季 0013</b> 的评测口径警惕，在这里落实为「成功判据不只是误差，还包括有没有跟丢」。</p></div>
+      </div>
+
+      <h2>1. 一句话定位：一把毫米级的尺子</h2>
+      <p>如果说 Newer College（0181）是「大场景厘米级」、M2DGR（0182）是「分段精度」，那 Hilti-Oxford（2023）的目标是<strong>毫米级</strong>——而且是在<strong>数十米到上百米的真实工地 / 剧院</strong>里做出毫米级。怎么做到的？靠两套东西：① 一台测绘级扫描仪建出高精度地图；② 在地上<strong>手工放置精确的蓝色十字靶标</strong>（控制点），靶标处误差 &lt; 1 mm。</p>
+      <p>更重要的是，它把评测从「谁的 ATE 小谁赢」这种<strong>相对排名</strong>，升级成一把<strong>天平</strong>：一边是精度，一边是「有没有跟丢」。这正是它区别于前面几篇的精髓。</p>
+      <p>生活类比：评委打分不能只看「平均误差」，还得看「选手有没有中途晕倒弃赛」。Hilti 的评分函数就是这张评分表——误差小给分，但一旦跟丢（轨迹飞了），扣分比不准狠得多。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 它长什么样：Phasma 平台与传感器</h2>
+      <p>平台是一台手持设备 <strong>「Phasma」</strong>：Hesai PandarXT-32（32 线激光，10 Hz，120 m，测距精度 1 cm）、5 个 Alphasense 鱼眼相机（40 Hz）、Bosch BMI085 IMU（400 Hz）。<strong>硬件同步</strong>，外参由 GOM Atos Q3 微米级 3D 扫描仪校验。关键硬件改动：本版把上一代的 Ouster OS0-64（测距 3 cm）换成了 Hesai（测距 1 cm），这是精度提升的关键。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>激光</h4><p>Hesai PandarXT-32，32 线，10 Hz，测距精度 1 cm（1σ 0.5 cm）。</p></div>
+        <div class="mini-card"><h4>视觉</h4><p>5× Alphasense 鱼眼，40 Hz，720×540，含前视立体 + 两侧 + 顶视。</p></div>
+        <div class="mini-card"><h4>同步与外参</h4><p>硬件同步；外参由微米级扫描仪校验（比软同步严得多）。</p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2023_Hilti-Oxford/f7fe4e55d2aa21556b9a7bb9222391f0e0462a7b7fa265e2f258c14d1d51bc4d.jpg" alt="Hilti-Oxford dataset environments">
+        <figcaption>
+          <b>原图注（Fig. 2）：</b>Hilti-Oxford dataset environments: Top: Construction site. Middle: Long office corridor (left), Sheldonian stairs (right). Bottom: Sheldonian lower gallery (left) and exterior (right).<br>
+          <b>怎么看这张图：</b>这张图把它的「考场」摆出来——上面是工地（纹理少、色彩少、易退化），中间左边是<strong>长办公室走廊</strong>、右边是<strong>Sheldonian 剧院楼梯</strong>，下面是剧院下廊和外景。盯着看：这些场景的共同点是「几何相似、特征稀疏、长直结构」，正是用来逼 SOTA 到极限的退化序列。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ 真值是怎么来的：三层真值</h2>
+      <p>它的真值分三层，精度从密到疏：</p>
+      <ul>
+        <li><strong>(A) 先验地图</strong>：Z+F Imager 5016 扫描仪（量程 360 m，线性误差 1 mm+10 ppm/m，测距噪声亚毫米），用反光靶标 + 平面配准 + 光束法平差建图。91%/95% 扫描位置不确定度 &lt; 3 mm。</li>
+        <li><strong>(B) 稀疏评测真值（核心）</strong>：地面贴蓝色十字，把 Phasma 金属尖端放在十字中心、调气泡水平，<strong>手工误差 &lt; 1 mm</strong>。每序列仅 5–10 个这样的瞬时控制点。</li>
+        <li><strong>(C) 稠密开发真值</strong>：把每条去畸变激光扫描用 ICP 注册到先验地图，精度 1–2 cm，仅供开发用。</li>
+      </ul>
+      <p>多来源校验：扫描站间配准不确定度（sub-mm 先验 → 平差后 &lt; 3 mm），且靶标在多次扫描中可见以增加约束。一句话：<b>毫米级不是「处处毫米」，而是「靶标处毫米 + 地图厘级兜底」。</b></p>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. ★ 真值精度是多少：分区域的毫米级</h2>
+      <p>具体数字：稀疏评测真值 <strong>毫米级（手工放置误差 &lt; 1 mm）</strong>；先验地图单扫描不确定度 91%/95% 在 <strong>3 mm</strong> 内；稠密开发真值 <strong>1–2 cm</strong>。注意：激光-IMU 未单独外参标定，可能给控制点带来「几毫米」误差。</p>
+      <p><strong>关键是「分区域」。</strong>毫米级只保证在<strong>靶标附近</strong>；两个靶标之间，靠地图与插值，精度会下降。所以它不是「整条轨迹处处毫米」，而是「若干控制点毫米、其余厘级」。理解了这点，你才不会误以为它和 TUM 动捕（全场 &lt;10 mm）完全等价。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">毫米级靶标：一面真实的墙 + 几个控制点</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">靶标（蓝十字）附近毫米级，两靶标之间靠插值，精度下降——精度是「分区域」的</text>
+          <rect x="40" y="78" width="820" height="240" rx="6" fill="#1b2748" stroke="#3a4a78"/>
+          <text x="450" y="72" text-anchor="middle" fill="#9fb4ff" font-size="11">真实墙面（工地 / 剧院）</text>
+          <text x="60" y="110" fill="#9fb4ff" font-size="10">先验地图：Z+F Imager 5016 扫描仪</text>
+          <text x="60" y="128" fill="#9fb4ff" font-size="10">91% / 95% 扫描位置不确定度 &lt; 3 mm</text>
+          <text x="60" y="146" fill="#9fb4ff" font-size="10">反光靶标 + 平面配准 + 光束法平差</text>
+          <text x="60" y="164" fill="#9fb4ff" font-size="10">Phasma 金属尖端放在十字中心</text>
+          <text x="60" y="182" fill="#9fb4ff" font-size="10">调气泡水平 → 手工误差 &lt; 1 mm</text>
+          <text x="60" y="200" fill="#9fb4ff" font-size="10">蓝十字 = 控制点，每序列仅 5~10 个</text>
+          <text x="60" y="286" fill="#9fb4ff" font-size="10">靶标之外：靠先验地图插值</text>
+          <text x="60" y="302" fill="#9fb4ff" font-size="10">毫米级只在控制点处成立</text>
+          <line x1="40" y1="318" x2="860" y2="318" stroke="#33406b"/>
+          <text x="60" y="338" fill="#9fb4ff" font-size="11">地面（放蓝十字靶标）</text>
+          <g>
+            <line x1="200" y1="303" x2="240" y2="303" stroke="#4ea8ff" stroke-width="4"/>
+            <line x1="220" y1="283" x2="220" y2="323" stroke="#4ea8ff" stroke-width="4"/>
+            <circle cx="220" cy="303" r="14" fill="none" stroke="#4ea8ff" stroke-width="2"/>
+            <text x="220" y="348" text-anchor="middle" fill="#4ea8ff" font-size="11" font-weight="700">靶标 A</text>
+            <text x="220" y="366" text-anchor="middle" fill="#5cffb0" font-size="11">&lt; 1 mm</text>
+            <text x="220" y="384" text-anchor="middle" fill="#9fb4ff" font-size="10">尖端居中</text>
+          </g>
+          <g>
+            <line x1="480" y1="303" x2="520" y2="303" stroke="#4ea8ff" stroke-width="4"/>
+            <line x1="500" y1="283" x2="500" y2="323" stroke="#4ea8ff" stroke-width="4"/>
+            <circle cx="500" cy="303" r="14" fill="none" stroke="#4ea8ff" stroke-width="2"/>
+            <text x="500" y="348" text-anchor="middle" fill="#4ea8ff" font-size="11" font-weight="700">靶标 B</text>
+            <text x="500" y="366" text-anchor="middle" fill="#5cffb0" font-size="11">&lt; 1 mm</text>
+            <text x="500" y="384" text-anchor="middle" fill="#9fb4ff" font-size="10">调气泡水平</text>
+          </g>
+          <g>
+            <line x1="720" y1="303" x2="760" y2="303" stroke="#4ea8ff" stroke-width="4"/>
+            <line x1="740" y1="283" x2="740" y2="323" stroke="#4ea8ff" stroke-width="4"/>
+            <circle cx="740" cy="303" r="14" fill="none" stroke="#4ea8ff" stroke-width="2"/>
+            <text x="740" y="348" text-anchor="middle" fill="#4ea8ff" font-size="11" font-weight="700">靶标 C</text>
+            <text x="740" y="366" text-anchor="middle" fill="#5cffb0" font-size="11">&lt; 1 mm</text>
+            <text x="740" y="384" text-anchor="middle" fill="#9fb4ff" font-size="10">手工放置</text>
+          </g>
+          <line x1="240" y1="200" x2="480" y2="200" stroke="#ffd166" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="360" y="190" text-anchor="middle" fill="#ffd166" font-size="11">两靶标间：靠地图插值</text>
+          <text x="360" y="216" text-anchor="middle" fill="#ff9f6b" font-size="11">精度下降 → 厘级</text>
+          <line x1="520" y1="200" x2="720" y2="200" stroke="#ffd166" stroke-width="2" stroke-dasharray="6 4"/>
+          <text x="620" y="190" text-anchor="middle" fill="#ffd166" font-size="11">两靶标间：靠地图插值</text>
+          <text x="620" y="216" text-anchor="middle" fill="#ff9f6b" font-size="11">精度下降 → 厘级</text>
+          <text x="450" y="252" text-anchor="middle" fill="#9fb4ff" font-size="11">先验地图（Z+F 扫描仪）兜底：单扫描 &lt; 3 mm</text>
+          <text x="450" y="272" text-anchor="middle" fill="#9fb4ff" font-size="10">每序列仅 5~10 个靶标 → 真值是「稀疏」的</text>
+          <text x="450" y="330" fill="#cdd6ff" font-size="11" text-anchor="middle">毫米级是「点状」的：靶标处极准，中间靠插值</text>
+          <text x="450" y="408" text-anchor="middle" fill="#9fb4ff" font-size="11">靶标处：手工放置误差 &lt; 1 mm（Phasma 尖端居中、调气泡水平）</text>
+          <text x="450" y="430" text-anchor="middle" fill="#9fb4ff" font-size="11">两靶标之间：靠 Z+F 先验地图插值 → 精度掉到厘米（控制点稀疏）</text>
+          <text x="450" y="452" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：毫米级只在靶标处；其余靠插值 → 精度分区域，不是处处毫米</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一面真实墙面下的地面，摆了三个蓝色十字靶标（A/B/C），每个都标「&lt; 1 mm」（Phasma 金属尖端居中、调气泡水平手工放置）。两个靶标之间用黄色虚线连出「靠地图插值、精度下降到厘级」。上方注明先验地图（Z+F 扫描仪）兜底 &lt; 3 mm，并提醒每序列仅 5–10 个靶标。<br>
+          <b>怎么看这张图：</b>① <strong>毫米级是局部保证</strong>，只在你亲手放了靶标的地方；② 两靶标之间，真值靠先验地图插值得到，精度自然掉到厘米；③ 所以它是<strong>稀疏毫米真值</strong>，不能当成「全场连续毫米」。<br>
+          <b>要记住的一句话：</b>毫米级真值是「点状」的——靶标处极准，中间靠插值，整体分区域。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Hilti-Oxford/bde58611575ac84062cb4a593a4f31fbd8218f241a23f3ac0e9969f3aa56832e.jpg" alt="A reference target placed on the ground">
+        <figcaption>
+          <b>原图注（Fig. 8）：</b>A reference target placed on the ground and used for point cloud fine registration. Sparse ground truth points were created by placing Phasma at the cross-hairs of the reference target.<br>
+          <b>怎么看这张图：</b>这张就是上面自绘图里「蓝十字靶标」的实物照——把 Phasma 的尖端精确放在十字中心，就得到一个 &lt; 1 mm 的控制点。它证明那套毫米级真值不是算法估出来的，而是<strong>人手工量出来的物理基准</strong>。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. ★ 覆盖哪些场景：专逼 SOTA 到极限</h2>
+      <p>两地点：① 列支敦士登 Hilti 工地（100 m×30 m，4 层，纹理/色彩少，易退化）；② 牛津 Sheldonian 剧院（1664 年，6 层，60 cm 宽窄梯、穹顶）。挑战序列 8 条（2022 挑战赛）：Exp01 工地地面(easy)、Exp02 多层(medium)、Exp03 楼梯(hard)、Exp07 100 m 长走廊(medium)、Exp09 穹顶(hard)、Exp11 下廊(medium)、Exp15 阁楼-上廊(hard)、Exp21 室外(easy)，外加 7 条 additional。退化要素：剧烈摇动、动态遮挡、几何相似窄梯、暗角。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">退化序列连环画：长走廊 / 窄梯 / 暗角</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">这些场景几何相似、特征稀疏，专门逼 LiDAR/视觉 SLAM 到极限</text>
+          <rect x="30" y="70" width="270" height="330" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="165" y="92" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">长走廊（Exp07）</text>
+          <text x="165" y="110" text-anchor="middle" fill="#9fb4ff" font-size="10">难度：medium</text>
+          <polygon points="60,120 270,160 270,300 60,340" fill="#0e1626" stroke="#33406b"/>
+          <line x1="60" y1="120" x2="270" y2="160" stroke="#33406b"/>
+          <line x1="60" y1="340" x2="270" y2="300" stroke="#33406b"/>
+          <text x="165" y="240" text-anchor="middle" fill="#9fb4ff" font-size="11" transform="rotate(90 165 240)">两侧重复立面</text>
+          <text x="165" y="340" text-anchor="middle" fill="#ff9f6b" font-size="10">重复结构→特征难分</text>
+          <text x="165" y="358" text-anchor="middle" fill="#9fb4ff" font-size="10">激光也缺远约束</text>
+          <text x="165" y="380" text-anchor="middle" fill="#9fb4ff" font-size="10">100 m 长 · 几何相似</text>
+          <text x="165" y="400" text-anchor="middle" fill="#ff5d73" font-size="10">CSIRO 头部也 3.7 cm</text>
+          <rect x="315" y="70" width="270" height="330" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="450" y="92" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">窄楼梯（Exp09）</text>
+          <text x="450" y="110" text-anchor="middle" fill="#9fb4ff" font-size="10">难度：hard</text>
+          <polyline points="345,330 345,300 375,300 375,270 405,270 405,240 435,240 435,210 465,210 465,180 495,180 495,150 525,150 525,120" fill="none" stroke="#3a4a78" stroke-width="3"/>
+          <text x="450" y="180" text-anchor="middle" fill="#9fb4ff" font-size="10">贴墙转向 · 视角受限</text>
+          <text x="450" y="200" text-anchor="middle" fill="#9fb4ff" font-size="11">60 cm 宽梯 · 之字形</text>
+          <text x="450" y="340" text-anchor="middle" fill="#ff9f6b" font-size="10">无窗 · 约束极少→易漂</text>
+          <text x="450" y="358" text-anchor="middle" fill="#9fb4ff" font-size="10">远处约束断供</text>
+          <text x="450" y="380" text-anchor="middle" fill="#ff5d73" font-size="10">最难：132s 进无窗段</text>
+          <text x="450" y="400" text-anchor="middle" fill="#9fb4ff" font-size="10">头部误差 4.0 cm</text>
+          <rect x="600" y="70" width="270" height="330" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="735" y="92" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">暗角（Exp15）</text>
+          <text x="735" y="110" text-anchor="middle" fill="#9fb4ff" font-size="10">难度：hard</text>
+          <rect x="640" y="120" width="190" height="210" fill="#05070d" stroke="#33406b"/>
+          <circle cx="735" cy="225" r="40" fill="#0e1626" stroke="#3a4a78"/>
+          <text x="735" y="230" text-anchor="middle" fill="#33406b" font-size="11">暗</text>
+          <text x="735" y="340" text-anchor="middle" fill="#ff9f6b" font-size="10">上廊 · 相机直接瞎</text>
+          <text x="735" y="358" text-anchor="middle" fill="#9fb4ff" font-size="10">暗角缺纹理</text>
+          <text x="735" y="380" text-anchor="middle" fill="#9fb4ff" font-size="10">光线不足</text>
+          <text x="735" y="400" text-anchor="middle" fill="#ff5d73" font-size="10">头部误差 2.7 cm</text>
+          <text x="450" y="430" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：退化 = 约束少；这些序列正是挑战赛用来拉开差距的</text>
+          <text x="450" y="452" text-anchor="middle" fill="#9fb4ff" font-size="10">论文：头部方案全是 LiDAR-惯性、无相机——退化场景相机非必需</text>
+          <text x="40" y="430" fill="#9fb4ff" font-size="10">退化 = 约束骤减</text>
+          <text x="40" y="452" fill="#9fb4ff" font-size="10">长走廊 / 窄梯 / 暗角</text>
+          <text x="860" y="430" text-anchor="end" fill="#9fb4ff" font-size="10">头部误差 2.7~4.0 cm</text>
+          <text x="860" y="452" text-anchor="end" fill="#9fb4ff" font-size="10">离毫米级仍很远</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三格退化场景。① 长走廊（Exp07）：透视长廊，两侧重复立面，标「100 m、几何相似」，连头部方法也只有 3.7 cm；② 窄楼梯（Exp09）：之字形窄梯，标「60 cm 宽、无窗、约束极少」，最难的段在 132 s 后进入无窗区；③ 暗角（Exp15）：一个近乎全黑的房间，标「上廊、光线不足」。<br>
+          <b>怎么看这张图：</b>① 长走廊的<strong>重复立面</strong>让视觉/激光缺乏可区分特征；② 窄梯<strong>无窗</strong>，激光只能扫到近处结构，远处约束断供；③ 暗角直接让相机「瞎」。三者都让 SLAM 的约束骤减。<br>
+          <b>要记住的一句话：</b>退化序列靠「减少约束」逼方法现原形，这正是一把毫米级尺子的用武之地。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 挑战赛评分函数：一杆天平</h2>
+      <p>Hilti 不只给真值，还配套了一个<strong>评分函数</strong>。先用 SE(3) Umeyama 对齐把估计轨迹与控制点配准，再按逐点绝对距离 e_i 给分 s_i：</p>
+      <div class="formula-box"><div class="flow-formula">$$s_i=\begin{cases}10 & e_i<0.01\,\text{m}\\ 6 & e_i\in[0.01,0.03)\,\text{m}\\ 3 & e_i\in[0.03,0.06)\,\text{m}\\ 1 & e_i\in[0.06,0.10)\,\text{m}\\ 0 & e_i\ge 0.10\,\text{m}\end{cases}\qquad S_j=\Big(\frac{1}{10N}\sum_{i=0}^{N}s_i\Big)\times 100$$</div></div>
+      <p><strong>这句话在说什么：</strong>这个式子先把你的轨迹和控制点用刚体变换（SE(3)，只旋转平移、不缩放）对齐，然后看每个控制点差多远——差小于 1 cm 给 10 分（满分），1–3 cm 给 6 分，3–6 cm 给 3 分，6–10 cm 给 1 分，超过 10 cm 直接 0 分。把所有控制点分数平均、再乘 10，得到 0–100 的总分。它和「平均 RMSE ATE」大致同向，但作者特意指出<strong>均值 ATE 会骗人</strong>（误差集中在外段时均值被拉平），评分函数更尖。</p>
+      <p><strong>为什么是「天平」？</strong>关键在「跟丢」的处理：一旦方法跟丢，轨迹会飞到离控制点很远的地方，e_i 远超 0.10 m，该点直接得 0 分，而且<strong>后面一大段可能连续 0 分</strong>。所以「跟丢一次」比「全程稍微不准」扣得狠得多——天平的一边是精度，另一边是「有没有跟丢」，跟丢那端压倒性重。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">评分函数 = 一杆天平：精度 vs 是否跟丢</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">先 SE(3) 对齐再打分；跟丢一次 → 连续 0 分，比「全程稍微不准」扣得狠得多</text>
+          <line x1="450" y1="110" x2="450" y2="300" stroke="#5cffb0" stroke-width="4"/>
+          <circle cx="450" cy="110" r="10" fill="#5cffb0"/>
+          <line x1="180" y1="180" x2="720" y2="180" stroke="#5cffb0" stroke-width="4"/>
+          <polygon points="450,180 430,200 470,200" fill="#5cffb0"/>
+          <line x1="180" y1="180" x2="180" y2="240" stroke="#3a4a78" stroke-width="2"/>
+          <path d="M120 240 Q180 280 240 240 Z" fill="#16203a" stroke="#3a4a78"/>
+          <text x="180" y="320" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">左盘：精度</text>
+          <text x="180" y="342" text-anchor="middle" fill="#9fb4ff" font-size="11">e_i &lt; 1cm → 10 分</text>
+          <text x="180" y="360" text-anchor="middle" fill="#9fb4ff" font-size="11">1~3cm → 6 分</text>
+          <text x="180" y="378" text-anchor="middle" fill="#9fb4ff" font-size="11">3~6cm → 3 分</text>
+          <text x="180" y="396" text-anchor="middle" fill="#9fb4ff" font-size="11">6~10cm → 1 分</text>
+          <text x="180" y="300" text-anchor="middle" fill="#5cffb0" font-size="10">鼓励「准」</text>
+          <line x1="720" y1="180" x2="720" y2="240" stroke="#3a4a78" stroke-width="2"/>
+          <path d="M660 240 Q720 290 780 240 Z" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="720" y="320" text-anchor="middle" fill="#ff5d73" font-size="13" font-weight="700">右盘：是否跟丢</text>
+          <text x="720" y="342" text-anchor="middle" fill="#ff9f6b" font-size="11">e_i ≥ 10cm → 0 分</text>
+          <text x="720" y="360" text-anchor="middle" fill="#ff9f6b" font-size="11">跟丢 → 连续 0 分</text>
+          <text x="720" y="378" text-anchor="middle" fill="#ff9f6b" font-size="11">扣分压倒性重</text>
+          <text x="720" y="396" text-anchor="middle" fill="#9fb4ff" font-size="11">比「不准」狠得多</text>
+          <text x="720" y="300" text-anchor="middle" fill="#ff5d73" font-size="10">惩罚「失联」</text>
+          <circle cx="180" cy="262" r="10" fill="#5cffb0"/>
+          <circle cx="720" cy="262" r="22" fill="#ff5d73"/>
+          <text x="720" y="268" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">重</text>
+          <text x="450" y="250" text-anchor="middle" fill="#ffd166" font-size="11">天平向右（跟丢）倾斜</text>
+          <text x="450" y="380" text-anchor="middle" fill="#9fb4ff" font-size="11">均值 ATE 会骗人：误差集中外段被拉平</text>
+          <text x="450" y="400" text-anchor="middle" fill="#9fb4ff" font-size="11">冠军 CSIRO 563.8 分 / 2.07 cm；视觉-only OKVIS2 仅 32.5 分</text>
+          <text x="450" y="430" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：天平向右（跟丢）倾斜 → 评分函数惩罚「失联」远胜「小误差」</text>
+          <text x="450" y="452" text-anchor="middle" fill="#9fb4ff" font-size="10">分数平均 ×10 → 0~100；从相对排名到绝对评测的关键一步</text>
+          <text x="450" y="72" text-anchor="middle" fill="#9fb4ff" font-size="11">先 SE(3) 刚体对齐（不缩放）</text>
+          <text x="450" y="90" text-anchor="middle" fill="#9fb4ff" font-size="11">再按逐点距离 e_i 给分</text>
+          <text x="250" y="130" fill="#9fb4ff" font-size="10">满分档：e_i&lt;1cm=10 分</text>
+          <text x="250" y="150" fill="#9fb4ff" font-size="10">分档粗 → 歧视大误差</text>
+          <text x="250" y="170" fill="#9fb4ff" font-size="10">六档：10/6/3/1/0 分</text>
+          <text x="650" y="130" fill="#9fb4ff" font-size="10">跟丢段整段归零</text>
+          <text x="650" y="150" fill="#9fb4ff" font-size="10">扣分比重压倒性</text>
+          <text x="250" y="210" fill="#9fb4ff" font-size="10">平均×10 → 总分 0~100</text>
+          <text x="650" y="210" fill="#9fb4ff" font-size="10">均值 ATE 会骗人</text>
+          <text x="650" y="230" fill="#9fb4ff" font-size="10">天平倾向跟丢端</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>一杆天平，左盘写「精度」（e_i 越小分越高：&lt;1cm=10、1–3cm=6、3–6cm=3、6–10cm=1），右盘写「是否跟丢」（e_i≥10cm=0 分，跟丢连续 0 分）。右盘砝码画得更大更红，表示「跟丢」这端压倒性重。<br>
+          <b>怎么看这张图：</b>① 左盘鼓励「准」，但每档只差几分；② 右盘一旦触发（跟丢），<strong>不是扣几分，而是整段归零</strong>；③ 所以一个会偶尔跟丢的方法，总分可能远低于一个「全程小误差但不出彩」的方法。<br>
+          <b>要记住的一句话：</b>评分函数把「有没有跟丢」放在比「准不准」更重的位置——这是从相对排名到绝对评测的关键一步。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2023_Hilti-Oxford/8c3aa7c8180b83fcfe07bb9e67289204db8b99616cee99606e15e083be6eb37c.jpg" alt="Summary of top three teams RMSE ATE">
+        <figcaption>
+          <b>原图注（Fig. 9）：</b>Summary of the top three teams' RMSE ATE (cm), sorted from smallest to largest error. Results in bold have reached the desired sub-cm accuracy.<br>
+          <b>怎么看这张图：</b>这是挑战赛结果——冠军 CSIRO（Wildcat SLAM）563.8 分、平均 RMSE ATE 2.07 cm；视觉-only 最好的 OKVIS2 仅 32.5 分、误差 10–20 cm。盯着看：<strong>头部全是 LiDAR-惯性、没有纯相机</strong>，说明在退化场景里相机并非必需，激光仍能靠扫描远处建筑/地面「透窗」获取约束。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 什么时候该用 / 不该用</h2>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>✅ 该用</h4><p>评「要求毫米级绝对精度」的激光/激光-惯性 SLAM；想用挑战赛评分函数做公平排名；测长走廊、窄梯、暗角等<strong>极端退化</strong>序列下的表现。</p></div>
+        <div class="mini-card"><h4>❌ 不该用</h4><p>当需要<strong>稠密连续</strong>毫米真值（它只有 5–10 个稀疏控制点）；当场景无人工布靶标条件（靶标要人去放）；当只需相对排名而不关心绝对精度。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">8. 作者自述的局限</h2>
+      <p>三点：① 评分只管轨迹精度，<strong>不考虑延迟/算力</strong>（队伍用了离线多序列融合后处理，结果可能优于单序列在线）；② 激光-IMU 未单独外参标定，控制点可能有几毫米误差；③ <strong>稀疏真值仅 5–10 个瞬时点</strong>，中间靠插值。补充：2021 挑战版用 Ouster OS0-64（测距 3 cm），本版换 Hesai（1 cm）是精度跃升的关键硬件；最难的 Exp09 自 132 s 起进入无窗窄梯，约束极少。</p>
+      <p><b>OCR 订正与术语澄清：</b>论文里「7 12 April tags」缺了乘号，应为「7×12 AprilTags」（共 84 个，用于<strong>先验地图的站点配准</strong>）；本课讲的「地面蓝色十字靶标」是<strong>另一回事</strong>——它是给人把 Phasma 尖端摆上去、产生<strong>稀疏评测控制点</strong>用的，不要和 AprilTags 混为一谈。另：论文 Table II（挑战结果表）在抽取时严重串行、版式失真，本课一律以正文叙述的数字为准（冠军 CSIRO 563.8 分、平均 RMSE ATE 2.07 cm）。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>Hilti 评分函数里，一个方法「全程误差 8 cm（每点得 1 分）」和一个方法「前 90% 误差 2 cm、最后 10% 跟丢归零」，谁总分高？</p>
+        <div class="quiz-options">
+          <button data-correct="yes" data-explanation="后者高：前者每点 1 分 → 均分约 10 分；后者前 90% 得 6~10 分、仅后 10% 归零，均分仍远高于 10。天平惩罚「跟丢」但只罚那段。" onclick="lessonKit.answer(this,'q0183a')">后者更高</button>
+          <button data-correct="no" data-explanation="错：跟丢只让那 10% 归零，其余 90% 仍高分；全程 8 cm 则每点都只有 1 分，反而更低。" onclick="lessonKit.answer(this,'q0183a')">前者更高</button>
+        </div>
+        <div class="quiz-feedback" id="q0183a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="i">9. 读完你应该能回答</h2>
+      <ol>
+        <li>Hilti-Oxford 的「三层真值」各是什么、精度分别多少？</li>
+        <li>为什么说它的毫米级是「分区域的」？靶标之间精度怎么变？</li>
+        <li>挑战赛评分函数怎么给分？为什么「跟丢」比「不准」扣得狠？</li>
+        <li>它和 TUM（毫米/全场）、Newer College（厘米）在精度档和评测哲学上有何不同？</li>
+        <li>为什么挑战赛头部方案全是 LiDAR-惯性、没有纯相机？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>写出 Hilti-Oxford 三层真值的名称、获取方式和精度，并说明为什么它是「稀疏」毫米真值。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>(A) 先验地图：Z+F 扫描仪建图，单扫描 &lt;3 mm；(B) 稀疏评测真值：地面手工放蓝十字靶标，误差 &lt;1 mm，每序列仅 5–10 个；(C) 稠密开发真值：激光扫描 ICP 注册到地图，1–2 cm。因为靶标要人去放、数量极少，所以毫米级只在这些点处成立，其余靠插值——是稀疏毫米真值。</div></details>
+        </li>
+        <li>评分函数中，若某控制点 e_i = 0.05 m，得几分？若 e_i = 0.12 m 呢？这说明什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>e_i=0.05 m 落在 [0.03,0.06) → 3 分；e_i=0.12 m ≥0.10 m → 0 分。说明评分函数对「超过 10 cm」零容忍：一旦跟丢飞远，该点直接归零，且连续段可能全零，惩罚远重于「小误差」。</div></details>
+        </li>
+        <li>为什么 Hilti 的毫米级和 TUM 的毫米级不是一回事？各适合什么？
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>TUM 毫米级来自动捕全场连续测量（小室内 &lt;10 mm）；Hilti 毫米级只在稀疏靶标处、靠人工放置+地图插值，且场景大数十倍。TUM 适合小房高精度评测，Hilti 适合大场景绝对精度与退化序列排名。</div></details>
+        </li>
+        <li>用天平比喻，解释评分函数为什么比「平均 RMSE ATE」更尖、更能拉开方法差距。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>平均 RMSE 把所有点误差平方平均，误差集中在外段时会被「均值」拉平、看不出局部崩；评分函数对 &gt;10 cm 直接 0 分，跟丢段整段归零，等于在天平右盘压了重砝码，能立刻把「会失联」的方法和「全程稳」的方法拉开差距。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0182-M2DGR-2022-地面机器人的致命场景.html">← 0182 M2DGR：地面机器人的致命场景</a>
+        <a class="next" href="0184-WildPlaces-2023-自然场景的地点识别.html">0184 Wild-Places：亚米级真值也能评地点识别 →</a>
+      </div>
+      <p class="foot-note">把评测从「谁误差小」升级成「准不准 + 有没有跟丢」——这杆天平，才是绝对精度的真正标准。⚖️</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>M2DGR（2022）：地面机器人的致命场景 — SLAM 论文精读课</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Noto+Serif+SC:wght@600;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/slam-course.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+  <script defer src="assets/slam-course.js"></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div class="eyebrow">阶段 I · 数据集与评测 / Lesson 0182</div>
+      <h1>M2DGR（2022）：地面机器人的致命场景</h1>
+      <p class="subtitle">它是一把什么样的尺子？——面向地面机器人的「全传感器套餐」数据集，用动捕 / 激光跟踪仪 / RTK 三套真值按场景切换，专挑电梯、全黑、室内外切换这些现实里最要命的情形。🤖 这一课的核心是：同一份数据集里，不同序列的真值精度根本不一样，不能笼统说「M2DGR 是毫米级」。</p>
+      <div class="hero-meta">
+        <span>🎯 主题：地面机器人多传感器 SLAM 的分段真值基准</span>
+        <span>👥 作者：国内高校团队（正文未标注发表处）</span>
+        <span>📅 年份 · <i>M2DGR: A Multi-Sensor and Multi-Scenario SLAM Dataset for Ground Robots</i></span>
+      </div>
+      <div class="toc">
+        <a href="#a">开场与定位</a>
+        <a href="#b">它长什么样：地面机器人与传感器</a>
+        <a href="#c">★ 真值是怎么来的（三源切换）</a>
+        <a href="#d">★ 真值精度是多少（不能笼统说毫米级）</a>
+        <a href="#e">★ 覆盖哪些场景（致命场景连环画）</a>
+        <a href="#f">基准任务与评测协议</a>
+        <a href="#g">什么时候该用 / 不该用</a>
+        <a href="#h">作者自述的局限</a>
+        <a href="#i">读完你应该能回答</a>
+      </div>
+    </header>
+
+    <main class="section-card" id="a">
+      <div class="lead-grid">
+        <div class="callout"><h4>本节目标</h4><p>读完你应该能：说清 M2DGR 为什么用「三套真值源按场景切换」而不是统一一把尺；背出三套设备的精度数字（动捕 1 mm / 激光跟踪仪 1 mm+1.5 ppm / RTK 2 cm）；解释为什么「M2DGR 的真值是毫米级」这句话是错的；用连环画复述电梯、全黑、室内外切换三类致命场景；判断它适不适合你的任务。</p></div>
+        <div class="callout"><h4>和前面课程怎么接</h4><p>★ <b>0180 TUM</b> 定义了 ATE，M2DGR 直接沿用 TUM 的 ATE（用 EVO 工具算），本课会点明「它没发明新指标」。★ <b>第四季 0073</b> 说 KITTI 用 RTK-GPS 厘米级——M2DGR 户外段同样是 RTK，正可对照「同一精度来源、不同平台」。★ <b>第一季 0013</b> 警告的评测口径问题，在这里变成现实：<strong>同一数据集里真值精度随场景跳变</strong>，比之前必须说明用的是哪段。★ <b>第八季 0153–0158</b> 讲动态/退化环境评测，这里电梯金属屏蔽、全黑正是极端退化，可互参。★ <b>0175 VECtor</b> 同样走「讲清测什么、真值多准、何时该用」的写法。</p></div>
+      </div>
+
+      <h2>1. 一句话定位：一把「分段」的尺子</h2>
+      <p>大多数数据集给你一把统一的尺（比如 TUM 全程动捕、KITTI 全程 RTK）。M2DGR 不一样：它是面向<strong>地面机器人</strong>的数据集，平台是轮式/履带小车，塞满了相机、激光、IMU、GNSS、轮式里程计等「全家桶」传感器。它最特别的地方在真值：<strong>不勉强用一套设备覆盖所有场景，而是按场景换三套真值源</strong>——室内用动捕、过门用激光跟踪仪、户外用 RTK。</p>
+      <p>生活类比：你想给一个快递机器人做「全场景考试」，但考场有室内仓库、有电梯、有室外马路。你不会用同一把尺量所有考场——仓库里架动捕相机最准，电梯里金属屏蔽只能用跟踪仪盯着，马路上得靠卫星。M2DGR 就是把这三把尺按考场发下去。</p>
+    </main>
+
+    <section class="section-card">
+      <h2 id="b">2. 它长什么样：地面机器人与传感器清单</h2>
+      <p>平台是<strong>三层地面机器人</strong>（顶/中/底分层装传感器），速度不快，但传感器极全：Velodyne VLP-32C（32 线激光）、6 鱼眼 + 1 天顶彩色相机、红外相机、事件相机、RealSense 深度、IMU、GNSS（Ublox M8T，GPS/北斗）、Xsens RTK/INS。同步方式是<strong>软件统一时间戳</strong>（无硬件触发），相机间 &lt; 10 ms，GNSS 仅 1 Hz。</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>激光</h4><p>Velodyne VLP-32C，32 线，10 Hz。</p></div>
+        <div class="mini-card"><h4>视觉全家桶</h4><p>6 鱼眼 + 1 天顶（FLIR）、红外（Gaode）、事件（DVXplorer）、RealSense D435i。</p></div>
+        <div class="mini-card"><h4>定位辅助</h4><p>IMU（Handsfree A9 150 Hz）、GNSS/RTK（Ublox M8T 1 Hz + Xsens Mti 680G）、轮式里程计。</p></div>
+      </div>
+      <figure class="figure">
+        <img src="../../md/images/2022_M2DGR/252526f542f5459d6187a8fe40d649e0255fcafec89fb46f372b3d4a99053c11.jpg" alt="Our dataset for ground robots captured by a rich suite of sensors">
+        <figcaption>
+          <b>原图注（Fig. 1）：</b>Our dataset for ground robots was captured by a rich suite of sensors within various scenarios. Some sensory data are visualized.<br>
+          <b>怎么看这张图：</b>这张总览把「机器人身上挂了多少传感器」和「各种场景下的传感数据」一摆出来。盯着看：左上角是机器人本体，右边是同一时刻不同模态的图——彩色、鱼眼、红外、事件、激光。这正是它敢自称「全传感器套餐」的底气，也是它能覆盖致命场景的前提。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="c">3. ★ 真值是怎么来的：三源按场景切换</h2>
+      <p>这是本篇的题眼。它<strong>不用同一设备硬扛所有场景</strong>，而是让真值源跟着场景走（对应论文 Table II / III 的 GT 列）：</p>
+      <ul>
+        <li><strong>纯房间（Room / Roomdark）</strong> → <strong>Vicon Vero 2.2 动捕</strong>：12 台相机、50 Hz，机器人贴反光标记点。</li>
+        <li><strong>大厅 / 门 / 电梯（Hall / Door / Lift）</strong> → <strong>Leica Nova MS60 激光跟踪仪</strong>：10 Hz，机器人装棱镜反射器，跟踪仪盯着棱镜测位姿。</li>
+        <li><strong>户外（Street / Circle / Gate / Walk）</strong> → <strong>Xsens Mti 680G RTK/INS</strong>：100 Hz，靠良好卫星可见性输出高精度轨迹。</li>
+      </ul>
+      <p>换句话说，<strong>同一份数据集里，真值精度是随场景跳变的</strong>——它不是一把统一的尺，而是一抽屉尺，按考场发。这一点决定了你引用 M2DGR 真值时，<strong>必须说清「这段用的是哪套」</strong>。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">真值三源切换：同一数据集，精度随场景跳变</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">不是一把统一尺，而是按考场发三把——引用时必须说明用的是哪段</text>
+          <rect x="40" y="78" width="260" height="300" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="170" y="100" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">纯房间（室内）</text>
+          <text x="170" y="120" text-anchor="middle" fill="#9fb4ff" font-size="11">Vicon Vero 2.2 动捕</text>
+          <rect x="60" y="142" width="220" height="86" fill="#101a30" stroke="#2a3a66"/>
+          <text x="170" y="162" text-anchor="middle" fill="#9fb4ff" font-size="11">12 台红外相机</text>
+          <text x="170" y="180" text-anchor="middle" fill="#9fb4ff" font-size="11">50 Hz 三角测量</text>
+          <text x="170" y="198" text-anchor="middle" fill="#9fb4ff" font-size="11">机器人贴反光点</text>
+          <text x="170" y="232" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">精度 1 mm</text>
+          <text x="170" y="254" text-anchor="middle" fill="#9fb4ff" font-size="10">（局部化精度）</text>
+          <text x="170" y="288" text-anchor="middle" fill="#ffd166" font-size="11">场景：Room / Roomdark</text>
+          <text x="170" y="312" text-anchor="middle" fill="#ff9f6b" font-size="10">天花板架相机</text>
+          <text x="170" y="334" text-anchor="middle" fill="#ff9f6b" font-size="10">适合小房高精度</text>
+          <text x="170" y="356" text-anchor="middle" fill="#9fb4ff" font-size="10">空间小、精度高</text>
+          <rect x="320" y="78" width="260" height="300" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="450" y="100" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">门 / 大厅 / 电梯</text>
+          <text x="450" y="120" text-anchor="middle" fill="#9fb4ff" font-size="11">Leica Nova MS60 跟踪仪</text>
+          <rect x="340" y="142" width="220" height="86" fill="#101a30" stroke="#2a3a66"/>
+          <text x="450" y="162" text-anchor="middle" fill="#9fb4ff" font-size="11">激光跟踪仪</text>
+          <text x="450" y="180" text-anchor="middle" fill="#9fb4ff" font-size="11">10 Hz 盯棱镜</text>
+          <text x="450" y="198" text-anchor="middle" fill="#9fb4ff" font-size="11">机器人装棱镜反射器</text>
+          <text x="450" y="232" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">1 mm + 1.5 ppm</text>
+          <text x="450" y="254" text-anchor="middle" fill="#9fb4ff" font-size="10">（ppm = 每百万分之一）</text>
+          <text x="450" y="288" text-anchor="middle" fill="#ffd166" font-size="11">场景：Hall / Door / Lift</text>
+          <text x="450" y="312" text-anchor="middle" fill="#ff9f6b" font-size="10">需通视棱镜 + 盯棱镜</text>
+          <text x="450" y="334" text-anchor="middle" fill="#ff9f6b" font-size="10">电梯里也能跟</text>
+          <text x="450" y="356" text-anchor="middle" fill="#9fb4ff" font-size="10">过渡段专用</text>
+          <rect x="600" y="78" width="260" height="300" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="730" y="100" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">户外（马路）</text>
+          <text x="730" y="120" text-anchor="middle" fill="#9fb4ff" font-size="11">Xsens Mti 680G RTK/INS</text>
+          <rect x="620" y="142" width="220" height="86" fill="#101a30" stroke="#2a3a66"/>
+          <text x="730" y="162" text-anchor="middle" fill="#9fb4ff" font-size="11">RTK 接收机</text>
+          <text x="730" y="180" text-anchor="middle" fill="#9fb4ff" font-size="11">100 Hz 融合 INS</text>
+          <text x="730" y="198" text-anchor="middle" fill="#9fb4ff" font-size="11">需良好卫星可见</text>
+          <text x="730" y="232" text-anchor="middle" fill="#5cffb0" font-size="14" font-weight="700">约 2 cm</text>
+          <text x="730" y="254" text-anchor="middle" fill="#9fb4ff" font-size="10">（RTK 固定解）</text>
+          <text x="730" y="288" text-anchor="middle" fill="#ffd166" font-size="11">场景：Street/Circle/Gate</text>
+          <text x="730" y="312" text-anchor="middle" fill="#ff9f6b" font-size="10">要抬头看天</text>
+          <text x="730" y="334" text-anchor="middle" fill="#ff9f6b" font-size="10">树下 / 峡谷失效</text>
+          <text x="730" y="356" text-anchor="middle" fill="#9fb4ff" font-size="10">大空间可用</text>
+          <text x="450" y="408" text-anchor="middle" fill="#ff5d73" font-size="13" font-weight="700">⚠ 不能笼统说「M2DGR 真值是毫米级」</text>
+          <text x="450" y="432" text-anchor="middle" fill="#cdd6ff" font-size="12">室内段 = 毫米；户外段 = 2 cm。精度随场景跳变，比之前先说清用的是哪段。</text>
+          <text x="450" y="454" text-anchor="middle" fill="#9fb4ff" font-size="10">切换原因：每套都有物理前提（架相机 / 通视棱镜 / 看天）</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三个并列的「考场卡片」——纯房间用 Vicon 动捕（1 mm）、门/大厅/电梯用 Leica 激光跟踪仪（1 mm + 1.5 ppm）、户外用 Xsens RTK（约 2 cm）。每张卡片写了设备、原理和对应场景。底部红字警告「不能笼统说 M2DGR 是毫米级」。<br>
+          <b>怎么看这张图：</b>① <strong>精度是分段的</strong>：室内毫米、户外两厘米，差了一档；② 切换的原因是<strong>物理限制</strong>——动捕要架相机、跟踪仪要通视棱镜、RTK 要看天；③ 所以引用 M2DGR 真值时<strong>必须说明序列属于哪类</strong>，否则数字不可比。<br>
+          <b>要记住的一句话：</b>同一数据集、不同序列、不同精度——这是 M2DGR 最该被记住的设计哲学。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="d">4. ★ 真值精度是多少：分场景，别一概而论</h2>
+      <p>把三套设备的规格摊开（论文 Table II）：</p>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>动捕 Vicon</h4><p>局部化精度 <strong>1 mm</strong>。室内纯房间段，最接近「金标准」。</p></div>
+        <div class="mini-card"><h4>激光跟踪仪 Leica</h4><p><strong>1 mm + 1.5 ppm</strong>（ppm = 每百万分之一，即每米多 1.5 微米，长距离才显现）。门/大厅/电梯段。</p></div>
+        <div class="mini-card"><h4>RTK / INS Xsens</h4><p>RTK 固定解约 <strong>2 cm</strong>。户外段，依赖卫星。</p></div>
+      </div>
+      <p><strong>所以「M2DGR 真值是毫米级」是错的。</strong>只有室内段（Room / Roomdark）和过门段（跟踪仪）到毫米；户外段是 2 cm（厘米级）。论文也自承「不同真值源精度不一」。评测某方法时，如果你拿户外段（RTK 2 cm）去和 TUM 室内段（动捕 &lt;1 mm）比 ATE，那是在拿不同精度的尺互比——<b>第一季 0013</b> 警告过的坑，在这里变成现实。</p>
+      <p>诚实标注：论文 Table III 的 GT 列原文有 OCR 笔误「RTk/INS」，应为「RTK/INS」；Table IV「Hal105」应为「Hall05」。本课已按规范更正。</p>
+      <p>三套真值源共同的特点是：<strong>每一套都有自己的物理前提</strong>。动捕要提前在房间里架好相机，跟踪仪要求机器人身上那个棱镜<strong>始终被通视</strong>，RTK 则要求机器人头顶<strong>看得见足够的卫星</strong>。理解这三条前提，你就明白为什么不可能用一套设备通吃——也明白为什么引用它的数字时必须先说清是哪一段。</p>
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">RTK 真值的物理前提：头顶必须看得见天空</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">M2DGR 户外段靠 RTK/INS（约 2 cm）；一旦进室内、树下或城市峡谷，它就失效</text>
+          <rect x="40" y="76" width="390" height="268" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="235" y="100" text-anchor="middle" fill="#5cffb0" font-size="13" font-weight="700">① 户外开阔地：抬头看得见天</text>
+          <circle cx="90" cy="126" r="8" fill="#ffd166"/>
+          <text x="90" y="130" text-anchor="middle" fill="#0f1424" font-size="9">S1</text>
+          <circle cx="180" cy="126" r="8" fill="#ffd166"/>
+          <text x="180" y="130" text-anchor="middle" fill="#0f1424" font-size="9">S2</text>
+          <circle cx="270" cy="126" r="8" fill="#ffd166"/>
+          <text x="270" y="130" text-anchor="middle" fill="#0f1424" font-size="9">S3</text>
+          <circle cx="350" cy="126" r="8" fill="#ffd166"/>
+          <text x="350" y="130" text-anchor="middle" fill="#0f1424" font-size="9">S4</text>
+          <text x="235" y="152" text-anchor="middle" fill="#9fb4ff" font-size="10">GNSS 卫星：可见颗数多</text>
+          <text x="235" y="176" text-anchor="middle" fill="#9fb4ff" font-size="10">几何分布好 · 无多径</text>
+          <line x1="90" y1="190" x2="225" y2="252" stroke="#5cffb0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="180" y1="190" x2="225" y2="252" stroke="#5cffb0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="270" y1="190" x2="225" y2="252" stroke="#5cffb0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <line x1="350" y1="190" x2="225" y2="252" stroke="#5cffb0" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <rect x="180" y="258" width="90" height="36" rx="6" fill="#1b2748" stroke="#3a4a78"/>
+          <text x="225" y="281" text-anchor="middle" fill="#cdd6ff" font-size="10">地面机器人</text>
+          <line x1="225" y1="236" x2="225" y2="258" stroke="#ffd166" stroke-width="3"/>
+          <circle cx="225" cy="228" r="7" fill="none" stroke="#ffd166" stroke-width="2"/>
+          <text x="252" y="232" fill="#ffd166" font-size="10">GNSS 天线</text>
+          <text x="55" y="270" fill="#9fb4ff" font-size="10">三层地面机器人</text>
+          <text x="55" y="288" fill="#9fb4ff" font-size="10">VLP-32C + IMU</text>
+          <text x="235" y="304" text-anchor="middle" fill="#5cffb0" font-size="12" font-weight="700">RTK 固定解 ≈ 2 cm</text>
+          <text x="235" y="324" text-anchor="middle" fill="#9fb4ff" font-size="10">开阔地 · 视野无遮挡</text>
+          <rect x="470" y="76" width="390" height="268" rx="10" fill="#101a30" stroke="#2a3a66"/>
+          <text x="665" y="100" text-anchor="middle" fill="#ff5d73" font-size="13" font-weight="700">② 室内 / 树下 / 城市峡谷</text>
+          <rect x="500" y="140" width="110" height="150" fill="#1b2748" stroke="#3a4a78"/>
+          <text x="555" y="232" text-anchor="middle" fill="#cdd6ff" font-size="11">建筑</text>
+          <text x="505" y="162" fill="#9fb4ff" font-size="10">金属屋面遮挡</text>
+          <text x="505" y="180" fill="#9fb4ff" font-size="10">信号多次反射</text>
+          <text x="505" y="198" fill="#9fb4ff" font-size="10">可见卫星不足</text>
+          <rect x="640" y="258" width="84" height="34" rx="6" fill="#1b2748" stroke="#3a4a78"/>
+          <line x1="664" y1="257" x2="700" y2="293" stroke="#ff5d73" stroke-width="4"/>
+          <line x1="700" y1="257" x2="664" y2="293" stroke="#ff5d73" stroke-width="4"/>
+          <rect x="756" y="226" width="10" height="64" fill="#2e7d5b"/>
+          <circle cx="761" cy="190" r="46" fill="#2e7d5b" opacity="0.55"/>
+          <text x="855" y="170" text-anchor="end" fill="#9fb4ff" font-size="10">树冠遮挡</text>
+          <text x="855" y="252" text-anchor="end" fill="#9fb4ff" font-size="10">天线看不见天</text>
+          <text x="665" y="312" text-anchor="middle" fill="#ff5d73" font-size="11" font-weight="700">RTK 失效 / 只剩惯导推算</text>
+          <text x="665" y="332" text-anchor="middle" fill="#9fb4ff" font-size="10">红色叉号：天线被遮挡</text>
+          <rect x="40" y="356" width="820" height="104" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="60" y="380" fill="#cdd6ff" font-size="11">RTK ＝ 基站 + 流动站，靠卫星载波相位差分求解 → 固定解约 2 cm</text>
+          <text x="60" y="402" fill="#cdd6ff" font-size="11">前提：卫星颗数够、几何分布好、没有多径</text>
+          <text x="60" y="424" fill="#cdd6ff" font-size="11">室内金属屏蔽 / 树下 / 城市峡谷 → 失锁，退化到米级</text>
+          <rect x="640" y="364" width="210" height="88" rx="8" fill="#3a1820" stroke="#ff5d73"/>
+          <text x="745" y="386" text-anchor="middle" fill="#ff5d73" font-size="11" font-weight="700">最挑场景的一把尺</text>
+          <text x="745" y="406" text-anchor="middle" fill="#9fb4ff" font-size="10">只有户外段能用</text>
+          <text x="745" y="426" text-anchor="middle" fill="#9fb4ff" font-size="10">帧率仅 1 Hz · 易受多径</text>
+          <text x="745" y="444" text-anchor="middle" fill="#9fb4ff" font-size="10">所以室内必须换尺</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>左右两联对照。左联是户外开阔地：机器人顶上一根 GNSS 天线，头顶四颗卫星（S1–S4）都能看到，虚线是信号，标注「RTK 固定解 ≈ 2 cm」。右联是室内 / 树下 / 城市峡谷：金属建筑、树冠挡住天空，天线处画了一个红色叉号，标注「RTK 失效 / 只剩惯导推算」。下方横条解释 RTK 的原理与「天空可见」这个前提。<br>
+          <b>怎么看这张图：</b>① RTK 靠的是<strong>卫星载波相位差分</strong>，没有卫星就没有差分，也就没有厘米级；② 它的精度前提是<strong>「看得见天」</strong>——金属屋面、树冠、城市峡谷都会让卫星失锁或产生多径；③ 所以 M2DGR 只在户外段用它，室内段必须换动捕或激光跟踪仪，这正是「按场景换尺」的根本原因。<br>
+          <b>要记住的一句话：</b>真值设备的物理前提决定了它能用在哪些场景——RTK 的前提就是抬头看得见天空。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="e">5. ★ 覆盖哪些场景：专挑「致命情形」</h2>
+      <p>共 <strong>36 条序列</strong>（约 1 TB），场景设计得「专挑现实里最要命的」：Street(10)、Circle(2)、Gate(3)、Walk(1)、Hall(5)、Door(2)、Lift(4)、Room(3)、Roomdark(6)。代表性退化/特殊场景：<strong>全黑（Roomdark，红外可工作）、长走廊、开阔地、电梯跨层（Lift，1 楼→2 楼）、室内外经门切换（Door）</strong>。规模 13688 s、10708.67 m、1220.6 GB。</p>
+      <p>这类「地面机器人现实场景」恰恰是大多数数据集回避的。下面用连环画把三类致命情形画出来。</p>
+
+      <figure class="figure">
+        <svg viewBox="0 0 900 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+             font-family="Inter, 'Noto Serif SC', system-ui, sans-serif">
+          <rect x="0" y="0" width="900" height="470" fill="#0f1424"/>
+          <text x="450" y="26" text-anchor="middle" fill="#e8ecff" font-size="18" font-weight="700">致命场景连环画：电梯 / 全黑 / 室内外切换</text>
+          <text x="450" y="48" text-anchor="middle" fill="#9fb4ff" font-size="12.5">大多数数据集回避的现实情形，这里专挑来逼 SLAM 现原形</text>
+          <rect x="30" y="70" width="270" height="330" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="165" y="92" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">① 电梯跨层</text>
+          <rect x="70" y="115" width="90" height="160" fill="#0e1626" stroke="#3a4a78"/>
+          <rect x="170" y="115" width="90" height="160" fill="#1b2748" stroke="#3a4a78"/>
+          <text x="115" y="145" fill="#9fb4ff" font-size="9">金属厢体</text>
+          <line x1="115" y1="195" x2="115" y2="255" stroke="#ffd166" stroke-width="3"/>
+          <text x="115" y="295" text-anchor="middle" fill="#ffd166" font-size="10">1 楼 ↓ 2 楼</text>
+          <text x="165" y="330" text-anchor="middle" fill="#9fb4ff" font-size="10">无 GNSS</text>
+          <text x="165" y="348" text-anchor="middle" fill="#9fb4ff" font-size="10">金属屏蔽</text>
+          <text x="165" y="366" text-anchor="middle" fill="#ff5d73" font-size="10">IMU 预积分失配</text>
+          <text x="165" y="386" text-anchor="middle" fill="#ff5d73" font-size="11" font-weight="700">LIO-SAM ATE=1247 m</text>
+          <text x="165" y="406" text-anchor="middle" fill="#9fb4ff" font-size="9">教科书级灾难</text>
+          <rect x="315" y="70" width="270" height="330" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="450" y="92" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">② 全黑房间</text>
+          <rect x="355" y="115" width="190" height="150" fill="#05070d" stroke="#3a4a78"/>
+          <text x="450" y="195" text-anchor="middle" fill="#33406b" font-size="11">RGB：一片黑</text>
+          <circle cx="410" cy="255" r="14" fill="#ff5d73"/>
+          <circle cx="490" cy="275" r="10" fill="#ff5d73"/>
+          <text x="450" y="305" text-anchor="middle" fill="#9fb4ff" font-size="10">红外相机反而能取特征</text>
+          <text x="450" y="323" text-anchor="middle" fill="#9fb4ff" font-size="10">但平整窗帘 = 无纹理</text>
+          <text x="450" y="347" text-anchor="middle" fill="#ffd166" font-size="10">普通 RGB SLAM：直接失败</text>
+          <text x="450" y="365" text-anchor="middle" fill="#5cffb0" font-size="10">热红外 ORB3：0.404 m</text>
+          <text x="450" y="386" text-anchor="middle" fill="#9fb4ff" font-size="9">Roomdark 共 6 条</text>
+          <rect x="600" y="70" width="270" height="330" rx="10" fill="#16203a" stroke="#3a4a78"/>
+          <text x="735" y="92" text-anchor="middle" fill="#ff5d73" font-size="14" font-weight="700">③ 室内外经门</text>
+          <rect x="620" y="115" width="110" height="160" fill="#1b2748" stroke="#3a4a78"/>
+          <rect x="740" y="115" width="110" height="160" fill="#0e1626" stroke="#3a4a78"/>
+          <line x1="730" y1="115" x2="730" y2="275" stroke="#ffd166" stroke-width="3" stroke-dasharray="5 4"/>
+          <text x="675" y="112" fill="#9fb4ff" font-size="10">室内</text>
+          <text x="795" y="112" fill="#9fb4ff" font-size="10">室外</text>
+          <text x="735" y="305" text-anchor="middle" fill="#ff5d73" font-size="10">光照剧变</text>
+          <text x="735" y="323" text-anchor="middle" fill="#9fb4ff" font-size="10">GNSS 进出门跳变</text>
+          <text x="735" y="347" text-anchor="middle" fill="#9fb4ff" font-size="10">曝光 / 白平衡重置</text>
+          <text x="735" y="365" text-anchor="middle" fill="#ffd166" font-size="10">Door 共 2 条</text>
+          <text x="735" y="386" text-anchor="middle" fill="#9fb4ff" font-size="9">门是天然退化边界</text>
+          <text x="60" y="416" fill="#9fb4ff" font-size="10">电梯：金属屏蔽 + IMU 预积分失配</text>
+          <text x="60" y="434" fill="#9fb4ff" font-size="10">全黑：红外取特征，RGB 直接失效</text>
+          <text x="60" y="452" fill="#9fb4ff" font-size="10">经门：光照 / GNSS 双重剧变边界</text>
+          <text x="450" y="426" text-anchor="middle" fill="#cdd6ff" font-size="13" font-weight="700">要记住：电梯/全黑/室内外切换 是现实机器人天天撞、多数基准却绕开的坑</text>
+          <text x="450" y="452" text-anchor="middle" fill="#9fb4ff" font-size="10">论文原话：现有 SOTA 在这几类场景「部分表现差」——数据有效，但方法远未解决</text>
+        </svg>
+        <figcaption>
+          <b>这张图在画什么：</b>三格连环画。① 电梯：金属厢体里机器人从 1 楼下到 2 楼，标注「无 GNSS、金属屏蔽」，并点出 LIO-SAM 在 Lift04 上 ATE 飙到 1247 m；② 全黑：左半黑屏写「RGB 一片黑」，右半用红点表示红外能取特征，但平整窗帘无纹理；③ 室内外经门：一条虚线门把室内外分开，标注「光照剧变、GNSS 跳变」。<br>
+          <b>怎么看这张图：</b>① 电梯里<strong>卫星信号被金属屏蔽</strong>，且上下楼时 IMU 预积分与激光里程计失配，导致灾难性漂移；② 全黑下<strong>普通 RGB 直接失效</strong>，但热红外仍能工作（这也是为什么数据集要塞红外/事件相机）；③ 经门切换是<strong>光照与 GNSS 的双重剧变</strong>，是天然退化边界。<br>
+          <b>要记住的一句话：</b>这些「现实致命场景」恰恰是大多数数据集回避、而地面机器人天天要面对的。
+        </figcaption>
+      </figure>
+
+      <figure class="figure">
+        <img src="../../md/images/2022_M2DGR/e1f40f0f54a70dc13159cc662235a6bb75898bc149b6bb7109a1500ae6e9bbc4.jpg" alt="Color image and Infra-red image in a complete dark scene">
+        <figcaption>
+          <b>原图注（Fig. 5）：</b>Color image (Left) and Infra-red image (Right) in a complete dark scene.<br>
+          <b>怎么看这张图：</b>左边彩色图几乎全黑（RGB 相机在 Roomdark 里啥也看不见），右边红外图却能清晰看到结构——这正是上面连环画第②格的「原文证据」。它解释了为什么全黑场景里热红外相机反而比彩色鲁棒，也是 M2DGR 坚持上红外/事件相机的原因。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="f">6. 基准任务与评测协议</h2>
+      <p>M2DGR 是<strong>数据集 + benchmark</strong>，指标沿用 TUM 的 <strong>ATE</strong>（用 EVO 工具先对齐真值再算）。评测对象覆盖视觉 SLAM（ORB-SLAM3 的 Pinhole/Fisheye/Thermal 三种模式、Cubemap、Multicol、VINS-Mono）与激光 SLAM（A-LOAM、LeGO-LOAM、LINS、LIO-SAM），外加 RTKLIB（GNSS SPP）。协议挑了 7 条代表性序列，失败记为 X。</p>
+      <p>论文 Table V 给了各方法 ATE(m)：A-LOAM 在 Street02=5.299、Street07=28.940、Roomdark06=0.314；LeGO-LOAM 在 Street07=35.437；<strong>LIO-SAM 在 Lift04=1247.153（灾难性失败）</strong>；ORB3-Thermal 在 Roomdark06=0.404（红外在全黑有效）；VINS-Mono 在 Street07=143.725。这些数字本身就是「致命场景真的致命」的证据。</p>
+      <figure class="figure">
+        <img src="../../md/images/2022_M2DGR/792146977bc4a4c761cd1c09cfde85dae285eb0e8ceb6ec59aec5a4a41285df0.jpg" alt="Trajectories and ground truth acquisition">
+        <figcaption>
+          <b>原图注（Fig. 3）：</b>(a) trajectories of outdoor sequences; (b) indoor ground truth from a motion-capture system with twelve cameras; (c) a 3D laser tracker tracks the robot through a door; (d) lift sequences — the robot moved in a hall then went to the lift…<br>
+          <b>怎么看这张图：</b>这张图把「三源真值」的现场摆出来了——(b) 室内 12 相机动捕房、(c) 跟踪仪通过门盯着棱镜、(d) 电梯序列。它和上面那张自绘图一一对应：你看到的每一种设备，都对应一类场景和一种精度。盯着 (d) 想：电梯里既没有动捕也没有好卫星，只能靠跟踪仪盯棱镜。
+        </figcaption>
+      </figure>
+    </section>
+
+    <section class="section-card">
+      <h2 id="g">7. 什么时候该用 / 不该用</h2>
+      <div class="summary-grid">
+        <div class="mini-card"><h4>✅ 该用</h4><p>评地面机器人（轮式/履带）的多传感器 SLAM；想测电梯、全黑、室内外切换等<strong>现实致命场景</strong>；需要「室内毫米 + 户外厘米」的分段真值。</p></div>
+        <div class="mini-card"><h4>❌ 不该用</h4><p>当「统一毫米级金标准」去横向压别的数据集（它户外只有 2 cm）；评无人机/手持（平台不符）；忽略序列类型直接报一个「M2DGR 精度」。</p></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="h">8. 作者自述的局限</h2>
+      <p>论文自承三点：① <strong>软同步</strong>，且<strong>不同真值源精度不一</strong>；② 电梯/室内外切换等场景<strong>几乎所有被测系统都失败</strong>，说明数据有效但方法远未解决；③ GNSS 仅室外有效，存在多径/失锁。补充：它指出 OpenLORIS 用激光 SLAM 造真值并不可靠（激光在某些场景误差比视觉还大）——侧面印证「没有一把尺通吃」。</p>
+      <div class="interactive-card">
+        <h3>互动判断</h3>
+        <p>论文测出 LIO-SAM 在 Lift04 上 ATE = 1247 m。这代表 LIO-SAM 这个算法「绝对误差 1247 米」吗？</p>
+        <div class="quiz-options">
+          <button data-correct="no" data-explanation="不对：ATE 是估计轨迹相对真值的误差，1247 m 说明进电梯后轨迹严重漂移/跟丢，是「灾难性失败」而非平静的 1247 米误差。" onclick="lessonKit.answer(this,'q0182a')">常见误解</button>
+          <button data-correct="yes" data-explanation="对：这个数值是方法在电梯金属屏蔽+跨层下彻底失配的信号，警示意义大于字面，说明该场景当前方法无解。" onclick="lessonKit.answer(this,'q0182a')">正确看法</button>
+        </div>
+        <div class="quiz-feedback" id="q0182a"></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <h2 id="i">9. 读完你应该能回答</h2>
+      <ol>
+        <li>M2DGR 为什么用「三套真值源」而不是一套？分别对应哪些场景、哪些设备、什么精度？</li>
+        <li>为什么说「M2DGR 真值是毫米级」这句话是错的？正确说法是什么？</li>
+        <li>画出三类致命场景（电梯/全黑/室内外切换），并各说一个为什么它们致命。</li>
+        <li>它的评测指标是什么？和 0180 的 TUM 是什么关系？</li>
+        <li>LIO-SAM 在 Lift04 上 ATE=1247 m，这个数字该怎么正确理解？</li>
+      </ol>
+    </section>
+
+    <section class="exercise-box">
+      <h3>课后练习</h3>
+      <ol>
+        <li>把三套真值源按「设备 / 对应场景 / 精度」填成三行，并说明为什么不能合并成一把尺。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>动捕 Vicon（纯房间，1 mm）/ 激光跟踪仪 Leica（门·大厅·电梯，1 mm+1.5 ppm）/ RTK Xsens（户外，约 2 cm）。不能合并，因为每套都有物理前提（架相机、通视棱镜、看天），没有一种能通吃所有场景，所以精度随场景跳变。</div></details>
+        </li>
+        <li>为什么「M2DGR 真值是毫米级」会误导人？给出正确的分段表述。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>只有室内段（动捕 1 mm）和过门段（跟踪仪 1 mm+1.5 ppm）到毫米，户外段是 RTK 约 2 cm（厘米级）。正确说法：M2DGR 室内段为毫米级、户外段为厘米级，引用时必须说明序列类型。</div></details>
+        </li>
+        <li>全黑场景下，为什么普通 RGB SLAM 失败而热红外仍能工作？用 M2DGR 的数字说明。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>全黑时 RGB 相机接收光强近零、无法提取特征，ORB-SLAM3 普通模式直接失败；红外相机靠热辐射成像，仍能取特征。论文数字：ORB3-Thermal 在 Roomdark06 上 ATE=0.404 m，证明红外在全黑有效（但平整窗帘在热图里仍无纹理）。</div></details>
+        </li>
+        <li>把 M2DGR 和 Newer College（0181）、TUM（0180）在「真值来源 + 平台 + 精度档」上做三行对照。
+          <details class="exercise-answer"><summary>展开查看答案</summary><div>M2DGR：三源切换，地面机器人，室内毫米/户外厘米；Newer College：测绘扫描仪+ICP，手持步行，约 3 cm；TUM：动捕，手持 Kinect/小车，帧间 &lt;1 mm、全场 &lt;10 mm。三者来源、平台、精度档都不同，不可横比。</div></details>
+        </li>
+      </ol>
+    </section>
+
+    <footer class="section-card">
+      <div class="nav-links">
+        <a href="0181-NewerCollege2020-手持激光与退化场景.html">← 0181 Newer College：手持激光与退化场景</a>
+        <a class="next" href="0183-Hilti-Oxford-2023-毫米级真值.html">0183 Hilti-Oxford：毫米级真值 →</a>
+      </div>
+      <p class="foot-note">没有一把尺能通吃所有场景——承认分段，才是诚实的评测。🤖</p>
+      <p style="text-align:center;margin-top:1rem;font-size:.9rem;"><a href="../index.html">📚 返回课程馆</a></p>
+    </footer>
+  </div>
+</body>
+</html>
