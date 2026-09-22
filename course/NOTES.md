@@ -1370,3 +1370,86 @@ responsive_check.py --widths 390,768,1024
 - **五步**：解析清单 → 精读落盘 → 图索引 → 规范改造 → 并行写作 → 机检/登记/配套/提交；
 - **五种季型**决定导览课怎么写（续接 / 支线 / 工具 / 补名词 / 看位置）；
 - **一条贯穿始终的纪律**：**绝不凭标题推测内容；agent 的汇报是意图不是事实，必须机检。**
+
+---
+
+## 十七、跨会话 / 跨机器的协作纪律（2026-09-22）
+
+> 这一天出现了新情况：**手机沙箱与电脑两个 agent 在同一个仓库上交替作业**，一天内远端被推了 4 次。
+> 下面几条因此从"好习惯"升级为"硬纪律"。
+
+### 77. ★★★ 开工前第一件事：先拉远端
+
+**用户明确要求过：动这个仓库之前，先 `git pull`。**
+
+这不是形式主义。2026-09-22 那天，我在沙箱里做完一批改动准备推送，一拉才发现远端多了两个提交：
+`fdcbb7b`（本机 agent 对照 PDF 回填了 245 处 OCR 丢失符号）和 `a8e84f2`（修了渲染页"后半段整段消失"的缺陷）。
+**不拉就动手 = 在旧代码上改，然后制造冲突，或者更糟——覆盖掉别人的成果。**
+
+标准开场：
+
+```bash
+git status --short                    # 先确认自己工作区是干净的
+git fetch origin
+git log --oneline -1 origin/main      # 看一眼远端有没有新提交
+git merge --ff-only origin/main       # 干净的话直接快进
+```
+
+`--ff-only` 的作用是**只允许快进**：万一本地和远端已经分叉，它会报错停下，而不是悄悄生成一个合并提交。
+停下才发现要处理，比自动合出来一个你不知道怎么来的提交安全得多。
+
+### 78. ★★ 一次改多件事，就开分支
+
+```bash
+git checkout -b feat/xxx              # 从 main 切出来
+# …在分支上提交，可以分多个 commit…
+git checkout main
+git fetch origin && git merge --ff-only origin/main
+git merge --no-ff feat/xxx            # 合并回 main
+git push origin main
+```
+
+`--no-ff` 会强制留下一个合并提交，分支图上能看出"这里曾经有个分支、它干了什么"。
+好处是**想整体回退时只需 revert 那一个合并提交**，不用逐个找。
+
+### 79. ★★★ 生成产物：不手工编辑，也不手工合并
+
+本仓库有三类**由脚本生成**的 HTML，**任何时候都不要手改它们**：
+
+| 生成产物 | 源头 | 生成命令 |
+|---|---|---|
+| `md/html/*.html`（257 页论文原文） | `md/*.md` | `python tools/build_md_view.py papers` |
+| `course/learning-records/html/*.html`（13 页学习记录） | `course/learning-records/*.md` | `python tools/build_md_view.py records` |
+| `outputs/html/*.html`（产出文档） | `outputs/*.md` | `python tools/build_md_view.py outputs` |
+
+（不帶参数跑 `python tools/build_md_view.py` 会三组一起重建。）
+
+**两条推论：**
+
+1. **改了源文件，必须重跑生成器**。否则源里修好了，站点上看到的还是旧内容。
+   合并分支时最容易踩这条：源 md 来自一侧、生成页来自另一侧，看起来"合并成功了"，其实站点是错的。
+2. **生成页的合并冲突不要手工解决**。做法是：任取一侧落定 → 重跑生成器 → 让源文件决定最终内容。
+   手工去挑冲突行，只会挑出一个"两边都不对"的版本。
+
+### 80. ★ 沙箱环境里不要碰 `.git/objects/`
+
+Linux 沙箱（PRoot）下有个反直觉的坑：**任何针对 `.git/objects/pack/` 的删除操作都会让 pack 文件变成
+`Operation not permitted` 的幽灵**，git 当场失联，只能重新 clone。
+
+- **不要跑 `git gc`**（它内部会重建 pack）。
+- **不要 `find .git -name '...' -delete`**（即使只删自己指定的文件，也会连带触发）。
+- 顺带一提：经 `gh-proxy` 这类镜像 clone 时，镜像可能把自己打包时的临时文件（形如
+  `.l2s.tmp_pack_*`，可达数百 MB）一起塞进 `.git/objects/pack/`。**别去清理它**——
+  它不影响 git 工作，而去清理会把 pack 弄坏。仓库真实体积以 GitHub API 的 `size` 为准。
+
+### 81. ★ 判断"远端体积"要看 API，不要看本地目录
+
+本地 `du -sh` 会把上面那些镜像临时文件算进去，得出虚高的数字（曾据此误判"接近 GitHub 1GB 软限"）。
+权威口径：
+
+```bash
+gh api repos/zhangs1r/slam-atlas --jq '.size'   # 单位 KB
+```
+
+GitHub 的限制分三层：**单文件 100 MB（硬限，push 直接被拒）**、仓库 1 GB（软限，收到提醒邮件）、
+仓库 5 GB（硬限）。目前仓库约 213 MB，最大单文件约 1 MB，离任何一条线都很远。
