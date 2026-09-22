@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第十一季学习记录：应用与相邻领域 · 看位置（0199–0205） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0013-第十一季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第十一季学习记录：应用与相邻领域 · 看位置（0199–0205）</h1>
+<blockquote>
+<p>对应课程：第 0199 – 0205 节（语料库阶段 K，5 篇论文；本季 7 节课，30 张具象自绘图、28 张原文图）
+记录日期：2026-09-21
+<strong>★ 这是整个项目的最后一季。A–K 十一个阶段至此全部开课。</strong></p>
+</blockquote>
+<hr />
+<h2>一、这一季跟前十季有什么根本不同</h2>
+<p>前六季（A–G）是一条<strong>纵向</strong>的路，把 SLAM 这条技术线越挖越深。
+第八季起，项目连着开了四个<strong>横切面</strong>，但它们切的角度各不相同：</p>
+<table>
+<thead>
+<tr>
+<th>季型</th>
+<th>代表</th>
+<th>导览课要讲什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>续接季</td>
+<td>A–G</td>
+<td>预告「一个技术演进」的下一站</td>
+</tr>
+<tr>
+<td>横切 · 支线季</td>
+<td>H（专题支线）</td>
+<td>讲清「横切在哪、拆掉了什么默认假设」</td>
+</tr>
+<tr>
+<td>横切 · 工具季</td>
+<td>I（数据集与评测）</td>
+<td>先立一套分析框架</td>
+</tr>
+<tr>
+<td>横切 · 补名词季</td>
+<td>J（基础零件）</td>
+<td>先承认「这些词你早就在论文里见过、但没人解释过」</td>
+</tr>
+<tr>
+<td><strong>横切 · 看位置季</strong></td>
+<td><strong>K（本季）</strong></td>
+<td><strong>先画出「一个完整机器人系统」的框图</strong>，再说明 SLAM 只占其中一环</td>
+</tr>
+</tbody>
+</table>
+<p><strong>这一季不读新方法。</strong> 它回答的是一个前十季从没正面答过的问题：</p>
+<blockquote>
+<p><strong>SLAM 站在系统的哪一环？它的上游从哪拿数据、下游把结果交给谁？</strong></p>
+</blockquote>
+<p>导览课立下的分析框架是一条<strong>七环系统链</strong>：</p>
+<pre><code>传感器 → 感知/前端 → SLAM/里程计 → 地图 → 规划 → 控制 → 执行器
+</code></pre>
+<p><strong>前十季一直在讲链上的第 ②③④ 环</strong>（感知 / SLAM / 地图），
+而<strong>规划、控制、执行器、以及「算力放哪」这些环，前十季几乎没碰过</strong>。</p>
+<hr />
+<h2>二、全季最有价值的一张表：五篇覆盖的环极不均匀</h2>
+<p>这不是巧合，<strong>它本身就是这一季要讲的内容</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>篇目（课号）</th>
+<th>覆盖哪些环</th>
+<th>关键事实</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Falcon 4</strong> <code>0200</code></td>
+<td><strong>横跨六环（感知→执行器）</strong></td>
+<td>全季<strong>唯一自洽闭环的整机系统</strong>，也是<strong>唯一落到执行器</strong>的一篇（Pixhawk 4 → 电机转速）</td>
+</tr>
+<tr>
+<td><strong>运动规划综述</strong> <code>0201</code></td>
+<td><strong>一环都不实现</strong></td>
+<td>它是导航栈的「<strong>解剖图</strong>」，是元层面的<strong>选型指南</strong></td>
+</tr>
+<tr>
+<td><strong>RecSLAM</strong> <code>0202</code></td>
+<td>只覆盖 SLAM 与地图两环的<strong>算力部署与融合方式</strong></td>
+<td><strong>算法零改动</strong>（用 GMapping 当黑盒），把「多机 + SLAM」当<strong>待调度的算力负载</strong></td>
+</tr>
+<tr>
+<td><strong>Wildcat</strong> <code>0203</code></td>
+<td><strong>就是 SLAM/里程计这一环本身</strong></td>
+<td>与第九季 <code>0184</code> 闭环</td>
+</tr>
+<tr>
+<td><strong>撤稿的区域特征融合</strong> <code>0204</code></td>
+<td><strong>感知这一环</strong></td>
+<td>警示课，<strong>不写撤稿理由</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>★ 一条横向的新轴</strong>：<code>0202</code> 引入的是「<strong>机器人–边缘–云</strong>」这条
+<strong>计算基础设施轴</strong>，它与 A–J 季的「<strong>算法纵向轴</strong>」<strong>正交</strong>——
+这是前十季从未出现过的一环。它不解决多机 SLAM 的算法问题（地图一致性、回环、通信受限），
+而是把「多机 + SLAM」整体当成<strong>待调度的算力负载</strong>。</p>
+<p><strong>★ 一个正面冲突（很适合做成对照）</strong>：面对「机器人算力不够」，两条路方向相反——
+- <code>0200</code> 把算力<strong>往机上堆</strong>（换 i7-10710U、坚持全部 onboard、无地面站）；
+- <code>0202</code> 把算力<strong>往机外送</strong>（原始帧卸载到边缘）。
+- 而 <code>0201</code> 从统计上<strong>支持 <code>0200</code> 这一侧</strong>：学习/复杂算法不宜端到端上机，应保留经典组件。</p>
+<hr />
+<h2>三、两处「技术核心」</h2>
+<h3>3.1 Falcon 4 的双参考系解耦（<code>0200</code>）</h3>
+<p><strong>戏剧冲突</strong>：VIO <strong>局部准但越走越偏</strong>，SLAM <strong>长期准但一跳一跳不平滑</strong>。
+直接二选一都有毛病。</p>
+<p><strong>解法</strong>：<strong>只把两者的漂移量注入回路</strong>（原文写的是注入 <code>(T_DRIFT)^-1</code>）——
+于是<strong>同时保住 VIO 的平滑与 SLAM 的长期无漂</strong>。
+这是「<strong>两个都不完美的东西怎么组合</strong>」的一个漂亮范例。</p>
+<p>另有两个很好的数字教具：
+- <strong>三层地图的存储量级</strong>：语义层（树干圆柱 + 地面平面）<strong>约 2 MB</strong> 对
+  全局粗体素图 <strong>1250 MB</strong>——<strong>约 600 倍</strong>；
+- <strong>为什么树冠下必须用 LiDAR</strong>：密林树冠下阳光透叶打出<strong>斑驳光斑</strong>、
+  光斑随时间移动、局部亮暗剧变，<strong>破坏了视觉的恒亮假设</strong>。</p>
+<h3>3.2 Wildcat 的连续时间表示（<code>0203</code>）</h3>
+<p><strong>问题</strong>：一帧点云<strong>不是一个瞬间</strong>——激光雷达一边转一边走，
+同一帧里先扫到的点和后扫到的点<strong>是在不同位置采的</strong>，于是<strong>直墙被扫成斜线</strong>。</p>
+<p><strong>解法</strong>：<strong>连续时间</strong>表示——用 B 样条把轨迹表示成<strong>一条能求值的曲线</strong>，
+于是<strong>任意时刻都能插值出位姿</strong>，每个点各归各位。</p>
+<p><strong>一个重要的反面（能同时打穿两个误解）</strong>：
+Wildcat <strong>自己的纯里程计在 MulRan 上比 LIO-SAM 更差</strong>（<strong>2.9% vs 2.4%</strong>），
+它赢在<strong>鲁棒性（对手跑不完隧道）</strong>与<strong>全局一致性（回环 + 重力约束）</strong>，
+<strong>不是赢在单帧精度</strong>。</p>
+<hr />
+<h2>四、三处清单与正文不符（第 20–22 处）</h2>
+<h3>4.1 ★★ 第 20 处：「仿真」是文件名截断造成的误读</h3>
+<p>清单标「边缘计算加速多机器人<strong>仿真</strong>」——<strong>错</strong>。
+真实标题是 <code>Edge Robotics: Edge-Computing-Accelerated Multirobot
+**Simultaneous Localization and Mapping**</code>。</p>
+<p><strong>错的源头很小但很典型</strong>：文件名
+<code>2022_Edge_Robotics__Edge-Computing-Accelerated_Multirobot_Sim.md</code>
+里的 <code>_Sim</code> 是 <strong><code>Simultaneous</code> 被 66 字符长度限制切掉之后剩下的残骸</strong>——
+<strong>正好切在第三个字母上</strong>。于是 <code>Simultaneous</code> 变成 <code>Sim</code>，
+<code>Sim</code> 又被顺理成章读成了 <code>simulation</code>。</p>
+<p><strong>而且它不只是仿真</strong>：<strong>有真机原型</strong>（3 台 TurtleBot3 + 1 个边缘节点，端侧 Jetson TX2）。</p>
+<p>→ <strong>处理方式</strong>：开课即纠正，并<strong>把「文件名截断是一种系统性失真，不是个别事故」讲成教学点</strong>。
+（本季三篇应用论文的文件名<strong>都在第 66 个字符处被截断</strong>。）</p>
+<h3>4.2 ★★ 第 21 处：清单替论文说了一句它没说过的话</h3>
+<p>清单在 Wildcat 备注里写「<strong>用 SE(2) 相对位姿做稠密重建</strong>」。逐词实测：</p>
+<table>
+<thead>
+<tr>
+<th>清单的说法</th>
+<th>正文实测</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用 SE(2)</td>
+<td><code>SE(2)</code> 在正文里出现 <strong>0 次</strong>；出现的是 <code>SE(3)</code> / <code>SO(3)</code> / <code>so(3)</code></td>
+</tr>
+<tr>
+<td>做稠密重建</td>
+<td>正文<strong>没有「稠密重建」这个说法</strong>；产物是 <strong>surfel + submap</strong></td>
+</tr>
+</tbody>
+</table>
+<p>→ <strong>处理纪律</strong>：<strong>这是清单的说法，不是论文写的。我们不为它补话</strong>——
+不去替论文解释「它其实也想用 SE(2)」，也不去替它圆「稠密重建大概是这个意思」。
+<strong>论文说的是 SE(3)，我们就写 SE(3)。</strong></p>
+<p>并顺手讲清 SE(2) 与 SE(3) 的区别（平面 3 自由度 vs 空间 6 自由度），
+以及<strong>为什么这篇不需要 SE(2)</strong>：① 场景是三维的（QCAT 含三层楼梯与隧道）；
+② 它的位姿图专门加了<strong>重力方向约束</strong>；③ 它的面元匹配代价是<strong>三维</strong> point-to-plane 型。</p>
+<p>还附了一个很合理的猜测：<strong>误会可能来自「平面」这个词</strong>——
+它用协方差矩阵的<strong>最小特征值</strong>判断一个面元「平不平」，
+但那是<strong>面元自己的局部几何</strong>，不是<strong>位姿被表示成平面运动</strong>。</p>
+<h3>4.3 ★ 两处标题不全（同一截断的连带后果）</h3>
+<ul>
+<li>自主飞行漏了 <strong><code>Under Dense Forest Canopy</code></strong>——<strong>树冠下才是它的题眼</strong>；</li>
+<li>运动规划漏了 <strong><code>using machine learning: a survey</code></strong>——<strong>它是一篇综述</strong>；
+  而且清单把它归成「系统类偏工程」也错；<strong>它还是本批公式最少的一篇（仅 1 个编号式）</strong>。</li>
+</ul>
+<hr />
+<h2>五、一次跨季对账（本季最值得记的一件事）</h2>
+<p><strong>第九季 <code>0184</code></strong> 写：「Wild-Places 的真值由 <strong>Wildcat SLAM 自举</strong>生成，
+原文写明平均误差 <strong>0.3 m</strong>」。</p>
+<p><strong>本季 <code>0203</code> 第一次读 Wildcat 本身</strong>，去原文对账：</p>
+<ul>
+<li>Wildcat 正文给的是 <strong>QCAT 绝对误差 FlatPack 均值 0.42 m / SpinningPack 均值 0.34 m</strong>
+  （Table II，<strong>63 个测绘靶标</strong>）。</li>
+<li><strong>0.3 m 就是 0.34 m 的四舍五入</strong>（取的是 SpinningPack 那一个）。</li>
+<li>更要紧的是<strong>它不是轨迹误差，是「地图上这 63 个测绘点准不准」</strong>——
+  <strong>QCAT 这种 5 km 级室内外场景根本拿不到轨迹真值</strong>
+  （原文：providing an accurate pose ground truth is not feasible）。</li>
+<li>另外原文还有一个 <strong>DARPA 的 3 cm</strong>，那是<strong>另一种口径</strong>
+  （稀疏体素地图对稠密真值的最近邻统计），作者自认「不能精确反映地图精度」。
+  → <strong>3 cm 与 0.42 m 是两个不能放在一起比的数。</strong></li>
+</ul>
+<p>★ <strong>做这次对账不是挑第九季的错，而是示范「数字离开口径就会失真」这件事本身。</strong>
+并接回第九季的核心洞见：Wildcat 的误差是亚米级（0.34–0.42 m），
+而它要判的阈值是米级（3 m），<strong>误差比判据小一个量级</strong>——
+Wild-Places 拿它当亚米级真值去评「检索落在 3 m 内」，<strong>完全成立。够用比准更重要。</strong></p>
+<p>★ 而且这条链是双向的：<strong>第九季站在数据集的角度转引了 0.3 m；
+本季站在 SLAM 系统的角度查到了 0.42 / 0.34 m，并说清了它是什么误差。</strong></p>
+<hr />
+<h2>六、撤稿警示课（<code>0204</code>）：本季最特殊的一节</h2>
+<h3>6.1 事实部分（逐词实测）</h3>
+<ul>
+<li><strong>正文从头到尾没有撤稿声明</strong>：<code>retract</code> 全文命中 <strong>27 处，27 处全部落在图片路径里</strong>
+  （图片目录名继承自带 <code>RETRACTED_ARTICLE</code> 前缀的文件名，是<strong>假命中</strong>）；
+  <strong>排除图片路径后，正文文字命中 0 处</strong>。</li>
+<li><strong>Declarations 段反而完全合规</strong>：Funding「<strong>无资金支持</strong>」、
+  Conflict of interest「<strong>作者声明无相关利益冲突</strong>」、
+  Data availability「<strong>可向通讯作者索取</strong>」、Ethical approval「<strong>不涉及</strong>」。</li>
+<li><strong>外部核实（Springer 官网）</strong>：标题前缀 <strong>RETRACTED ARTICLE</strong>；
+  期刊 <strong>Soft Computing</strong>（Springer），Vol 27, Issue 23, pp 18195–18213, 2023；
+  DOI <strong>10.1007/s00500-023-09278-3</strong>；
+  变更历史「<strong>09 March 2026 — This article has been retracted</strong>」；
+  撤稿通知在<strong>另一份文件</strong>：DOI <strong>10.1007/s00500-026-11323-w</strong>。</li>
+<li><strong>★ 它仍有 98 条 Scopus 引用。</strong></li>
+</ul>
+<h3>6.2 课上的四段骨架（写成操作课，不是论文摘要）</h3>
+<ol>
+<li><strong>起——零件全对</strong>：把它用到的<strong>第十季零件</strong>逐条列出来打勾
+   （RPN、ROI pooling、ResNet50、Faster-RCNN、KITTI、AP/mAP/IoU、相机-LiDAR 标定与投影），
+   读者会<strong>本能觉得这篇很正规</strong>；</li>
+<li><strong>承——声明全合规</strong>：Declarations 四条逐字抄出来，全部合规；</li>
+<li><strong>转——回到论文内部查自洽性</strong>：同一个 mAP 在正文与表格里分别是 <strong>97.13% 与 85.67%</strong>；
+   摘要同时给 <strong>70 ms 与 15.8 FPS</strong> 而 1÷0.070 ≈ <strong>14.3 FPS</strong>；
+   训练集明细相加是 <strong>4500</strong> 而正文写 <strong>4400</strong>；
+   对比表的引用归属与自家参考文献表<strong>系统性对不上</strong>；
+   式(11) 的 4×4 矩阵<strong>底行全零</strong>、式(10) 里<strong>旋转矩阵没进目标函数</strong>；</li>
+<li><strong>合——判据是「可核查性」</strong>：不是「看起来像不像论文」，
+   而是「数据/代码是否可得、评测协议是否自洽、数字能否复现」。</li>
+</ol>
+<h3>6.3 ★★★ 不许说的话（照单执行）</h3>
+<ul>
+<li>不许写「因为数据造假所以被撤」；</li>
+<li>不许写「因为无法复现所以被撤」；</li>
+<li>不许写「因为作者有问题」「因为审稿人发现了什么」；</li>
+<li><strong>不许出现「撤稿原因是……」这一句式</strong>；</li>
+<li>不许把「读起来不对劲的地方」说成「<strong>撤稿的证据</strong>」，只能说成
+  「<strong>读时应当起疑、应去核查的地方</strong>」。</li>
+</ul>
+<p><strong>需要一句话时就用</strong>：「<strong>正文未给出撤稿理由；本课不写理由。</strong>」</p>
+<h3>6.4 全季最重要的一句话</h3>
+<blockquote>
+<p><strong>零件都对、声明都合规、格式都像样，仍不保证整篇可信。</strong></p>
+</blockquote>
+<p>而<strong>判据要建立在「可核查性」上</strong>——
+这也顺手解释了为什么它仍有 98 条引用：
+<strong>撤稿不会自动撤回别人已经引用的行为。</strong></p>
+<hr />
+<h2>七、本季的诚实标注</h2>
+<ul>
+<li><strong>撤稿理由不写</strong>（通知是出版方另发的文件，本语料库没有）。</li>
+<li><strong><code>0202</code> 的多处原文疑点</strong>如实标出：上传时延单位 <code>ms</code> 应为 <code>s</code>；
+  1.51 s 与 49.74% 口径不自洽；通道名 <code>3G</code> / <code>5G</code> 前后不一致；
+  角速度写成 <code>m/s²</code>；「平均 58.71% / 上限 12.16%」混了两个指标；
+  Algorithm 3 下标应为 <code>j</code>。</li>
+<li><strong><code>0200</code> 弃用了一个量级不可能的数字</strong>（原文「1.1 km 回环覆盖 200 m²」），
+  改讲轨迹导数（急动度）那一段。</li>
+<li><strong><code>0203</code> 如实区分</strong>：Wildcat 自报的 QCAT 误差是「<strong>对齐之后的形状误差</strong>」，
+  不是「绝对位置误差」；DARPA 的 3 cm 是另一种口径，<strong>两者不能比</strong>。</li>
+</ul>
+<hr />
+<h2>八、本季量化数据（交付时实测）</h2>
+<pre><code class="language-text">篇目            5 篇（全部命中，未覆盖 0）
+课程            7 节（0199–0205），课号连续、文件名唯一
+自绘 SVG        30 张（每节 4.3 张，各季最高）
+SVG 文字标注     1013 个（平均每节 145 个）
+引用原文图       28 张（0 缺失）
+写作规范         stageK-writing-rules.md，56 KB
+</code></pre>
+<p><strong>交付前校验（全绿）</strong>：</p>
+<pre><code class="language-text">audit_lessons.py 0199 0205        → 7 节，问题项 0
+svgcheck（全季 7 节 + 新成就卡）    → 0 OVERLAP / 0 OUT-OF-BOX
+validate_delivery.py             → 221 文件 / 824 图 0 缺失，问题总数 0
+responsive_check 三宽度           → 221 页 × {390,768,1024} 溢出 0 页
+</code></pre>
+<p><strong>本季新踩的坑（写进了 NOTES 第 76 条）</strong>：
+<strong>写作 agent 会按「课号 + 自己猜的标题」拼文件名，而不是去读真实文件名。</strong>
+本季首轮有 4 节课共 <strong>21 处跨季链接全部是死链</strong>（链接文字都对得上语义，
+但文件名是编的）——<strong>只有机检能抓到</strong>。</p>
+<p><strong>配套产出</strong>：<code>成就卡-第十一季.html</code>（全景结业者，+ <code>ach-stage-k</code> 登记，<strong>共 11 张卡，A–K 全覆盖</strong>）、
+<code>路线图总览.html</code> 阶段 K 状态改为已开课、catalog 新增 <code>stage-k</code>
+（7 条 lesson，<strong>lesson 总数达 205</strong>，与收官课里写的「205 节课」对上）、
+NOTES 第 72–76 条、SKILL 阶段总表/台账/进度台账/变更日志。</p>
+<hr />
+<h2>九、全项目结业小结</h2>
+<p><strong>十一季 · 十一个阶段 · 205 节课 · 255 篇语料库。</strong></p>
+<ul>
+<li><strong>主干七季（A–G）</strong> 是一条纵向的技术演进：
+  从全景纲领出发 → 打地基 → 视觉主干 → 激光主干 → 多传感器融合 → 神经隐式与 3D 高斯 → 学习式方法；</li>
+<li><strong>四个横切面（H–K）</strong> 是四种不同的切法：
+  <strong>H 支线</strong>拆假设、<strong>I 尺子</strong>教衡量、<strong>J 零件</strong>补名词、<strong>K 位置</strong>看全局。</li>
+</ul>
+<p><strong>从第一季的全景纲领出发，最后又回到全景。</strong></p>
+<p><strong>你现在能做什么</strong>：
+拿到一篇论文，能读正文而不是猜标题；看到一个指标，会先问它是在什么尺子上量的；
+看到一个陌生名词，能判断该不该停下来读懂它；看到一个方法，能说出它在系统链上站在哪一环。</p>
+<p><strong>还欠什么</strong>：
+建图质量的评测只被点过名；多机数据集的真值难题没解；
+有少数几个零件的重要性来自行业共识而非本语料库证据；
+而且这始终是 <strong>255 篇语料库</strong>上的课程，<strong>不是 SLAM 全集</strong>。</p>
+<div class="doc-foot">本页由 <code>course/learning-records/0013-第十一季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

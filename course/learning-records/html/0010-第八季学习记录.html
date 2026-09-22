@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第八季学习记录：专题支线 · 动态 / 语义 / 多机 / 事件（0152–0178） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0010-第八季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第八季学习记录：专题支线 · 动态 / 语义 / 多机 / 事件（0152–0178）</h1>
+<blockquote>
+<p>对应课程：第 0152 – 0178 节（语料库阶段 H，42 篇论文；本季 27 节课，97 张具象自绘图、95 张原文图）
+记录日期：2026-09-21</p>
+</blockquote>
+<hr />
+<h2>一、这一季和前七季的性质不同</h2>
+<p>前七季是一条<strong>纵向</strong>的线：先建立坐标系，再打地基，然后视觉主干、激光主干、多传感器融合、
+神经隐式、学习式方法——每一季都接在上一季后面。</p>
+<p><strong>这一季是横向的</strong>。它不接在第七季后面，而是<strong>横切所有前七季</strong>，去拆三个从没人明说、
+但一直默认成立的假设：</p>
+<table>
+<thead>
+<tr>
+<th>前七季的隐含假设</th>
+<th>本季哪一块拆它</th>
+<th>拆完之后冒出来的新问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>环境是<strong>静止</strong>的</td>
+<td>动态环境（<code>0153</code>–<code>0158</code>）</td>
+<td>怎么判断哪些点在动？判错怎么办？代价是多少？</td>
+</tr>
+<tr>
+<td>地图只是<strong>几何</strong>，不知道那是什么</td>
+<td>语义建图（<code>0159</code>–<code>0167</code>）</td>
+<td>标签从哪来？同一物体跨帧怎么认成同一个？</td>
+</tr>
+<tr>
+<td>只有<strong>一台</strong>机器人、一个主体</td>
+<td>多机协同（<code>0168</code>–<code>0174</code>）</td>
+<td>谁是中心？怎么防止一个假回环把两台地图一起毁掉？</td>
+</tr>
+<tr>
+<td>相机是<strong>快门式</strong>的，总有完整图像</td>
+<td>事件相机（<code>0175</code>–<code>0178</code>）</td>
+<td>没有绝对亮度、没有完整图像，传统光度误差和描述子全不能用了，那用什么？</td>
+</tr>
+</tbody>
+</table>
+<p><strong>拆完之后冒出来的全是新问题，不是旧问题的重复</strong>——这是本季最值得记的一句话。</p>
+<hr />
+<h2>二、四条支线各自的收获</h2>
+<h3>2.1 动态环境：代价账是本块的主线</h3>
+<p>八篇论文可以按「拿动态怎么办」分成四种哲学：</p>
+<table>
+<thead>
+<tr>
+<th>哲学</th>
+<th>代表</th>
+<th>关键数字 / 判据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>删</strong>（几何 + 语义双通道）</td>
+<td>DynaSLAM <code>0153</code></td>
+<td>深度一致性阈值 τ_z = 0.4 m；语义 Mask R-CNN 195 ms/帧</td>
+</tr>
+<tr>
+<td><strong>删</strong>（纯几何，无语义）</td>
+<td>点相关性、CRF <code>0154</code></td>
+<td>不需要 GPU；代价是要等一段时间才能下结论</td>
+</tr>
+<tr>
+<td><strong>留 + 追踪</strong>（当路标）</td>
+<td>DynaSLAM II、Dynam-SLAM <code>0155</code></td>
+<td>停驶车场景反而更准，但要把物体位姿一起优化</td>
+</tr>
+<tr>
+<td><strong>软降权</strong>（不删点）</td>
+<td>WF-SLAM、室外动态 <code>0156</code></td>
+<td>用场景流确认「此刻动没动」，避免误删停驶车</td>
+</tr>
+</tbody>
+</table>
+<p><strong>本块最重要的一笔账</strong>：高精度的「几何＋语义＋修补」三件套加起来约 737 ms/帧，
+离 33 ms 的实时线差了二十多倍；想实时只能退到只用几何的 1.69 ms 档。
+更要紧的是——<strong>即使画面里没有人，语义那 195 ms 也照样要付</strong>，
+所以作者实测发现 DynaSLAM 在静态序列上反而略逊于原版 ORB-SLAM2。
+<strong>动态处理不是白拿的鲁棒性，它在安静场景里是净亏。</strong></p>
+<p>还有一个判据层面的收获：<strong>「可动类」不等于「此刻真在动」</strong>。
+语义只能告诉你「这是车」，只有几何（场景流）才能告诉你「它现在动没动」。
+一刀切把可动类全剔除，代价就是把路边停驶车辆那些本来能用来定位的特征点全丢了。</p>
+<h3>2.2 语义建图：地图表示决定能力上限</h3>
+<p>这一块的主线可以做成一档<strong>表示能力的阶梯</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>表示</th>
+<th>代表（课号）</th>
+<th>多出来的能力</th>
+<th>拿不到的东西</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>surfel 面元</td>
+<td>SemanticFusion <code>0159</code>、Co-Fusion/MaskFusion <code>0160</code></td>
+<td>稠密几何 + 语义</td>
+<td><strong>没有自由空间</strong>，做不了导航级可达性</td>
+</tr>
+<tr>
+<td>体素 / TSDF</td>
+<td>MID-Fusion、EM-Fusion <code>0161</code>、PanopticFusion <code>0162</code></td>
+<td>空的地方也是信息 → 自由空间、可抽网格</td>
+<td>内存与算力更贵，普遍 2–5 Hz</td>
+</tr>
+<tr>
+<td>场景图 DSG</td>
+<td>Kimera <code>0163</code></td>
+<td>分层抽象（楼→层→房间→物体→网格），<strong>可行动</strong></td>
+<td>实现最重，依赖完整系统</td>
+</tr>
+</tbody>
+</table>
+<p>另外三条贯穿线索：
+- <strong>语义粒度的三档</strong>：逐像素语义 → 实例分割 → 全景（stuff + things 都要）；
+- <strong>数据关联判据</strong>决定实例稳定性：IoU 类在遮挡/消失时会丢实例，统计检验类更稳；
+- <strong>「建物体模型」比「只滤动态点」贵得多</strong>：<code>0165</code> YOLO-SLAM 只删人点就能无 GPU 跑，
+  而 <code>0161</code> 做对象级重建必须 GPU + 降频。</p>
+<h3>2.3 多机协同：这块最抽象，也最需要图</h3>
+<p><strong>这一块是前七季那条「回环假阳性铁律」最残酷的战场</strong>：
+单机一次假回环毁一张地图；<strong>多机一次假回环会把两台机器人的地图一起缝歪</strong>。</p>
+<p>两代解法（<code>0171</code> 做了并排对照）：</p>
+<table>
+<thead>
+<tr>
+<th>家族</th>
+<th>做法</th>
+<th>优点</th>
+<th>代价</th>
+<th>使用者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>一致集最大化 / PCM</strong></td>
+<td>找互相不矛盾的最大一堆，只把那一堆放进优化</td>
+<td>绝不会被假回环拉歪；实现简单</td>
+<td>大图要枚举、算得慢；<strong>漏真回环</strong>（recall 低）</td>
+<td>DOOR / DiSCo / DCL / D²SLAM 远场</td>
+</tr>
+<tr>
+<td><strong>渐进非凸 / GNC</strong></td>
+<td>不丢任何一条，逐步「降温」，残差大的边权重趋零</td>
+<td><strong>保 recall</strong>；在线可跑</td>
+<td>要自己调降温节奏，参数不直观</td>
+<td>LAMP 2.0 / Swarm-SLAM / Kimera-Multi</td>
+</tr>
+</tbody>
+</table>
+<p>架构主线是三级递进：<strong>中心化</strong>（简单可靠但有单点与带宽瓶颈）→ <strong>分布式</strong>（各机本地优化再汇合）
+→ <strong>完全去中心化</strong>（对等、无主、容断）。</p>
+<p>通信上有一条很实用的规律：<strong>传什么决定了能省多少</strong>——原始图 &gt; 点云 &gt; 描述子 &gt; 关键帧 &gt; 拓扑/里程计。
+第七季 <code>0135</code> 讲的那个免训练几何描述子 Scan Context，在这一块被<strong>直接当成机器人之间的通用语言</strong>
+（<code>0170</code> DiSCo-SLAM）；后续还演进到 LiDAR-Iris 与 DELIGHT。</p>
+<h3>2.4 事件相机：先补物理机理，再谈算法</h3>
+<p>这一块的物理机理本身就反直觉，所以 <code>0175</code> 专门做了一节概念铺垫：</p>
+<ul>
+<li>它输出的<strong>不是图像</strong>，而是一串稀疏的 <code>(x, y, t, 极性)</code> 四元组；</li>
+<li>每个像素<strong>独立、异步</strong>工作，只在亮度变化超过阈值时才发一个事件；</li>
+<li><strong>没有绝对亮度</strong>——它只知道「变了」，不知道「多亮」；</li>
+<li><strong>静止时什么都不输出</strong>——这既是优点（省数据）也是致命弱点（没有信息可用于初始化）。</li>
+</ul>
+<p>也正因为没有绝对亮度，<strong>传统的光度误差完全不能用了</strong>（回链第三季 <code>0048</code> DSO 用的就是绝对亮度），
+于是这一块演化出两条优化目标：<strong>重投影/边缘对齐派</strong>（EVO、ESVO、DEVO、PL-EVIO）
+与<strong>对比度最大化派</strong>（CMax-SLAM）。</p>
+<p>融合范式的主线是：单事件 → 事件+帧 → 事件+IMU → 事件双目，
+其中<strong>双目/深度主要解决尺度，IMU/标准帧主要解决静止退化与初始化</strong>。</p>
+<hr />
+<h2>三、这块和前七季的接口（本季点名的回链）</h2>
+<table>
+<thead>
+<tr>
+<th>回链</th>
+<th>在哪一节</th>
+<th>接的是什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>第一季 <code>0005</code> 激光侧动态（SW-NDT）</td>
+<td><code>0158</code></td>
+<td>全项目第一次碰动态，与视觉侧对照</td>
+</tr>
+<tr>
+<td>第一季 <code>0014</code> 回环假阳性铁律</td>
+<td><code>0168</code> 起每节</td>
+<td>多机是这条铁律最残酷的战场</td>
+</tr>
+<tr>
+<td>第二季 位姿图与 Schur 消元</td>
+<td><code>0169</code> 起</td>
+<td>多机鲁棒后端都是在位姿图上加约束或筛边</td>
+</tr>
+<tr>
+<td>第二季 体素 / TSDF / 八叉树</td>
+<td><code>0161</code>–<code>0162</code></td>
+<td>语义建图的地图表示全部来自这里</td>
+</tr>
+<tr>
+<td>第三季 <code>0043</code>–<code>0045</code> ORB-SLAM</td>
+<td><code>0153</code> 起</td>
+<td>动态块几乎全部建立在它之上（外层加补丁）</td>
+</tr>
+<tr>
+<td>第三季 <code>0048</code> DSO 光度标定</td>
+<td><code>0175</code></td>
+<td>说明为什么事件相机不能用光度误差</td>
+</tr>
+<tr>
+<td>第三季 <code>0040</code> 尺度暗线</td>
+<td><code>0156</code>/<code>0177</code></td>
+<td>动态与事件两块都会撞上尺度问题</td>
+</tr>
+<tr>
+<td>第四季 <code>0092</code>/<code>0093</code> 激光回环</td>
+<td><code>0170</code></td>
+<td>Scan Context / LiDAR-Iris 在多机里的角色</td>
+</tr>
+<tr>
+<td>第六季 语义与动态剔除</td>
+<td><code>0159</code>/<code>0157</code></td>
+<td>「语义当零件」的现成例子</td>
+</tr>
+<tr>
+<td>第七季 <code>0135</code> Scan Context</td>
+<td><code>0170</code></td>
+<td>直接拿来当机间观测交换的通用语言</td>
+</tr>
+<tr>
+<td>第七季 <code>0140</code> 假阳性铁律结账</td>
+<td><code>0168</code> 起</td>
+<td>本块是它的正面检验</td>
+</tr>
+<tr>
+<td>第七季 <code>0147</code> SAM / DINOv2</td>
+<td><code>0157</code>/<code>0159</code></td>
+<td>上一季当「零件」讲，这一季真的被当零件用</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>四、本季的诚实标注（原文与清单的可疑处）</h2>
+<ol>
+<li><strong><code>2019_Kimera-Semantics.md</code> 文件名与内容不符</strong>：正文其实是 Kimera 主论文
+   （IJRR 2021，约 27k 词，含 DSG 五层结构与全家族模块），<strong>不是</strong>独立发表的
+   Kimera-Semantics 模块论文；「2019」这个年份也与正文的 2021 不符。<code>0163</code> 开课即声明。</li>
+<li><strong>Kimera 主论文并未提及 Kimera-Multi</strong>：因此不作「前者是后者前身」的断言，
+   只作「同属 MIT-SPARK 团队与同一表示体系」这一较弱表述，并标注为推断。</li>
+<li><strong>一处误报经核实后推翻</strong>：预精读环节曾报告两篇论文撞名（DiSCo-SLAM 与 D²SLAM），
+   逐字核对原文后确认是<strong>误报</strong>——两篇是不同论文（一个激光分布式、一个空中集群视觉惯性）。
+   课上反而把它当教学点：同名论文要靠作者与传感器区分。<strong>agent 的自我汇报不能直接采信。</strong></li>
+<li><strong><code>2018_EventTracking.md</code> 偏跟踪而非完整 SLAM</strong>，且<strong>依赖已有深度图</strong>；
+   <strong><code>2024_CMax-SLAM</code> 只做旋转运动</strong>（rotation-only BA），不是完整 6-DOF SLAM。
+   两处都在课里显式说明限定。</li>
+<li><strong><code>2022_MR-TopoMap</code> 是探索与拓扑框架</strong>，不是完整的协同 SLAM 后端，课上如实说明边界。</li>
+</ol>
+<hr />
+<h2>五、本季量化数据（交付时实测）</h2>
+<pre><code>课页数            27 节（0152–0178）
+具象自绘图        97 张（平均每节 3.6 张，各季最高）
+SVG 内文字标注    1261 个
+引用原文图        95 张（全部存在，0 缺失）
+结构审计          27 节全部通过，问题项 0
+SVG 几何体检      0 OVERLAP / 0 OUT-OF-BOX
+交付校验          191 文件 / 733 图 0 缺失，问题总数 0
+窄屏体检          191 页 × {390, 768, 1024} 溢出 0 页
+</code></pre>
+<div class="doc-foot">本页由 <code>course/learning-records/0010-第八季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

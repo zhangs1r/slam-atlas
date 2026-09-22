@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第九季学习记录：数据集与评测 · 一把尺子（0179–0185） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0011-第九季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第九季学习记录：数据集与评测 · 一把尺子（0179–0185）</h1>
+<blockquote>
+<p>对应课程：第 0179 – 0185 节（语料库阶段 I，5 篇论文；本季 7 节课，25 张具象自绘图、17 张原文图）
+记录日期：2026-09-21</p>
+</blockquote>
+<hr />
+<h2>一、这一季跟前八季有什么根本不同</h2>
+<p>前八季是一条<strong>纵向</strong>的路：先建立坐标系，再打地基，然后视觉主干、激光主干、多传感器融合、
+神经隐式、学习式方法、专题支线（动态/语义/多机/事件）。每一季都回答「<strong>怎么做</strong> SLAM」。</p>
+<p><strong>这一季回答的是另一个问题：怎么判断一个 SLAM 做得好不好。</strong></p>
+<p>它不讲任何新方法，只讲<strong>尺子</strong>。而且这件事<strong>早就欠着了</strong>——</p>
+<p>第一季第 <code>0013</code> 课曾经提过一句警告：注意 <code>GT^soft</code>、<code>R@100P</code> 这类<strong>评测口径</strong>的坑。
+当时那只是一句提醒。这一季就是把它做成了完整的一课。</p>
+<p><strong>更欠的是另一件事</strong>：前八季到处都在用 TUM、EuRoC、KITTI 这些数据集，
+但从没交代过它们的<strong>真值是怎么来的、精度到哪一级</strong>。
+这一季把这件事补上了——而补完之后会发现，<strong>它直接改变了你怎么读论文里的表格</strong>。</p>
+<hr />
+<h2>二、全季主线：真值从哪来，决定这把尺子量得出什么</h2>
+<p>5 篇论文按「真值怎么获得」正好排成一个阶梯，这也是本季最重要的那张表：</p>
+<table>
+<thead>
+<tr>
+<th>真值来源</th>
+<th>代表（课号）</th>
+<th>精度</th>
+<th>换来什么</th>
+<th>代价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>动捕 / 激光跟踪仪</strong></td>
+<td>TUM <code>0180</code>、M2DGR 室内 <code>0182</code></td>
+<td><strong>毫米级</strong></td>
+<td>极准</td>
+<td><strong>空间小</strong>（动捕房只有几米）</td>
+</tr>
+<tr>
+<td><strong>毫米级靶标 + 扫描仪</strong></td>
+<td>Hilti-Oxford <code>0183</code></td>
+<td><strong>毫米级</strong>（分区域）</td>
+<td>大场景也能毫米级</td>
+<td>要布靶标、要后期处理</td>
+</tr>
+<tr>
+<td><strong>测绘扫描仪 + ICP</strong></td>
+<td>Newer College <code>0181</code></td>
+<td><strong>厘米级</strong></td>
+<td>手持大场景可用</td>
+<td>精度让一档</td>
+</tr>
+<tr>
+<td><strong>RTK-GPS / GNSS</strong></td>
+<td>M2DGR 户外 <code>0182</code>、KITTI 等</td>
+<td><strong>厘米级</strong></td>
+<td>户外大场景</td>
+<td><strong>需要天空可见</strong></td>
+</tr>
+<tr>
+<td><strong>SLAM 自举</strong></td>
+<td>Wild-Places <code>0184</code></td>
+<td><strong>亚米级</strong></td>
+<td>没有真值也能评</td>
+<td><strong>只能评检索，不能评轨迹精度</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>★ 本季最重要的一句话</strong>：<strong>够用比准更重要。</strong>
+任务不同，对真值精度的要求就不同——Wild-Places 用亚米级真值评地点识别<strong>完全成立</strong>，
+因为地点识别的成功判据本来就是「检索结果落在 3 米内」。
+「真值越准越好」是外行话，<strong>够用</strong>才是工程标准。</p>
+<hr />
+<h2>三、评测方法论：ATE 与 RPE（本季的技术核心）</h2>
+<p>这两个指标由 2012 年那篇 TUM 论文定义，<strong>至今所有 SLAM 论文都在用</strong>。课上用一条走廊把它们讲清：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>全称</th>
+<th>量什么</th>
+<th>能看出什么</th>
+<th>看不出什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>ATE</strong></td>
+<td>绝对轨迹误差</td>
+<td>整条轨迹与真值的偏差</td>
+<td><strong>整体漂移</strong>（全局量）</td>
+<td>中间某段飘了又回来的情况</td>
+</tr>
+<tr>
+<td><strong>RPE</strong></td>
+<td>相对位姿误差</td>
+<td>每一小段内的相对位移误差</td>
+<td><strong>漂移率</strong>（局部量）</td>
+<td>整体偏了多少</td>
+</tr>
+</tbody>
+</table>
+<p><strong>为什么两个都要报</strong>（这张对照图是全季题眼）：
+- 「整条轨迹偏移一大截、但形状对」→ <strong>ATE 大、RPE 小</strong>；
+- 「整体位置对、但中间飘了一段又回来」→ <strong>ATE 可能不大、RPE 大</strong>。</p>
+<p><strong>三个容易忽略但要命的细节</strong>：</p>
+<ol>
+<li><strong>轨迹对齐方式会改变数字</strong>：单目 SLAM 天生缺尺度，
+   <strong>必须用 Sim(3)（允许缩放）对齐才公平</strong>；用 SE(3)（只允许旋转平移）会让单目无端吃亏。</li>
+<li><strong>时间戳关联</strong>：真值与估计的采样时刻不同，要先配对；
+   如果两边<strong>时钟差 0.1 秒</strong>，误差会被<strong>虚假放大</strong>——这不是方法的问题，是评测的问题。</li>
+<li><strong>RMSE 与中位数</strong>：100 次误差里绝大多数很小、少数极大（跟丢了）时，
+   <strong>RMSE 被那几次拖高、中位数不受影响</strong>——所以论文有时两个都报。</li>
+</ol>
+<hr />
+<h2>四、四篇数据集各自的看点</h2>
+<h3>4.1 Newer College（<code>0181</code>）：手持 + 退化场景</h3>
+<ul>
+<li>平台是<strong>手持</strong>（人拎着走）→ 能进去车去不了的地方（楼梯、窄道）。</li>
+<li>真值：<strong>测绘级激光扫描仪建图 + ICP 注册</strong>，精度约 <strong>3 cm</strong>（<strong>厘米级</strong>）。
+  <strong>要讲清为什么这个场景做不到毫米级</strong>——这是"精度与场景规模互相制约"的活例子。</li>
+<li>看点：<strong>退化场景</strong>（长走廊、隧道），激光与视觉同时失去信息。</li>
+</ul>
+<h3>4.2 M2DGR（<code>0182</code>）：一份数据集里三种真值</h3>
+<ul>
+<li>地面机器人多传感器：相机、激光、IMU、GNSS、<strong>轮式里程计</strong>。</li>
+<li><strong>题眼</strong>：真值不是单一来源，而是<strong>按场景切换</strong>——
+  室内动捕 <strong>1 mm</strong> / 激光跟踪仪 <strong>1 mm + 1.5 ppm</strong> / 户外 RTK <strong>约 2 cm</strong>。
+  <strong>所以不能笼统说「M2DGR 的真值是毫米级」</strong>：同一份数据集里，不同序列的真值精度是不同的。</li>
+<li>场景专挑<strong>致命情形</strong>：电梯内（无 GNSS + 金属屏蔽）、全黑环境、室内外切换（光照剧变）。</li>
+</ul>
+<h3>4.3 Hilti-Oxford（<code>0183</code>）：把评测推向绝对精度</h3>
+<ul>
+<li><strong>毫米级真值是分区域的</strong>：靠布置 <strong>AprilTag 靶标</strong>，靶标处毫米级、
+  <strong>靶标之间靠插值</strong>——所以不是处处毫米级。</li>
+<li><strong>评分函数</strong>把「精度」与「是否跟丢」放在一起打分，<strong>跟丢扣分远比不准重</strong>。
+  这是从"相对排名"走向"绝对精度"的标志。</li>
+<li>场景含长走廊、窄楼梯、暗角，专逼当时 SOTA 到极限。</li>
+</ul>
+<h3>4.4 Wild-Places（<code>0184</code>）：★ 全季最需要小心的一节</h3>
+<ul>
+<li>真值由 <strong>Wildcat SLAM 自举</strong>（不是外部测量设备）：原文写明平均误差 <strong>0.3 m</strong>；
+  机间配准「<strong>95% 对应点误差 &lt; 0.95 m</strong>」；地点识别<strong>成功判据是「检索结果落在 3 米内」</strong>。</li>
+<li><strong>所以它的真值只有亚米级</strong>，<strong>不能与 TUM / Hilti 放在同一精度梯队</strong>。</li>
+<li>两个新问题（前八季没碰过的）：</li>
+<li><strong>用 SLAM 评 SLAM 的循环论证风险</strong>——缓解方式是与外部测量的数据交叉比对；</li>
+<li><strong>共享点泄漏</strong>——若两段序列共享同一批点云，检索任务就作弊了；
+    他们用「<strong>1 秒时间窗</strong>」把共享点切开。</li>
+<li>评测协议：<strong>R@1、MRR、F1</strong>，且<strong>必须带上「成功判据半径」这个前提</strong>——
+  回链第七季 <code>0134</code>–<code>0140</code> 的 Recall@1：<strong>召回率如果没有前缀（R@1 / R@1% / 判据半径）是没有意义的。</strong></li>
+</ul>
+<hr />
+<h2>五、收官课的结账：排行榜上的数字为什么不可横比</h2>
+<p>至少四条理由（<code>0185</code> 正面回答）：</p>
+<ol>
+<li><strong>真值精度不同</strong>——毫米级真值上 1 cm 的误差，在亚米级真值上根本量不出来；</li>
+<li><strong>轨迹对齐方式不同</strong>——SE(3) 还是 Sim(3)，单目的数字会差很多；</li>
+<li><strong>序列 / 场景不同</strong>——同一数据集的不同序列难度并不相同，挑好序列就能刷分；</li>
+<li><strong>统计量选择不同</strong>——报 RMSE 还是中位数，跟丢一次的代价天差地别；</li>
+<li>（附加）<strong>「跟丢了算不算」的规则不同</strong>——有的评测把跟丢的段直接剔除，
+   有的给重罚（如 Hilti），同一个系统在两个规则下能得出相反结论。</li>
+</ol>
+<hr />
+<h2>六、这块和前八季的接口（本季点名的回链）</h2>
+<table>
+<thead>
+<tr>
+<th>回链</th>
+<th>在哪一节</th>
+<th>接的是什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>第一季 <code>0013</code>（GT^soft / R@100P 警告）</strong></td>
+<td><code>0179</code> 导览</td>
+<td><strong>本季的总纲</strong>——当年一句提醒，这一季做成完整一课</td>
+</tr>
+<tr>
+<td>第一季 <code>0002</code> SLAM 全景纲领</td>
+<td><code>0180</code></td>
+<td>优化的目标函数与评测的指标是两回事</td>
+</tr>
+<tr>
+<td>第二季 BA 与位姿图</td>
+<td><code>0180</code></td>
+<td>被比较的「轨迹」正是位姿图优化输出</td>
+</tr>
+<tr>
+<td>第三季 TUM / EuRoC / KITTI</td>
+<td><code>0180</code>/<code>0181</code></td>
+<td>补上这些数据集真值的来路</td>
+</tr>
+<tr>
+<td>第四季 LOAM 系列在 KITTI 上排名</td>
+<td><code>0185</code></td>
+<td>排行榜数字怎么读</td>
+</tr>
+<tr>
+<td>第七季 <code>0134</code>–<code>0140</code> 场景识别 Recall@1</td>
+<td><code>0184</code></td>
+<td>补上 MRR / F1 / 判据半径</td>
+</tr>
+<tr>
+<td>第八季 <code>0153</code>–<code>0158</code> 动态环境</td>
+<td><code>0182</code></td>
+<td>动态场景评测的难处</td>
+</tr>
+<tr>
+<td>第八季 <code>0175</code> VECtor 数据集</td>
+<td><code>0184</code></td>
+<td>同类「数据集课」的先行例子</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>七、本季的诚实标注</h2>
+<ol>
+<li><strong>★ 清单有一处误导，已开课即纠正</strong>（第 16 处路线图问题）：清单把 5 篇并列，
+   容易让人以为真值精度差不多；<strong>实际 Wild-Places 只有亚米级</strong>（见 4.4），
+   <strong>不能与 TUM / Hilti 同梯队</strong>。课上没有掩饰，反而把它做成了全季最重要的教学点。</li>
+<li><strong>三篇正文未标注发表会议</strong>（M2DGR、Hilti-Oxford、Wild-Places）——
+   按规范写「正文未标注」，<strong>没有凭印象补会议名</strong>。</li>
+<li>多处 OCR 错误已改并说明：Newer College 的「1.5msec/:」→ 约 1 m/s；
+   M2DGR 的「RTk/INS」→ RTK/INS、「Hal105」→ Hall05；
+   Hilti 的「7 12 April tags」→ 7×12 AprilTags；Wild-Places 的「ORDF」→ ORFD；
+   TUM 的「7×7From this」→ 7×7 m²。</li>
+</ol>
+<hr />
+<h2>八、本季量化数据（交付时实测）</h2>
+<pre><code>课页数            7 节（0179–0185）
+具象自绘图        25 张（平均每节 3.6 张）
+SVG 内文字标注    734 个
+引用原文图        17 张（全部存在，0 缺失）
+结构审计          7 节全部通过，问题项 0
+SVG 几何体检      0 OVERLAP / 0 OUT-OF-BOX
+交付校验          199 文件 / 750 图 0 缺失，问题总数 0
+窄屏体检          198 页 × {390, 768, 1024} 溢出 0 页
+</code></pre>
+<div class="doc-foot">本页由 <code>course/learning-records/0011-第九季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

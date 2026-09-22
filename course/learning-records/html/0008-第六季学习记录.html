@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第六季学习记录：前沿 · 神经隐式与 3D 高斯（0104–0127） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0008-第六季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第六季学习记录：前沿 · 神经隐式与 3D 高斯（0104–0127）</h1>
+<blockquote>
+<p>对应课程：第 0104 – 0127 节（语料库阶段 F，共 36 篇论文；本季 24 节课，49 张具象自绘图）
+记录日期：2026-09-20</p>
+</blockquote>
+<hr />
+<h2>一、这一季到底在争什么</h2>
+<p>前五季问的都是<strong>「位姿怎么算」</strong>。这一季换了一个更前面的问题：</p>
+<blockquote>
+<p><strong>场景本身，到底存在哪？</strong></p>
+</blockquote>
+<p>两条答案，本质上是一对反义词：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>显式</th>
+<th>隐式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>场景存成什么</td>
+<td>一堆<strong>明码标价的几何元素</strong>（点、体素、面片、平面、椭球）</td>
+<td>一堆<strong>权重</strong>（网络参数、特征网格里的数）</td>
+</tr>
+<tr>
+<td>想删掉一个东西</td>
+<td>直接删——它就在那儿</td>
+<td>不知道从哪删：改一处，全世界都跟着动</td>
+</tr>
+<tr>
+<td>想看清楚细节</td>
+<td>加更多元素，内存跟着涨</td>
+<td>把网络做大 / 分辨率调高，训练变慢</td>
+</tr>
+<tr>
+<td>「画出来」这一步</td>
+<td>要有明确的投影与合成规则</td>
+<td>网络本身就负责回答「这个方向看过去是什么颜色」</td>
+</tr>
+</tbody>
+</table>
+<p><strong>这一季的有趣之处在于：它走了一圈又回到了显式。</strong></p>
+<p>iMAP 把地图塞进网络（最激进）→ NICE-SLAM 拆成特征网格（把一部分信息搬回网格）→ Vox-Fusion / ESLAM 用八叉树与平面省内存（网格变稀疏、变平面）→ Point-SLAM 把特征挂到点云上（回到点！）→ <strong>3DGS 干脆回到「一堆椭球」</strong>。而这一圈不是白走的：<strong>3DGS 保留了这条线上最值钱的那个零件——可微渲染</strong>。</p>
+<hr />
+<h2>二、两笔挂了五季的债，这一季还清了</h2>
+<p>这是本季最值得记的一件事。两笔债都不是「后来有人随便说说」，而是<strong>第一季自己写在账上的</strong>：</p>
+<h3>债① 「3DGS 综述只引用、未展开『自适应密度控制』」（第一季 0015 课写下）</h3>
+<p><strong>第 0116 课连本带利还清。</strong> 而且核实的过程抓到一处<strong>方向反了的常见误传</strong>——我自己的初稿就写错了：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>条件</th>
+<th>动作</th>
+<th>体积怎么变</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>克隆 clone</strong></td>
+<td><strong>欠重建</strong>（高斯太小，盖不住这块几何）</td>
+<td>复制一个<strong>同样大</strong>的高斯，沿位置梯度推一步</td>
+<td>变大</td>
+</tr>
+<tr>
+<td><strong>切分 split</strong></td>
+<td><strong>过度重建</strong>（一个大高斯糊住了一小块几何）</td>
+<td>一分为二，各自尺度<strong>除以 1.6</strong></td>
+<td>不变</td>
+</tr>
+</tbody>
+</table>
+<p>关键判据是<strong>「高斯相对于它要盖的几何是太大还是太小」</strong>——不是「高斯数量多不多」。另有一条容易被忽略但很关键的机制：<strong>周期性把所有高斯的不透明度重置到接近 0</strong>，让「占着位置却没在干活」的高斯被淘汰、重新参与竞争。</p>
+<p>（这条的教训我单列在下面第四节。）</p>
+<h3>债② 「隐式地图方法在大尺度户外的有效性尚未被证明」（第一季 0010 课写下）</h3>
+<p><strong>第 0111 课与 0121 课给出正面证据。</strong></p>
+<ul>
+<li><strong>0111 PIN-SLAM</strong>：把地图做成「可形变的神经点云」，回环来了就<strong>把点整体拉过去</strong>，而不是重训网络；里程计与回环齐备——这是第一个<strong>完整</strong>的隐式 SLAM，而且能跑两万帧级别的序列（激光侧）。</li>
+<li><strong>0121 Splat-SLAM</strong>：纯 RGB、带回环、全局优化（高斯侧）。</li>
+</ul>
+<p><strong>但这里要诚实</strong>：这两条证据都是「特定条件下成立」，还谈不上「隐式方法已经全面适用于大尺度户外」。我在课里把它写成「<strong>这条判断第一次被正面回应</strong>」，而不是「已经被推翻」——因为<strong>未被证明 ≠ 已被证否</strong>，反过来也一样。</p>
+<hr />
+<h2>三、本季最反直觉的三个认识</h2>
+<h3>① 回环发生时，真正被改动的东西比想象的浅</h3>
+<p>我原本以为「隐式地图要回环，就得重训网络」。<strong>本季六篇读下来，结论几乎一致相反</strong>：</p>
+<blockquote>
+<p><strong>不动 MLP 权重，只动显式锚点（点、子图、控制点），加一个跟着走的小 MLP。</strong></p>
+</blockquote>
+<p>原因很直白：MLP 权重是<strong>全局纠缠</strong>的——调一个数，整个场景都变。而点、子图这些「锚点」是<strong>局部的、可以整体搬运</strong>的。所以 Loopy-SLAM 用点基 submap + 位姿图，PIN-SLAM 用可形变神经点，GO-SLAM 用全局优化 + 即时重建。</p>
+<p><strong>这就是「改动落在哪一层」的问题</strong>——本季第 0110 课专门用一张三层结构图讲它。</p>
+<h3>② 稠密表示碰上动态物体，代价比稀疏时大得多</h3>
+<p>第三季 0068 课讲动态环境时，代价是「<strong>几个特征点被污染</strong>」。到了稠密/隐式表示，代价升级成「<strong>地图上长出一整块根本不存在的几何</strong>」——因为它不筛点，它是「把每个像素/每个体素都拟合上」。</p>
+<p>所以第 0114 课我把这一句当成题眼：<strong>「静态假设一旦破，稠密地图长出的不是几个坏点，而是整块幽灵。」</strong></p>
+<p>而 0121 的 WildGS-SLAM 给了本季最漂亮的一招：<strong>用 DINOv2 特征的「不确定度」当『这东西可能不是真的』的信号</strong>——不需要深度、不需要语义标签、不需要分割网络。它的思路是：同一处在几帧之间特征对不上 → 说明这里要么在动、要么不真。</p>
+<h3>③ 「逐场景优化」这件事，终于有人正面挑战了</h3>
+<p>3DGS 与它的一大批后续，都是「<strong>一个场景优化一遍</strong>」——这其实是第二季 0027 课 COLMAP「离线 SfM 逐场景优化」那条老路的延续。</p>
+<p><strong>第 0124 课的 GPS-Gaussian 问的是：能不能不优化？</strong> 答案是能：一次前向推理直接出可渲染的高斯。<strong>但边界很窄</strong>——它只在人体上验证过，而且不是 SLAM。我在课里如实写成了「这是『泛化』这条不成熟环节的一个回应，但远不是通用解」。</p>
+<hr />
+<h2>四、被纠正的六处错误假设（这一季最多）</h2>
+<p>精读 agent 和逐句核实一共纠正了我<strong>六处</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>我原本以为</th>
+<th>正文实际是</th>
+<th>影响</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>欠重建 → split，过度重建 → clone</td>
+<td><strong>反了</strong>：欠重建 → <strong>clone</strong>，过度重建 → <strong>split</strong></td>
+<td>还债课的核心方向，必须对</td>
+</tr>
+<tr>
+<td>2</td>
+<td>隐式/神经地图回环会重训 MLP 权重</td>
+<td><strong>不动 MLP，只动显式锚点 + 小 MLP</strong></td>
+<td>影响整组「回环怎么改」的叙事</td>
+</tr>
+<tr>
+<td>3</td>
+<td>NeRF-SLAM / NeRF-LOAM 有回环</td>
+<td><strong>都没有回环</strong>（已用 grep 验证）</td>
+<td>避免替论文编功能</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Orbeez-SLAM 是动态环境方法</td>
+<td>是<strong>静态世界</strong>的实时隐式 SLAM</td>
+<td>影响它在模块里的定位</td>
+</tr>
+<tr>
+<td>5</td>
+<td>OVD-SLAM 用开放词汇检测（标题写 OVD）</td>
+<td><strong>实际只用 YOLOv5 语义分割</strong></td>
+<td>典型的「标题不可信」案例</td>
+</tr>
+<tr>
+<td>6</td>
+<td>GS-IR 的法向来自 SDF 蒸馏</td>
+<td>来自<strong>深度梯度</strong>；SuGaR 也不是独立 SDF 网络，而是从密度导出</td>
+<td>避免张冠李戴</td>
+</tr>
+</tbody>
+</table>
+<p><strong>这六条里，第 1、2、5 条属于同一类：叙事顺滑的版本 ≠ 正文的版本。</strong> 我在写作简报里已经养成习惯写一句「若与正文不符请指出」，这一季它救了六次。</p>
+<hr />
+<h2>五、三条主线的本季进展</h2>
+<h3>主线一：「地图里存什么」——这条最长线索的第五次换血</h3>
+<p>第二季 <code>0033</code> TSDF（每格一个标量距离）→ <code>0034</code> Voxel Hashing（体素块 + 哈希）→ 第四季 <code>0084</code> ikd-Tree（能增量插入删除的树）→ 第五季 <code>0100</code>（<strong>存拟合好的平面</strong>）→ <strong>本季：网络权重 → 多层级特征网格 → 八叉树 → 特征平面 → 点上的特征 → 椭球</strong>。</p>
+<p>本季给这条线补上了两个以前没出现过的维度：
+- <strong>「信息存哪」可以分层</strong>（显式锚点 + 隐式特征）；
+- <strong>「表示」与「渲染」可以合流</strong>（第五季 0098 的高斯地图本身就是可渲染的；本季 0116–0121 把这件事做成了完整的 SLAM）。</p>
+<h3>主线二：「提取 vs 不提取特征」——本季出现第三回合的苗头</h3>
+<p>第一回合在视觉（第三季 0046–0050：DTAM → LSD-SLAM → DSO → SVO），第二回合在激光（第四季 0074 → 0084：LOAM 提特征 → FAST-LIO2 彻底不提）。</p>
+<p><strong>本季是「换一个层面重问」</strong>：不再问「要不要提特征」，而是问「<strong>要不要显式地存几何</strong>」——iMAP 连点都不存，3DGS 存成椭球，SuGaR 又把椭球压回表面抽网格。<strong>这三步的摆动，与前面两回合是同一种张力的不同表现。</strong></p>
+<h3>主线三：一致性从「数学保证」变成「学出来的东西」</h3>
+<p>第二季 <code>0022</code> 的 NEES、第三季 <code>0061</code> 的 FEJ，都是在<strong>用数学手段保证估计量一致</strong>。本季 0113 的 NeurAR 换了一条路：<strong>让网络自己报「我有多不确定」</strong>，再用这个置信度过滤不可信区域、指导下一步看哪里。</p>
+<p><strong>这是第一季 0011 课承认的六个不成熟环节里「概率化 / 置信度」那一条的一个具体回应</strong>——但要注意，它是「学出来的不确定性」，与 NEES 那种有统计保证的检验不是一回事。</p>
+<hr />
+<h2>六、留给后面阶段的疑问</h2>
+<ol>
+<li><strong>语义建图到底能不能定量评估？</strong> 第一季 <code>0012</code> 课写过「语义建图质量无法定量评估，只能用定位精度作 proxy」。本季 0120（SNI-SLAM）与 0123（LangSplat）都在建语义地图，但<strong>评价方式依然是间接的</strong>。这条债还没还。</li>
+<li><strong>高斯怎么压到机载？</strong> 0125 把显存砍了 96%，但那是在桌面 GPU 上的实验。第五季 <code>0119</code> Photo-SLAM 明确面向 Jetson，本季 0125 的内存压缩是它的续集——<strong>两者的交集（嵌入式 + 压缩 + SLAM）还没有人做完整</strong>。</li>
+<li><strong>隐式表示的失败模式怎么诊断？</strong> 第一季 <code>0010</code> 课提到过、本季第二季 <code>0037</code> 也引用过 NeRF 作者自己的话：「体素与网格能推理出『渲染质量会在哪里退步』，但把场景编码进网络权重之后，<strong>这些问题变得无法分析</strong>」。本季读到的所有工作，<strong>都还没有回答这个问题</strong>。</li>
+<li><strong>「提特征 vs 不提特征」的第三回合什么时候来？</strong> 本季只是在「要不要显式存几何」这个层面上摆动了一次。真正把学习式描述子塞进完整 SLAM 的这一支（阶段 G），还没读。</li>
+<li><strong>回环时「可移动的那一层」有没有理论边界？</strong> 本季的答案（动锚点、不动权重）是工程上成立的，但<strong>没人回答「什么样的信息必须存在不可动的那一层」</strong>。</li>
+</ol>
+<hr />
+<h2>七、读完这一季，你应该能回答</h2>
+<ul>
+<li>隐式表示与显式表示各自的赢面与死穴分别是什么？为什么说这一季「走了一圈又回到显式」？</li>
+<li>3DGS 为什么快？（提示：不是「没有网络」，而是<strong>把稠密采样换成了投影 + 排序 + α 合成</strong>）</li>
+<li>「欠重建」和「过度重建」分别对应哪个动作？为什么要周期性重置不透明度？</li>
+<li>如果地图是一堆网络权重，回环来了怎么改？为什么本季的做法都是「只动显式锚点」？</li>
+<li>稠密表示碰上动态物体，代价为什么比稀疏时大？WildGS-SLAM 又是怎么不用语义标签就把它剔掉的？</li>
+<li>第一季留下的两笔债，分别在哪一节课、用什么证据还的？还清了吗，还是只是「第一次被正面回应」？</li>
+</ul>
+<div class="doc-foot">本页由 <code>course/learning-records/0008-第六季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

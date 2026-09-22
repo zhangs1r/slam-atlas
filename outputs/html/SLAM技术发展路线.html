@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLAM 技术发展路线梳理（基于 58 篇精选论文语料库） — SLAM Atlas 产出</title>
+<link rel="stylesheet" href="../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../course/index.html">← 课程馆</a>
+  <a href="../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../SLAM技术发展路线.md" download>下载 .md 源文件</a>
+</div>
+<main class="wide">
+
+<h1>SLAM 技术发展路线梳理（基于 58 篇精选论文语料库）</h1>
+<blockquote>
+<p>语料来源：IEEE Xplore 顶刊顶会（T-RO / RA-L / T-IM / T-ITS / TVCG / CVPR / ICCV / IROS / ICRA 等），
+经机构订阅权限下载并经 MinerU 转为 Markdown 精读。
+时间窗：以 <strong>2022–2026 前沿</strong> 为主轴，另补 <strong>18 篇奠基性经典（2017–2021）</strong> 作为时间轴锚点。
+生成时间：2026-09-15</p>
+</blockquote>
+<hr />
+<h2>〇、怎么用这份材料</h2>
+<ul>
+<li>本地已建好完整语料库：<code>papers/</code>（58 篇 PDF）、<code>md/</code>（58 篇 Markdown 全文）、<code>md/_digest.md</code>（阅读索引）。</li>
+<li>想深挖任何一篇，直接说论文简称即可（如"FAST-LIO2 的 ikd-Tree 怎么重平衡"），我可以从原文里定位到具体章节和公式。</li>
+<li>下文用 <strong>★</strong> 标注语料库里的核心论文，可直接对照原文。</li>
+</ul>
+<hr />
+<h2>一、总览：过去十年 SLAM 发生的五次范式迁移</h2>
+<p>如果把 SLAM 拆成"表示（世界怎么存）— 前端（怎么算相对运动）— 后端（怎么消漂移）— 传感器（靠什么感知）"四个维度，那么近十年的演进可以浓缩为下面五条迁移线：</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>迁移</th>
+<th>从</th>
+<th>到</th>
+<th>代表节点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>后端</strong></td>
+<td>扩展卡尔曼滤波</td>
+<td>因子图 / 滑动窗口优化</td>
+<td>ORB-SLAM2 ★ → VINS-Mono ★ → LIO-SAM ★</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>前端</strong></td>
+<td>手工特征点</td>
+<td>直接法 → 半直接法 → 学习式匹配</td>
+<td>ORB-SLAM2 → DSO ★ → SVO → SuperGlue ★/LightGlue ★</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>传感器融合</strong></td>
+<td>单传感器 / 松耦合</td>
+<td>紧耦合 IMU → LiDAR-惯性 → LiDAR-惯性-视觉</td>
+<td>VINS-Mono → LIO-SAM → R3LIVE → FAST-LIVO2 ★</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>场景表示</strong></td>
+<td>稀疏点云 / TSDF 体素</td>
+<td>隐式神经场（NeRF） → 显式可微高斯</td>
+<td>NICE-SLAM ★ → ESLAM ★/Co-SLAM ★ → MonoGS ★/SplaTAM ★</td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong>系统形态</strong></td>
+<td>单机、单任务</td>
+<td>多机分布式 + 语义/动态 + 极端环境鲁棒</td>
+<td>DOOR-SLAM ★/Kimera-Multi ★ → Swarm-SLAM ★/D²SLAM ★</td>
+</tr>
+</tbody>
+</table>
+<p>有一个反直觉但很重要的观察：<strong>"更复杂"并不总等于"更好"</strong>。KISS-ICP ★（2023 RA-L）几乎把激光里程计的所有工程复杂性都删掉——只留点对点 ICP + 自适应对应阈值 + 鲁棒核 + 简单运动补偿——却能在多种平台、多种雷达上用同一套参数达到 SOTA 水平（KITTI 上的平移误差 0.67%）。它和 FAST-LIO2 ★ 的"直接配准原始点、不做特征提取"一起，构成了对本领域"过度工程化"的一次有力纠偏。</p>
+<hr />
+<h2>二、主线一：视觉 SLAM —— 特征法、直接法、半直接法三足鼎立</h2>
+<h3>2.1 特征法：可解释、可开源、可复现</h3>
+<p><strong>ORB-SLAM2 ★（2017 T-RO）</strong> 是这一路线的完成态：单目/双目/RGB-D 三合一，ORB 特征点 + 词袋回环 + 重定位 + 局部 BA，在 29 个公开序列上达到当时最高精度，并且开源成为领域事实标准。</p>
+<p>它定义了后续几乎所有视觉 SLAM 论文的"评测基线"和"功能清单"：跟踪、局部建图、回环、重定位四个线程的架构，至今仍是工程实现的模板。</p>
+<p><strong>它的局限也定义了后来的研究方向</strong>：稀疏特征点对弱纹理、低光照、运动模糊极不友好；地图只是特征点云，无法直接用于导航避障；且完全没有尺度信息（单目）。</p>
+<h3>2.2 直接法：绕开特征，直接用像素强度</h3>
+<p><strong>DSO ★（2018 T-RO）</strong> 是直接法的巅峰之作。它用光度误差替代重投影误差，把相机几何标定<strong>和光度标定</strong>（曝光时间、镜头渐晕、非线性响应）一起联合优化，并在滑窗内对所有参数做一致性联合优化。</p>
+<p>它的关键技术选择很值得玩味：<strong>放弃平滑先验，改为在图像上均匀采样像素</strong>。这样它就能利用边缘、甚至无纹理墙壁上的平滑强度变化——正是特征法失效的地方。</p>
+<p><strong>DM-VIO ★（2022 RA-L）</strong> 是这条线在近年的重要突破，解决的是滑动窗口优化的一个根本痛点：边缘化（marginalization）不可逆且会固定线性化点。它提出 <strong>延迟边缘化（delayed marginalization）</strong>——维护第二个图，延迟边缘化，从而能在需要时重新推进这个图、用新的线性化点重建先验；进而把 IMU 信息注入已边缘化的状态，用于 <strong>位姿图 BA 做 IMU 初始化</strong>，能捕获完整的光度不确定性，显著改善尺度估计。</p>
+<h3>2.3 视觉惯性 VIO：尺度从哪来、怎么初始化</h3>
+<p>单目 SLAM 的尺度不可观测，这是把 IMU 引入的根本动机。但 IMU 初始化本身又是个鸡生蛋问题。</p>
+<p><strong>VINS-Mono ★（2018 T-RO）</strong> 给出了至今被广泛沿用的答案：先做<strong>纯视觉 SfM 滑窗</strong>恢复结构，再做<strong>视觉-惯性对齐</strong>恢复尺度、重力方向、速度、偏置；跟踪用紧耦合非线性优化融合预积分 IMU 与特征观测；回环用 4-DoF 位姿图优化保证全局一致性，并支持地图保存/加载/合并。</p>
+<p><strong>OpenVINS ★（2020 ICRA）</strong> 代表了另一条技术路线——<strong>滤波式</strong>。它是面向研究的开源平台，核心是流形上的滑动窗口 EKF，并特别强调 <strong>FEJ（First-Estimates Jacobian）</strong> 一致性处理，还内置在线相机内参/外参标定、相机-IMU 时间偏移标定、以及可扩展的仿真器。对研究 VIO 的可观测性与一致性，这是最好的起点。</p>
+<p><strong>GVINS ★（2022 T-RO）</strong> 把问题推到室外大尺度：它直接融合 <strong>GNSS 原始观测</strong>（伪距 + 多普勒频移）而非解算后的位置，与视觉、惯性构成因子图，并用<strong>由粗到细的在线标定</strong>建立全局测量与局部状态的连接，还能处理卫星信号间歇甚至完全不可用的退化情况，实现室内外无缝切换。</p>
+<p><strong>Dynam-SLAM ★（2023 T-RO）</strong> 则补上了动态环境这一块：把<strong>立体场景流</strong>与 IMU 松耦合用于动态特征检测（显式建模场景流的不确定性，推导路标的运动似然），再把动态与静态特征<strong>紧耦合</strong>进非线性优化——动态特征被用来构造"虚拟路标"。这个"动态特征不丢弃、反而转成可利用约束"的思路，是近年动态 SLAM 值得注意的转向。</p>
+<hr />
+<h2>三、主线二：激光 SLAM 与 LIO —— 一场关于"数据结构"的竞赛</h2>
+<p>激光 SLAM 的演进主线，表面是算法，<strong>骨子里是数据结构</strong>——因为要在毫秒级完成大规模点云的最近邻查询与增量更新。</p>
+<h3>3.1 从 LOAM 到 LIO-SAM：因子图化</h3>
+<p><strong>LOAM（2014 RSS）→ LeGO-LOAM ★（2018 IROS）</strong> 确立了"特征提取 + 两步 LM 优化"的范式：LeGO-LOAM 先用点云分割滤噪，再提取平面/边缘特征，用两步 Levenberg-Marquardt 分别求解 6-DoF 变换的不同分量，从而能在低功耗嵌入式平台上实时运行（这正是"轻量"的含义）。它针对地面车辆利用了<strong>地平面先验</strong>。</p>
+<p><strong>LIO-SAM ★（2020 IROS）</strong> 是分水岭：它把激光-惯性里程计放到<strong>因子图</strong>上，IMU 预积分因子、激光里程计因子、GPS 因子、回环因子都可以作为不同类型的 factor 加入。工程上的关键取舍是：<strong>不做当前帧对全局地图的配准，而是对局部滑窗内的固定大小子关键帧集合配准</strong>——同时配合关键帧筛选和旧帧边缘化，换来实时性。</p>
+<h3>3.2 FAST-LIO2：两个"反主流"决定</h3>
+<p><strong>FAST-LIO2 ★（2022 T-RO，语料库引用数最高，1721+）</strong> 的两个核心创新都是"做减法"：</p>
+<ol>
+<li><strong>直接配准原始点到地图，完全不做特征提取</strong>。好处有三：能利用环境中的细微特征（精度更高）；天然适配不同扫描模式的雷达（无需为机械式/固态式分别设计特征）；消除了手工特征模块这个最大的工程量。</li>
+<li><strong>用增量 k-d 树（ikd-Tree）维护地图</strong>。ikd-Tree 支持<strong>增量插入与删除</strong>以及<strong>动态重平衡</strong>，并且天然支持树上下采样。论文在 19 个序列上和 octree、R*-tree、nanoflann k-d tree 做了完整基准对比。</li>
+</ol>
+<p>配合<strong>紧耦合迭代卡尔曼滤波</strong>，FAST-LIO2 成为近三年被引用和复现最多的 LIO 系统。</p>
+<h3>3.3 围绕 ikd-Tree 的"数据结构军备竞赛"</h3>
+<p>FAST-LIO2 之后，一批工作开始挑战它的数据结构：</p>
+<ul>
+<li><strong>Faster-LIO ★（2022 RA-L）</strong>：用 <strong>iVox（增量体素）</strong> 取代树结构，支持增量插入与<strong>并行近似 kNN</strong> 查询，并提出 linear iVox 与 PHC（伪希尔伯特曲线）iVox 两种底层结构。固态雷达下单帧可达 1000–2000 Hz，32 线机械雷达 &gt;200 Hz，且精度不降。</li>
+<li><strong>iG-LIO ★（2024 RA-L）</strong>：把 <strong>GICP 约束与惯性约束统一在一个估计框架</strong>里，用体素表面协方差估计器算扫描的表面协方差，用增量体素地图表示环境的概率模型，从而同时降低协方差估计、最近邻搜索和地图管理的耗时——在保持相同参数的前提下效率超过 Faster-LIO。</li>
+<li><strong>KISS-ICP ★（2023 RA-L）</strong>：反向而行的极简主义。点对点 ICP + 自适应对应阈值 + 鲁棒核 + 点云子采样 + 运动补偿，<strong>完全不使用 IMU</strong>，参数极少且跨雷达免调参。</li>
+</ul>
+<h3>3.4 其他重要补充</h3>
+<ul>
+<li><strong>DLO ★（2022 RA-L）</strong>：面向算力受限平台的轻量前端，核心是<strong>关键帧/子图管理机制</strong>加定制 ICP 求解器（含数据结构回收），由 NASA JPL CoSTAR 团队开发，直接服务于 DARPA 地下挑战赛。</li>
+<li><strong>Scan Context ★（2018 IROS）</strong>：不做直方图、不依赖训练的 <strong>3D 激光全局描述子</strong>，直接记录可见空间的三维结构，配相似度评分和两阶段搜索，对视角变化（反向重访、转角）不变。它是后续几乎所有激光场景识别工作的对比基线。</li>
+<li><strong>PIN-SLAM ★（2024 T-RO）</strong>：把隐式神经表示引入激光 SLAM 的关键一步，详见第五节。</li>
+</ul>
+<hr />
+<h2>四、主线三：多传感器融合 —— 从 LIO 到 LIV，最终"统一地图"</h2>
+<p>当单一传感器在退化场景（长廊、隧道、玻璃、弱纹理）失效时，融合成为必由之路。这条线的终点是<strong>用一个统一的地图结构承载所有传感器的信息</strong>。</p>
+<ul>
+<li><strong>R3LIVE（2022 T-RO）</strong>：RGB 着色的 LiDAR-惯性-视觉紧耦合，把视觉的颜色信息直接赋予激光点，兼顾几何精度与外观。</li>
+<li><strong>FAST-LIVO ★（2022 IROS）</strong>：由 LIO 与 VIO 两个紧耦合子系统构成。LIO 把新扫描的原始点配准到增量建的点云地图；<strong>地图点额外挂载图像块</strong>，VIO 子系统通过最小化<strong>直接光度误差</strong>对齐新图像（不提取任何视觉特征）。还提出新型外点剔除方法，剔除位于边缘或被遮挡的不稳定地图点。</li>
+<li><strong>FAST-LIVO2 ★（2025 T-RO）</strong>：把上一版推进到成熟。核心变化：</li>
+<li>用 <strong>ESIKF（误差状态迭代卡尔曼滤波）+ 序贯更新</strong>处理 LiDAR 与图像测量的维度不匹配问题；</li>
+<li>LiDAR 建几何结构，<strong>视觉把图像块链接到 LiDAR 点</strong>上，LiDAR 点的<strong>平面先验</strong>反过来提升图像对齐精度，且平面先验会被动态精化；</li>
+<li><strong>LiDAR 与视觉测量融合进同一个体素地图</strong>（这是"统一地图"的落地），并加入按需光线投射（raycast）、实时曝光估计、光束发散导致的测距噪声建模。</li>
+<li><strong>LIV-GaussMap ★（2024 RA-L）</strong>：把这条线接到 3DGS 上——用尺寸自适应体素的 LiDAR-惯性系统初始化场景表面高斯与各帧位姿，再用视觉光度梯度优化高斯质量与密度。兼容固态与机械雷达、重复与非重复扫描模式。</li>
+</ul>
+<p><strong>方向性结论</strong>：LIV 融合的技术收敛点已经很清楚了——<strong>不再维护"激光地图"和"视觉地图"两套东西，而是维护一个统一的可微/可增量更新的场景表示</strong>，让几何与光度信息在其中互相约束。FAST-LIVO2 用体素地图做到了这一点，LIV-GaussMap 用高斯原语做到了这一点。</p>
+<hr />
+<h2>五、主线四：神经隐式表示 SLAM（NeRF-SLAM）—— "把地图变成一个可微函数"</h2>
+<p>这是 2021 年后最活跃的方向。核心想法：用 MLP 或特征网格参数化一个连续函数，输入 3D 坐标输出占用/密度/颜色（或 SDF），跟踪和建图都通过可微渲染来做。</p>
+<h3>5.1 起步与问题</h3>
+<p><strong>iMAP ★（2021 ICCV）</strong> 首次证明<strong>单个 MLP 可以作为实时 SLAM 的唯一场景表示</strong>——在线训练、无需先验，建图 2 Hz、跟踪 10 Hz。代价是：全连接网络不含局部信息，重建过度平滑，且<strong>难以扩展到较大场景</strong>。</p>
+<h3>5.2 分层特征与混合编码：解决"平滑"和"慢"</h3>
+<ul>
+<li><strong>NICE-SLAM ★（2022 CVPR）</strong>：引入<strong>层次化场景表示</strong>（多级特征网格），把多尺度局部信息注入隐式场，配合预训练几何先验，在大尺度室内场景实现细节重建，在可扩展性、效率和鲁棒性上都优于之前的神经隐式 SLAM。</li>
+<li><strong>ESLAM ★（2023 CVPR）</strong>：用<strong>多尺度轴对齐特征平面</strong> + 浅层解码器输出 TSDF 和 RGB。相比当时的稠密视觉 SLAM，重建和定位精度提升 <strong>50% 以上</strong>、速度最高快 <strong>10 倍</strong>，且<strong>完全不需要预训练</strong>。</li>
+<li><strong>Co-SLAM ★（2023 CVPR）</strong>：<strong>多分辨率 hash-grid（快速收敛、高频局部特征）+ one-blob 编码（鼓励表面连贯、补全未观测区域）</strong> 的联合参数-坐标编码，兼顾两者之长；射线采样策略允许它对<strong>所有关键帧做全局 BA</strong>，而不像多数神经 SLAM 那样必须筛选少量活跃关键帧。10–17 Hz。</li>
+<li><strong>Vox-Fusion ★（2022 ISMAR）</strong>：体素内参数化隐式表面 + <strong>八叉树动态扩展</strong>，无需预先知道环境边界，是多进程框架。</li>
+<li><strong>Point-SLAM ★（2023 ICCV）</strong>：把神经特征锚定在<strong>数据驱动生成的点云</strong>上，点密度可随输入信息密度自适应——细节多的区域点更密，从而在降低运行时间和内存的同时解析精细结构。</li>
+</ul>
+<h3>5.3 全局一致性：神经 SLAM 的最大痛点</h3>
+<p>上述方法都会累积漂移导致地图扭曲。三个代表性解法：</p>
+<ul>
+<li><strong>GO-SLAM ★（2023 ICCV）</strong>：以鲁棒位姿估计为核心，通过<strong>高效回环 + 在线 full BA</strong>利用完整历史帧的全局几何来优化每一帧，同时<strong>即时（on-the-fly）更新隐式连续表面</strong>以保证重建的全局一致性，支持单目/双目/RGB-D。</li>
+<li><strong>Loopy-SLAM ★（2024 CVPR）</strong>：<strong>数据驱动的点基 submap 生成 + 全局场景识别触发在线回环 + 鲁棒位姿图优化刚性对齐各 submap</strong>。它的关键优势源于<strong>点基表示</strong>：地图修正可以高效完成，无需像网格类方法那样保存全部历史输入帧。</li>
+<li><strong>NeRF-SLAM ★（2023 IROS）</strong>：借力 <strong>DROID-SLAM 提供带协方差的深度与位姿</strong>，再拟合<strong>概率体密度</strong>的层次化 NeRF，单目图像下几何/光度精度相比同期方法最高有显著优势，且实时。</li>
+</ul>
+<h3>5.4 走向激光与大场景</h3>
+<ul>
+<li><strong>NeRF-LOAM ★（2023 ICCV）</strong>：神经里程计 + 神经建图 + 网格重建三模块，共享一个<strong>神经 SDF</strong>；关键设计是<strong>把 LiDAR 点分为地面点与非地面点</strong>以抑制 Z 轴漂移，且里程计与体素嵌入联合优化，<strong>无需预训练</strong>即可跨环境泛化。</li>
+<li><strong>PIN-SLAM ★（2024 T-RO）</strong>：这条线目前最完整的成果。它用<strong>稀疏可优化的神经点</strong>构建隐式 SDF 地图，做<strong>无对应的点-隐式模型配准</strong>做位姿估计；神经点<strong>天然弹性可形变</strong>，回环时能随全局位姿调整一起形变，从而得到全局一致且高度紧凑的地图；回环检测直接用<strong>神经点特征</strong>。且同一套表示可扩展到 RGB-D 甚至度量-语义 SLAM。</li>
+</ul>
+<p><strong>方向性结论</strong>：神经隐式 SLAM 已从"能不能做"进入"怎么做得又快又全局一致"。当前的技术共识是 <strong>特征网格/hash 编码 + 混合参数化</strong>取代纯 MLP 以提速，<strong>弹性可形变表示（神经点）</strong>取代刚性网格以支持全局优化。但它在算力开销和实时性上仍显著劣于几何方法——这正是 3DGS 路线崛起的直接原因。</p>
+<hr />
+<h2>六、主线五：3D Gaussian Splatting SLAM —— 2024 年后的新主流</h2>
+<p>3DGS 用一组显式 3D 高斯原语（位置、协方差、不透明度、球谐系数）表示场景，通过可微光栅化渲染。相比 NeRF 的隐式查询，<strong>渲染快、优化快、天然显式</strong>——这让它非常适合 SLAM 的实时要求。</p>
+<h3>6.1 开山之作</h3>
+<ul>
+<li><strong>MonoGS / Gaussian Splatting SLAM ★（2024 CVPR）</strong>：<strong>首次把 3DGS 用于单目 SLAM</strong>（最难的配置），以 3 fps 实时运行，<strong>只用高斯这一种表示完成跟踪、建图、高质量渲染</strong>。关键技术：原版 3DGS 需要离线 SfM 提供精确位姿，它改为<strong>直接对 3D 高斯做相机位姿优化</strong>（大步长收敛域）；利用高斯的显式性质引入<strong>几何验证与正则化</strong>处理增量稠密重建的歧义；完整 SLAM 系统可无缝扩展到 RGB-D。</li>
+<li><strong>SplaTAM ★（2024 CVPR）</strong>：面向单目未定位 RGB-D 相机，用<strong>轮廓掩码（silhouette mask）</strong>优雅地表达场景密度的存在性，从而快速判断某区域是否已建图、并结构化地扩展地图。论文报告在相机位姿估计、地图构建、新视角合成上相比当时方法<strong>最高 2 倍</strong>的性能提升。</li>
+<li><strong>GS-SLAM ★（2024 CVPR）</strong>：提出<strong>自适应扩展策略</strong>，动态增删高斯以重建新观测区域、改进旧区域建图——这是把 3DGS 从"合成单个静态物体"扩展到"重建完整场景"的关键；跟踪阶段用<strong>由粗到细</strong>的选择可靠高斯来优化位姿，兼顾速度与鲁棒。</li>
+</ul>
+<h3>6.2 工程化与嵌入式部署</h3>
+<ul>
+<li><strong>Photo-SLAM ★（2024 CVPR）</strong>：提出 <strong>hyper primitives map</strong>——<strong>同时利用显式几何特征做定位、学习隐式光度特征表达纹理</strong>；基于几何特征主动致密化，并用<strong>高斯金字塔训练</strong>渐进学习多级特征。结果是 PSNR 比当时 SOTA 高约 30%、渲染快数百倍，且能在 <strong>Jetson AGX Orin 等嵌入式平台实时运行</strong>——这是它有别于纯学术方案的关键，直指机器人落地。</li>
+</ul>
+<h3>6.3 2025 年的两个重要补强</h3>
+<ul>
+<li><strong>WildGS-SLAM ★（2025 CVPR）</strong>：单目 RGB 的动态环境 3DGS SLAM。用浅层 MLP + <strong>DINOv2 特征</strong>预测<strong>不确定性图</strong>，在跟踪与建图中引导动态物体剔除，并强化稠密 BA 与高斯地图优化。注意这里<strong>基础模型（DINOv2）已经进入 SLAM 前端</strong>。</li>
+<li><strong>Splat-SLAM ★（2025 CVPRW）</strong>：<strong>首个全局优化的 RGB-only SLAM</strong>，高斯地图随关键帧位姿与深度更新动态适配。针对缺几何先验的问题，提出 <strong>DSPO（视差-尺度-位姿联合优化）</strong> 做 BA，联合优化位姿、深度与单目深度尺度。</li>
+</ul>
+<h3>6.4 与激光融合</h3>
+<ul>
+<li><strong>LIV-GaussMap ★（2024 RA-L）</strong>（见第四节）：LiDAR-Inertial-Visual 融合的高斯辐射场建图。</li>
+</ul>
+<p><strong>方向性结论</strong>：3DGS SLAM 在 2024 年集中爆发，2025 年迅速转向三个"补短板"方向——<strong>动态环境</strong>（WildGS-SLAM）、<strong>全局一致性与 RGB-only</strong>（Splat-SLAM）、<strong>嵌入式实时</strong>（Photo-SLAM）。当前最大的开放问题仍是：回环与大尺度下的地图一致性（高斯原语不像神经点那样天然可形变），以及内存随场景线性增长。</p>
+<hr />
+<h2>七、主线六：学习式前端与场景识别</h2>
+<p>深度学习最先渗透的不是后端，而是<strong>特征匹配</strong>和<strong>场景识别</strong>这两个"感知"环节。</p>
+<h3>7.1 特征匹配</h3>
+<ul>
+<li><strong>SuperGlue ★（2020 CVPR）</strong>：用<strong>图神经网络 + 可微最优传输</strong>联合求解两组局部特征的匹配，并能拒绝不可匹配点；基于注意力的上下文聚合让它能联合推理 3D 场景与特征分配。GPU 上实时。</li>
+<li><strong>LightGlue ★（2023 ICCV）</strong>：重新审视 SuperGlue 的多个设计决策并给出简单有效的改进，在内存与计算上更高效、更准、更易训练。<strong>最关键的性质是自适应</strong>：容易匹配的图像对（重叠大、外观变化小）推理明显更快——这直接面向延迟敏感的三维重建应用。</li>
+</ul>
+<h3>7.2 场景识别与回环</h3>
+<ul>
+<li><strong>LCDNet ★（2022 T-RO）</strong>：同时做<strong>地点识别</strong>和<strong>6-DoF 相对位姿估计</strong>，共享编码器 + 全局描述子头 + <strong>基于非平衡最优传输的可微相对位姿头</strong>（可端到端训练）。论文特别强调它在<strong>反向回环（reverse loop）</strong>这个难点上大幅超越此前方法，并可集成进完整 SLAM 系统。</li>
+<li><strong>OverlapTransformer ★（2022 RA-L）</strong>：利用 LiDAR 的距离图像表示，<strong>yaw 角不变</strong>的 transformer 架构，单帧 &lt;2 ms，并贡献了一个包含不同时间重复场景的长期场景识别数据集。</li>
+<li><strong>LCR-Net ★（2024 T-RO）</strong>：把回环与重定位<strong>统一到一个框架</strong>，用多头网络 + <strong>位姿感知注意力</strong>同时估计相似度与 6-DoF 位姿；论文强调它<strong>不依赖耗时的鲁棒位姿估计器</strong>，因此适合在线 SLAM，并给出了首个具备深度回环能力的激光 SLAM 集成。</li>
+</ul>
+<hr />
+<h2>八、主线七：语义、动态环境与多机协同</h2>
+<h3>8.1 语义与度量-语义</h3>
+<ul>
+<li><strong>Kimera ★（2020 ICRA）</strong>：开源 C++ 库，四个模块——VIO、鲁棒位姿图优化、轻量 3D 网格化、度量-语义标注，能在 3D 中做网格重建和语义标注。它是后续大量语义 SLAM 工作的基础设施。</li>
+<li><strong>SNI-SLAM ★（2024 CVPR）</strong>：神经隐式语义 SLAM。<strong>层次语义表示</strong>支持自顶向下的结构化语义建图；用<strong>跨注意力</strong>融合外观、几何、语义特征做特征协作，使系统在某单一属性退化时仍保持鲁棒；并提出<strong>特征级损失</strong>（相比 RGB/深度损失能在更高层次引导网络优化）。</li>
+</ul>
+<h3>8.2 动态环境：从"剔除"到"建模"</h3>
+<ul>
+<li><strong>DynaSLAM ★（2018 RA-L）</strong>：基于 ORB-SLAM2，用 Mask R-CNN 与多视图几何（或两者结合）检测运动物体，并对被遮挡的背景做<strong>修补（inpainting）</strong>，从而估计静态部分的地图——这对长期应用是必需的。</li>
+<li><strong>Dynam-SLAM ★（2023 T-RO）</strong>：见第二节，把动态特征转成"虚拟路标"继续利用。</li>
+<li><strong>WildGS-SLAM ★（2025 CVPR）</strong>：用不确定性引导动态剔除（3DGS 时代版本）。</li>
+<li><strong>两份高价值综述</strong>：<strong>《A Survey of Visual SLAM in Dynamic Environment》（2024 T-IM）</strong> 系统梳理了从<strong>几何方法 → 语义方法</strong>的演进，并把语义动态 SLAM 细分为"动态物体剔除 / 动态物体跟踪 / 动态场景语义建图"三类；<strong>《The Revisiting Problem in SLAM: A Survey on Visual Loop Closure Detection》（2022 T-ITS）</strong> 则把回环检测系统拆成特征提取、环境表示、决策、评测四段来综述，是回环方向最好的入门与索引。</li>
+</ul>
+<h3>8.3 多机协同 SLAM：从"能协同"到"抗异常、能扩展"</h3>
+<ul>
+<li><strong>DOOR-SLAM ★（2020 RA-L）</strong>：完全分布式，核心是<strong>分布式两两一致测量集最大化（PCM）</strong>剔除机间伪回环，从而可以使用更激进的参数（不必为了稳健而牺牲召回）；只靠点对点通信，不要求全连接，前端不交换原始传感器数据。</li>
+<li><strong>Kimera-Multi ★（2022 T-RO）</strong>：鲁棒、完全分布式、构建全局一致的<strong>度量-语义 3D 网格</strong>；基于<strong>分布式渐进非凸（GNC）算法</strong>做鲁棒位姿图优化，能识别并拒绝由感知歧义导致的机间与机内错误回环。</li>
+<li><strong>LAMP 2.0 ★（2022 RA-L）</strong>：DARPA 地下挑战赛 Team CoSTAR 的方案，可适配不同里程计源的单机前端接口 + 可扩展多机前端 + 鲁棒多机后端，面向黑暗、粉尘、崎岖地形与自相似场景。</li>
+<li><strong>Swarm-SLAM ★（2024 RA-L）</strong>：面向集群机器人的开源 C-SLAM，强调<strong>可扩展、灵活、去中心化、稀疏</strong>四大性质；支持激光/双目/RGB-D；提出<strong>机间回环优先级排序</strong>技术以降低通信量、加速收敛；ROS 2 实现在五个数据集和三个机器人 ad-hoc 网络实测。</li>
+<li><strong>D²SLAM ★（2024 T-RO）</strong>：面向<strong>空中集群</strong>的去中心化分布式视觉惯性 SLAM。创新在于区分<strong>近场估计</strong>（近距离精确相对状态）与<strong>远场估计</strong>（一致全局轨迹）；前端同时支持立体与全向相机以应对空中集群的视场挑战；分布式优化让它在网络延迟下仍有良好扩展性与韧性。</li>
+<li><strong>DiSCo-SLAM ★（2022 RA-L）</strong>：首个把轻量 <strong>Scan Context 描述子</strong>用于多机 SLAM 的框架，实现数据高效的机间观测交换；两阶段（全局+局部）优化框架，对未知初始条件（机间回环搜索的典型困难）鲁棒。</li>
+</ul>
+<hr />
+<h2>九、主线八：事件相机与新型传感器</h2>
+<ul>
+<li><strong>Ultimate SLAM ★（2018 T-RO）</strong>：首个把<strong>事件、标准帧、IMU 三者紧耦合</strong>融合的状态估计流水线。动机非常清晰——事件相机无运动模糊、动态范围极高，适合高速与高动态范围场景，但运动量小的时候信息很少；标准相机在低速良好光照下信息丰富，但快速运动/极端光照下严重失效。二者互补，论文报告相比纯事件流水线精度提升约 130%、相比纯标准帧视觉惯性系统提升约 85%，并完成了首个基于事件相机的自主四旋翼飞行。</li>
+<li><strong>ESVIO ★（2023 RA-L）</strong>：<strong>首个事件相机立体视觉惯性里程计</strong>，含纯事件的 ESIO 与图像辅助的 ESVIO 两种模式，建立连续立体事件流的时空关联，后端紧耦合多传感器测量；在低光环境下完成了机载四旋翼飞行与大规模户外实验。</li>
+<li><strong>DEVO ★（2022 ICRA）</strong>：深度相机 + 高分辨率事件相机的实时视觉里程计，把传统边缘半稠密视觉里程计<strong>扩展到事件流的时间-表面（time-surface）图</strong>上，用高效的<strong>几何半稠密 3D-2D 边缘对齐</strong>更新位姿；在常规条件下与 RGB-D 方案相当，在挑战条件下反超。</li>
+</ul>
+<hr />
+<h2>十、工程与评测现实：DARPA SubT 给出的冷静结论</h2>
+<p><strong>《Present and Future of SLAM in Extreme Environments》（2024 T-RO）</strong> 是理解"实验室 SLAM"与"真实世界 SLAM"差距的最佳文本。它综述了地下挑战赛中六支队伍的完整方案（CERBERUS、CoSTAR、CSIRO、CTU-CRAS-Norlab、Explorer、MARBLE），并给出一个相当克制的判断：</p>
+<blockquote>
+<p>在<strong>具备高质量多模态传感套件</strong>的前提下，地下 SLAM 问题<strong>可以说是"已解决"——但仅限于环境、尺度、传感器、参数调优和算力都满足特定条件的情况</strong>。</p>
+</blockquote>
+<p>论文总结的行之有效的工程共识：
+1. LiDAR 为主的方案对挑战性环境越来越鲁棒；
+2. 特征检测/扫描预处理实现实时点云对齐；
+3. 与惯性数据紧耦合提升运动估计鲁棒性（去畸变、为 ICP 提供初值、消除 roll/pitch 漂移）；
+4. 关键帧/子图 + 因子图框架把轨迹稀疏化，支撑大规模长期多机在线运行；
+5. 增加其他传感模态进一步提升鲁棒性。</p>
+<p>它指出的<strong>尚未解决的开放问题</strong>（这部分对选题极有价值）：
+- <strong>鲁棒与弹性感知</strong>：跌落、撞击、碰撞导致的定位失败是最常见失效模式——高频运动会超出机载感知系统的捕获能力（结构光传感器采样率较低）。领域<strong>缺乏关于"弹性算法与系统"的基础研究</strong>，而不只是"多加几个传感器"。
+- <strong>超越传统 SLAM 传感器</strong>：热成像可穿透视觉退化条件，雷达能维持低光/粉尘下的工作——需要引入非传统模态并设计<strong>失效检测与恢复</strong>方法。
+- <strong>向上扩展</strong>：多机 LiDAR SLAM 已是成熟领域，集中式方案在 5–10 台机器人规模可实时精确，去中心化方案在中等规模（&lt;1 km）不依赖机间回环也能达到小误差；但扩展到 &gt;100 台机器人的超大规模仍是开放问题。
+- <strong>向下扩展（小型化与低成本）</strong>：现有方案大多依赖一个或多个 LiDAR + 强力嵌入计算机；用低成本组件实现同等能力，以支持大量可消耗机器人执行高风险任务，仍需大量工作。</p>
+<p>配套的评测基础设施是 <strong>Hilti-Oxford Dataset ★（2023 RA-L）</strong>：激光 + 五相机 + IMU 的多模态采集平台，<strong>毫米级精度的真值采集方法</strong>，外参用微米级扫描仪验证，时间同步走硬件——它把 SLAM 评测从"相对排名"推向"绝对精度"。</p>
+<hr />
+<h2>十一、关键技术对比速查</h2>
+<h3>11.1 激光/激光惯性系统</h3>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>年份/venue</th>
+<th>后端</th>
+<th>地图结构</th>
+<th>是否用IMU</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LeGO-LOAM ★</td>
+<td>2018 IROS</td>
+<td>两步 LM</td>
+<td>点云特征图</td>
+<td>可选</td>
+<td>地面优化、轻量、嵌入式计算</td>
+</tr>
+<tr>
+<td>LIO-SAM ★</td>
+<td>2020 IROS</td>
+<td>因子图</td>
+<td>局部子关键帧</td>
+<td>是</td>
+<td>多因子（IMU/GPS/回环），滑窗局部配准</td>
+</tr>
+<tr>
+<td>FAST-LIO2 ★</td>
+<td>2022 T-RO</td>
+<td>迭代 EKF</td>
+<td><strong>ikd-Tree</strong></td>
+<td>是</td>
+<td>直接配原点到地图、无特征提取</td>
+</tr>
+<tr>
+<td>Faster-LIO ★</td>
+<td>2022 RA-L</td>
+<td>迭代 EKF</td>
+<td>iVox 增量体素</td>
+<td>是</td>
+<td>并行近似 kNN，200–2000 Hz</td>
+</tr>
+<tr>
+<td>KISS-ICP ★</td>
+<td>2023 RA-L</td>
+<td>优化</td>
+<td>体素下采样点云</td>
+<td><strong>否</strong></td>
+<td>极简、跨雷达免调参</td>
+</tr>
+<tr>
+<td>DLO ★</td>
+<td>2022 RA-L</td>
+<td>优化</td>
+<td>关键帧/子图</td>
+<td>是</td>
+<td>算力受限平台、定制 ICP</td>
+</tr>
+<tr>
+<td>iG-LIO ★</td>
+<td>2024 RA-L</td>
+<td>迭代 EKF</td>
+<td>增量体素 + 表面协方差</td>
+<td>是</td>
+<td>统一 GICP 与惯性约束</td>
+</tr>
+<tr>
+<td>FASTER-LIVO2 ★</td>
+<td>2025 T-RO</td>
+<td>ESIKF 序贯更新</td>
+<td><strong>统一体素地图</strong></td>
+<td>是</td>
+<td>LiDAR几何+视觉光度统一</td>
+</tr>
+</tbody>
+</table>
+<h3>11.2 隐式 / 显式神经表示 SLAM</h3>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>年份/venue</th>
+<th>表示</th>
+<th>输入</th>
+<th>关键突破</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>iMAP ★</td>
+<td>2021 ICCV</td>
+<td>单 MLP</td>
+<td>RGB-D</td>
+<td>首个 MLP-only 实时 SLAM</td>
+</tr>
+<tr>
+<td>NICE-SLAM ★</td>
+<td>2022 CVPR</td>
+<td>层次特征网格</td>
+<td>RGB-D</td>
+<td>引入局部信息，可扩展</td>
+</tr>
+<tr>
+<td>Vox-Fusion ★</td>
+<td>2022 ISMAR</td>
+<td>体素 + 八叉树</td>
+<td>RGB-D</td>
+<td>动态扩展、无需先验边界</td>
+</tr>
+<tr>
+<td>ESLAM ★</td>
+<td>2023 CVPR</td>
+<td>轴对齐特征平面</td>
+<td>RGB-D</td>
+<td>精度+50%、快10倍、免预训练</td>
+</tr>
+<tr>
+<td>Co-SLAM ★</td>
+<td>2023 CVPR</td>
+<td>hash-grid + one-blob</td>
+<td>RGB-D</td>
+<td>全局 BA、10–17 Hz</td>
+</tr>
+<tr>
+<td>Point-SLAM ★</td>
+<td>2023 ICCV</td>
+<td>神经点云</td>
+<td>RGB-D</td>
+<td>点密度自适应</td>
+</tr>
+<tr>
+<td>GO-SLAM ★</td>
+<td>2023 ICCV</td>
+<td>隐式场</td>
+<td>单/双/RGB-D</td>
+<td>在线 full BA + 即时重建</td>
+</tr>
+<tr>
+<td>NeRF-LOAM ★</td>
+<td>2023 ICCV</td>
+<td>神经 SDF</td>
+<td><strong>LiDAR</strong></td>
+<td>地面/非地面分离抑 Z 漂移</td>
+</tr>
+<tr>
+<td>Loopy-SLAM ★</td>
+<td>2024 CVPR</td>
+<td>点基 submap</td>
+<td>RGB-D</td>
+<td>回环 + submap 刚性对齐</td>
+</tr>
+<tr>
+<td>PIN-SLAM ★</td>
+<td>2024 T-RO</td>
+<td><strong>弹性神经点 + 隐式 SDF</strong></td>
+<td>LiDAR/RGB-D</td>
+<td>无对应配准、全局形变一致</td>
+</tr>
+</tbody>
+</table>
+<h3>11.3 3DGS SLAM</h3>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>年份/venue</th>
+<th>输入</th>
+<th>核心贡献</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MonoGS ★</td>
+<td>2024 CVPR</td>
+<td>单目/RGB-D</td>
+<td>首个单目 3DGS SLAM，3 fps，直接对高斯优化位姿</td>
+</tr>
+<tr>
+<td>SplaTAM ★</td>
+<td>2024 CVPR</td>
+<td>RGB-D</td>
+<td>轮廓掩码表达密度，未定位单目相机</td>
+</tr>
+<tr>
+<td>GS-SLAM ★</td>
+<td>2024 CVPR</td>
+<td>RGB-D</td>
+<td>自适应高斯增删 + 由粗到细跟踪</td>
+</tr>
+<tr>
+<td>Photo-SLAM ★</td>
+<td>2024 CVPR</td>
+<td>单/双/RGB-D</td>
+<td>hyper primitives，Jetson 实时</td>
+</tr>
+<tr>
+<td>LIV-GaussMap ★</td>
+<td>2024 RA-L</td>
+<td>LiDAR+惯导+相机</td>
+<td>尺寸自适应体素初始化高斯</td>
+</tr>
+<tr>
+<td>WildGS-SLAM ★</td>
+<td>2025 CVPR</td>
+<td>单目 RGB</td>
+<td>DINOv2 不确定性引导动态剔除</td>
+</tr>
+<tr>
+<td>Splat-SLAM ★</td>
+<td>2025 CVPRW</td>
+<td>RGB-only</td>
+<td>全局优化 + DSPO 联合优化</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>十二、趋势判断与开放问题</h2>
+<p><strong>已经收敛的共识：</strong></p>
+<ol>
+<li><strong>统一场景表示</strong>吃掉多传感器融合的复杂性。FAST-LIVO2 用统一体素图，LIV-GaussMap 用高斯，趋势是"一套表示装下几何与光度"。</li>
+<li><strong>后端全面因子图化</strong>。EKF 只在特定场景（FAST-LIO2 的 IESKF）因效率优势保留，全局一致性一律走位姿图/因子图。</li>
+<li><strong>"去特征化"与"轻量化"成为工程主流</strong>。FAST-LIO2 去掉特征提取，KISS-ICP 去掉几乎所有组件——两者都被广泛复现，说明<strong>可维护性</strong>已经是选型的核心指标。</li>
+<li><strong>回环从"检测"走向"检测+配准+重定位一体化"</strong>。LCDNet 到 LCR-Net 的演进说明了这一点。</li>
+</ol>
+<p><strong>正在发生、尚未定论的：</strong></p>
+<ol start="5">
+<li><strong>3DGS vs 神经隐式场之争</strong>。3DGS 在速度与渲染质量上占优，但内存随场景线性增长、且不像神经点那样天然支持全局形变；神经点在全局一致性上更优雅（PIN-SLAM、Loopy-SLAM）。<strong>短期内两者会并存，长期看"可形变的显式原语"可能是收敛方向</strong>。</li>
+<li><strong>基础模型进入 SLAM</strong>。DINOv2 用于动态不确定性预测（WildGS-SLAM）、DROID-SLAM 提供几何先验（NeRF-SLAM / GO-SLAM）、DUSt3R/MASt3R 这类三维基础模型刚进入视野。<strong>"用大模型做几何先验、用小模型做实时优化"可能是下一代架构的形态</strong>。</li>
+<li><strong>动态环境从"剔除"转向"建模"</strong>。DynaSLAM 的背景修补 → Dynam-SLAM 的虚拟路标 → 语义动态综述划分出的"跟踪/剔除/建图"三支，趋势是把动态物体当作可估计的状态而非噪声。</li>
+<li><strong>弹性（resilience）而非鲁棒（robustness）</strong>。DARPA SubT 明确指出领域缺乏关于跌落/碰撞/传感器中断下<strong>失败检测与恢复</strong>的基础研究。这是一个明确的高价值选题缺口。</li>
+<li><strong>超大规模集群与超低成本小型化</strong>两端都还开着。前者 &gt;100 机器人，后者要求摆脱多 LiDAR + 强力算力。</li>
+</ol>
+<p><strong>一份偏冷门但值得关注的方向：</strong></p>
+<ol start="10">
+<li><strong>评测的绝对精度化</strong>。Hilti-Oxford 用毫米级真值把评测标准推高，这和 SubT 的结论互相印证：<strong>领域真正的瓶颈已经从算法创新转移到"在真实退化条件下可复现地工作"</strong>。</li>
+</ol>
+<hr />
+<h2>十三、语料库索引（按主线组织）</h2>
+<table>
+<thead>
+<tr>
+<th>主线</th>
+<th>论文</th>
+<th>文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>视觉 SLAM</td>
+<td>ORB-SLAM2, VINS-Mono, DSO, OpenVINS, Kimera, DM-VIO, GVINS, Dynam-SLAM</td>
+<td><code>md/2017_*</code> ~ <code>md/2023_Dynam-SLAM.md</code></td>
+</tr>
+<tr>
+<td>激光 / LIO</td>
+<td>LeGO-LOAM, LIO-SAM, Scan Context, FAST-LIO2, Faster-LIO, KISS-ICP, DLO, DiSCo-SLAM, iG-LIO, PIN-SLAM</td>
+<td><code>md/2018_*</code>、<code>md/202*</code></td>
+</tr>
+<tr>
+<td>多传感器 LIV</td>
+<td>FAST-LIVO, FAST-LIVO2, LIV-GaussMap</td>
+<td><code>md/2022_FAST-LIVO.md</code> 等</td>
+</tr>
+<tr>
+<td>隐式表示</td>
+<td>iMAP, NICE-SLAM, Vox-Fusion, ESLAM, Co-SLAM, Point-SLAM, GO-SLAM, NeRF-LOAM, NeRF-SLAM, Loopy-SLAM</td>
+<td><code>md/2021_iMAP.md</code> 等</td>
+</tr>
+<tr>
+<td>3DGS</td>
+<td>MonoGS, SplaTAM, GS-SLAM, Photo-SLAM, WildGS-SLAM, Splat-SLAM, SNI-SLAM</td>
+<td><code>md/2024_*</code>、<code>md/2025_*</code></td>
+</tr>
+<tr>
+<td>学习式前端</td>
+<td>SuperGlue, LightGlue, LCDNet, OverlapTransformer, LCR-Net</td>
+<td><code>md/2020_SuperGlue.md</code> 等</td>
+</tr>
+<tr>
+<td>动态 / 语义</td>
+<td>DynaSLAM, Dynam-SLAM, SNI-SLAM + 动态环境综述</td>
+<td><code>md/2018_DynaSLAM.md</code> 等</td>
+</tr>
+<tr>
+<td>多机协同</td>
+<td>DOOR-SLAM, Kimera-Multi, LAMP 2.0, Swarm-SLAM, D²SLAM, DiSCo-SLAM</td>
+<td><code>md/2020_DOOR-SLAM.md</code> 等</td>
+</tr>
+<tr>
+<td>事件相机</td>
+<td>Ultimate SLAM, DEVO, ESVIO</td>
+<td><code>md/2018_UltimateSLAM.md</code> 等</td>
+</tr>
+<tr>
+<td>综述 / 评测</td>
+<td>3DGS 综述, 深度学习定位建图综述, 动态环境综述, 回环检测综述, DARPA SubT, Hilti-Oxford</td>
+<td><code>md/2024_DARPA-SubT.md</code> 等</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>十四、可以怎么问我</h2>
+<p>语料库里的 58 篇全文都在本地 Markdown 里，我随时可以定位到具体章节。试试这些类型的问题：</p>
+<ul>
+<li><strong>对比型</strong>："FAST-LIO2 和 Faster-LIO 的数据结构差别到底在哪？各自的复杂度是什么？"</li>
+<li><strong>机制型</strong>："PIN-SLAM 回环时神经点具体是怎么形变的？" / "Co-SLAM 的 one-blob 编码解决什么问题？"</li>
+<li><strong>选型型</strong>："我要做一个室内移动机器人，算力是 Jetson Orin，该选哪条技术路线？"</li>
+<li><strong>溯源型</strong>："3DGS SLAM 这一支是怎么从 NeRF SLAM 演化过来的？关键转折点是什么？"</li>
+<li><strong>选题型</strong>："按 DARPA SubT 的结论，现在还有哪些明确的高价值开放问题？"</li>
+<li><strong>补录型</strong>："帮我再补下载 XX 方向的论文"——检索和下载通道已经打通，可以随时扩充语料库。</li>
+</ul>
+<hr />
+<p><em>报告基于本地 58 篇论文语料库自行梳理总结，论文原文见 <code>papers/</code>，结构化全文见 <code>md/</code>。</em></p>
+<div class="doc-foot">本页由 <code>outputs/SLAM技术发展路线.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

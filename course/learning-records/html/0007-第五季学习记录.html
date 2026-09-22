@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第五季学习记录：多传感器融合（0095–0103） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0007-第五季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第五季学习记录：多传感器融合（0095–0103）</h1>
+<blockquote>
+<p>对应课程：第 0095 – 0103 节（语料库阶段 E，多传感器融合，共 9 篇）
+一句话概括这一季：<strong>前四季把三个传感器各自拆开看过一遍，这一季把它们装回同一台机器里。</strong></p>
+</blockquote>
+<hr />
+<h2>一、这一季读完了什么</h2>
+<table>
+<thead>
+<tr>
+<th>课次</th>
+<th>系统</th>
+<th>它的一句话</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0095</td>
+<td>导览</td>
+<td>三个传感器的盲区几乎不重叠——这才叫互补</td>
+</tr>
+<tr>
+<td>0096</td>
+<td>R³LIVE（2022）</td>
+<td>两条流水线并行：激光管几何、相机管颜色，末端合流成着色点云</td>
+</tr>
+<tr>
+<td>0097</td>
+<td>R³LIVE++（2024）</td>
+<td>从"贴颜色"到"估辐射"：同一面墙在不同曝光下该是同一个颜色</td>
+</tr>
+<tr>
+<td>0098</td>
+<td>LIV-GaussMap（2024）</td>
+<td>地图不再是一堆点，而是一组能直接被光穿过的椭球——建图与渲染合流</td>
+</tr>
+<tr>
+<td>0099</td>
+<td>FAST-LIVO（2022）</td>
+<td>视觉不提特征、不三角化，直接把激光地图当成自己的地图用</td>
+</tr>
+<tr>
+<td>0100</td>
+<td>FAST-LIVO2（2025）</td>
+<td>同一份体素地图 + 同一个滤波器 + 序贯更新（<strong>本季顶点</strong>）</td>
+</tr>
+<tr>
+<td>0101</td>
+<td>TVL-SLAM（2022）</td>
+<td>因子图后端、没有 IMU——用来证明"紧耦合 ≠ 必须用因子图"</td>
+</tr>
+<tr>
+<td>0102</td>
+<td>AdaFusion + FusionPortable</td>
+<td>怎么用多模态"认地方"，怎么用带真值的数据集"量准不准"</td>
+</tr>
+<tr>
+<td>0103</td>
+<td>M-LOAM（2022）</td>
+<td>多激光雷达的在线外参标定：一边跑一边把传感器关系估出来</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>二、几个"啊哈时刻"</h2>
+<h3>1. 融合的价值不在"日常"，而在"退化"</h3>
+<p>以前我以为多传感器是"多加一层保险"。读完这一季才明白：<strong>在正常场景下，三种传感器是互相冗余的；只有在各自的退化场景里，互补才真正变成价值。</strong></p>
+<p>反过来看第四季 0076 课那个数字就很清楚了：一条 200 米的隧道里，纯激光的位移误差高达 <strong>56%</strong>。融合不是让好场景更好，而是让坏场景能用。</p>
+<h3>2. 「深度白送」这四个字，改变了直接法的性质</h3>
+<p>第三季 0046–0050 学直接法时，最让我头疼的是：<strong>每个像素的深度都得自己估</strong>（逆深度那一套）。DTAM 要估一张稠密的逆深度图，DSO 要维护活动点，SVO 用概率深度滤波一个像素一个像素地收敛。</p>
+<p>而 FAST-LIVO 系做的事情是：<strong>激光已经把地图建好了，地图里每一格存的是一块平面——视觉上来直接问"我这个像素投过去落在哪块平面上"，深度就出来了。</strong></p>
+<p>这就等于把直接法最贵的那一步直接删掉了。也难怪 LIVO 能做得比纯视觉直接法快那么多。</p>
+<h3>3. 「序贯更新」——一帧里的测量可以一个一个来</h3>
+<p>这是我这一季最反直觉的一个收获。我一直以为"一帧数据"就该"一起处理"（攒够了再解一个最小二乘）。</p>
+<p>FAST-LIVO2 的做法是：一帧里有若干个平面测量、若干个图像块测量，<strong>它们一个一个地去更新同一个状态</strong>，而且每更新一次就<strong>重新线性化一次</strong>。</p>
+<p>好处是想得通的：状态每被一个测量修正一点，下一个测量的线性化点就更准一点——像一个人一边听一边修正自己的判断，而不是把所有人的话听完再一次性表态。</p>
+<h3>4. 「地图里存什么」这条暗线，走完了两个极端</h3>
+<p>从第二季一路追到现在，这条线的每一站我都在学习记录里记过：</p>
+<ul>
+<li>第二季 0033：存<strong>一个标量</strong>（TSDF 的截断距离）</li>
+<li>第二季 0034：存<strong>体素块</strong>（只给表面附近分配内存）</li>
+<li>第四季 0084：存<strong>点</strong>，但用能增量插入删除的树管起来</li>
+<li><strong>本季 0100：存一块平面</strong>（中心 + 法向 + 统计量）</li>
+<li><strong>本季 0098：存一组椭球高斯</strong></li>
+</ul>
+<p>规律很清晰：<strong>存储单元一路变厚，因为下游要用它的人变多了。</strong> 一开始只有"找最近点"要用，存点就够；后来视觉要用它当几何约束，就得存平面；再后来渲染器也要用，干脆存成能直接画出来的东西。</p>
+<hr />
+<h2>三、三条主线的收束</h2>
+<h3>主线一：融合的两种哲学</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>两条流水线并行</th>
+<th>统一状态、统一地图</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>代表</td>
+<td>R³LIVE / R³LIVE++</td>
+<td>FAST-LIVO / FAST-LIVO2</td>
+</tr>
+<tr>
+<td>几何谁管</td>
+<td>激光惯性那一路</td>
+<td>同一份体素地图</td>
+</tr>
+<tr>
+<td>纹理谁管</td>
+<td>视觉惯性那一路</td>
+<td>同一个滤波器、同一份地图</td>
+</tr>
+<tr>
+<td>视觉深度从哪来</td>
+<td>自己那一套 VIO 估</td>
+<td><strong>直接复用激光地图</strong></td>
+</tr>
+<tr>
+<td>产物</td>
+<td>着色点云 / 辐射场</td>
+<td>统一地图 + 位姿</td>
+</tr>
+</tbody>
+</table>
+<p>两种都是<strong>紧耦合</strong>——判断标准不是"用了什么算法"，而是<strong>"两种数据有没有进同一个待优化的问题"</strong>。</p>
+<h3>主线二：建图与渲染的合流</h3>
+<p>第一季 0015（3D 高斯）→ 第二季 0036–0039（NeRF / Instant NGP / Plenoxels）→ 第三季 0071（神经隐式 SLAM）→ <strong>本季 0097 / 0098</strong>。</p>
+<p>以前是"先建好地图，再想办法把它画出来"；这一季变成<strong>地图本身就是画得出来的东西</strong>。而且多了激光这一路，几何是白送的——不用像 3DGS 那样从稀疏点云和光度梯度里慢慢猜。</p>
+<h3>主线三：看不见的地基</h3>
+<p>最后两课（0102 / 0103）提醒了我一件很实在的事：<strong>融合系统在真实场景里跑不起来，往往不是算法不够聪明，而是地基没打好。</strong></p>
+<ul>
+<li><strong>时间</strong>：硬件触发同步 → 在线估计残余时偏（第三季 0057 的 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>t</mi><mi>d</mi></msub></mrow></math>）→ 外参标定</li>
+<li><strong>外参</strong>：出厂标定会被震动与温度带偏，所以干脆把它当待估变量（0103）</li>
+<li><strong>退化</strong>：融合真正发光的地方</li>
+</ul>
+<hr />
+<h2>四、精读 agent 纠正了我的四处错误假设</h2>
+<p>这一季的四个精读 agent 又一次证明了"不许凭印象"的价值。我在简报里写的假设，有四处与正文不符，全部被指了出来：</p>
+<table>
+<thead>
+<tr>
+<th>我的假设</th>
+<th>正文实际是</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R³LIVE++ 引入了<strong>视角相关的反射</strong></td>
+<td><strong>不是</strong>——它的辐射量是每通道单值常量（朗伯、与视角无关）；视角相关是 LIV-GaussMap 用球谐才做的</td>
+</tr>
+<tr>
+<td>FAST-LIVO（v1）用<strong>序贯更新</strong></td>
+<td><strong>不是</strong>——v1 是<strong>异步更新</strong>，"序贯"是 FAST-LIVO2 的贡献</td>
+</tr>
+<tr>
+<td>v1 就已经是"<strong>同一份地图</strong>、一个滤波器"</td>
+<td><strong>不是</strong>——v1 是"<strong>两份地图</strong>、一个滤波器"；统一成一份是 v2 的事</td>
+</tr>
+<tr>
+<td>第三篇（TVL-SLAM）属于 <strong>LIVO 家族</strong></td>
+<td><strong>不是</strong>——它<strong>不含 IMU</strong>、视觉走特征法、也<strong>不是实时</strong>；它的角色是"因子图紧耦合路线"的对照样本</td>
+</tr>
+</tbody>
+</table>
+<p><strong>这四处如果没被纠正，就会原样写进课程里。</strong> 所以我在写作简报里都会附一句"如果我的描述与正文不符，请以正文为准并明确指出来"——这句几乎每次都有收获。</p>
+<p>另外还有两处<strong>路线图显示名不精确</strong>：
+- <code>AdaFusion</code> 的用途是<strong>地点识别</strong>（not 里程计融合）——路线图只写了"注意力式融合网络"，没说清用途
+- 所谓"多传感器鲁棒里程计"其实是<strong>多台同一种传感器</strong>（多激光雷达）+ <strong>在线外参标定</strong>，不是异源融合</p>
+<hr />
+<h2>五、留给阶段 F（前沿：神经隐式与 3D 高斯）的疑问</h2>
+<ol>
+<li><strong>3DGS 的"自适应密度控制"到底怎么做？</strong> 这个问题从第一季 0015 课就挂着（当时那篇综述只引用未展开），第三季 0072 提到过，本季 0098 的 LIV-GaussMap 也没展开——它用的是另一套初始化与优化方式。</li>
+<li><strong>地图里存高斯，到底能不能用于定位？</strong> 本季 0098 的高斯地图只服务于渲染，位姿还是独立 LIO 给的（比较松的耦合）。那"高斯本身参与定位"是什么样子？</li>
+<li><strong>神经隐式 SLAM 的实时性天花板在哪？</strong> 第三季 0071 的 NICER-SLAM / DN-SLAM 还受限于速度与场景规模；本季 FAST-LIVO2 已经把"存平面"做到实时了，那"存隐式场"能不能也做到？</li>
+<li><strong>"提取 vs 不提取特征"的第三回合。</strong> 视觉侧（第三季 0046–0050）与激光侧（第四季 0074/0084）都走完了；本季 FAST-LIVO 系列给出了一个有意思的答案——<strong>一个系统里两种策略可以共存</strong>（视觉走直接法、激光走地图配准）。那学习式前端会把这条线引向哪里（阶段 G）？</li>
+<li><strong>多传感器 + 高斯的组合</strong>：本季已经有了"融合结果可渲染"（0098），那"可渲染 + 可回环 + 大尺度"什么时候能凑齐？</li>
+</ol>
+<div class="doc-foot">本页由 <code>course/learning-records/0007-第五季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>
