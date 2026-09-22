@@ -45,7 +45,11 @@ GLOBAL_VARS = set(re.findall(r'(--[a-zA-Z0-9-]+)\s*:', GLOBAL_CSS))
 
 # 这些类是"状态类"，由 JS 在运行时加上去，不一定有独立规则
 SKIP = {"figure", "figcaption", "disabled", "next", "correct", "wrong", "show",
-        "active", "exercise-answer", "open", "selected"}
+        "active", "exercise-answer", "open", "selected",
+        # 语义标记类：样式写在元素的行内 style 上，本来就不该有 CSS 规则
+        # （`7747541` 的「对照原文」条：<div class="lesson-source" style="...">，
+        #  205 节 + 3 个答疑页都在用）。不放这里会报 208 条假阳性。
+        "lesson-source"}
 
 IDENT = re.compile(r'^[A-Za-z_][A-Za-z0-9_-]*$')
 
