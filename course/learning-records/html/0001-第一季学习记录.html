@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第一季学习记录：建立坐标系 — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0001-第一季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第一季学习记录：建立坐标系</h1>
+<blockquote>
+<p>对应课程：第 0001 – 0016 节（语料库阶段 A，20 篇综述与全景文章）
+这一季的定位是<strong>建立共同词汇表</strong>，不追求技术细节的完全掌握。</p>
+</blockquote>
+<h2>一、这一季我真正学到的东西</h2>
+<h3>1. 有了四根"纵轴"，255 篇论文可以挂上去了</h3>
+<p>第 0003 课把 SLAM 的演进总结成四句口号，我认为这是整季最实用的收获：</p>
+<ol>
+<li>跟踪前端 → 优化后端</li>
+<li>滤波方法 → 优化方法</li>
+<li>手工挑选特征点 → 深度学习生成特征</li>
+<li>稀疏特征点地图 → 带语义的稠密点云地图</li>
+</ol>
+<p><strong>用法</strong>：以后读任何一篇论文，先问"它在推进哪一条轴"。ORB-SLAM 推进第 1 条；
+VINS-Mono 推进第 2 条；SuperGlue / LoFTR 推进第 3 条；SemanticFusion 推进第 4 条。</p>
+<h3>2. 拿到了一套"标准形式化"，能看懂后面所有后端论文</h3>
+<p>第 0002 课的式 (1)→(4)：MAP → 因式分解 → 高斯似然 → 非线性最小二乘。
+关键的一步是"<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>z</mi><mi>k</mi></msub></mrow></math> 只依赖 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>&#x1D4B3;</mi><mi>k</mi></msub></mrow></math>"——这一句直接决定了因子图的稀疏性，
+也就决定了后端能不能算得动。</p>
+<h3>3. 理解了"为什么放弃滤波"</h3>
+<p>滤波的固有问题是<strong>递归 + 边缘化</strong>：旧状态被积分掉之后就无法再单独修正，
+所以跨很久的回环只能"打个补丁"，做不到全局重排。
+这就是"图优化能给出全局一致解"的根本原因。</p>
+<p>同时记住了一个更细的答案：<strong>在高不确定性情形下滤波可能反而有利</strong>（Strasdat 等 2010）。
+不是"优化全面碾压滤波"。</p>
+<h3>4. 一条会被推翻的工程铁律（本季最有趣的认知）</h3>
+<ul>
+<li><strong>2012 年</strong>（第 0004 课）："一个假阳性就能在建图过程中造成不可挽回的失败"，
+  所以 <strong>precision 必须为 100%</strong>，recall 尽量高即可。宁可漏掉十次真回环，不能错认一次。</li>
+<li><strong>2022 年</strong>（第 0014 课）：同样强调"a single false-positive detection can,
+  in many cases, cause a total failure for SLAM"。</li>
+<li><strong>2024 年</strong>（第 0013 课）："随着 SLAM 鲁棒图优化技术的出现，避免错误回环已经变得不那么重要了。
+  有了鲁棒图优化，找到足够多的正确回环（TP）比避免错误回环（FP）更重要。"</li>
+</ul>
+<p><strong>结论</strong>：同一个指标该定多严，<strong>取决于下游有多鲁棒</strong>。
+这是我第一次真切体会到"技术演进会改变评价标准"。</p>
+<h2>二、我特意记下的易混点</h2>
+<table>
+<thead>
+<tr>
+<th>易混的一对</th>
+<th>区别</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>退化（degenerative）vs 降质（degraded）</td>
+<td>退化＝几何约束不足（隧道/长走廊），根因是<strong>信息缺失</strong>；降质＝传感器感知被干扰（雨雪雾/玻璃反射）</td>
+</tr>
+<tr>
+<td>松耦合 vs 紧耦合</td>
+<td>不是"接得牢不牢"，而是<strong>额外传感器的量测有没有进统一的误差模型</strong></td>
+</tr>
+<tr>
+<td>landmark 地图 vs 占据栅格地图</td>
+<td>前者能定位但不能避障（空白区不携带自由空间信息）；后者可以避障</td>
+</tr>
+<tr>
+<td>隐式 vs 显式表示</td>
+<td>隐式要"查询网络 + 稠密采样"；显式（高斯）直接存几何 + 光栅化，所以快</td>
+</tr>
+<tr>
+<td>事件 vs 帧</td>
+<td>事件只含二值增减（极性），<strong>不含绝对亮度</strong>；且亮度变化还取决于相对运动</td>
+</tr>
+<tr>
+<td>AUC 大 vs 方法好</td>
+<td>不一定。AUC 丢掉了曲线形状信息（比如"precision 是否曾达到 100%"），会误导</td>
+</tr>
+</tbody>
+</table>
+<h2>三、这一季留给我的疑问（下一季要带着读）</h2>
+<ol>
+<li><strong>BA 的稀疏性具体怎么利用？</strong> 第 0002 课说"稀疏性决定后端能不能算得动"，
+   但 Schur 消元、正规方程的稀疏分解都还没讲。→ 阶段 B。</li>
+<li><strong>预积分到底在解决什么？</strong> 第 0002 课提到 IMU 因子，第 0008 课提到 IMU 采样 200 Hz，
+   但"预积分"这个词还没被真正讲清。→ 阶段 B。</li>
+<li><strong>ikd-Tree 与普通 k-d 树差在哪？</strong> 第 0006 课反复提到它是 FAST-LIO2 的关键，
+   但具体机制没展开。→ 阶段 D。</li>
+<li><strong>"提取 vs 不提取特征"为什么会来回摆动？</strong> （LOAM 挑特征 → FAST-LIO2 不挑 → 深度学习又学特征）
+   第 0006 课给了线索（算力与数据结构的变化），需要看方法论文确认。→ 阶段 D / G。</li>
+<li><strong>3DGS 的"自适应密度控制"具体怎么做？</strong> 第 0015 课明确说那篇综述只引用未展开。→ 阶段 F。</li>
+</ol>
+<h2>四、下一步行动</h2>
+<ul>
+<li>[ ] 打开 <code>../outputs/论文阅读路线图.html</code>，把阶段 B（打地基，19 篇）的 ●●● 论文列出来</li>
+<li>[ ] 优先读：Bundle Adjustment 现代综述（2000）、g2o（2011）、流形上的 IMU 预积分（2017）、KinectFusion（2011）</li>
+<li>[ ] 读之前先回看第 0002 课的式 (1)–(4) 与第 0003 课的 EKF 状态向量</li>
+</ul>
+<div class="doc-foot">本页由 <code>course/learning-records/0001-第一季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

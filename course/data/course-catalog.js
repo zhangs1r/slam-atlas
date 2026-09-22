@@ -2482,57 +2482,93 @@ window.PAPERLESSON_DATA = {
   /* ---------- 学习记录 ---------- */
   learningRecords: [
     {
-      path: "learning-records/0001-第一季学习记录.md",
+      path: "learning-records/html/0001-第一季学习记录.html",
       title: "第一季：建立坐标系",
       emoji: "📝",
       description: "第一季的点滴收获：关键概念、易混点、以及每节课留下的疑问。"
     },
     {
-      path: "learning-records/0002-答疑记录-激光雷达分类三类vs两类.md",
+      path: "learning-records/html/0002-答疑记录-激光雷达分类三类vs两类.html",
       title: "答疑记录：激光雷达三类 vs 两类",
       emoji: "❓",
       description: "就地插进第 0006 课的答疑补丁：为什么原文一会儿说三类、一会儿说两类。"
     },
     {
-      path: "learning-records/0003-答疑记录-MAP到非线性最小二乘.md",
+      path: "learning-records/html/0003-答疑记录-MAP到非线性最小二乘.html",
       title: "答疑记录：MAP 到非线性最小二乘",
       emoji: "🧮",
       description: "第 0002 课四行公式的答疑记录：拆成 5 个数学零件 + 手算 13.2 m 算例，独立成页放在 `qa/`（不占主线编号），并与 0002 就地补丁双向互链。"
     },
     {
-      path: "learning-records/0004-第二季学习记录.md",
+      path: "learning-records/html/0004-第二季学习记录.html",
       title: "第二季：打地基",
       emoji: "🏗️",
       description: "第二季的收获与债务清单：Schur 消元在五个场景的复用对照表、gauge freedom、「隐式 vs 混合 vs 显式」三篇对照表，以及五条留到后面阶段的疑问。"
     },
     {
-      path: "learning-records/0005-第三季学习记录.md",
+      path: "learning-records/html/0005-第三季学习记录.html",
       title: "第三季：视觉主干",
       emoji: "📷",
       description: "第三季全季的收获与债务清单：六条疑问逐条销账、三条主线总收束（尺度暗线六站 / 架构的分工演化 / 滤波 vs 优化）、89 张具象自绘图的清单，以及留给后面阶段的五条疑问。"
     },
     {
-      path: "learning-records/0006-第四季学习记录.md",
+      path: "learning-records/html/0006-第四季学习记录.html",
       title: "第四季：激光主干",
       emoji: "📡",
       description: "第四季的收获：四条主线（提特征→不提特征 / 数据结构 / 退化与鲁棒 / 地图与回环）、ikd-Tree 这笔债的完整链条与它的四件事，以及三处路线图显示名不符的勘误。"
     },
     {
-      path: "learning-records/0007-第五季学习记录.md",
+      path: "learning-records/html/0007-第五季学习记录.html",
       title: "第五季：多传感器融合",
       emoji: "🎛️",
       description: "第五季的收获：融合的两种哲学对照表、四个「啊哈时刻」（融合的价值在退化时才体现 / 深度白送改变了直接法 / 序贯更新 / 地图存储单元一路变厚）、三条主线的收束，以及精读时被纠正的四处错误假设。"
     },
     {
-      path: "learning-records/0008-第六季学习记录.md",
+      path: "learning-records/html/0008-第六季学习记录.html",
       title: "第六季：神经隐式与 3D 高斯",
       emoji: "🫧",
       description: "第六季全季的收获：两笔挂了五季的债（自适应密度控制 / 大尺度户外未证明）的偿还情况与证据、三个最反直觉的认识（回环只动显式锚点 / 稠密表示的动态代价更大 / 逐场景优化被正面挑战）、被纠正的六处错误假设、三条主线的进展，以及留给后面阶段的五条疑问。"
+    },
+    {
+      path: "learning-records/html/0009-第七季学习记录.html",
+      title: "第七季：学习式方法",
+      emoji: "🧠",
+      description: "第七季收获（阶段 G，31 篇论文 / 24 节课）：深度学习究竟吃掉了 SLAM 的哪几块、边界在哪，以及匹配 / 检索 / 端到端 / 基础模型四条支线的进展与遗留疑问。"
+    },
+    {
+      path: "learning-records/html/0010-第八季学习记录.html",
+      title: "第八季：专题支线",
+      emoji: "🧩",
+      description: "第八季收获（阶段 H，42 篇论文 / 27 节课）：动态、语义、多机、事件四条专题支线各自的核心结论、被纠正的假设与瓶颈。"
+    },
+    {
+      path: "learning-records/html/0011-第九季学习记录.html",
+      title: "第九季：数据集与评测",
+      emoji: "📏",
+      description: "第九季收获（阶段 I，5 篇论文 / 7 节课）：评测这把尺子怎么定义、真值精度阶梯，以及「够用比准更重要」的取舍。"
+    },
+    {
+      path: "learning-records/html/0012-第十季学习记录.html",
+      title: "第十季：基础零件",
+      emoji: "🔧",
+      description: "第十季收获（阶段 J，11 篇论文 / 13 节课）：论文里反复出现却不是 SLAM 的四族基础零件（骨干 / 检测 / 分割 / 外围），以及它们与主线课程的连接点。"
+    },
+    {
+      path: "learning-records/html/0013-第十一季学习记录.html",
+      title: "第十一季：应用与相邻领域",
+      emoji: "🛰️",
+      description: "第十一季收获（阶段 K，5 篇论文 / 7 节课）：SLAM 在整个机器人系统里站在哪一环，以及一篇已撤稿论文留下的警示。"
     }
   ],
 
   /* ---------- 项目与官网 / 相关产出 ---------- */
   siteLinks: [
+    {
+      title: "相关产出与原始素材（总索引）",
+      url: "../outputs/index.html",
+      emoji: "🧰",
+      description: "路线图、演进图谱、图解入门、语料库目录与实测报告的汇总入口，全部为站内可读页面。"
+    },
     {
       title: "255 篇论文阅读路线图（交互版）",
       url: "../outputs/论文阅读路线图.html",
@@ -2541,7 +2577,7 @@ window.PAPERLESSON_DATA = {
     },
     {
       title: "论文语料库总目录",
-      url: "../outputs/论文语料库总目录.md",
+      url: "../outputs/html/论文语料库总目录.html",
       emoji: "📚",
       description: "255 篇论文的清单与本地文件对应关系。"
     },
@@ -2559,7 +2595,7 @@ window.PAPERLESSON_DATA = {
     },
     {
       title: "本地论文全文（Markdown）",
-      url: "../md/",
+      url: "../md/index.html",
       emoji: "📄",
       description: "所有课程的原始素材：255 篇论文的 Markdown 全文与插图，位于项目 md/ 目录。"
     }

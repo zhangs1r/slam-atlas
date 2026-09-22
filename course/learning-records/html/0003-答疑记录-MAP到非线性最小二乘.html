@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>答疑记录 0003：从 MAP 到非线性最小二乘的四个公式 — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0003-答疑记录-MAP到非线性最小二乘.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>答疑记录 0003：从 MAP 到非线性最小二乘的四个公式</h1>
+<blockquote>
+<p>类型：<strong>通道 B（独立答疑页）+ 通道 A（就地插入补丁）</strong> 双落点、双向互链
+产物 ①：<code>qa/qa-0002-MAP到非线性最小二乘.html</code>（独立答疑页，<strong>不占主线课号</strong>）
+产物 ②：<code>lessons/0002-PastPresentFuture-2016-SLAM的全景纲领.html</code> 内 <code>id="q0002-map"</code> 就地补丁
+日期：2026-09-17</p>
+</blockquote>
+<h2>学习者的问题</h2>
+<blockquote>
+<p>"0002 课「从 MAP 到非线性最小二乘」中的四个公式我不是很理解，你可以尝试画图或者帮我回顾一下数学知识，
+因为我很久没接触数学推导了，一直在实践项目。"</p>
+</blockquote>
+<h2>结构要求（学习者在第二轮追问中明确提出，已固化为项目约定）</h2>
+<blockquote>
+<p>"你可以单独建一个文件夹，专门里面就放答疑，可以不用给他插入到这种零零几零几这种课程里面了，
+你发个链接从那个正文跳转到我这个答疑里面，我这答疑里面可以有个链接，再跳回到相应的位置。"</p>
+</blockquote>
+<p>据此（见 <code>course/NOTES.md</code> 第三节、skill 第 9.2 节）：</p>
+<ul>
+<li>答疑页放独立目录 <strong><code>course/qa/</code></strong>，命名 <strong><code>qa-&lt;源课号&gt;-&lt;主题&gt;.html</code></strong>；</li>
+<li><strong>不占用主线课号</strong>——主线永远是 0001、0002、0003…（第二季仍从 0017 开始，
+  不会因为一页答疑而顺延，也避免与并行会话写的第二季撞号）；</li>
+<li><strong>双向互链</strong>：源课 <code>(4)</code> 式之后插补丁（带 <code>id="q0002-map"</code>）→ 链接跳到答疑页；
+  答疑页 hero 里给「← 回到 0002 课原位置」链接（<code>../lessons/0002-…#q0002-map</code>），页脚再给一条；</li>
+<li>catalog 里单独建「追问答疑馆」分馆（<code>qa</code> → collection <code>qa-0002</code>），<strong>不挂进 <code>stage-a</code></strong>，
+  <code>lesson.id</code> 用 <code>QA0002</code>，避免与主线课号混淆。</li>
+</ul>
+<h2>判断：为什么走"通道 B + A"而不是只插一个补丁</h2>
+<table>
+<thead>
+<tr>
+<th>判据（skill 9.0）</th>
+<th>本例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>需要<strong>独立推导</strong></td>
+<td>✅ 贝叶斯分母可扔、独立 → 连乘、高斯 → exp(加权平方)、取负对数翻面，共 4 段推导</td>
+</tr>
+<tr>
+<td><strong>跨知识点</strong>（概率 + 概率分布 + 优化 + 数值稳定性）</td>
+<td>✅ 涉及贝叶斯、高斯、二次型范数、argmax/argmin、log 数值下溢、迭代求解</td>
+</tr>
+<tr>
+<td>学习者<strong>自陈基础薄弱</strong>（很久没碰数学）</td>
+<td>✅ 需要"补零件"式的从零铺垫，塞进原课会撑爆原课节奏</td>
+</tr>
+</tbody>
+</table>
+<p>结论：<strong>主体必须独立成页</strong>（<code>qa/qa-0002-*</code>），同时在 0002 被问到的位置留一个默认展开的补丁，
+把"一句话结论 + 四行各自只做一件事 + 跳转链接"就地给出。</p>
+<h2>答疑页的结构（8 节）</h2>
+<table>
+<thead>
+<tr>
+<th>节</th>
+<th>内容</th>
+<th>对应原始疑问</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>先补五个数学零件</strong>：p(·) 读成"可信度"、贝叶斯（分母可扔）、高斯与 Ω、argmax/argmin、log 与取负</td>
+<td>"帮我回顾数学知识"</td>
+</tr>
+<tr>
+<td>2</td>
+<td>第 (1) 式：等号来自贝叶斯 + 分母可扔；三条候选取哪个的<strong>数值算例</strong>（0.80×0.20 等）</td>
+<td>第 (1) 式</td>
+</tr>
+<tr>
+<td>3</td>
+<td>第 (2) 式：<strong>把两个假设拆开</strong>（量测独立 vs 局部依赖），因子图举例，log 的工程理由（下溢表）</td>
+<td>第 (2) 式</td>
+</tr>
+<tr>
+<td>4</td>
+<td>第 (3) 式：从一维高斯一步步推到 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>exp</mi><mo stretchy="false">&#x00028;</mo><mo>&#x02212;</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mo fence="false" stretchy="false">&#x02016;</mo><mi>h</mi><mo>&#x02212;</mo><mi>z</mi><msubsup><mo fence="false" stretchy="false">&#x02016;</mo><mi>&#x003A9;</mi><mn>2</mn></msubsup><mo stretchy="false">&#x00029;</mo></mrow></math>，解释 ∝ 与二次型</td>
+<td>第 (3) 式</td>
+</tr>
+<tr>
+<td>5</td>
+<td>第 (4) 式：四步化简链（乘积→求和→脱 exp→取负翻面）；<strong>先验项被原文省略</strong>的诚实说明</td>
+<td>第 (4) 式</td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>手算到底</strong>：走廊里一台机器人，里程计 10 m(σ=1) + 激光 14 m(σ=0.5) → <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msup><mi>x</mi><mo>&#x022C6;</mo></msup><mo>&#x0003D;</mo><mn>13.2</mn></mrow></math> m，含"拉力平衡"验算与先验情形</td>
+<td>"推不动" → 用算术代替推导</td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong>七个最容易卡住的点</strong>（先验为何能扔、两个假设之别、为何取 log、Ω 为何用逆、高斯不成立怎么办、非线性怎么解、与卡尔曼的关系）</td>
+<td>隐含疑问</td>
+</tr>
+<tr>
+<td>8</td>
+<td>自测表 + 2 个互动判断 + 6 道折叠练习</td>
+<td>检索练习</td>
+</tr>
+</tbody>
+</table>
+<h2>设计取舍（下次可复用）</h2>
+<ol>
+<li><strong>"补零件 → 逐式拆解 → 手算 → FAQ → 自测"</strong> 是应对"我很久没碰数学"类追问的固定骨架。
+   零件不进正文而是集中放在第 1 节，学习者可以按需回查，不必在公式中间被术语打断。</li>
+<li><strong>每一节都配一张自绘图</strong>（共 7 张，纯内联 SVG，不引外部库）：
+   - 图 1 候选轨迹打分图（房间 + 三条轨迹 + 分数条）
+   - 图 2 三个同学量同一张桌子（解释"量测独立"）
+   - 图 3 论文 Fig. 3 的简化因子图（保留原图蓝/绿配色约定）
+   - 图 4 高斯钟形曲线 + Ω 的胖瘦对照（两条曲线为<strong>真实计算的高斯折线</strong>，
+     <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>e</mi><mo>&#x0003D;</mo><mn>1</mn></mrow></math> m 处标注 13.5% = <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>exp</mi><mo stretchy="false">&#x00028;</mo><mo>&#x02212;</mo><mn>2</mn><mo stretchy="false">&#x00029;</mo></mrow></math>，可核对）
+   - 图 5 山峰 ↔ 山谷（max 翻 min，峰顶与谷底同横坐标）
+   - 图 6 弹簧平衡图（细长弹簧 vs 粗短弹簧 + 两根等长"拉力"色条）
+   - 图 7 三种权重下估计值的滑动对照（13.2 / 12.0 / 10.8）
+   所有图的<strong>解释文字都放在 <code>&lt;figcaption&gt;</code> 里</strong>（图内只留最短标签），并统一给
+   「这张图在画什么 / 怎么看这张图 / 要记住的一句话」三段。
+   <strong>曲线上的数值点用 Python 按公式算好再写进 <code>&lt;polyline&gt;</code></strong>（脚本见 <code>_tmp/gen_poly.py</code>），
+   不凭手感画。</li>
+<li><strong>数值算例必须能验算</strong>。13.2 m 这个数满足 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo>&#x02211;</mo><msub><mi>&#x003C9;</mi><mi>k</mi></msub><mo stretchy="false">&#x00028;</mo><mi>x</mi><mo>&#x02212;</mo><msub><mi>z</mi><mi>k</mi></msub><mo stretchy="false">&#x00029;</mo><mo>&#x0003D;</mo><mn>0</mn></mrow></math>（两边拉力都是 3.2），
+   学习者可以用纸笔复核；钟形曲线的 13.5% 也对应 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>exp</mi><mo stretchy="false">&#x00028;</mo><mo>&#x02212;</mo><mn>2</mn><mo stretchy="false">&#x00029;</mo></mrow></math>。<strong>不要给无法复核的"看起来很像"的数。</strong></li>
+<li><strong>诚实标注"教学用假数字"</strong>：第 2 节那张候选取值表（0.80 / 0.10 / 0.40 等）是我们为演示乘法编的，
+   不是论文数值，课里已显式写明。</li>
+<li><strong>SVG 里不写 <code>class</code> 属性</strong>（只写内联 <code>fill</code>/<code>stroke</code>），既避免与课程样式表打架，
+   也避免第 11 节第 ⑥ 项的"未定义类"误报。</li>
+</ol>
+<h2>顺手核出的两处原文细节（重要）</h2>
+<ol>
+<li><strong>原文 (4) 式省略了先验项。</strong> 原文第 II-A 节在 (4) 式前一段写了
+   "assume that the prior can be written as <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>p</mi><mo stretchy="false">&#x00028;</mo><mi>&#x1D4B3;</mi><mo stretchy="false">&#x00029;</mo><mo>&#x0221D;</mo><mi>exp</mi><mo stretchy="false">&#x00028;</mo><mo>&#x02212;</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mo fence="false" stretchy="false">&#x02016;</mo><msub><mi>h</mi><mn>0</mn></msub><mo stretchy="false">&#x00028;</mo><mi>&#x1D4B3;</mi><mo stretchy="false">&#x00029;</mo><mo>&#x02212;</mo><msub><mi>z</mi><mn>0</mn></msub><msubsup><mo fence="false" stretchy="false">&#x02016;</mo><mrow><msub><mi>&#x003A9;</mi><mn>0</mn></msub></mrow><mn>2</mn></msubsup><mo stretchy="false">&#x00029;</mo></mrow></math>"，
+   (4) 式第一行也确实是 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mo>argmin</mo><mo>&#x02212;</mo><mi>log</mi><mo stretchy="false">&#x00028;</mo><mi>p</mi><mo stretchy="false">&#x00028;</mo><mi>&#x1D4B3;</mi><mo stretchy="false">&#x00029;</mo><msub><mo>&#x0220F;</mo><mi>k</mi></msub><mi>p</mi><mo stretchy="false">&#x00028;</mo><msub><mi>z</mi><mi>k</mi></msub><mo>&#x02223;</mo><msub><mi>&#x1D4B3;</mi><mi>k</mi></msub><mo stretchy="false">&#x00029;</mo><mo stretchy="false">&#x00029;</mo></mrow></math>，
+   <strong>但最终那行求和只从 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>k</mi><mo>&#x0003D;</mo><mn>1</mn></mrow></math> 到 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>m</mi></mrow></math>，没有显式写出先验项</strong>。
+   这不是错误、是排版省略，但如果不点明，学习者会觉得"第 0002 课说先验可丢，怎么先验就再也不见了"。
+   已在答疑页第 5 节用 <code>callout</code> 给出完整形式。</li>
+<li><strong>OCR 错误 4 处</strong>（已在答疑页第 7 节末尾集中说明）：
+   argmax 下标 <code>χ</code> → 应为花体 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>&#x1D4B3;</mi></mrow></math>；(2) 式多一个右括号；
+   <code>squared &lt;sub&gt;2&lt;/sub&gt;-norm</code> → 应为 squared ℓ₂-norm（ℓ 被吃）；<code>ex p ( - ...)</code> → <code>exp</code> 被断字。</li>
+</ol>
+<h2>后续动作</h2>
+<ul>
+<li>[x] 新增 <code>qa/qa-0002-MAP到非线性最小二乘.html</code>（独立目录，不占课号）</li>
+<li>[x] 在 0002 第 3 节 (4) 式后插入 <code>qa-patch</code>（<code>id=q0002-map</code>，默认 <code>open</code>，含跳转链接）</li>
+<li>[x] 答疑页 hero 加「回到原位置」提示条，页脚加回程链接（指向 <code>../lessons/0002-…#q0002-map</code>）</li>
+<li>[x] <code>data/course-catalog.js</code>：新增分馆 <code>qa</code>（追问答疑馆）+ collection <code>qa-0002</code>；
+      <code>lessons</code> 追加 <code>QA0002</code>（<code>paper: "qa-0002"</code>）；<strong><code>stage-a</code> 的课时数已复原为 16 节课</strong></li>
+<li>[x] <code>learning-records</code> 追加本条；<code>reference/glossary.html</code> 的 MAP/MLE/因子图/信息矩阵 课次标注
+      改为「0002 ＋答疑页」，并新增「加权最小二乘」一条</li>
+<li>[x] 已跑 skill 第 11 节代码校验（含新增的第 ⑨ 项双向链接校验）+ 第 12 节视觉校验</li>
+</ul>
+<h2>方法论收获</h2>
+<p><strong>"我看不懂这几行公式"这类追问，本质不是"公式难"，而是"零件缺"。</strong>
+如果只把公式再讲一遍（换个说法重抄一遍），学习者下次还是卡；
+正确做法是<strong>先列出他缺的那几个零件</strong>（本例 5 个），再让公式变成"零件的组装说明书"。
+判断零件清单的方法：逐式追问"这一步用了什么性质"——用到的每个性质就是一个零件。
+另配两条：
+① <strong>能验算的数值算例比三页推导更能让人产生"我懂了"的感觉</strong>，所以这类答疑页必须有一节"手算到底"；
+② <strong>答疑页不要混进课程主线</strong>——它是"哪里不懂点哪里"的旁支，
+   一旦混进编号序列，主线进度、课时统计、后续开课都会被牵连（本次即为真实教训）。</p>
+<div class="doc-foot">本页由 <code>course/learning-records/0003-答疑记录-MAP到非线性最小二乘.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

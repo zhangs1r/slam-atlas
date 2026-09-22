@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第七季学习记录：学习式方法 · 匹配 / 检索 / 端到端 / 基础模型（0128–0151） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0009-第七季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第七季学习记录：学习式方法 · 匹配 / 检索 / 端到端 / 基础模型（0128–0151）</h1>
+<blockquote>
+<p>对应课程：第 0128 – 0151 节（语料库阶段 G，31 篇论文；本季 24 节课，69 张具象自绘图、100 张原文图）
+记录日期：2026-09-21</p>
+</blockquote>
+<hr />
+<h2>一、这一季在回答什么：一句挂了六季的判断</h2>
+<p>第一季第 <code>0011</code> 课（深度学习视觉 SLAM 综述）里，作者把学习方法在 SLAM 里的位置总结成一句话：</p>
+<blockquote>
+<p><strong>深度学习先吃掉匹配与检索。</strong></p>
+</blockquote>
+<p>当时那只是一句综述作者的判断。这一季二十四节课，就是<strong>把这句话拆开、逐项去兑现或者证伪</strong>。</p>
+<p>拆开之后是四笔账，而且结论并不一致——<strong>这正是本季最值得记的地方</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>战场</th>
+<th>结论</th>
+<th>课号</th>
+<th>关键证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>匹配</strong></td>
+<td><strong>吃掉了</strong></td>
+<td>0129–0133</td>
+<td>SuperGlue 把「数据关联」变成 GNN + 最优传输，作者自己叫它 middle-end</td>
+</tr>
+<tr>
+<td><strong>检索</strong></td>
+<td><strong>吃掉了</strong></td>
+<td>0134–0140</td>
+<td>从 DBoW2 的手工词袋，到学习式全局描述子把反向回环 AP 从 0.65 拉到 0.94</td>
+</tr>
+<tr>
+<td><strong>位姿</strong></td>
+<td><strong>只吃掉了很窄的一段</strong></td>
+<td>0141–0146</td>
+<td>端到端 VO 在特定条件下能打，但前提一条都没少（见下）</td>
+</tr>
+<tr>
+<td><strong>几何/表示</strong></td>
+<td><strong>没被吃掉，但被「外包」了</strong></td>
+<td>0147–0150</td>
+<td>基础模型不替你做 SLAM，但它把「每次都要重新解」的那部分变成了一次前向</td>
+</tr>
+</tbody>
+</table>
+<p>「外包」这个词是本季的收获。基础模型（DINOv2、SAM、DUSt3R）没有替换掉 SLAM 的任何一环，
+它们是<strong>把过去必须逐场景优化的东西，变成了可以直接调用的函数</strong>——
+但这个函数给出的东西（比如 DUSt3R 的点图）<strong>尺度仍未定</strong>，最后那一步还是得 SLAM 自己做。</p>
+<hr />
+<h2>二、四笔账的细节</h2>
+<h3>账① 匹配：被吃掉的是「关联」，不是「检测」</h3>
+<p>一个必须分清的层次：流水线是 <strong>前端（检测 + 描述）→ 中间端（匹配）→ 后端（优化）</strong>。</p>
+<ul>
+<li>SuperGlue（<code>0129</code>）吃的是<strong>中间端</strong>：给它两组带描述子的关键点，它输出谁配谁，以及每个匹配的置信度。
+  核心是「注意力让匹配有上下文」+「用最优传输解指派问题」+「垃圾桶变量丢弃配不上的点」。
+  室内 AUC@20° 报告为 <strong>51.84</strong>，模型 <strong>12M</strong> 参数、<strong>69 ms</strong>。</li>
+<li>LoFTR（<code>0130</code>）干脆<strong>不要检测器</strong>：先在 1/8 分辨率上做全局匹配，再逐级细化回原图。
+  这正好回答了第二季以来一直悬着的那句「没有纹理的地方提不出特征怎么办」。</li>
+<li>LightGlue（<code>0131</code>）把 SuperGlue 重构得更省：位置编码、解耦可匹配性、深度监督，
+  以及按难度<strong>自适应停止</strong>——简单图像对早停，难的才多算几层。论文报告推理量比 SuperGlue 减 <strong>30%</strong>。</li>
+<li><strong>SiLK（<code>0133</code>）是本季最重要的反例</strong>：它是「检测器 + 描述子」的<strong>前端</strong>，
+  匹配只用余弦相似度加互为最近邻，<strong>不做注意力也不做最优传输</strong>——却依然能打（<strong>76k</strong> 参数、
+  IMC2022 mAA <strong>0.685</strong>）。它和第四季 <code>0088</code> KISS-ICP 是同一个方法论的两面：
+  <strong>当别人在往上加复杂度的时候，先问一句「这些复杂度到底买到了什么」。</strong></li>
+</ul>
+<blockquote>
+<p><strong>一个必须纠正的流行误解</strong>：常有人说「PoseNet 是端到端 VO 的开端」。
+不是。PoseNet 是<strong>单张图像的全局重定位</strong>，它连「里程计」都不是（<code>0141</code> 课专门交代了这一点）。</p>
+</blockquote>
+<h3>账② 检索：假阳性铁律还成立吗</h3>
+<p>第一季 <code>0014</code> 课立过一条铁律：<strong>回环里一次假阳性，就能把整张地图拉歪。</strong></p>
+<p>这一季的十二篇场景识别论文，本质上都在回答这条铁律。几个里程碑：</p>
+<ul>
+<li><strong>DBoW2（<code>0134</code>）</strong>是这条线的工程标杆：把图像压成视觉词频向量，tf-idf 加权后打分。
+  它能在嵌入式上跑到 <strong>22 ms</strong> 一帧，而且当时报告<strong>零假阳性</strong>——这也是它能进 ORB-SLAM 的原因。</li>
+<li><strong>Scan Context（<code>0135</code>）</strong>走的是免训练几何路线：把一帧激光按方位角和环号压成一张「最大高度矩阵」，
+  <strong>列循环移位就等于转向</strong>。2018 原版只解决旋转；<strong>横向不变性是 2022 的 <code>++</code> 才系统解决的</strong>
+  （<code>++</code> 报告 <strong>7.4 ms</strong> 一帧）。这条线正是第四季 <code>0093</code> RING++ 的直接对手。</li>
+<li><strong>学习式点云描述子（<code>0136</code>–<code>0137</code>）</strong>把最难的方向反环回解决了：
+  LCDNet 在 KITTI 08 反向回环上 <strong>AP 0.94</strong>，而 Scan Context 只有 <strong>0.65</strong>。
+  OverlapTransformer 更极端——它把「旋转不变」直接<strong>做进网络结构</strong>（只压竖直维、不压水平维），
+  而不是靠暴力列移去搜，跑到 <strong>1.37 ms</strong>（约 <strong>730 Hz</strong>）。</li>
+<li><strong>端到端回环与重定位（<code>0140</code>）</strong>给出本季对铁律的正式答复：
+  用同一个骨干出两路结果（检索 + 六自由度位姿），回环 <strong>1 Hz</strong>、重定位 <strong>2.5 Hz</strong>，
+  KITTI 上 AUC <strong>0.958</strong> / R@1 <strong>0.937</strong>。</li>
+</ul>
+<p><strong>结论是：假阳性被压下去了，但代价换了形式。</strong> 过去怕的是「误匹配一对点」，
+现在怕的是「描述子对某类场景系统性不敏感」——失效从<strong>随机</strong>变成了<strong>成体系</strong>，
+所以评测协议（<code>Recall@1</code> 与 <code>Recall@1%</code> 到底在量什么，见 <code>0139</code>）比单个数字更重要。</p>
+<h3>账③ 位姿：为什么只吃掉了很窄的一段</h3>
+<p>这一条支线的演进是：PoseNet（2015，其实不是 VO）→ DeepVO（2017，真正的起点）→
+UnDeepVO / TartanVO（换训练信号）→ D3VO（深度·位姿·不确定性一起学）→
+<strong>DROID-SLAM（<code>0145</code>）→ DPVO（<code>0146</code>）</strong>。</p>
+<p><strong>转折点是 DROID-SLAM</strong>：它把 <strong>BA 做成网络里的一层</strong>。这里必须和第二季 <code>0018</code>/<code>0019</code> 对照——
+经典 BA 是<strong>稀疏</strong>的、靠 <strong>Schur 消元</strong>解；DROID-SLAM 是<strong>稠密</strong>的、靠<strong>迭代更新</strong>解。
+它报告的「灾难性失败更少」在正文里有实测支撑（TartanAir / EuRoC / TUM 上零失败）。</p>
+<p><strong>但「只吃掉了很窄的一段」的意思是说：端到端 VO 一条前提都没省。</strong>
+它仍然需要：训练数据（真值位姿很贵）、仍然怕动态物体与纯旋转、仍然难以跨数据集泛化
+（TartanVO 这类工作专门在补这一条）。而 DPVO（<code>0146</code>）的价值恰恰在于——<strong>它往下减</strong>：
+把稠密光流换成图像块跟踪，精度保持而算量大降。<strong>这一季的暗线就是「加」与「减」的拉锯。</strong></p>
+<h3>账④ 几何：没被吃掉，被外包了</h3>
+<ul>
+<li><strong>DINOv2（<code>0147</code>）</strong>：自监督视觉特征，<strong>LVD-142M</strong> 数据、<strong>ViT-g</strong> 规模、训练约 <strong>22,016 GPU 小时</strong>。
+  它在 SLAM 里的用法早就有现成例子——<strong>第六季 <code>0121</code> WildGS-SLAM 用它的特征不确定性做动态剔除</strong>。</li>
+<li><strong>SAM（<code>0147</code>）</strong>：<strong>11M</strong> 图 / <strong>1.1B</strong> mask 训练出来的通用分割，约 <strong>50 ms</strong>。
+  关键设计是<strong>三重歧义</strong>：一个点提示输出三个不同粒度的 mask，让使用者自己挑。</li>
+<li><strong>DUSt3R（<code>0148</code>）</strong>：把「从无序图像重建」这件事变成一次前向——直接回归 <strong>pointmap</strong>
+  （同一个坐标系，<strong>但尺度未定</strong>）。它和第二季 <code>0027</code> COLMAP 是同一件事的两代做法。</li>
+<li><strong>MASt3R-SLAM（<code>0149</code>）</strong>：它本身<strong>就是一套实时 SLAM 系统</strong>（<strong>15 FPS</strong>，
+  TUM / 7-Scenes / EuRoC 上 ATE 分别 <strong>0.030 / 0.047 / 0.041 m</strong>），建立在双视图重建先验上。</li>
+<li><strong>SLAM3R（<code>0150</code>）</strong>：前馈网络直接从视频预测统一坐标系的点图，<strong>20+ FPS</strong>，
+  7-Scenes 上 <strong>2.13 / 2.34 cm</strong>。</li>
+<li><strong>Metric3D v2（<code>0150</code>）</strong>：回答一个更朴素的问题——<strong>单目的尺度从哪来</strong>。
+  这条暗线第三季 <code>0040</code> 导览就埋下了（「尺度暗线六站」），本课是它的最新一站。</li>
+</ul>
+<hr />
+<h2>三、本季最反直觉的三个认识</h2>
+<h3>① 同一个「最优传输」，在两个地方做的是完全不同的事</h3>
+<p>这是本季最容易混、也最值得记住的一点：</p>
+<ul>
+<li>在 <strong>SuperGlue（<code>0129</code>）</strong> 里，最优传输解的是<strong>匹配指派</strong>——谁是同一个点、谁配不上（丢垃圾桶）。</li>
+<li>在 <strong>SALAD（<code>0138</code>）</strong> 里，最优传输解的是<strong>描述子聚合</strong>——一个局部特征该以多大权重分配给几个「视觉词」。</li>
+</ul>
+<p><strong>同一个数学工具，在流水线的两个不同位置，含义完全变了。</strong> 看到「用了最优传输」不能直接推断它在干什么。</p>
+<h3>② 单阶段的聚合方法，反过来打过了两阶段的检索加重排序</h3>
+<p>常规直觉是「两步总比一步细」。但 SALAD（单阶段、用 OT 做聚合）在 MSLS Challenge 上报告
+<strong>75.0%</strong>，而两阶段代表 R²Former 是 <strong>73.0%</strong>（<code>0138</code>/<code>0139</code>）。
+<strong>把重排序的能力吸收进聚合本身，可以既省一次前向又更准。</strong></p>
+<h3>③ 尺度这条线，本季才第一次被「基础模型」正面处理</h3>
+<p>单目没有尺度是第三季就反复讲的老问题（靠双目基线、靠 IMU、靠已知物体）。
+本季的答案是：<strong>用一个在 1600 万张图上训过的模型，直接回归度量深度</strong>（<code>0150</code>）。
+这条路的隐忧也很清楚——<strong>它把尺度押在训练数据的分布上</strong>，换了国家、换了相机、换了场景类型，
+这个先验还准不准，是需要警惕的。</p>
+<hr />
+<h2>四、还清的债与没还的债</h2>
+<h3>还清的</h3>
+<table>
+<thead>
+<tr>
+<th>债</th>
+<th>何时欠下</th>
+<th>何时还清</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>「深度学习先吃掉匹配与检索」只是一句判断</td>
+<td>第一季 <code>0011</code></td>
+<td><strong>本季整季</strong>，四笔账逐项结清</td>
+</tr>
+<tr>
+<td>回环假阳性铁律在学习式方法下是否还成立</td>
+<td>第一季 <code>0014</code></td>
+<td><code>0140</code> 正面复查（结论：压下去了，但失效变成成体系的）</td>
+</tr>
+<tr>
+<td>「没有特征点的地方怎么办」</td>
+<td>第二季 <code>0027</code> / 第三季 <code>0046</code> 起反复出现</td>
+<td><code>0130</code> LoFTR（不用检测器）</td>
+</tr>
+<tr>
+<td>「干脆不提特征」只在激光侧见过</td>
+<td>第四季 <code>0084</code> FAST-LIO2</td>
+<td><code>0130</code>/<code>0133</code> 给出视觉侧的对应答案</td>
+</tr>
+<tr>
+<td>单目尺度这条暗线</td>
+<td>第三季 <code>0040</code> 导览</td>
+<td><code>0150</code> Metric3D v2（用基础模型补尺度）</td>
+</tr>
+</tbody>
+</table>
+<h3>没还的（写在这里，留给后面）</h3>
+<ol>
+<li><strong>失效边界没有定论</strong>：学习式方法在动态物体、纯旋转、纹理缺失下到底比经典方法好还是差？
+   本季每一篇都只在自己选的数据集上说好话。</li>
+<li><strong>训练数据的偏差与公平性</strong>：<code>0147</code> 里 DINOv2 正文那组百分比与它<strong>自己的表格数字不符</strong>
+   （正文说非洲地区低 25.7%、收入差 31.7%；表格里是 74.0 vs 89.7、67.4 vs 90.5）。
+   课上并列了两套并说明<strong>以表格为准</strong>——这个例子本身就是「模型能力」与「模型公平」是两件事的证据。</li>
+<li><strong>算力与部署成本</strong>：本季方法大多要 GPU；第七季没有一篇真正解决「怎么上机载」。</li>
+<li><strong>语义与语言怎么进地图</strong>：第六季 <code>0123</code> 开过头，本季只在 <code>0147</code> 用到分割零件，没结账。</li>
+</ol>
+<hr />
+<h2>五、方法与数据</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>课程数</td>
+<td>24 节（<code>0128</code>–<code>0151</code>）</td>
+</tr>
+<tr>
+<td>覆盖论文</td>
+<td>31 篇（清单 31 条，<strong>31 篇全部 1:1 命中</strong>，无重复录入、无标题错配）</td>
+</tr>
+<tr>
+<td>自绘具象 SVG</td>
+<td><strong>69 张</strong>（每节约 2.9 张，是各季中密度最高的一季）</td>
+</tr>
+<tr>
+<td>引用原文图</td>
+<td><strong>100 张</strong>（全部经存在性校验，0 缺失）</td>
+</tr>
+<tr>
+<td>静态校验</td>
+<td>164 文件 / 638 处图片引用，<strong>问题 0</strong></td>
+</tr>
+<tr>
+<td>窄屏体检</td>
+<td><strong>163 页 × {390, 768, 1024} 三个宽度，横向溢出 0 页</strong></td>
+</tr>
+<tr>
+<td>SVG 几何体检</td>
+<td>本季 24 节的 OVERLAP / OUT-OF-BOX 均为 <strong>0</strong></td>
+</tr>
+</tbody>
+</table>
+<p>本季的自绘图密度之所以最高，是因为本季抽象内容特别集中（注意力、最优传输、Sinkhorn、
+相关体、描述子聚合、pointmap、up-to-scale、群卷积……），而原文的图大多只在讲自己的贡献。
+所以每一个抽象概念都配了<strong>具象</strong>图：真实的街道、停车场、相框、图书馆卡片柜、漏斗、橡皮膜，
+而不是抽象的点线方块。</p>
+<hr />
+<h2>六、本季被抓出来的「清单与正文不符」（诚实记录）</h2>
+<p>本季精读阶段一共查出 <strong>4 处</strong>需要显式纠正的地方，全部写进了课里：</p>
+<ol>
+<li><strong><code>2015_PoseNet</code> 不是视觉里程计</strong>，而是单张图像的<strong>全局重定位</strong>。
+   清单把它归在「端到端 VO」块里属归类粗糙。真正开启端到端 VO 的是 <code>2017_DeepVO</code>。</li>
+<li><strong><code>2023_SiLK</code> 是前端</strong>（检测器 + 描述子），<strong>不是匹配中间端</strong>。
+   SuperGlue / LoFTR / LightGlue 三篇才是 middle-end。</li>
+<li><strong><code>2020_RAFT</code> 是稠密光流</strong>，不是稀疏特征匹配。它被放进匹配块是因为提供了稠密对应。</li>
+<li><strong><code>2023_DINOv2</code> 正文与自身表格矛盾</strong>（见第四节第 2 条）。</li>
+</ol>
+<p>另外还处理了多处 OCR 问题（SuperGlue 式(3) 括号、SiLK 双 softmax 公式、LightGlue 拼写、
+RAFT 递推式下标、UnDeepVO Table I 与 D3VO Table 4 的表格串行），
+以及 <code>DBoW2</code> 那篇 Markdown 文件开头混入了约 32 行另一篇论文的串页垃圾（课上只取中段正文）。</p>
+<p><strong>这是本项目第 9–12 处路线图/清单问题。规律还是同一条：
+「文件夹里有这个文件名」不等于「存在这篇论文」，而「清单写着它属于某类」也不等于「它真的属于某类」。</strong></p>
+<hr />
+<h2>七、下一季（阶段 H）会去哪里</h2>
+<p>阶段 H 是<strong>专题支线</strong>（动态 / 语义 / 多机 / 事件相机，42 篇），按需取用。
+本季欠下的第 1 条（学习式方法的失效边界）与第 4 条（语义怎么进地图）会在那里遇到正面材料。</p>
+<div class="doc-foot">本页由 <code>course/learning-records/0009-第七季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

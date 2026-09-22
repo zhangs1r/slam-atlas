@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第二季学习记录：打地基 — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0004-第二季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第二季学习记录：打地基</h1>
+<blockquote>
+<p>对应课程：第 0017 – 0039 节（语料库阶段 B，19 篇论文）
+这一季的定位是<strong>把第一季"会用但说不清"的公式亲手推一遍</strong>。</p>
+</blockquote>
+<h2>一、这一季还清的两笔债</h2>
+<h3>1. 悬念①：BA 的稀疏性怎么利用（第 0019 课）</h3>
+<p>第一季第 0002 课只留下一句话——"稀疏性决定后端能不能算得动"。这一季把它推完了：</p>
+<ul>
+<li><strong>稀疏性从哪来</strong>：BA 的 Hessian 分"结构块"与"相机块"，而<strong>结构子矩阵是块对角的</strong>（三维特征只与相机耦合，彼此之间不耦合）。原文一句话概括："3D features couple only to cameras, not to other features"。这就是为什么可以按点独立求和。</li>
+<li><strong>Schur 消元消掉了什么</strong>：消掉结构（点）参数，留下<strong>约化相机系统</strong> <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mover><mi>H</mi><mo stretchy="true">&#x000AF;</mo></mover><mrow><mi>C</mi><mi>C</mi></mrow></msub><msub><mi>x</mi><mi>C</mi></msub><mo>&#x0003D;</mo><msub><mover><mi>g</mi><mo stretchy="true">&#x000AF;</mo></mover><mi>C</mi></msub></mrow></math>，其中 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mover><mi>H</mi><mo stretchy="true">&#x000AF;</mo></mover><mrow><mi>C</mi><mi>C</mi></mrow></msub><mo>&#x0003D;</mo><msub><mi>H</mi><mrow><mi>C</mi><mi>C</mi></mrow></msub><mo>&#x02212;</mo><msub><mo>&#x02211;</mo><mi>p</mi></msub><msub><mi>H</mi><mrow><mi>C</mi><mi>p</mi></mrow></msub><msubsup><mi>H</mi><mrow><mi>p</mi><mi>p</mi></mrow><mrow><mo>&#x02212;</mo><mn>1</mn></mrow></msubsup><msub><mi>H</mi><mrow><mi>p</mi><mi>C</mi></mrow></msub></mrow></math>。<strong>"相机数量通常少于点的数量"这件事，就是这条捷径成立的理由。</strong></li>
+<li><strong>Schur 过程一旦定下，唯一的自由度只剩变量排序</strong>——而填充（fill-in）最小化是 NP-complete，所以工程上只能在几种启发式排序里选。</li>
+</ul>
+<p><strong>最重要的收获：这个"消元"招式在同一季里出现了三次，形态完全不同。</strong>
+| 场景 | 消掉什么 | 用什么消 | 出现在 |
+|---|---|---|---|
+| BA | 结构（点）参数 | Schur 补（块消元） | 0019 |
+| 点云 BA | 特征参数（面/边） | <strong>闭式解</strong>（特征值/特征向量） | 0022 |
+| MSCKF | 特征点坐标 | <strong>左零空间正交投影</strong>（维数 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mn>2</mn><mi>M</mi><mo>&#x02212;</mo><mn>3</mn></mrow></math>） | 0028 |
+| 预积分 | 三维路标 | Schur 补（structureless 视觉因子） | 0030 |
+| 固定延迟平滑 | 旧控制点 | Schur 补（<strong>边缘化</strong>成先验因子） | 0032 |</p>
+<p>以前以为这是五个不相干的技术，现在明白是<strong>同一个思想的不同落地</strong>。</p>
+<h3>2. 悬念②：预积分在解决什么（第 0029、0030 课）</h3>
+<p>答案其实只要看两个式子并排：</p>
+<ul>
+<li>式(32)：<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi mathvariant="normal">R</mi><mi>j</mi></msub><mo>&#x0003D;</mo><msub><mi mathvariant="normal">R</mi><mi>i</mi></msub><msub><mo>&#x0220F;</mo><mi>k</mi></msub><mrow><mi mathvariant="normal">E</mi><mi mathvariant="normal">x</mi><mi mathvariant="normal">p</mi></mrow><mo stretchy="false">&#x00028;</mo><mo>&#x022EF;</mo><mo stretchy="false">&#x00029;</mo></mrow></math> —— 右端每项都含 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi mathvariant="normal">R</mi><mi>k</mi></msub></mrow></math>，而 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi mathvariant="normal">R</mi><mi>k</mi></msub></mrow></math> 由 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi mathvariant="normal">R</mi><mi>i</mi></msub></mrow></math> 递推而来。<strong>优化一改 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi mathvariant="normal">R</mi><mi>i</mi></msub></mrow></math>，全部作废。</strong></li>
+<li>式(33)：<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>&#x00394;</mi><msub><mi mathvariant="normal">R</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>&#x02261;</mo><msubsup><mi mathvariant="normal">R</mi><mi>i</mi><mo>&#x022A4;</mo></msubsup><msub><mi mathvariant="normal">R</mi><mi>j</mi></msub></mrow></math>、<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>&#x00394;</mi><msub><mi mathvariant="bold">v</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>&#x02250;</mo><msubsup><mi mathvariant="normal">R</mi><mi>i</mi><mo>&#x022A4;</mo></msubsup><mo stretchy="false">&#x00028;</mo><msub><mi mathvariant="bold">v</mi><mi>j</mi></msub><mo>&#x02212;</mo><msub><mi mathvariant="bold">v</mi><mi>i</mi></msub><mo>&#x02212;</mo><mi mathvariant="bold">g</mi><mi>&#x00394;</mi><msub><mi>t</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo stretchy="false">&#x00029;</mo></mrow></math>、<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>&#x00394;</mi><msub><mi mathvariant="bold">p</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>&#x02250;</mo><msubsup><mi mathvariant="normal">R</mi><mi>i</mi><mo>&#x022A4;</mo></msubsup><mo stretchy="false">&#x00028;</mo><msub><mi mathvariant="bold">p</mi><mi>j</mi></msub><mo>&#x02212;</mo><msub><mi mathvariant="bold">p</mi><mi>i</mi></msub><mo>&#x02212;</mo><msub><mi mathvariant="bold">v</mi><mi>i</mi></msub><mi>&#x00394;</mi><msub><mi>t</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><mo>&#x02212;</mo><mfrac><mn>1</mn><mn>2</mn></mfrac><mi mathvariant="bold">g</mi><mi>&#x00394;</mi><msubsup><mi>t</mi><mrow><mi>i</mi><mi>j</mi></mrow><mn>2</mn></msubsup><mo stretchy="false">&#x00029;</mo></mrow></math> —— 右端<strong>只剩 IMU 读数与旧偏置</strong>，<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi mathvariant="normal">R</mi><mi>i</mi></msub><mo>&#x0002C;</mo><msub><mi mathvariant="bold">v</mi><mi>i</mi></msub><mo>&#x0002C;</mo><msub><mi mathvariant="bold">p</mi><mi>i</mi></msub><mo>&#x0002C;</mo><mi mathvariant="bold">g</mi></mrow></math> <strong>全部消失</strong>。</li>
+</ul>
+<p>原文那句是关键："make the right-hand side of (33) <strong>independent from the state at time <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>i</mi></mrow></math> as well as gravitational effects</strong>"。</p>
+<p><strong>偏置为什么不用重积分</strong>：雅可比 "remain constant and can be <strong>precomputed</strong>"，偏置变化只做<strong>一阶修正</strong>就行。</p>
+<h2>二、这一季新学到的、第一季完全没提的东西</h2>
+<h3>1. gauge freedom（第 0019 课）——本季最反直觉</h3>
+<p>坐标系整体变换不改变几何。所以 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>H</mi></mrow></math> <strong>天然秩亏</strong>（<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>H</mi><mi>G</mi><mo>&#x0003D;</mo><mn>0</mn></mrow></math>），必须固定一个 gauge，否则方程欠定。</p>
+<p>这解释了两件事：
+- 为什么"BA 的协方差没有绝对含义"——残差在真值处才有意义，但真值不可知，只能用拟合值，所以<strong>残差有偏</strong>；
+- 为什么第 0020 课的算法"必须固定一个节点"（给 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><msub><mi>H</mi><mrow><mo stretchy="false">[</mo><mn>11</mn><mo stretchy="false">]</mo></mrow></msub></mrow></math> 加 I）——同一个问题的工程版。</p>
+<h3>2. "先剔除外点再优化"原来是错的（第 0019 课）</h3>
+<p>原文原话：先固定阈值剔除再做最小二乘，"outlier deletion is just a <strong>roundabout way of simulating a robust cost function</strong>"——硬阈值剔除只是<strong>迂回地</strong>模拟了一个鲁棒代价函数。</p>
+<p>正确做法是把内点+外点建成一个 <strong>total distribution</strong>，让 ML 估计<strong>天然鲁棒</strong>。</p>
+<h3>3. NEES 与"一致性"的边界（第 0022、0029 课）</h3>
+<p>"一致（consistent）"不是形容词，是一条<strong>可以画出来的曲线</strong>：归一化 NEES 贴近 1 才叫一致。</p>
+<p>但更重要的是<strong>它有适用范围</strong>：点噪声超过 0.3 m 后一阶近似失效，协方差不再可信。原文自己写了这条边界——这种诚实值得学。</p>
+<h3>4. 连续时间：什么时候必须换建模（第 0031、0032 课）</h3>
+<p>第 0031 课是一篇<strong>对比研究</strong>，它用"人为注入 0/10/20 ms 时延"把工程难题变成受控变量。结论很干脆：</p>
+<ul>
+<li><strong>同步 → 两种表示等价</strong>；</li>
+<li><strong>不同步 + 高速 → 连续时间赢</strong>，能把 ATE 恢复到同步水平；</li>
+<li><strong>但同步场景下连续时间不划算</strong>（地面机器人上 DT 0.87 m 还略胜 CT 0.92 m）。</li>
+</ul>
+<p>而且原文只做全局快门，<strong>卷帘快门没有任何实验数据</strong>——这一点必须记住，别被"连续时间能解决卷帘快门"的说法带偏。</p>
+<h3>5. 一个漂亮的反直觉：composition 少控制点反而更准（第 0032 课）</h3>
+<p>ElasticLiDAR++ 里，66 个状态的 composition + SE(3) 做到 10.3 mm，而 606 个状态的 spline-direct 只有 23.1 mm。原因是 composition <strong>优化的是"修正量"</strong>，每轮从零出发、无奇异性。</p>
+<h3>6. "隐式 vs 显式"这条线的完整版（第 0036–0039 课）</h3>
+<p>第一季第 0015 课提过这对概念，但 NeRF 本身只被当作背景。这四节把它补完了：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>信息放在哪</th>
+<th>每场景规模</th>
+<th>训练时间</th>
+<th>原文承认的主要伪影</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>NeRF</strong></td>
+<td>全在 MLP 权重里（隐式）</td>
+<td>约 5 MB 权重</td>
+<td>V100 上 1–2 天</td>
+<td>过平滑（去掉位置编码时）、无法分析"会在哪失败"</td>
+</tr>
+<tr>
+<td><strong>Instant NGP</strong></td>
+<td>网络 + 可训练哈希特征表（混合）</td>
+<td><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>F</mi><mo>&#x0003D;</mo><mn>2</mn></mrow></math> 维/entry</td>
+<td><strong>秒级</strong></td>
+<td>哈希冲突造成的<strong>颗粒感</strong>；<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>T</mi><mo>&#x0003E;</mo><msup><mn>2</mn><mrow><mn>19</mn></mrow></msup></mrow></math> 撞 L2 缓存断崖</td>
+</tr>
+<tr>
+<td><strong>Plenoxels</strong></td>
+<td>只留可微渲染器（显式）</td>
+<td>2 阶球谐 27 系数/体素</td>
+<td><strong>11 分钟</strong></td>
+<td>高光处伪影；TV 权重无普适最优</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Plenoxels 的那句原文最值得记</strong>："the key element of Neural Radiance Fields is <strong>not the neural network but the differentiable volumetric renderer</strong>."</p>
+<h3>7. TSDF 是"显式几何的隐式表示"（第 0033 课）</h3>
+<p>这个中间态以前没想清楚：它存的是<strong>距离标量场</strong>（离散存储），但表面是<strong>零水平集</strong>（要靠等值面才能"看见"几何）。所以它既不是 3D 高斯那种纯显式，也不是 NeRF 那种纯隐式。</p>
+<h2>三、这一季特意记下的易混点</h2>
+<table>
+<thead>
+<tr>
+<th>易混的一对</th>
+<th>区别</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Schur 消元 vs 零空间投影</strong></td>
+<td>都是"消掉不想估的变量"；前者用块消元、后者用正交投影；BA 里消点参数，MSCKF 里消特征坐标</td>
+</tr>
+<tr>
+<td><strong>滤波 vs 平滑</strong></td>
+<td>不是"旧 vs 新"，而是"只估当前状态 vs 估整条轨迹"；而且原文说 "<strong>iterated EKF equations are equivalent to the Gauss-Newton algorithm</strong>"，两者不是两回事</td>
+</tr>
+<tr>
+<td><strong>TSDF vs ESDF</strong></td>
+<td>TSDF = 沿射线的<strong>投影距离</strong>，只在表面附近有效；ESDF = 到最近障碍的<strong>欧氏距离</strong>，覆盖整个工作空间，且有梯度可供规划</td>
+</tr>
+<tr>
+<td><strong>地图中心 vs 轨迹中心</strong></td>
+<td>不是"有没有地图"，而是<strong>回环靠什么</strong>：形变地图 vs 位姿图。地图中心不可逆（丢历史数据）</td>
+</tr>
+<tr>
+<td><strong>预积分 vs 连续时间</strong></td>
+<td>预积分是<strong>离散框架的补丁</strong>；连续时间框架下 "<strong>naturally couple raw IMU measurements</strong>"，这个补丁就不需要了</td>
+</tr>
+<tr>
+<td><strong>提取 vs 不提取特征</strong></td>
+<td>0022 是最有意思的中间态：<strong>提取</strong>面/边特征做关联，但残差用<strong>全部原始点</strong></td>
+</tr>
+<tr>
+<td><strong>一致性 vs 精度</strong></td>
+<td>精度是"错得少"，一致性是"<strong>知道自己错多少</strong>"。两者可以背离</td>
+</tr>
+</tbody>
+</table>
+<h2>四、这一季留给我的疑问（下一季要带着读）</h2>
+<ol>
+<li><strong>ikd-Tree 到底和 k-d 树差在哪？</strong> 第 0023 课只说了 PCL 的最近邻搜索是 FLANN 的<strong>近似</strong>算法，第 0022 课用的是 BALM 的自适应体素化，<strong>两篇都没用 ikd-Tree</strong>。→ <strong>阶段 D（FAST-LIO2）</strong>。</li>
+<li><strong>"提取 vs 不提取特征"为什么会来回摆动？</strong> （LOAM 挑特征 → FAST-LIO2 不挑 → 深度学习又学特征）→ <strong>阶段 D / G</strong>。</li>
+<li><strong>3DGS 的"自适应密度控制"具体怎么做？</strong> → <strong>阶段 F</strong>。</li>
+<li><strong>神经隐式 SLAM（iMAP / NICE-SLAM）到底怎么把 NeRF 塞进 SLAM 的循环？</strong> 第 0010 课点名过，但没展开。→ <strong>阶段 F</strong>。</li>
+<li><strong>IMU 初始化（重力方向、尺度、偏置）怎么做？</strong> 第 0029 课明确说那篇论文<strong>没有</strong>初始化章节，是它的空白。→ 后续 VIO 方法论文。</li>
+</ol>
+<h2>五、下一步行动</h2>
+<ul>
+<li>[ ] 回看第 0019 课，把 Schur 消元的推导自己在纸上重推一遍（不看课）</li>
+<li>[ ] 用第 0031 课那张对照表，判断自己的场景该用离散还是连续时间</li>
+<li>[ ] 打开 <code>../outputs/论文阅读路线图.html</code>，把阶段 D（激光主干，32 篇）的 ●●● 论文列出来</li>
+<li>[ ] 优先读：LOAM、LeGO-LOAM、FAST-LIO2、Point-LIO</li>
+</ul>
+<div class="doc-foot">本页由 <code>course/learning-records/0004-第二季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

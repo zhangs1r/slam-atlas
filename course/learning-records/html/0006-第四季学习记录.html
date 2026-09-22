@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第四季学习记录：激光主干（0073–0094，全季 22 节） — SLAM 学习记录</title>
+<link rel="stylesheet" href="../../../course/shared/theme.css">
+<style>
+  .bar{position:sticky;top:0;z-index:5;background:var(--paper-light);border-bottom:1px solid var(--border);
+    padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;align-items:center;}
+  .bar .sp{flex:1;}
+  main{max-width:var(--reading-width);margin:0 auto;padding:28px 20px 80px;}
+  main.wide{max-width:var(--content-width);}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--border);border-radius:var(--radius-md);}
+  table{display:block;overflow-x:auto;}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:var(--code-bg);border-left:3px solid var(--accent);padding:8px 12px;font-size:13px;overflow-x:auto;font-family:var(--font-mono);}
+  .ocrmiss{background:var(--accent-dim);color:var(--accent-deep);border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:var(--accent-dim);border:1px solid var(--accent-light);border-radius:var(--radius-md);
+    padding:10px 14px;font-size:13.5px;color:var(--ink-80);margin:0 0 18px;}
+  .doc-foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--border);font-size:13px;color:var(--ink-40);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../index.html">← 课程馆</a>
+  <a href="../../../md/index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../0006-第四季学习记录.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>第四季学习记录：激光主干（0073–0094，全季 22 节）</h1>
+<blockquote>
+<p>对应课程：第 0073 – 0094 节（语料库阶段 D，激光主干，共 32 篇；22 节课，86 张原图 + 50 张具象自绘图）
+读这一季之前的状态：第一季建立了坐标系，第二季打好了数学地基，第三季把视觉那台机器拆完了。</p>
+</blockquote>
+<hr />
+<h2>一、这一季到底在回答什么</h2>
+<p>前四季读下来，有一个规律越来越清楚：<strong>每一季都在回答上一季留下的一个问题。</strong></p>
+<ul>
+<li>第一季问「这个领域有什么」；</li>
+<li>第二季问「支撑这些方法的最小二乘、因子图、预积分到底怎么算」；</li>
+<li>第三季问「把这些零件装成一台机器，会长什么样」；</li>
+<li><strong>第四季问的是：把相机换成激光雷达，那台机器会变成什么样？</strong></li>
+</ul>
+<p>答案是：<b>机器的大形状没变，但有两个零件被彻底换掉了。</b></p>
+<p>① <strong>「用什么信息」变了</strong>——相机给的是二维像素，激光直接给三维点。尺度问题消失了，但多出来一个「一帧扫描需要时间」的运动畸变问题。
+② <strong>「数据怎么装」变了</strong>——像素不会无限增长，但地图会。于是「用什么数据结构装一棵一直在长的地图」变成了这一季的核心矛盾。</p>
+<hr />
+<h2>二、四条主线（这一季的骨架）</h2>
+<h3>主线一：提特征 → 不提特征（第二回合）</h3>
+<p>第三季 0046–0050 讲过视觉侧的完整摆动史。这一季是<strong>同一场辩论在激光侧的第二回合</strong>，而且终点更极端：</p>
+<table>
+<thead>
+<tr>
+<th>课次</th>
+<th>系统</th>
+<th>立场</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0074</td>
+<td>LOAM</td>
+<td>提特征（角点 + 平面点），其余全丢</td>
+</tr>
+<tr>
+<td>0075</td>
+<td>LeGO-LOAM</td>
+<td>仍然提，但先分割去噪、再按地面/非地面分两路</td>
+</tr>
+<tr>
+<td>0076</td>
+<td>NDT-LOAM</td>
+<td><strong>前端不提</strong>（用加权 NDT），后端仍提</td>
+</tr>
+<tr>
+<td>0083</td>
+<td>FAST-LIO</td>
+<td>仍然提，但换成滤波</td>
+</tr>
+<tr>
+<td><strong>0084</strong></td>
+<td><strong>FAST-LIO2</strong></td>
+<td><strong>彻底不提</strong>——所有原始点都用</td>
+</tr>
+</tbody>
+</table>
+<p><strong>一个关键的理解</strong>：视觉侧要「减少」像素，因为像素弱、多、贵；激光侧要「全都要」，因为三维点本身就是干净的几何量，而「挑特征」这个动作在树木、草丛、非重复扫描上会<strong>主动丢掉有用信息</strong>。</p>
+<h3>主线二：数据结构（本季还的那笔债）</h3>
+<table>
+<thead>
+<tr>
+<th>课次</th>
+<th>结构</th>
+<th>插入</th>
+<th>删除</th>
+<th>并行</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0074</td>
+<td>静态 k-d 树</td>
+<td>整体重建</td>
+<td>不支持</td>
+<td>差</td>
+</tr>
+<tr>
+<td><strong>0084</strong></td>
+<td><strong>ikd-Tree</strong></td>
+<td>增量 <math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>O</mi><mo stretchy="false">&#x00028;</mo><mi>log</mi><mi>n</mi><mo stretchy="false">&#x00029;</mo></mrow></math></td>
+<td>懒惰删除 + box-wise</td>
+<td>双线程重建</td>
+</tr>
+<tr>
+<td>0085</td>
+<td>iVox（体素哈希）</td>
+<td><math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"><mrow><mi>O</mi><mo stretchy="false">&#x00028;</mo><mn>1</mn><mo stretchy="false">&#x00029;</mo></mrow></math></td>
+<td>LRU 淘汰</td>
+<td>天然并行</td>
+</tr>
+</tbody>
+</table>
+<p><strong>这笔债的完整链条</strong>：第一季 <code>0006</code> 课第一次提到「ikd-Tree 是 FAST-LIO2 的关键」→ 第二季 <code>0022</code> 课明确写「本文走的是自适应体素化路线，ikd-Tree 是另一条路线，我们留到阶段 D」→ 第三季 <code>0023</code> 课（PCL）把问题立起来：「为什么激光 SLAM 后来需要一棵能动态插入删除的树？」→ 本季 <code>0074</code> 讲了 LOAM「每 sweep 重建一次地图 k-d 树」这个具体开销 → <strong><code>0084</code> 正面回答</strong>。</p>
+<p><strong>ikd-Tree 的四件事</strong>（第 0084 课）：
+1. <strong>点插入 + 树上下采样</strong>——新点进来时同一小格里只留离中心最近的；
+2. <strong>懒惰删除</strong>——删除只打标记，物理删除推迟到重建时；
+3. <strong>部分重建</strong>——只重建违反平衡准则的那棵子树（书架歪了只扶歪的那一层）；
+4. <strong>双线程并行重建 + operation logger</strong>——主线程继续跑里程计，后台重建期间的新请求先排队、重建完重放。</p>
+<p><strong>一个跨季的呼应</strong>：这个「哈希 + 稀疏」的招式，这一季在三个战场都出现过——第二季 <code>0034</code> 的 Voxel Hashing、第三季 <code>0038</code> 的 Instant NGP 多分辨率哈希、本季 <code>0085</code> 的 iVox。</p>
+<h3>主线三：退化与鲁棒</h3>
+<table>
+<thead>
+<tr>
+<th>课次</th>
+<th>系统</th>
+<th>应对方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0075</td>
+<td>LeGO-LOAM</td>
+<td>地面单独约束 3 个自由度</td>
+</tr>
+<tr>
+<td>0076</td>
+<td>EKF-LOAM</td>
+<td>自适应协方差：<strong>特征越少越不信激光</strong></td>
+</tr>
+<tr>
+<td>0090</td>
+<td>COIN-LIO</td>
+<td>用反射强度当「照片」做直接法</td>
+</tr>
+<tr>
+<td>0090</td>
+<td>固态强度篇</td>
+<td>用反射强度突变当「线特征」</td>
+</tr>
+<tr>
+<td>0090</td>
+<td>LI-Init</td>
+<td>补上被跳过的初始化</td>
+</tr>
+<tr>
+<td>0091</td>
+<td>Switch-SLAM</td>
+<td>切换 scan-to-map 的<strong>初值来源</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>本季最重要的一个概念澄清</strong>：<strong>退化不是「数据变少了」，而是「数据里缺少某些方向上的信息」。</strong> 均质隧道里激光照样测到成千上万个点，但每一段都一样，所以「我在起点」与「我前进了 10 米」都能解释同一帧数据——数学上表现为 Hessian 在某些方向的特征值趋于零。</p>
+<h3>主线四：地图与回环</h3>
+<ul>
+<li><strong>地图表示的第四条路</strong>：SuMa++（<code>0082</code>）的<strong>面片地图</strong>——每个面片自带位置、朝向、大小，还能挂语义标签。它与第二季 <code>0033</code>–<code>0035</code> 的 TSDF 系、第三季 <code>0062</code> 的网格地图、<code>0071</code> 的神经隐式共同构成「地图表示的四条路」。</li>
+<li><strong>回环的两条路线</strong>（<code>0092</code>）：<strong>几何搜索</strong>（Cartographer 的分支定界，不靠描述子）与<strong>外观检索</strong>（BoW3D 的 3D 词袋，描述子是 LinK3D）。</li>
+<li><strong>旋转平移不变的地点识别</strong>（<code>0093</code>）：RING++ 的 Gram 矩阵——<strong>它比的不是「点的坐标」，而是「点与点之间的关系」</strong>，所以机器人怎么转、怎么平移，这张表都一样。</li>
+</ul>
+<hr />
+<h2>三、本季新学到的、前三季完全没提的东西</h2>
+<p><strong>运动畸变（<code>0074</code>）</strong>
+- 机械旋转激光转一圈要 0.1 秒，这 0.1 秒里车已经开了——于是<strong>同一帧里不同时刻采到的点，根本不在同一个坐标系里</strong>。
+- LOAM 的解法是<strong>用一个假设换一个起点</strong>：假设 0.1 秒内速度恒定，然后按时间比例<strong>线性插值</strong>把每个点搬回它被采到的那一刻。
+- 这个假设的适用范围很窄（只要求 0.1 秒内成立），所以它大多数时候好用；运动剧烈变化时需要 IMU 介入。</p>
+<p><strong>地面只约束三个自由度（<code>0075</code>）</strong>
+- 无限大的平地能约束：竖直平移、横滚、俯仰。
+- 约束不到：前后左右平移、航向——<strong>因为平地是均匀的，怎么滑都还是同一块平地</strong>。
+- 这个结论不是拍脑袋定的，是从几何推出来的；LeGO-LOAM 的「两步优化」正建立在这个分工上。</p>
+<p><strong>新卡尔曼增益公式（<code>0083</code>）</strong>
+- 旧形式要求逆的矩阵大小 = <strong>测量维度</strong>（上千个特征点 → 上千阶）。
+- 新形式要求逆的矩阵大小 = <strong>状态维度</strong>（18 维）。
+- <strong>同一个问题换个写法，要算逆的矩阵就从上千阶降到 18 阶</strong>——这就是 FAST-LIO 能实时融合 1200 个以上特征点的全部原因。这与第二季 <code>0019</code> 的 Schur 消元是同一个思想：<strong>换个消元顺序，把大矩阵变小</strong>。</p>
+<p><strong>逐点更新（<code>0086</code>）</strong>
+- 帧级更新：把一帧 0.1 秒内采的点都「摞」到扫描末端那一个位姿上，中间的点被拉弯。
+- 逐点更新：每个点在其真实采样时刻就更新一次状态，<strong>帧内运动畸变自然消失</strong>，带宽可以推到极高（Point-LIO 的 4–8 kHz）。</p>
+<p><strong>反射强度（<code>0090</code>）</strong>
+- 激光返回的第二个通道：除了「有多远」，还有「有多亮」。
+- <strong>同样是「用强度」，两种用法完全不同</strong>：COIN-LIO 把它<strong>投影成图像</strong>做直接法的 5×5 patch 光度误差（适合大尺度几何退化，但需要高分辨率旋转式激光）；固态强度篇把它的<strong>局部突变当「线特征」</strong>做点-线配准（适合固态激光的小视场退化，但时间效率不及 FAST-LIO2）。</p>
+<p><strong>初始化（<code>0090</code>）</strong>
+- 第二季 <code>0029</code>/<code>0030</code> 讲预积分时，原文<strong>明确没有初始化章节</strong>；第三季 <code>0057</code>（VINS-Mono 四步松对齐）与 <code>0064</code>（纯惯性初始化）给了<strong>视觉侧</strong>的答案；<strong>本季 <code>0090</code> 的 LI-Init 是激光侧的答案</strong>。
+- 它做的事：互相关定时间偏移 → 统一优化外参旋转 → 加速度约束估平移/重力/零偏。前提是<strong>必须有充分激励</strong>（运动不够就初始化不了）。</p>
+<p><strong>4D 雷达（<code>0094</code>）</strong>
+- 输出的每个点带「距离 + 方位 + 仰角 + <strong>多普勒速度</strong>」。
+- 代价：点比激光稀疏得多、噪声大、还有<strong>鬼影</strong>（玻璃幕墙多次反射产生的虚假目标）。
+- 收益：不怕雨雪雾、成本更低、<strong>还额外给速度</strong>。第一季 <code>0007</code> 课讲过的 FMCW 测多普勒，在这里是同一件事的自然延伸。</p>
+<hr />
+<h2>四、第五处路线图错配（本季核实出的一处 + 两处显示名不精确）</h2>
+<p><strong>标题错配</strong>（与前三季那四处同类）：
+本季核实标题时没有发现新的「张冠李戴」，但发现三处<strong>显示名与正文不符</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>路线图显示名</th>
+<th>正文真实标题</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SuMa（2019）</td>
+<td><strong>SuMa++</strong>: Efficient LiDAR-based Semantic SLAM</td>
+<td>实际是 SuMa++（语义版本），文件名漏了 <code>++</code></td>
+</tr>
+<tr>
+<td>RING（2023）</td>
+<td><strong>RING++</strong>: Roto-Translation Invariant Gram…</td>
+<td>实际是 RING++</td>
+</tr>
+<tr>
+<td>2D 激光实时回环（2016）</td>
+<td>Real-Time Loop Closure in 2D LIDAR SLAM</td>
+<td>这就是 <strong>Cartographer 的回环论文</strong>，显示名没点出来</td>
+</tr>
+</tbody>
+</table>
+<p>三处都已在对应课次（<code>0082</code> / <code>0093</code> / <code>0092</code>）里公开说明。</p>
+<p><strong>前四处错配汇总</strong>：① SW-NDT 冒充 LiDAR 综述 ② 工业异常检测误下载 ③ COLMAP 冒充 SfM 综述 ④ 自驾综述冒充 ORB-SLAM 会议版。
+<strong>结论从未变过：文件名与路线图标注都不可信，必须逐篇开正文核标题。</strong></p>
+<hr />
+<h2>五、留给阶段 E（多传感器融合）的疑问</h2>
+<ol>
+<li><strong>激光 + 视觉 + 惯性的「三合一」到底怎么耦合？</strong> 本季 <code>0076</code> 的 EKF-LOAM 与 <code>0091</code> 的 Switch-SLAM 都只是「两个传感器互相兜底」，还没到真正三者同时进一个优化。第三季 <code>0065</code>/<code>0066</code> 的 GNSS 是另一种外部信息。</li>
+<li><strong>激光与视觉的「退化互补性」有多强？</strong> 本季反复见到「激光在长走廊失效」，而视觉在无纹理处失效——这两个失效场景<strong>是不是正好互补</strong>？如果是，那融合的收益就有理论下界。</li>
+<li><strong>时间同步与外参标定</strong>：本季 <code>0090</code> 的 LI-Init 解决了激光-IMU 的初始化，但三传感器的时空对齐还没看到。</li>
+<li><strong>4D 雷达 + 视觉 + IMU</strong> 会不会成为恶劣天气下的组合方案？</li>
+</ol>
+<h2>六、以及留给阶段 F / G 的</h2>
+<ul>
+<li><strong>3DGS 的「自适应密度控制」</strong>：第一季 <code>0015</code> 课明确说那篇综述<strong>只引用未展开</strong>，本季没碰。</li>
+<li><strong>神经隐式 SLAM 怎么把 NeRF 塞进在线循环</strong>：第二季 <code>0036</code>–<code>0039</code> 是离线表示，第三季 <code>0071</code> 讲了两种组合方式，但真正的在线闭环在阶段 F。</li>
+<li><strong>「提取 vs 不提取特征」的第三回合</strong>：本季 <code>0084</code> 走到了「不提」，但<strong>学习式前端</strong>（用网络提特征）是另一条路——阶段 G。</li>
+</ul>
+<hr />
+<h2>七、一句话总结这一季</h2>
+<p><strong>它把「怎么用一堆三维点算清自己在哪」这件事，从 2017 年讲到了 2024 年；而这一路上最重要的转折点，是一个反问：「我们为什么要挑特征？」</strong></p>
+<div class="doc-foot">本页由 <code>course/learning-records/0006-第四季学习记录.md</code> 预渲染生成。公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>
