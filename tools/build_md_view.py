@@ -151,7 +151,7 @@ for f in files:
         banner = ''
     m = re.search(r'^#\s+(.+)$', src, re.M)
     title = _html.escape(m.group(1).strip() if m else stem)
-    open(os.path.join(OUT, stem + '.html'), 'w', encoding='utf-8').write(
+    open(os.path.join(OUT, stem + '.html'), 'w', encoding='utf-8', newline='').write(
         TEMPLATE.format(title=title, stem=stem, content=body, banner=banner))
     made += 1
     report.append({'stem': stem, 'miss': n_miss, 'size': len(body)})
@@ -160,4 +160,20 @@ size = sum(os.path.getsize(os.path.join(OUT, x)) for x in os.listdir(OUT))
 print(f'生成 {made} 个页面 → {OUT}/，合计 {size / 1048576:.1f} MB')
 print(f'公式：块级成功 {blocks_ok} / 失败 {blocks_fail}；行内成功 {inlines_ok} / 失败 {inlines_fail}')
 print(f'含 U+FFFD 的源文件仍剩 {miss_total} 处（已在页面标注）')
-json.dump(report, open('/var/minis/workspace/slam-atlas-audit/render_report.json', 'w'), ensure_ascii=False)
+# 渲染报告：Linux 审计沙箱里写 /var/minis/...；本机（Windows 等）落到仓库内 _tmp/
+# 注意：Windows 上 '/var/...' 会被解析成「当前盘符:\var\...」，所以必须先判平台，不能靠 except
+_candidates = []
+if os.name != 'nt':
+    _candidates.append('/var/minis/workspace/slam-atlas-audit/render_report.json')
+_candidates.append(os.path.join(ROOT, '_tmp', 'render_report.json'))
+_report_path = _candidates[-1]
+for _p in _candidates:
+    try:
+        os.makedirs(os.path.dirname(_p), exist_ok=True)
+        with open(_p, 'w', encoding='utf-8') as fh:
+            json.dump(report, fh, ensure_ascii=False)
+        _report_path = _p
+        break
+    except OSError as e:
+        print(f'（渲染报告写不进 {_p}：{e}）')
+print(f'渲染报告写到 {_report_path}')
