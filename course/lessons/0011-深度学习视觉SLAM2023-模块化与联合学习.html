@@ -52,7 +52,7 @@
       <p>先复习经典 VSLAM 管线（原文 Sec. III）：图像序列 → 特征提取（SIFT/ORB 这类手工特征）→ 视觉里程计（内部又含特征匹配、外点剔除、光流估计、深度估计，最后合成相对位姿）→ 局部建图 → 局部优化 → 全局优化；旁边还有一条"去过的地点数据库 → 回环检测"支路。原文的 Fig. 1 画的就是它，而紧贴其下的 Fig. 2 是本文自建的四分类树。</p>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DeepSLAM-Survey/a984a87875859941199411198ab5ca466a050d833d40d8701793801be01360cf.jpg" alt="Figure 1 Visual SLAM pipeline 与 Figure 2 深度学习 VSLAM 分类树（合扫描件）">
+        <img src="../../md/images/2024_DeepSLAM-Survey/a984a87875859941199411198ab5ca466a050d833d40d8701793801be01360cf.jpg" alt="Figure 1 Visual SLAM pipeline 与 Figure 2 深度学习 VSLAM 分类树（合扫描件）" loading="eager" decoding="async">
         <figcaption>
           <p><b>原图注（FIGURE 1 &amp; FIGURE 2）：</b>注意——<b>这一张 jpg 其实含两张图</b>：上半部分是 FIGURE 1 "Visual SLAM pipeline"（视觉 SLAM 管线：图像序列 → 特征提取 → 视觉里程计估计［内含特征匹配 / 外点剔除 / 光流估计 / 深度估计 → 相对位姿估计］+ 局部建图 → 局部优化 → 全局优化，以及"Previously visited places database → Loop closure Detection"支路）；下半部分是 FIGURE 2 "Deep learning-based VSLAM taxonomy"（深度学习 VSLAM 分类树：Modular / Joint / Confidence / Active 四大类，分别对应正文 Section 5 / 6 / 7 / 8）。</p>
           <p><b>怎么看这张图：</b>先看上半：红色框圈出的"视觉里程计估计"内部有四个小模块（匹配、剔外点、光流、深度），它们是后面深度学习最先下手的部位；左侧数据库支路说明回环检测是独立于主流程的一路。再看下半的分类树：树枝上明确标着 Section 5–8——<b>模块化学习</b>（Sec.5，逐个学管线里的单模块：深度、光流、VO、建图、回环）、<b>联合学习</b>（Sec.6，深度+光流+自运动一起学，或端到端）、<b>置信度学习</b>（Sec.7，估计或降低不确定性）、<b>主动学习</b>（Sec.8，主动控制运动与传感）。这张分类轴的切法是"<b>学习范围</b>"，和上一课按功能切分的分类轴互补——建议把两张树画在一起对照。</p>
@@ -81,7 +81,7 @@ $$E(D)=\sum_{x}C(x,d_x)+\sum_{x}\sum_{y\in N_x}E_s(d_x,d_y)\tag{1}$$
       <h3>2.2 学习光流</h3>
       <p><b>光流</b>（optical flow）= 逐像素在 2-D 图像平面上的位移矢量场。先看一张示意图建立直觉：</p>
       <figure class="figure">
-        <img src="../../md/images/2024_DeepSLAM-Survey/304ce0a8f57d3e71fba4654add4ed109c1052e4f0b4c22a167fdccd65fa38659.jpg" alt="Figure 3 相邻帧之间的光流">
+        <img src="../../md/images/2024_DeepSLAM-Survey/304ce0a8f57d3e71fba4654add4ed109c1052e4f0b4c22a167fdccd65fa38659.jpg" alt="Figure 3 相邻帧之间的光流" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（FIGURE 3）：</b>Optical flow between consecutive frames（相邻帧之间的光流）。上排是 Frame-1/2/3 三帧（红色像素是被追踪的那个点），下排是 Optical flow 1→2 与 2→3 的位移矢量场。</p>
           <p><b>怎么看这张图：</b>上排盯住红色像素：它在三帧里逐格移动；下排把每帧间"每个像素去哪了"画成箭头场——这就是光流。红色箭头对应红色像素自己的位移。经典方法依赖两条硬假设：① 像素移动时<b>亮度不变</b>（亮度恒常假设）；② 位移是<b>局部小平移</b>。原文点破其缺陷：这两条隐含地<b>把光流限制在小位移上</b>——位移一大，亮度必然明显变化，假设就崩了。深度学习不设这些硬约束，因此能吃下大位移和复杂运动。</p>
@@ -93,7 +93,7 @@ $$E(D)=\sum_{x}C(x,d_x)+\sum_{x}\sum_{y\in N_x}E_s(d_x,d_y)\tag{1}$$
       <p>监督路线：早期工作只学管线的局部（关键点提取、描述子、特征匹配），但误差逐模块累积、得不偿失；Konda et al. 把 VO 当分类问题（离散化带来误差累积）；early fusion（第一层就融合时序信息）与 slow fusion（逐层缓慢融合）两种时空特征架构；真正的里程碑仍是 <b>DeepVO</b>——CNN（FlowNet 结构）提空间特征 + RNN 追踪时序变化，在 KITTI 上与最先进单目 VO 打平，成为端到端 VO 的基线。原文的评价很到位：<b>"空间特征交给 CNN、时间依赖交给 RNN"的解耦</b>是其成功关键；且监督式 VO 天然输出带全局尺度的单目位姿（网络从海量图像隐式编码了尺度）。原文 Sec. V-C 还有一句大实话："与传统方法相比，深度学习 VO <b>不需要特征提取、特征匹配或复杂的几何运算</b>"（does not require feature extraction, feature matching, or complex geometric operations）——这句话是"深度学习为什么先吃下匹配类任务"证据链的第一环（下一节展开）。自监督路线：SfmLearner 式 DepthNet+PoseNet 新视角合成；立体训练 + 单目测试恢复尺度；3-D 几何损失保证深度尺度一致。原文 Table 4 对各路线的优劣有逐项总结（见下文表格裁剪件）。</p>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DeepSLAM-Survey/855128d47c7498c8e58826b41b4ae78e97b95ca94c7c7c876aebb9d9eb41b155.jpg" alt="TABLE 4 视觉里程计方法总结（原表格扫描裁剪件）">
+        <img src="../../md/images/2024_DeepSLAM-Survey/855128d47c7498c8e58826b41b4ae78e97b95ca94c7c7c876aebb9d9eb41b155.jpg" alt="TABLE 4 视觉里程计方法总结（原表格扫描裁剪件）" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（TABLE 4. Visual Odometry estimation summary）：</b>视觉里程计方法总结表。<b>诚实说明：这是原论文表格的扫描裁剪件，不是插图</b>——正文 HTML 表格重排后它未出现在 md 的图片引用里，但文件真实存在，此处直接用作课程插图。表内四行：Synchrony detection［80］（监督，双目，计算高效但回归差）；Examine relative changes［82］= DeepVO（CNN+RNN，泛化好、隐式编码全局尺度，但不如经典几何方法准）；Novel view synthesis［52］= SfmLearner（深度 CNN+位姿 CNN，几何分析一致，但尺度歧义、依赖亮度恒常、假设静态无遮挡）；Scale aware estimation［84][85］（恢复全局尺度、保证几何一致性，但不纠正漂移累积）。</p>
           <p><b>怎么看这张表：</b>横着读每一行都是一种"监督信号选择"的代价清单：要尺度就得引入双目或几何一致性约束；要免标签就得忍受亮度恒常假设。竖着对比"Drawbacks"一列，你会发现"漂移累积"没有任何一行能解决——这正是后面需要回环检测与后端优化的原因。</p>
@@ -211,6 +211,7 @@ $$p_t=K\,T_{s\to t}\,\hat{T}^{obj}\,D_s(p_s)K^{-1}p_s\tag{6}$$
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2024_DeepSLAM-Survey.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">Deep Learning Techniques for Visual SLAM: A Survey</a></div>
       <div class="nav-links">
         <a href="0010-深度学习视觉定位与建图2024.html">← 深度学习视觉定位与建图（2024）</a>
         <a class="next" href="0012-动态环境视觉SLAM综述2024-从几何到语义.html">动态环境视觉 SLAM 综述（2024）→</a>

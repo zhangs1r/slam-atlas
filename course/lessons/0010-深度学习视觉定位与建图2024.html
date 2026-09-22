@@ -52,7 +52,7 @@
       <p>为什么传统方法不够用、要请出深度学习？原文列举的痛点是：传感器测量不完美、动态场景、糟糕光照条件等。深度学习的思路是反过来的——不靠手工设计的物理/几何模型，而是<b>从大量数据里隐式地学出"从图像到位姿 / 从图像到场景"的函数</b>。</p>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DL-VisualLoc-Survey/0e3e577c81f4b5345334259df6829157978d54c229ed8fb6e087b7cfb3cb3068.jpg" alt="Fig. 1 深度学习视觉定位与建图分类法">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/0e3e577c81f4b5345334259df6829157978d54c229ed8fb6e087b7cfb3cb3068.jpg" alt="Fig. 1 深度学习视觉定位与建图分类法" loading="eager" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 1）：</b>基于深度学习的视觉定位与建图分类法。圆角矩形表示功能模块，箭头表示模块间数据输入输出的连接关系。各模块可以组合成完整的深度学习 SLAM 系统，但并不要求包含全部模块才能工作。</p>
           <p><b>怎么看这张图：</b>这是全篇的"地图上的地图"。传感器数据进来后兵分三路：<b>A</b> 增量运动估计（VO，就是本课第 2 节）、<b>B</b> 全局重定位（第 3-4 节）、<b>C</b> 建图（第 5 节）；最后 <b>D</b> 回环检测与后端（第 6 节）把三路输出拧成一致的结果。注意箭头上标注的"货币"：VO 输出 motion transformation，重定位输出 global pose，建图输出几何/语义/神经表示——后端就是拿这些当原料做全局一致的优化。这张图也解释了本课的章节顺序：它就是原文 Sec. III–VI 的骨架。</p>
@@ -67,7 +67,7 @@
       <p>VO（Visual Odometry，视觉里程计）做的事很朴素：看连续的图像帧，估计帧间的运动变换，再把增量位姿积分成全局轨迹。原文按"<b>训练时有没有真值标签</b>"和"<b>是否纯神经网络</b>"把学习式 VO 分成三类，这是全篇最重要的教学图：</p>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DL-VisualLoc-Survey/fd1ea361690ba0a7fe7c8521850b1b448c34d668fd51f9f29485a6f8cca7d8a2.jpg" alt="Fig. 2 VO 三种学习范式的典型结构">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/fd1ea361690ba0a7fe7c8521850b1b448c34d668fd51f9f29485a6f8cca7d8a2.jpg" alt="Fig. 2 VO 三种学习范式的典型结构" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 2）：</b>VO 三种学习范式的典型结构：(a) 监督学习（转载自 DeepVO）、(b) 自监督学习（转载自 SfmLearner）、(c) 混合方式（转载自 D3VO）。</p>
           <p><b>怎么看这张图：</b>这是本篇最核心的教学图，值得盯两分钟。(a) 里两帧图像堆叠后过一排卷积层（Conv1 到 Conv6），再交给两个 LSTM（一种能记住历史的循环网络）输出 6 维位姿——这是<b>端到端监督</b>：拿真值位姿当标签直接回归。(b) 里没有位姿标签了，取而代之的是 DepthNet（预测深度）+ PoseNet（预测相对运动）双网络，用"合成出来的图和真图像不像"当监督信号——这是<b>自监督</b>。(c) 里神经网络只负责提供深度、位姿和光度不确定性的"预测原料"，真正的跟踪与优化仍由经典直接法 VO 的前端/后端完成——这是<b>混合</b>。三张小图从左到右，恰好是"网络管得越来越多 → 网络和几何各管一摊"的谱系。</p>
@@ -135,7 +135,7 @@ $$\mathcal L_{\mathrm{photo}}=\sum_{\langle\mathbf I_1,\dots,\mathbf I_N\rangle\
       </div>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DL-VisualLoc-Survey/f872ba20411a942cb5239b5fb44b145d5a28671914b2cf619d923e7dcbddddf7.jpg" alt="Fig. 3(b) 隐式 2-D 地图重定位（PoseNet）">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/f872ba20411a942cb5239b5fb44b145d5a28671914b2cf619d923e7dcbddddf7.jpg" alt="Fig. 3(b) 隐式 2-D 地图重定位（PoseNet）" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 3(b)）：</b>2-D 地图中重定位的典型架构——隐式地图定位，以 PoseNet 为例（Fig. 3(b) of the survey）。</p>
           <p><b>怎么看这张图：</b>管线简单到令人感动：单张街景图 → Visual Encoder（视觉编码器，几层卷积）→ Feature Map（特征图）→ Pose Regressor（位姿回归器）分出两个头，一个输出 Rotation（朝向）、一个输出 Position（位置）。没有任何显式的地图存储、没有特征匹配——"地图"就是网络参数本身。正是这种极简，让它成为"绝对位姿回归"范式的起点，也带来了下面要说的病根。</p>
@@ -170,7 +170,7 @@ $$\mathcal L_{\mathrm{photo}}=\sum_{\langle\mathbf I_1,\dots,\mathbf I_N\rangle\
       </ul>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DL-VisualLoc-Survey/618b37c4802911cf87efbe0ae057533c61cc14a29f3f67a2595f9d64282d9315.jpg" alt="Fig. 4 3-D 地图重定位：描述子匹配与场景坐标回归">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/618b37c4802911cf87efbe0ae057533c61cc14a29f3f67a2595f9d64282d9315.jpg" alt="Fig. 4 3-D 地图重定位：描述子匹配与场景坐标回归" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 4）：</b>3-D 地图中重定位的典型架构：(a) 描述子匹配定位（HF-Net）；(b) 场景坐标回归定位（Confidence SCR）。</p>
           <p><b>怎么看这张图：</b>上半 (a) 是描述子路线的实战流程：查询图先做 ① 全局匹配从检索库找到相似图（Retrieved），再 ② 局部匹配把检索图与稀疏 3-D 模型（右上角的 Sparse 3D model 点云）建立对应，最后 ③ 解出 6-DoF 位姿；右下角红绿连线展示查询图像素与 3-D 点的直接匹配。下半 (b) 是 SCR 路线：输入图像过网络（带 smooth / coords 两个损失）回归出每个像素的场景坐标（中间那张彩色坐标图），再经置信度预测分支给每个估计打分（右侧色条 0→1），最后置信度加权的 2D-3D 对应送去估计位姿。对比着看：一个"先有地图再匹配"，一个"网络就是地图"——两条路线的哲学差异一目了然。</p>
@@ -185,7 +185,7 @@ $$\mathcal L_{\mathrm{photo}}=\sum_{\langle\mathbf I_1,\dots,\mathbf I_N\rangle\
       <p>原文 Sec. V 把学习式建图一分为三：<b>几何建图</b>（学场景的显式几何）、<b>语义建图</b>（学场景的含义）、<b>隐式建图</b>（把整个场景编码进神经表示）。先看一张经典的"同一只兔子，五种表示"：</p>
 
       <figure class="figure">
-        <img src="../../md/images/2024_DL-VisualLoc-Survey/2573b4334536d86728b5962d2c2759a3468d0e2e5b4a8a004fcf4d3040966b0e.jpg" alt="Fig. 5 Stanford Bunny 的五种场景表示">
+        <img src="../../md/images/2024_DL-VisualLoc-Survey/2573b4334536d86728b5962d2c2759a3468d0e2e5b4a8a004fcf4d3040966b0e.jpg" alt="Fig. 5 Stanford Bunny 的五种场景表示" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 5）：</b>Stanford Bunny 基准上的场景表示：(a) 原始模型、(b) 深度、(c) 体素、(d) 点云、(e) 网格。</p>
           <p><b>怎么看这张图：</b>同一只兔子，五种"存法"：(b) 深度图是 2.5-D 的——每个像素存一个距离，从相机视角看信息完整、背后信息为零；(d) 点云只存采样点的 (x,y,z)，省空间但同样的几何可用不同点云表示（歧义）；(e) 网格显式编码表面（边、顶点、面）；(c) 体素把空间切成均匀小方块，表达力强但分辨率一高计算量爆炸。原文的选型建议就藏在这张图里：深度图/点云信息全但内存计算代价高，适合小场景；网格和表面函数类表示省内存，适合大规模户外。</p>
@@ -255,6 +255,7 @@ $$\mathcal L_{\mathrm{photo}}=\sum_{\langle\mathbf I_1,\dots,\mathbf I_N\rangle\
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2024_DL-VisualLoc-Survey.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">Deep Learning for Visual Localization and Mapping: A Survey</a></div>
       <div class="nav-links">
         <a href="0009-DARPA地下挑战赛2024-真实世界的SLAM.html">← DARPA 地下挑战赛（2024）</a>
         <a class="next" href="0011-深度学习视觉SLAM2023-模块化与联合学习.html">深度学习视觉 SLAM（2023）→</a>

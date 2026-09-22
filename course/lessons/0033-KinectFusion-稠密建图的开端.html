@@ -49,7 +49,7 @@
       <p>先给一个定位，免得你读偏：KinectFusion 是一篇<b>系统论文</b>，不是纯方法论文。判断依据在摘要和 §3——它明确用「四个组件」来组织全篇：Surface measurement（表面测量）、Surface reconstruction update（重建更新）、Surface prediction（表面预测）、Sensor pose estimation（传感器位姿估计）。换句话说，它没有发明全新的数学，而是把别人已经做过的几个零件<b>第一次组装成一个实时可跑的完整系统</b>。</p>
       <p>这四个零件分别是：Curless–Levoy 的<b>体融合（volume fusion）</b>思路、ICP 的<b>点-面（point-to-plane）</b>配准、以及<b>投影数据关联（projective data association）</b>。在它之前，这些零件各自存在，但没人用一块廉价深度相机加一块商品 GPU 把它们实时拼起来。本节的贡献，恰恰是这个「拼法」和让它实时跑起来的工程闭环。</p>
       <figure class="figure">
-        <img src="../../md/images/2011_KinectFusion/9c68f9ae19784cbf667667c5df199ab8cd76b52fceeeff5930cf6fcae4ac0f6c.jpg" alt="Fig. 1">
+        <img src="../../md/images/2011_KinectFusion/9c68f9ae19784cbf667667c5df199ab8cd76b52fceeeff5930cf6fcae4ac0f6c.jpg" alt="Fig. 1" loading="eager" decoding="async">
         <figcaption>
           <b>原图注（Fig. 1）：</b>Example output from our system, generated in real-time with a handheld Kinect depth camera and no other sensing infrastructure. Normal maps (colour) and Phong shading are shown.（本系统的实时输出示例，仅用手持 Kinect 深度相机、无其他传感设施。图中含法向贴图（彩色）与 Phong 着色。）<br>
           <b>怎么看这张图：</b>这是整篇最直观的「战果」图。注意它强调「手持 + 无其他传感」——也就是说，只靠一台几十美元的深度相机就能实时重建出带法向着色的细腻表面。它能做到这点，靠的正是后面要讲的四个组件与闭环；先看成果，再回头看机制会更有劲。
@@ -124,7 +124,7 @@
       </div>
       <p>$\mu$ 是<b>截断距离</b>。意思是：只有离表面 $\mu$ 范围内的距离才被认真记录，超出就被「压」到 +1 或干脆标成 null（未观测）。<b>为什么必须截断？</b>因为多视角下，截断范围之外的 SDF 是不可信的——一个体素在某一帧的「射线远处」很可能是另一帧的墙背后，不同视角会互相打架、彼此干扰。截断相当于给每个体素圈一块「我只敢相信自己附近」的信任区，远处的噪声就别来捣乱。<b>一句话直觉</b>：TSDF 不存「整个房间到每面墙的距离」，只存「表面附近薄薄一层」的距离，这样既省内存又干净。</p>
       <figure class="figure">
-        <img src="../../md/images/2011_KinectFusion/28bb10bd73e024be7dd45556b4363e5f190826f755f315c6db35bc1e387f5019.jpg" alt="Fig. 4">
+        <img src="../../md/images/2011_KinectFusion/28bb10bd73e024be7dd45556b4363e5f190826f755f315c6db35bc1e387f5019.jpg" alt="Fig. 4" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 4）：</b>A slice through the truncated signed distance volume showing the truncated function $\operatorname{F}&gt;\mu$ (white), the smooth distance field around the surface (grey), and the unobserved region (black).（截断符号距离体的一层切片——白色是截断区，灰色是表面附近的平滑距离场，黑色是未观测区域。）<br>
           <b>怎么看这张图：</b>这是「TSDF 长什么样」的最佳图。灰色的平滑斜坡就是表面附近的符号距离场，白边是 $\mathrm F&gt;\mu$ 的截断区，黑块是还没看到的地方（null）。注意真正有用的信息只在那一条薄薄的灰带上——这直观证明了「有用数据只有薄薄一层」。这条灰带也正是下一节换容器时要「只给这层分配内存」的逻辑起点。
@@ -155,7 +155,7 @@
       <h2>6. ★ raycasting：闭合的回路</h2>
       <p>现在讲本节的核心机制。§3.4 的 <b>raycasting（射线投射）</b>做一件事：从相机出发，对每个像素沿视线方向「打一条射线」穿过 TSDF 体，一步一步往前走，直到符号从正变负（自由空间 → 表面背后），那个<b>正→负的交界就是表面</b>。</p>
       <figure class="figure">
-        <img src="../../md/images/2011_KinectFusion/9387905b9df1f0f1a8405eecb4bae7de48b404e8d4b975fb3717baa295929773.jpg" alt="Fig. 3">
+        <img src="../../md/images/2011_KinectFusion/9387905b9df1f0f1a8405eecb4bae7de48b404e8d4b975fb3717baa295929773.jpg" alt="Fig. 3" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 3）：</b>Overall system workflow.（系统总体工作流。）<br>
           <b>怎么看这张图：</b>这是本节头号图，四个组件和 tracking–mapping 闭环都在里面。从左上「测量」下来，经「重建更新」把新深度融进 TSDF 体；右侧「预测」用 raycasting 从模型生成深度/法向图；最下「传感器位姿估计」拿预测图和真测量做 ICP。注意那条从预测绕回配准的箭头——它把 mapping 的输出喂回 tracking，闭合了回路。
@@ -177,14 +177,14 @@
         </div>
       </div>
       <figure class="figure">
-        <img src="../../md/images/2011_KinectFusion/c41049ecbdb6f6b601911fe16706edbb35468dbb68c6f6742259b1028b237d95.jpg" alt="Fig. 5">
+        <img src="../../md/images/2011_KinectFusion/c41049ecbdb6f6b601911fe16706edbb35468dbb68c6f6742259b1028b237d95.jpg" alt="Fig. 5" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 5）：</b>Reconstructed of a scene showing raycasting of the TSDF (left) without and (middle and right) with interpolation of the TSDF at the surface interface using …（场景重建，展示 TSDF 的 raycasting：左为不做插值，中/右为在表面界面处对 TSDF 插值。）<br>
           <b>怎么看这张图：</b>左图不做插值，表面是「台阶状」的格子；中、右图在表面交界处对 TSDF 做了线性插值，台阶被抹平，表面光滑得多。它证明式 15 那个插值精化不是花架子，而是画质的关键一步。
         </figcaption>
       </figure>
       <figure class="figure">
-        <img src="../../md/images/2011_KinectFusion/c7f8bc3d3fec065c7d36801bb1bcc10fa69ee6741babb1896ecb899654a55b8a.jpg" alt="Fig. 6">
+        <img src="../../md/images/2011_KinectFusion/c7f8bc3d3fec065c7d36801bb1bcc10fa69ee6741babb1896ecb899654a55b8a.jpg" alt="Fig. 6" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 6）：</b>Demonstration of the space skipping ray casting. (Left) pixel iteration count are shown where for each pixel the ray is traversed in steps of at most one voxel …（空间跳跃式 raycasting 演示；左为每个像素的迭代次数（每步至多一个体素）……）<br>
           <b>怎么看这张图：</b>它回答「为什么要加速、怎么加速」。左图颜色越亮代表该像素的射线要迭代越多步；用了 space skipping 后，远处自由空间被大步跳过，迭代次数大幅下降。这正对应正文「远小于 $\mu$ 的步长跳过已截断自由空间」的技巧——没有它，逐体素走完整张体积会慢到不可实时。
@@ -296,6 +296,7 @@
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2011_KinectFusion.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">KinectFusion: Real-Time Dense Surface Mapping and Tracking</a></div>
       <div class="nav-links">
         <a href="0032-连续时间落地-弹性地图与固定延迟平滑.html">← 上一课：连续时间落地</a>
         <a class="next" href="0034-VoxelHashing2013-体素地图的内存解法.html">下一课：Voxel Hashing（2013） →</a>

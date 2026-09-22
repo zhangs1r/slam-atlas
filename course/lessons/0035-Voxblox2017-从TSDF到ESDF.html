@@ -47,7 +47,7 @@
       <p>前两节（0033/0034）的地图都只为「看」：渲染、重建、AR 遮挡。这一节目标反转——MAV（微型飞行机器人）在未知环境要快速<b>局部重规划</b>，而轨迹优化类规划器（如 CHOMP）需要「障碍物距离 + 距离梯度」，而不是仅占据概率。</p>
       <p>当时的做法是从 Octomap 之类的占据图<b>批量（batch）</b>算 ESDF，<b>最大缺点是地图最大尺寸必须先验已知、不能动态变化</b>。原文也批评已有 TSDF 方案：<i>fixed-size voxel grid, which requires a known map size and a large amount of memory</i>（§II）。本节目标：在<b>动态增长的地图</b>上、<b>在线、单核 CPU、实时</b>，并且同时保留可人读的 mesh 输出给远程操作员看。</p>
       <figure class="figure">
-        <img src="../../md/images/2017_Voxblox/4270ae9739c17cbebb393fedb9488d876ad854c6b27feeb7e81499e1ec0b09d5.jpg" alt="Fig. 1">
+        <img src="../../md/images/2017_Voxblox/4270ae9739c17cbebb393fedb9488d876ad854c6b27feeb7e81499e1ec0b09d5.jpg" alt="Fig. 1" loading="eager" decoding="async">
         <figcaption>
           <b>原图注（Fig. 1）：</b>A planning experiment using voxblox-generated TSDF (shown as grayscale mesh) and ESDF (shown as a horizontal slice of the 3D grid) running entirely in real-time …（使用 voxblox 生成的 TSDF（灰色网格）与 ESDF（3D 网格的水平切片）的规划实验，完全实时运行……）<br>
           <b>怎么看这张图：</b>这是本节头号图，一眼看出两种场长什么样、差在哪。灰色网格是 TSDF（表面附近的薄距离层），彩色切片是 ESDF（整个工作空间每点离最近障碍的距离，颜色越暖离障碍越近）。规划器用的就是这张 ESDF 切片——它覆盖全空间，而 TSDF 只在表面薄薄一层。</p>
@@ -97,7 +97,7 @@
       </table>
       <p><b>三层架构（§III，务必讲）</b>：TSDF 层 + ESDF 层 + mesh 层，各层有<b>独立哈希表</b>，由 integrator 串起来。关键强调：它<b>直接沿用上一节 0034 的 voxel hashing</b>，做到 $O(1)$ 插入查询——对比 Octomap 的 $O(\log n)$。这是 0034→0035 之间的硬连接：容器还是那个哈希，只是内容从「只有 TSDF」扩成「TSDF + ESDF + mesh」三层。</p>
       <figure class="figure">
-        <img src="../../md/images/2017_Voxblox/266d5f9213d17cc00d220766a4ed2cd39ec2e0ae46ea74d942e73aa1de377c7b.jpg" alt="Fig. 2">
+        <img src="../../md/images/2017_Voxblox/266d5f9213d17cc00d220766a4ed2cd39ec2e0ae46ea74d942e73aa1de377c7b.jpg" alt="Fig. 2" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 2）：</b>System diagram for voxblox, showing how the multiple map layers (TSDF, ESDF, and mesh) interact with each other and with incoming sensor data through integrator …（voxblox 系统框图，展示多层地图（TSDF、ESDF、mesh）之间以及它们与输入传感数据之间如何通过 integrator 交互……）<br>
           <b>怎么看这张图：</b>它把「三层架构」画活了。传感数据先进 TSDF 层融出距离场；integrator 再把 TSDF 更新传播到 ESDF 层（这就是下一节波前算法的位置）；mesh 层独立从 TSDF 提取表面给人看。注意三层各是一张哈希表，互不绑架。</p>
@@ -137,7 +137,7 @@
         <p>§VI-B-2 实测原话：<i>building the ESDF incrementally leads to an order of magnitude speedups over the entire dataset</i>——<b>「一个数量级」的加速必须写上</b>。意思是：每来一帧就从头算整张 ESDF，比增量更新慢约 10 倍；机器人等不起，所以必须只更新受影响的局部波前。</p>
       </div>
       <figure class="figure">
-        <img src="../../md/images/2017_Voxblox/fe1e9c8f71aa2b9791c081922c14022cd2f6501f9659088507124d6019605734.jpg" alt="Fig. 9">
+        <img src="../../md/images/2017_Voxblox/fe1e9c8f71aa2b9791c081922c14022cd2f6501f9659088507124d6019605734.jpg" alt="Fig. 9" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 9）：</b>Timing results for updating ESDF in batch and incrementally, with different queueing strategies on the EuRoC dataset. The normal FIFO queue performs best for …（EuRoC 数据集上批量与增量更新 ESDF 的耗时对比，以及不同队列策略；FIFO 队列在……表现最好。）<br>
           <b>怎么看这张图：</b>这张图就是「一个数量级加速」的实证。incremental（增量）的柱比 batch（批量）矮约 10 倍；不同队列里 FIFO 最稳。它证明 §VI-B-2 那句原话不是吹的——增量波前是实时 ESDF 的命门。</p>
@@ -154,14 +154,14 @@
       </div>
       <p><b>为什么强调 on-board（机上）</b>？§I、§VII 说 MAV <i>low payload and power budget, combined with fast dynamics, requires fast and light-weight algorithms</i>——载重和功耗都紧，还要飞得快，算法必须轻。全套（状态估计、重建、规划、控制）跑在机上 <b>Intel i7 2.1 GHz CPU</b>，不用任何外部传感或基础设施；平台 Asctec Firefly + 前视双目与 IMU 同步。实验（§VI 通用设置）只用<b>单线程</b>四核 i7 2.5 GHz。这正是 0034「host→GPU 每帧一块受 CPU 限制」的延续——机上算力是硬约束。</p>
       <figure class="figure">
-        <img src="../../md/images/2017_Voxblox/c392af464955ae644329930243c07464436aacd8c4053ddc48798341b2b36838.jpg" alt="Fig. 6">
+        <img src="../../md/images/2017_Voxblox/c392af464955ae644329930243c07464436aacd8c4053ddc48798341b2b36838.jpg" alt="Fig. 6" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 6）：</b>Timing results for different merging strategies on the EuRoC dataset. Our approach is up to 20 times faster than standard raycasting into a TSDF, and up to 2 …（EuRoC 数据集上不同融合策略的耗时；本方法比标准 TSDF raycasting 快达 20 倍，比……快达 2 倍。）<br>
           <b>怎么看这张图：</b>它讲 grouped raycasting 的加速（接 §IV-B 放弃更快的 projection mapping 后怎么补速度）。把落到同一体素的点先分组求均值、只 raycast 一次，比朴素 raycasting 快达 20 倍，比 grouped Octomap 还快达 2 倍（注意是对数坐标）。这就是「选了准的 raycasting，又用分组把它变快」的解法。</p>
         </figcaption>
       </figure>
       <figure class="figure">
-        <img src="../../md/images/2017_Voxblox/acc10cefd2d63b68377168d462d765a1d058f736fc8195d4060d6325b4c25b51.jpg" alt="Fig. 8">
+        <img src="../../md/images/2017_Voxblox/acc10cefd2d63b68377168d462d765a1d058f736fc8195d4060d6325b4c25b51.jpg" alt="Fig. 8" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 8）：</b>A comparison of methods for generating ESDFs from TSDFs and occupancy, and their errors and timing differences. Using all of the data in half the truncation d …（从 TSDF 与 occupancy 生成 ESDF 的方法对比，以及它们的误差与耗时差异……）<br>
           <b>怎么看这张图：</b>它是 Fig. 8 的两张之一，证明「从 TSDF 建 ESDF 明显优于从 occupancy 建」——误差更低、或直接可用。这把本节「为什么不直接用 Octomap 批算」坐实了：TSDF 当跳板，ESDF 更准。</p>
@@ -248,6 +248,7 @@
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2017_Voxblox.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">Voxblox: Incremental 3D Euclidean Signed Distance Fields for On-Bo…</a></div>
       <div class="nav-links">
         <a href="0034-VoxelHashing2013-体素地图的内存解法.html">← 上一课：Voxel Hashing（2013）</a>
         <a class="next" href="0036-NeRF上-隐式表示与体渲染.html">下一课：NeRF（上） →</a>

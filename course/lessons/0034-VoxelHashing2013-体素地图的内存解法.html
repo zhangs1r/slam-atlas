@@ -52,7 +52,7 @@
       <p>接着是<b>内存数字对比（§9.1，抄准）</b>：本文哈希方案平均 <b>&lt;300 MB</b> 存表面数据（带颜色 <b>&lt;600 MB</b>），而「a regular grid that would require <b>well over 5 GB (including color)</b>」——在同样的 <b>8 mm 体素、8 m 深度范围</b>下。一句话：同一个场景，规则网格要 5 GB 以上，哈希只要几百 MB。<b>降低一个数量级的内存，这是本节的命根子。</b></p>
       <p>原文还顺手批评了其他扩容路线：<b>移动体积法（moving volume）</b>「streaming is one-way and lossy」（流式是单向且有损的）；<b>八叉树/层次结构</b>「tree traversal leads to thread divergence」（树遍历导致线程发散）、且「only real-time on specific scenes, and on very high-end graphics hardware」（只在特定场景、且要在很高端的显卡上才实时）。</p>
       <figure class="figure">
-        <img src="../../md/images/2013_VoxelHashing/db0735def3f13bee51bc6237e59efdd715792a69288017a63d15f7e01c65e628.jpg" alt="Fig. 1">
+        <img src="../../md/images/2013_VoxelHashing/db0735def3f13bee51bc6237e59efdd715792a69288017a63d15f7e01c65e628.jpg" alt="Fig. 1" loading="eager" decoding="async">
         <figcaption>
           <b>原图注（Fig. 1）：</b>Example output from our reconstruction system without any geometry post-processing. Scene is about 20m wide and 4m high and captured online in less than 5 min …（本重建系统未经任何几何后处理的输出示例。场景约 20 m 宽、4 m 高，在线采集不到 5 分钟……）<br>
           <b>怎么看这张图：</b>这是开场成果图，直接打上一节「7 m³ 天花板」的脸——20 m 宽、4 m 高的场景，不到 5 分钟在线重建完，还没做任何后处理。它直观说明：容器一换，能建的范围就从小房间跳到了大空间。
@@ -89,7 +89,7 @@
       </div>
       <p>本节选的是一条不同于这三者的路——<b>哈希表 + 固定大小的体素块</b>，既稀疏又对 GPU 友好。下面讲它怎么搭。</p>
       <figure class="figure">
-        <img src="../../md/images/2013_VoxelHashing/3de5f0c7d634b97da4db63c06785d36b4315f6b01117f7ff06d96785aa8b85de.jpg" alt="Fig. 2">
+        <img src="../../md/images/2013_VoxelHashing/3de5f0c7d634b97da4db63c06785d36b4315f6b01117f7ff06d96785aa8b85de.jpg" alt="Fig. 2" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 2）：</b>Pipeline overview.（流水线总览。）<br>
           <b>怎么看这张图：</b>把它和上一节 0033 的 Figure 3 对照看——流程几乎一模一样（测量 → 融合 → raycast → ICP），唯一变了的是「体素数据存在哪」。上一节是规则网格，这一节是哈希表。这就是「数学不变、容器变了」的视觉证据。</p>
@@ -117,14 +117,14 @@
         <p>哈希表按唯一哈希值<b>分桶（bucket）</b>，桶内顺序存少量项（实验取 <b>bucket size = 2</b>）。桶满时「append a linked list entry」——把桶内最后一项的 <code>offset</code> 当链表头，后续项用 <code>offset</code> 串起来，并「linearly search across the hash table for a free slot」（在表里线性找空槽）。检索时「linearly search within the bucket」并遍历链表。这就是经典的<b>桶 + 链式溢出</b>。</p>
       </div>
       <figure class="figure">
-        <img src="../../md/images/2013_VoxelHashing/0477ab1ce9759aef024061cc1abe07ea09e135016b0cd7c6c78e736fa8fc19be.jpg" alt="Fig. 3">
+        <img src="../../md/images/2013_VoxelHashing/0477ab1ce9759aef024061cc1abe07ea09e135016b0cd7c6c78e736fa8fc19be.jpg" alt="Fig. 3" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 3）：</b>Our voxel hashing data structure. Conceptually, an infinite uniform grid partitions the world. Using our hash function, we map from integer world coordinates …（我们的体素哈希数据结构。概念上一个无限均匀网格划分世界；用我们的哈希函数把整数世界坐标映射到……）<br>
           <b>怎么看这张图：</b>这是本节头号图，把「无限世界 → 有限哈希表」画活了。左边是想象中的无限均匀网格（世界坐标），中间哈希函数把它映射进右边有限长的哈希表；只有被观测到的那些块（蓝条）真正占位置，大片空网格根本不出现。这就是稀疏性的来源。</p>
         </figcaption>
       </figure>
       <figure class="figure">
-        <img src="../../md/images/2013_VoxelHashing/a6d0ee78ec9eb54705c1c66d101fb2489ee1455c32a7e18104dbde7d94db9ca9.jpg" alt="Fig. 4">
+        <img src="../../md/images/2013_VoxelHashing/a6d0ee78ec9eb54705c1c66d101fb2489ee1455c32a7e18104dbde7d94db9ca9.jpg" alt="Fig. 4" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 4）：</b>The hash table is broken down into a set of buckets. Each slot is either unallocated (white) or contains an entry (blue) storing the query world position, …（哈希表被分解为一组桶。每个槽要么未分配（白），要么包含一个条目（蓝），条目存储查询到的世界位置……）<br>
           <b>怎么看这张图：</b>它专门讲冲突处理。白色是空槽，蓝色是已占用条目；一个桶里放两个（bucket size = 2），桶满就溢出成链表。注意图里同一桶的项用箭头串起来——这正是正文「offset 当链表头」的可视化。</p>
@@ -217,7 +217,7 @@
       </div>
       <p>结论是：数据结构的性能余量「可用于增加 ICP 迭代次数以提升精度」；作者坦承本方法仍有小漂移，但质量可与离线多遍全局优化相比，且可作<b>在线预览 + 离线精修</b>的组合。注意那个关键差距——<b>46 fps vs 15 Hz</b>：本节比层次法快到超过输入帧率，而层次法低于帧率，会丢帧并转化为漂移。</p>
       <figure class="figure">
-        <img src="../../md/images/2013_VoxelHashing/d4951c91fcf8c2a6a9e72c6720a4cdc5089ba41ead4c08961935bbbc15bf87eb.jpg" alt="Fig. 7">
+        <img src="../../md/images/2013_VoxelHashing/d4951c91fcf8c2a6a9e72c6720a4cdc5089ba41ead4c08961935bbbc15bf87eb.jpg" alt="Fig. 7" loading="lazy" decoding="async">
         <figcaption>
           <b>原图注（Fig. 7）：</b>Performance Comparison: frame rate measurements across our test scenes compared against two state-of-the-art reconstruction methods. Extended (or moving volume) …（性能对比——在各测试场景上测得的帧率，与两种当时最先进的重建方法对比。）<br>
           <b>怎么看这张图：</b>这是「46 fps vs 15 Hz」的关键证据图。本文（hline）在各场景都稳在 40+ fps，而对比的层次法（灰）和移动体积法（其他）明显更低、且随场景变大掉得更狠。帧率够高才不丢帧，这也间接解释了为什么层次法会漂——下一节会把这个「帧率不足→漂移」讲得更透。</p>
@@ -278,6 +278,7 @@
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2013_VoxelHashing.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">Real-time 3D Reconstruction at Scale using Voxel Hashing</a></div>
       <div class="nav-links">
         <a href="0033-KinectFusion-稠密建图的开端.html">← 上一课：KinectFusion（2011）</a>
         <a class="next" href="0035-Voxblox2017-从TSDF到ESDF.html">下一课：Voxblox（2017） →</a>

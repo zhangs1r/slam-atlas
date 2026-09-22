@@ -216,7 +216,7 @@ ABLATION STUDY OF DIFFERENT DESIGN CHOICES ON FUSIONPORTABLE DATASET [21]
 
 ## C. Structure Reconstruction Evaluation
 
-Our study presented qualitative and quantitative results, highlighting the effectiveness of using LiDAR for initial structure optimization (see Figs. 1 and 2). Quantitatively, we evaluated our approach using CD (Chamfer Discrepancy) [26], EMD (Earth Mover Distance) [27], and F-score [28](Table IV), finding significant improvements in these metrics with LiDAR-based initialization. Although the use of photometric optimization for the Gaussian structure slightly reduced structural quality, the introduction of Gaussian pose refinement showed mixed results: it improved CD and EMD but negatively impacted the F-score. Despite some trade-offs in structural integrity for better PSNR, our method overall demonstrated superior structural metrics compared to purely visual approaches.
+Our study presented qualitative and quantitative results, highlighting the effectiveness of using LiDAR for initial structure optimization (see Figs. 1 and 2). Quantitatively, we evaluated our approach using CD (Chamfer Discrepancy) [26], EMD (Earth Mover Distance) [27], and F-score [28]（Table IV）, finding significant improvements in these metrics with LiDAR-based initialization. Although the use of photometric optimization for the Gaussian structure slightly reduced structural quality, the introduction of Gaussian pose refinement showed mixed results: it improved CD and EMD but negatively impacted the F-score. Despite some trade-offs in structural integrity for better PSNR, our method overall demonstrated superior structural metrics compared to purely visual approaches.
 
 ## V. CONCLUSION
 

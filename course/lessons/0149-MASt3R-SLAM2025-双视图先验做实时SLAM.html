@@ -106,7 +106,7 @@
       </div>
       <p style="margin-top:.4rem"><b>这句话在说什么：</b>$\psi(\cdot)$ 把点图归一化成<b>单位长度的方向射线</b>；$[X^{i}_{i}]_{\mathbf p}$ 是参考点图里第 $\mathbf p$ 个像素那条射线，$\mathbf x$ 是待匹配的那个三维点。式子说：请找一个像素位置 $\mathbf p$，让「这个像素射出去的方向」和「待匹配点的方向」<b>夹角最小</b>；夹角最小就认为它们对应同一个东西。注意它比的是<b>方向</b>而不是距离——所以深度的不准不会直接毁掉匹配，这就是它对深度误差鲁棒的原因。论文说由于射线图是平滑的，这个迭代对几乎所有有效像素都能在 10 次内收敛。</p>
       <figure class="figure">
-        <img src="../../md/images/2025_MASt3R-SLAM/770b19defd7c636d0974e51ce8d762b6a2f2095c742e47b0fcfd2db10f91197c.jpg" alt="MASt3R-SLAM iterative projective matching">
+        <img src="../../md/images/2025_MASt3R-SLAM/770b19defd7c636d0974e51ce8d762b6a2f2095c742e47b0fcfd2db10f91197c.jpg" alt="MASt3R-SLAM iterative projective matching" loading="eager" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 2）：</b>Overview of iterative projective matching: given the two pointmap predictions from MASt3R, the reference pointmap is normalised $\psi(X^{i}_{i})$ to give a smooth pixel to ray mapping. For an initial estimate of the projection $\mathbf p_0$ of 3D point $\mathbf x$ from pointmap $X^{j}_{i}$, the pixel is iteratively updated to minimise the angular difference $\theta$ between the queried ray $\psi([X^{i}_{i}]_{\mathbf p})$ and the target ray $\psi(\mathbf x)$. After finding the pixel $\mathbf p^{*}$ that achieves the minimum error, we have a pixel correspondence between $\mathcal T^{i}$ and $\mathcal T^{j}$.（迭代投影匹配总览：给定 MASt3R 的两张点图，把参考点图归一化为 $\psi(X^{i}_{i})$，得到一个平滑的「像素 → 射线」映射。先从点图 $X^{j}_{i}$ 里 3D 点 $\mathbf x$ 得到一个初始投影估计 $\mathbf p_0$，然后迭代更新像素坐标，使被查询的射线 $\psi([X^{i}_{i}]_{\mathbf p})$ 与目标射线 $\psi(\mathbf x)$ 的夹角 $\theta$ 最小；找到误差最小的像素 $\mathbf p^{*}$，就得到了 $\mathcal T^i$ 与 $\mathcal T^j$ 之间的像素对应。）</p>
           <p><b>怎么看这张图：</b>盯住那个角 $\theta$：它是<b>两条射线的夹角</b>，不是两点之间的距离。迭代的过程就是不断调整像素位置，把这个角越压越小，直到 $\mathbf p^{*}$ 处夹角最小。这里没有任何「特征描述子」出现——匹配完全靠几何方向，这就是它 2 毫秒做到的事。</p>
@@ -114,7 +114,7 @@
         </figcaption>
       </figure>
       <figure class="figure">
-        <img src="../../md/images/2025_MASt3R-SLAM/32655f57a34c44f5695c0f81c703e1fccb712ce1a5b04a7bce90679f8fddf16d.jpg" alt="MASt3R-SLAM system diagram">
+        <img src="../../md/images/2025_MASt3R-SLAM/32655f57a34c44f5695c0f81c703e1fccb712ce1a5b04a7bce90679f8fddf16d.jpg" alt="MASt3R-SLAM system diagram" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 3）：</b>System diagram of MASt3R-SLAM. New images are tracked against the current keyframe by predicting a pointmap from MASt3R and finding pixel matches using our efficient iterative projection pointmap matching. Tracking estimates the current pose and performs local pointmap fusion. When new keyframes are added to the backend, loop closure candidates are selected by querying the retrieval database, and then verified... （系统框图：新图像通过与当前关键帧做跟踪——用 MASt3R 预测点图、再用高效的迭代投影点图匹配找像素对应；跟踪估计当前位姿并做局部点图融合。新关键帧加入后端时，通过查询检索数据库选出回环候选，再做验证……）</p>
           <p><b>怎么看这张图：</b>这张图是本节最该记住的一张——它把「这是一套 SLAM 系统」这句话画了出来。请顺着箭头的<b>环</b>走一遍：新帧 → 与当前关键帧跟踪（出位姿）→ 局部融合 → 判断新关键帧 → 送进后端 → 检索回环候选并验证 → 全局优化 → 回到位姿与几何。这个环里的每一环都是 SLAM 的标准部件，只不过「匹配」那一环被换成了 MASt3R + 迭代投影。</p>
@@ -129,7 +129,7 @@
       <p>怎么做到？用上一节那个 $\psi$ 函数：把每个关键帧的 pointmap 归一化成「单位方向的射线」，于是<b>每个点图自己就在定义这一帧的相机模型</b>。这样一来：<b>变焦（焦距随时间变）</b>只是射线怎么散开变了；<b>镜头畸变</b>也只是射线怎么散开变了——而「所有射线交于一点」这条性质不变。所以它不需要一个固定或参数化的相机模型，也不需要标定就能跑。</p>
       <p>论文还讲了一段很有意思的动机：他们的匹配灵感来自<b>稠密 SLAM 里的投影式数据关联</b>，但那种做法需要一个能写出闭式投影的参数化相机模型；而他们从「通用相机标定」那条思路上借了办法——<b>没有闭式投影，就逐点迭代地把投影解出来</b>。这就是第 3 节那个迭代的来历。</p>
       <figure class="figure">
-        <img src="../../md/images/2025_MASt3R-SLAM/3a5cdfceb7da3139b963923d849efe274216860aad0c449740a18c5acd090f01.jpg" alt="MASt3R-SLAM uncalibrated SLAM with extreme zoom changes">
+        <img src="../../md/images/2025_MASt3R-SLAM/3a5cdfceb7da3139b963923d849efe274216860aad0c449740a18c5acd090f01.jpg" alt="MASt3R-SLAM uncalibrated SLAM with extreme zoom changes" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 7）：</b>Dense uncalibrated SLAM with extreme zoom changes shown by two consecutive keyframes for an outdoor scene.（无标定的稠密 SLAM，在户外场景中连续两个关键帧之间出现了剧烈的变焦。）</p>
           <p><b>怎么看这张图：</b>要看的重点是<b>两帧之间的视角/焦距差别有多大</b>——从一个很广的视角一下子推近。传统系统在这种「相机模型在变」的情况下要么得先标定、要么得假设焦距固定，很容易崩。<b>这张图是「只假设射线过同一个中心」这条设计到底值多少的直接证据</b>。</p>
@@ -179,7 +179,7 @@
         </div>
       </div>
       <figure class="figure">
-        <img src="../../md/images/2025_MASt3R-SLAM/d1ac946ea4461eed06e4cbba7fc185f7d570ed02c689ee61b3339ba4a0c21347.jpg" alt="MASt3R-SLAM reconstruction on Burghers sequence">
+        <img src="../../md/images/2025_MASt3R-SLAM/d1ac946ea4461eed06e4cbba7fc185f7d570ed02c689ee61b3339ba4a0c21347.jpg" alt="MASt3R-SLAM reconstruction on Burghers sequence" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 1）：</b>Reconstruction from our dense monocular SLAM system on the Burghers sequence. Using two-view predictions from MASt3R shown on the left, our system achieves globally consistent poses and geometry in real-time without a known camera model.（在 Burghers 序列上，我们的稠密单目 SLAM 系统的重建结果。左边是所用到的 MASt3R 两视图预测；系统在<b>相机模型未知</b>的情况下实时得到了全局一致的位姿与几何。）</p>
           <p><b>怎么看这张图：</b>左边那一小块是「底座」——MASt3R 只给了两张图的预测；右边一整片是「系统跑完之后」的结果。对比一下规模差别，就能明白第 2 节为什么要强调身份：<b>MASt3R 是零件，MASt3R-SLAM 是把它变成了系统</b>。还要注意图注里的「without a known camera model」——这句话就是第 4 节那条射线假设挣到的。</p>
@@ -357,6 +357,7 @@
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2025_MASt3R-SLAM.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">MASt3R-SLAM: Real-Time Dense SLAM with 3D Reconstruction Priors</a></div>
       <div class="nav-links">
         <a href="0148-DUSt3R2024-不必标定与位姿的重建.html">← 上一节：0148 DUSt3R 不必标定与位姿的重建</a>
         <a class="next" href="0150-前馈重建与度量深度.html">下一节：0150 前馈重建与度量深度（SLAM3R + Metric3D v2） →</a>

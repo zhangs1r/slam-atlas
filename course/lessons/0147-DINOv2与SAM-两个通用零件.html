@@ -85,7 +85,7 @@
       <h3>3.1 数据：LVD-142M 是怎么来的</h3>
       <p>自监督最怕的是「数据不够杂」。论文做了一条自动数据管线：先把已有的精选集（ImageNet-22k、ImageNet-1k、Google Landmarks 等）当查询，去一个 <b>12 亿张的无标注池</b>里按视觉相似度检索（每个查询取 4 个近邻），最后得到 <b>LVD-142M＝1.42 亿张精选图</b>。整条管线<b>不依赖任何元数据或文本，纯靠视觉相似度</b>。用 20 个节点 × 8 张 V100-32GB，不到 2 天就能产出这个数据集。</p>
       <figure class="figure">
-        <img src="../../md/images/2023_DINOv2/707817c37f8bcffbbc8b75f24e75df5b59fbf1761b975a2128a4fc213fdbc012.jpg" alt="DINOv2 data processing pipeline">
+        <img src="../../md/images/2023_DINOv2/707817c37f8bcffbbc8b75f24e75df5b59fbf1761b975a2128a4fc213fdbc012.jpg" alt="DINOv2 data processing pipeline" loading="eager" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 3）：</b>Overview of our data processing pipeline. Images from curated and uncurated data sources are first mapped to embeddings. Uncurated images are then deduplicated before being matched to curated images. The resulting combination augments the initial dataset through a self-supervised retrieval system.（数据管线总览：精选集与非精选集先各自映射成嵌入；非精选集先去重，再与精选图匹配；合成结果通过自监督检索系统扩充初始数据集。）</p>
           <p><b>怎么看这张图：</b>盯住中间那条「检索」的分岔：左边是人工整理好的精选集，右边是原始无标注池。原始池先去重（去掉近乎重复的图），再被当作「候选」与精选图做相似度匹配，被选中的才留下来。所以 <b>1.42 亿不是随便抓来的，是被「筛选」出来的</b>——这也解释了论文为什么说「没有精选数据就很难有好特征」。</p>
@@ -99,7 +99,7 @@
       </div>
       <p style="margin-top:.4rem"><b>这句话在说什么：</b>第一项是「图像级」的：把教师网络输出的概率分布 $P^{\text{教师}}$ 当答案，让学生网络的分布 $P^{\text{学生}}$ 去贴合它——因为没人给标签，只能拿「教师的看法」当答案，所以叫自监督。第二项是「patch 级」的：故意遮住图上的若干小块，要求学生把被遮住那块的表示猜回来（iBOT 那一套），这样特征才在<b>像素级</b>也靠得住。注意指数的写法是示意，原文是 DINO 交叉熵 + iBOT 两项的组合，不是这一个式子。</p>
       <figure class="figure">
-        <img src="../../md/images/2023_DINOv2/af0259d862a004849b68cfebf0b1f138ff3e8d006c2dd50fccca47190d3890d1.jpg" alt="DINOv2 model scale versus data scale">
+        <img src="../../md/images/2023_DINOv2/af0259d862a004849b68cfebf0b1f138ff3e8d006c2dd50fccca47190d3890d1.jpg" alt="DINOv2 model scale versus data scale" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 4）：</b>Model scale versus data scale. Evolution of performance as a function of model size for two different pretraining datasets: ImageNet-22k (14M images) and LVD-142M (142M images). The ViT-g trained on LVD-142M surpasses the ViT-g trained on ImageNet-22k on most benchmarks.（模型规模对数据规模：同一横轴是模型大小，两条线分别是 1400 万张的 ImageNet-22k 与 1.42 亿张的 LVD-142M；在 LVD-142M 上训出的 ViT-g 在多数基准上超过在 ImageNet-22k 上训出的 ViT-g。）</p>
           <p><b>怎么看这张图：</b>横轴是模型从小到大，纵轴是性能，两条线分别是两个数据集。要看的不是「越大越好」（这谁都知道），而是<b>两条线之间的落差</b>：同样的模型大小，数据喂对了的那条明显更高。这说明在自监督里，<b>「数据选得好」和「模型变大」是两件独立的事</b>，不能互相替代。</p>
@@ -109,7 +109,7 @@
       <h3>3.3 它到底「通用」在哪</h3>
       <p>论文的核心卖点是「frozen 特征在图像级与像素级都超过当时最好的 OpenCLIP，而且不用微调」。图像级好理解（分类、检索）；<b>像素级才是 SLAM 关心的</b>——patch token 可以直接当稠密特征用，做匹配、做对应。另外还有一个训练细节值得记：高分辨率阶段把图升到 <b>518×518</b> 短训一下，像素级任务明显变好。</p>
       <figure class="figure">
-        <img src="../../md/images/2023_DINOv2/f26238095557a4a2b20119e81a67cdab74b9e464808c69c0200f02d0b4c40f09.jpg" alt="DINOv2 first PCA components visualization">
+        <img src="../../md/images/2023_DINOv2/f26238095557a4a2b20119e81a67cdab74b9e464808c69c0200f02d0b4c40f09.jpg" alt="DINOv2 first PCA components visualization" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 1）：</b>Visualization of the first PCA components. We compute a PCA between the patches of the images from the same column (a, b, c and d) and show their first 3 components. Each component is matched to a different color channel. Same parts are matched between related images despite changes of pose, style or even objects. Background is removed by thresholding the first PCA component.（前三个 PCA 主成分的可视化：同一列的图之间对 patch 做 PCA，三个主成分分别映射到三个颜色通道。尽管姿态、风格甚至物体都变了，相关的图之间「相同的部位」还是对上了；背景用第一主成分阈值去掉。）</p>
           <p><b>怎么看这张图：</b>这是全篇最能说明「特征通用」的一张。每一列里几张图是<b>同一类东西的不同姿态、不同风格、甚至不同个体</b>，把它们的 patch 特征做 PCA 后映射成颜色，你会发现<b>同色区域落在同一个语义部位上</b>（都是「眼睛」、都是「轮子」、都是「把手」）。这说明网络学到的不是像素颜色，而是「这个部位是干什么用的」。</p>
@@ -117,7 +117,7 @@
         </figcaption>
       </figure>
       <figure class="figure">
-        <img src="../../md/images/2023_DINOv2/c83471a922991485e5383d751797de666fd2942be03c4754b1bd877245f54837.jpg" alt="DINOv2 matching across images">
+        <img src="../../md/images/2023_DINOv2/c83471a922991485e5383d751797de666fd2942be03c4754b1bd877245f54837.jpg" alt="DINOv2 matching across images" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 10）：</b>Matching across images. We match patch-level features between images from different domains, poses and even objects that share similar semantic information. This exhibits the ability of our model to transfer across domains and understand relations between similar parts of different objects.（跨图匹配：在不同领域、不同姿态、甚至只是语义相近的不同物体之间做 patch 级特征匹配。这展示了模型跨域迁移、以及理解不同物体「相似部位之间关系」的能力。）</p>
           <p><b>怎么看这张图：</b>连线跨越了灰度图、彩色图、不同物种、不同姿态。要盯着看的是<b>连线有没有乱</b>——如果特征只记住了颜色和纹理，跨域就会连错；这里能连对，说明特征抓的是<b>语义部位</b>。对 SLAM 来说这正是「不换模型就能跨场景用」的底气。</p>
@@ -132,7 +132,7 @@
       <h3>4.1 三件组件：贵的一件，便宜的两件</h3>
       <p>模型被刻意拆成三块：<b>图像编码器</b>（MAE 预训练的 ViT-H，最贵，但每张图只跑一次、结果可复用）、<b>prompt 编码器</b>（点/框用位置编码 + 类型嵌入、文本用 CLIP 文本编码器、掩码用卷积嵌入）、<b>mask 解码器</b>（两类 cross-attention 的 Transformer 解码块 + 动态 mask head）。这样拆的好处在数字上很直观：<b>图像编码只做一次，之后 prompt + 解码在浏览器 CPU 上只要约 50 毫秒</b>。损失是 focal loss 与 dice loss 的组合，训练时每个 mask 随机采 11 轮 prompt。</p>
       <figure class="figure">
-        <img src="../../md/images/2023_SegmentAnything/0783d60ca16f16e75aa4689ef9f1c9457ca9621f20a85aa3dbff70e464cdf4f5.jpg" alt="SAM overview">
+        <img src="../../md/images/2023_SegmentAnything/0783d60ca16f16e75aa4689ef9f1c9457ca9621f20a85aa3dbff70e464cdf4f5.jpg" alt="SAM overview" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 4）：</b>Segment Anything Model (SAM) overview. A heavyweight image encoder outputs an image embedding that can then be efficiently queried by a variety of input prompts to produce object masks at amortized real-time speed. For ambiguous prompts corresponding to more than one object, SAM can output multiple valid masks and associated confidence scores.（SAM 总览：重量级图像编码器输出图像嵌入，随后可被各种输入 prompt 高效查询，以摊薄后的实时速度产出物体掩码。对于对应多个物体的歧义 prompt，SAM 可以输出多个合法掩码及各自的置信度。）</p>
           <p><b>怎么看这张图：</b>顺着箭头走一遍就懂了这个架构的用意：上半部分是「重」的（图像编码器），下半部分分出去的三条支路是「轻」的（点、框、掩码/文本提示）。因为上半部分只跑一次，所以不管你换多少个提示、圈多少个东西，<b>边际成本都很低</b>——这就是论文说的 amortized real-time（摊薄后的实时）。</p>
@@ -143,7 +143,7 @@
       <p>这是 SAM 最容易被漏掉、也最关键的一个设计。你在一张照片上点一下一个人身上的衣服，问「分割这里」——可是「这里」到底指什么？<b>那件衣服？那个人？还是整张画面里的人加车加背景？</b>三个答案都合法，问题本身有歧义。</p>
       <p>SAM 的处理方式不是硬猜一个，而是<b>单次预测直接输出 3 个 mask，每个带一个「预测 IoU」作置信度</b>，让下游自己挑。论文用这个设计在 23 个数据集的单点分割评测里，有 <b>16 个超过当时最强的单点方法 RITM，最高领先 47 IoU</b>。这也解释了为什么评测里要专门画「oracle 圈」——单点提示可能对不上某一份真值，但 SAM 的三个预测里往往有一个是对的。</p>
       <figure class="figure">
-        <img src="../../md/images/2023_SegmentAnything/c79fb5b0d595530c36ca5e7fe0c7a5ae9fcfd6c0775cc691174d3c39a4f83350.jpg" alt="Three valid masks from one ambiguous point prompt">
+        <img src="../../md/images/2023_SegmentAnything/c79fb5b0d595530c36ca5e7fe0c7a5ae9fcfd6c0775cc691174d3c39a4f83350.jpg" alt="Three valid masks from one ambiguous point prompt" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 3）：</b>Each column shows 3 valid masks generated by SAM from a single ambiguous point prompt (green circle).（每一列展示的是：SAM 由同一个有歧义的点提示（绿圈）生成的 3 个合法掩码。）</p>
           <p><b>怎么看这张图：</b>竖着看一列就是一问三答：照片没变、绿点没变，三行的 mask 粒度却不一样——有的圈得很大（整个物体甚至带周边），有的圈到中等部件，有的只圈一小块。这不是模型「拿不准」，而是<b>它把「你要多大一块」这个歧义显式地交回给你</b>。横着看几列，会发现不同物体的歧义程度不同——有的物体本身就是小物件，三答差别不大。</p>
@@ -482,6 +482,7 @@
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2023_DINOv2.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">DINOv2: Learning Robust Visual Features without Supervision</a> · <a href="../../md/html/2023_SegmentAnything.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">Segment Anything</a></div>
       <div class="nav-links">
         <a href="0146-DPVO2023-图像块跟踪替代稠密光流.html">← 上一节：0146 DPVO 图像块跟踪替代稠密光流</a>
         <a class="next" href="0148-DUSt3R2024-不必标定与位姿的重建.html">下一节：0148 DUSt3R：不必标定与位姿的重建 →</a>

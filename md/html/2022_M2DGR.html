@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M2DGR: A Multi-Sensor and Multi-Scenario SLAM Dataset for Ground Robots — SLAM 论文原文</title>
+<style>
+  :root{--paper:#FBF9F5;--ink:#2E2A26;--ink2:#8A8178;--terra:#CC785C;--rule:#E4DCD0;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font-family:Inter,-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.85;font-size:16px;}
+  .bar{position:sticky;top:0;z-index:5;background:rgba(251,249,245,.94);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--rule);padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13.5px;}
+  .bar a{color:var(--terra);text-decoration:none;}
+  .bar a:hover{text-decoration:underline;}
+  .bar .sp{flex:1;}
+  main{max-width:820px;margin:0 auto;padding:28px 20px 80px;}
+  h1,h2,h3,h4{font-family:"Noto Serif SC","Songti SC",Georgia,serif;line-height:1.35;}
+  h1{font-size:26px;margin:.4em 0 .8em;}
+  h2{font-size:21px;margin:1.8em 0 .6em;padding-top:.4em;border-top:1px solid var(--rule);}
+  h3{font-size:17.5px;margin:1.4em 0 .5em;}
+  p{margin:.85em 0;}
+  img{max-width:100%;height:auto;display:block;margin:1.2em auto;border:1px solid var(--rule);border-radius:6px;}
+  table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:14.5px;display:block;overflow-x:auto;}
+  th,td{border:1px solid var(--rule);padding:6px 10px;text-align:left;}
+  th{background:#F4EFE7;}
+  code{background:#F4EFE7;padding:.1em .35em;border-radius:4px;font-size:.9em;}
+  pre{background:#F4EFE7;padding:12px;border-radius:8px;overflow-x:auto;}
+  pre code{background:none;padding:0;}
+  blockquote{border-left:3px solid var(--rule);margin:1em 0;padding:.2em 0 .2em 14px;color:var(--ink2);}
+  math{font-size:1.06em;}
+  .math-block{overflow-x:auto;margin:1.3em 0;text-align:center;}
+  .math-raw{background:#FDF3F0;border-left:3px solid var(--terra);padding:8px 12px;font-size:13px;overflow-x:auto;}
+  .ocrmiss{background:#FDE8E2;color:#B3654B;border-radius:3px;padding:0 2px;cursor:help;}
+  .banner{background:#FDF3F0;border:1px solid #F0D3C9;border-radius:8px;padding:10px 14px;
+    font-size:13.5px;color:#8A5A46;margin:0 0 18px;}
+  .foot{margin-top:48px;padding-top:18px;border-top:1px solid var(--rule);font-size:13px;color:var(--ink2);}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a href="../../course/index.html">← 课程馆</a>
+  <a href="../index.html">论文原文索引</a>
+  <span class="sp"></span>
+  <a href="../2022_M2DGR.md" download>下载 .md 源文件</a>
+</div>
+<main>
+
+<h1>M2DGR: A Multi-Sensor and Multi-Scenario SLAM Dataset for Ground Robots</h1>
+<p>Jie Yin , Ang Li, Tao Li , Wenxian Yu , and Danping Zou</p>
+<p>Abstract—We introduce M2DGR: a novel large-scale dataset collected by a ground robot with a full sensor-suite including six fish-eye and one sky-pointing RGB cameras, an infrared camera, an event camera, a Visual-Inertial Sensor (VI-sensor), an inertial measurement unit (IMU), a LiDAR, a consumer-grade Global Navigation Satellite System (GNSS) receiver and a GNSS-IMU navigation system with real-time kinematic (RTK) signals. All those sensors were well-calibrated and synchronized, and their data were recorded simultaneously. The ground truth trajectories were obtained by the motion capture device, a laser 3D tracker, and an RTK receiver. The dataset comprises 36 sequences (about 1 TB) captured in diverse scenarios including both indoor and outdoor environments. We evaluate state-of-the-art SLAM algorithms on M2DGR. Results show that existing solutions perform poorly in some scenarios. For the benefit of the research community, we make the dataset and tools public. The webpage of our project is https://github.com/SJTU-ViSYS/M2DGR.</p>
+<p>Index Terms—Data sets for SLAM, data sets for robotic vision.</p>
+<h2>I. INTRODUCTION</h2>
+<p>NTELLIGENT ground robots have been emerging in a wide range of applications such as logistics, security, warehouses, cleaning, and food delivery [1]. In those applications, the robots need to work reliably in indoor or a mixture of indoor and outdoor scenes. SLAM (Simultaneous Localization and Mapping) is the critical enabling technology that allows those robots to navigate in those complex scenes, which can construct a map of the environment while simultaneously tracking the location of the robot within the map. Though SLAM research has made a substantial progress in the past decades [2], [3], existing solutions frequently perform poorly in practice. For example, visual SLAM may fail at texture-less or dark backgrounds, while LiDAR SLAM could have trouble with long corridors or open areas. SLAM may also become invalid when the robot takes some unusual actions, for instance, a robot moves into a lift and goes out to the new floor. Those failure cases motivate us to construct a dataset that includes more practical scenarios to facilitate SLAM research.</p>
+<p>High-quality datasets can speed up breakthroughs and enable a fair comparison between different algorithms. However, most existing SLAM datasets are designed for autonomous driving or aerial robots as pointed in [4]. Those datasets are not the best fit for developing and evaluating algorithms of ground robots. Autonomous cars travel fast on streets and roads, while the ground robots move at a much lower speed in remarkably different surroundings, including both indoor and outdoor scenes. The aerial robots fly freely in 3D space and are also quite different from ground robots. Although there are a few datasets targeting ground robots [5], [6], they include only a few specific sensors or particular scenes. For logistics robots, catering robots, and service robots, challenging scenarios are frequently faced, like going into a lift or complete darkness, or going from outdoors to indoors. These situations may easily make existing SLAM methods fail, while they are seldom included in existing SLAM benchmark tests.</p>
+<p>In this paper, we introduce a new dataset for SLAM research of ground robots, which includes both indoor and outdoor environments and contains a rich suite of sensors. The dataset contains trajectories in highly diverse scenes such as halls, lifts, corridors, and roads as shown in Fig. 1. Based on this dataset, we evaluate the state-of-the-art SLAM algorithms, including both LiDAR SLAM and visual SLAM. The results show that existing SLAM systems perform poorly in at least one situation, indicating further efforts are required to improve the SLAM performance. We summarize major contributions as follows:</p>
+<p>- We collected large-scale sequences for ground robots with a rich sensor suite, which includes six surround-view fisheye cameras, a sky-pointing fish-eye camera, a VI-sensor, an event camera, an infrared camera, a 32-beam LiDAR, an IMU, and two GNSS receivers. To our knowledge, this is the first SLAM dataset focusing on ground robot navigation with such rich sensory information.</p>
+<p>- We recorded trajectories in challenging situations like entering lifts and complete darkness which are commonly faced in practical applications, whereas they are not present in previous datasets.</p>
+<p>- We launched a comprehensive benchmark where we evaluated existing state-of-the-art SLAM algorithms of various designs and analyzed their characteristics and defects.</p>
+<h2>II. RELATED WORK</h2>
+<h2>A. SLAM With Different Sensors</h2>
+<p>Generally speaking, SLAM can be categorized into visionbased and laser-based ones. Vision-based SLAM, or visual</p>
+<p><img alt="" src="../images/2022_M2DGR/252526f542f5459d6187a8fe40d649e0255fcafec89fb46f372b3d4a99053c11.jpg" /></p>
+<p><img alt="" src="../images/2022_M2DGR/1cd686fe29d7d380894547047bd20b94f6ec06ca3a821a0df4654b2c1111e88c.jpg" /><br />
+(f) LiDAR<br />
+Fig. 1. Our dataset for ground robots was captured by a rich suite of sensors within various scenarios. Some sensory data are visualized.</p>
+<p>SLAM, can be divided into monocular, binocular, and multicamera settings according to the number of cameras [3]. Though monocular visual SLAM [7] [8] is the most studied topic, it suffers from scale uncertainty and scale drift. Binocular visual SLAM [9] [10] takes advantage of known baseline distance to calculate metric depth by triangulation, and multi-camera SLAM [11] [12] yields a broader field of view by using more cameras to enhance the robustness of SLAM in dynamic environments such as streets. However, it is difficult for pure vision-based SLAM to handle scenes with few textures or low illumination conditions. By contrast, LiDAR SLAM is often regarded as a more reliable choice in such challenges. Nonetheless, LiDAR SLAM also has trouble with long corridors, highly dynamic movements, and foggy scenes.</p>
+<p>Recently, multi-sensor fusion has been successfully applied to existing SLAM systems to improve both the accuracy and robustness in practice. For example, ORB-SLAM3 [9] and VINS-Mono [7] integrate vision and IMU. LVI-SAM [13], and R2live [14] tightly integrate vision, LiDAR, and IMU. LIO-SAM [15] loosely integrates LiDAR, IMU, and GNSS. GVINS [16] tightly couples image information, IMU, and GNSS.</p>
+<p>To further improve the SLAM performance in practice, a recent trend is to explore different sensor configurations. We list some of them as follows.</p>
+<p>1) Multiple cameras: Multiple cameras have a broader field of view than monocular or stereo cameras, which can improve the robustness in dynamic scenes [17]. CoSLAM [18] uses independently moving multiple cameras and gains the capability ofco-localization and robustness in dynamic movements. Ifmultiple cameras are mounted on the same platform, not only a wider field of view can be achieved, but also the scale ambiguity can be resolved by the baselines between cameras [12]. For example, Multicol-SLAM [11] applies three fixed fish-eye cameras on a helmet, ROVO [19] uses four fish-eye cameras to achieve full coverage of 360◦ field of views. Panoramic SLAM [20] is another open-source omnidirectional SLAM system, which claims to achieve centimeter-level accuracy even in highly dynamic movements.</p>
+<p>2) Thermal-infrared cameras: Thermal-infrared cameras have gained increasing attention for their perceptual capability beyond the visible spectrum and their robustness regarding environmental changes. In environments with low visibility such as fog, smoke, and darkness, visual SLAM with ordinary RGB image information becomes ineffective. By contrast, thermal-infrared images can effectively improve visibility in these scenarios. For example, J. Delaune [21] proposed a SLAM algorithm using thermal-infrared images, enabling autonomous flight of UAVs (Unmanned Aerial Vehicle) at night.</p>
+<p>3) Event cameras: Event cameras measure changes in the brightness of pixels which are with low delay, low power consumption, and high dynamic measurement range. Therefore, they have unique advantages in quick motions. Henri et al. proposed an event-based Visual Odometry algorithm [22]. A. R. Vidal et al. proposed to tightly integrate events, images, and inertial information [23] to achieve better performance.</p>
+<p>4) GNSS: GNSS is a valuable localization source that can achieve high-precision positioning outdoors. Coupling GNSS raw measurements into SLAM systems has been proven effective in advancing the localization performance in urban canyons, as shown in recent work [24]. Besides, a sky-pointing camera can help monitor satellite availability and further improve localization accuracy [25].</p>
+<h2>B. Existing Benchmark Datasets</h2>
+<p>1) Datasetsfor ground robots: Most existing SLAM datasets focus on autonomous driving [27], [26], [28] or UAVs [32]. A few datasets are targeted at ground robots. OpenLORIS [6] was collected by a wheeled robot in indoor environments, which was designed for visual SLAM, where LiDAR SLAM was used to generate the ground truth. As we will see later, LiDAR SLAM may have even more significant errors than visual SLAM in some situations, making the ground truth unreliable. TUM RGBD [5] partly used a robot as the acquisition platform, but it only contains RGB and depth cameras. Similar datasets include UTIAS MultiRobot [37] and PanoraMIS [38], which are not applicable to LiDAR SLAM as well. The aforementioned datasets have limitations such as lack of rich sensory sources, outdated data, and insufficient challenges.</p>
+<p>TABLE I<br />
+COMPARISON OF SLAM DATASETS</p>
+<table><tr><td>Dataset</td><td>Environment</td><td>Platform</td><td>Duration</td><td>RGB Cam.</td><td>LiDAR</td><td>IMU</td><td>Infrared</td><td>GNSS</td><td>Event</td></tr><tr><td>KITTI [26]</td><td>Urban</td><td>Car</td><td>Short-terma</td><td>2</td><td>V</td><td>√</td><td></td><td></td><td></td></tr><tr><td>UrbanLoco [27]</td><td>Urban</td><td>Car</td><td>Long-term</td><td>6</td><td>√</td><td>√</td><td></td><td>√</td><td></td></tr><tr><td>Brno Urban [28]</td><td>Urban</td><td>Car</td><td>Long-term</td><td>4</td><td>√</td><td>√</td><td>√</td><td>√</td><td></td></tr><tr><td>Kaist D/N [29]</td><td>Urban</td><td>Car</td><td>Long-term</td><td>2</td><td>√</td><td>√</td><td>√</td><td></td><td></td></tr><tr><td>Pit30M [30]</td><td>Urban</td><td>Car</td><td>Long-term</td><td>1</td><td>√</td><td>√</td><td></td><td></td><td></td></tr><tr><td>USVinland [31]</td><td>Inland</td><td>USV</td><td>Short-term</td><td>2</td><td>√</td><td></td><td></td><td></td><td></td></tr><tr><td>EUROC [32]</td><td>Indoors</td><td>UAV</td><td>Short-term</td><td>2</td><td></td><td>√</td><td></td><td></td><td></td></tr><tr><td>UZH-FPV [33]</td><td>In/Outdoors</td><td>UAV</td><td>Short-term</td><td>2</td><td></td><td>√</td><td></td><td></td><td>√</td></tr><tr><td>TUM VI [34]</td><td>In/Outdoors</td><td>Hand-held</td><td>Short-term</td><td>2</td><td></td><td>√</td><td></td><td></td><td></td></tr><tr><td>LaFiDa [35]</td><td>In/Outdoors</td><td>Helmet</td><td>Short-term</td><td>3</td><td></td><td>√</td><td></td><td></td><td></td></tr><tr><td>NCLT [36]</td><td>In/Outdoors</td><td>Ground Robot</td><td>Long-term</td><td>6</td><td>√</td><td>√</td><td></td><td></td><td></td></tr><tr><td>OpenLORIS [6]</td><td>Indoors</td><td>Ground Robot</td><td>Short-term</td><td>2</td><td>√</td><td>√</td><td></td><td></td><td></td></tr><tr><td>Our dataset</td><td>In/Outdoors/ Transition/Lift</td><td>Ground Robot</td><td>Long-term</td><td>8</td><td>√</td><td>√</td><td>√</td><td>√</td><td>√</td></tr></table>
+
+<p><sup>a</sup>We identify a dataset as long-term if it has sequences longer than 20 minutes.</p>
+<p>2) Datasets with multiple cameras: Lafida [35] dataset contains three fish-eye cameras on a helmet, but the maximum recording time of its sequences is too short for long-term evaluation (usually longer than 20 minutes). The NCLT [36] dataset used an omnidirectional camera on a ground robot to capture images on campus at a frame rate of 5 Hz. Such a low frame rate could cause a small overlap between adjacent frames, which will be problematic to run visual SLAM algorithms. Nuscenes [39], Waymo [40], and A2D2 [41] datasets collected image data from multiple cameras with a 360◦ field of view in urban areas, but they did not provide ground truth of trajectories for evaluation of SLAM performance.</p>
+<p>3) Datasets with thermal-infrared camera: Brno Urban dataset recorded the infrared camera information on a car [28]. The KAIST D/N [29] dataset collected data from a stereo camera and a thermal infrared camera on a car, as well as a 32-beam LiDAR. However, as far as we know, no public SLAM dataset contains the data of infrared cameras in indoor scenes, which could be useful for the research and development of indoor navigation algorithms in the night or the smoke.</p>
+<p>4) Datasets with event Camera: E. Mueggler et al. [42] used the event camera to collect events of dynamic and static scenes inside and outside the room. The recording time of this dataset is too short to evaluate the performance of SLAM algorithms reliably. Interiornet dataset [43] simulates sensors including RGBD, IMU, stereo cameras, and event cameras, but there is a gap between the simulated and the real-world scenes.</p>
+<p>5) SLAM datasets with GNSS: Currently, there are very few SLAM datasets containing raw GNSS information. UrbanLoco dataset [27] collected the raw GNSS data with Ublox M8T and used a fish-eye camera to capture the sky, but it did not publish the data of the camera. As far as we know, there is no public SLAM dataset containing both GNSS raw measurements and images of a sky-pointing camera, while such kind of data could be valuable to some research.</p>
+<p>In summary, we review the current best-known SLAM datasets and analyze their limitations. Table I summarizes the defects and limitations of some mentioned datasets. From the table, we conclude that currently a dataset with rich scenarios and complete sensor information is urgently needed for furthering the study of SLAM algorithms for ground robots. To fill this gap, we present a new dataset M2DGR. Compared with previous SLAM datasets, our dataset contains long-term trajectories in diverse real-world scenarios with a rich pool of sensory information, which facilitates tests and comparisons of various algorithm designs.</p>
+<h2>III. THE M2DGR DATASET</h2>
+<h2>A. Acquisition Platform</h2>
+<p>We construct a ground robot for data collection as shown in Fig. 2. This robot has three layers. The bottom layer contains the power supply, the computer, and the display. The middle layer and the top layer include different sensors. The dimension figures of our robot are shown in Fig. 2(a) (c). To ensure the high-speed transmission of data, we connect the LiDAR to the Ethernet port ofthe host and other sensory devices to the USB3.0 port of the host. We record the data on a high-end laptop with a high-speed NMVe SSD.</p>
+<h2>B. Sensor Setup</h2>
+<p>The location of all the devices mounted is shown in Fig. 2. Six fish-eye cameras were used to capture the images of the surroundings in 360◦ field of view, including forward-looking stereo cameras, rear-looking stereo cameras, and two sidelooking cameras. Additionally, a 32-beam Velodyne LiDAR was used to scan the surrounding environment and obtain the 3D point cloud. We also used an infrared camera to capture infrared thermal images, a VI-sensor to obtain forward-looking color images as well as inertial data, and an event camera to capture dynamic information. We also mounted a consumer-level IMU, a GNSS receiver to collect GNSS raw signals, and a sky-pointing fish-eye camera to monitor the sky. For ground truth of trajectories, we applied Xsens Mti 680 G, a GNSS-IMU integrated navigation system, to track the robots in outdoor sequences, while used a motion-capture system and a laser scanner to track the robot in indoor sequences. All the sensors and tracking devices as well as their key parameters are listed in Table II.</p>
+<p><img alt="" src="../images/2022_M2DGR/fa3ca485e2481d2526ab43a431ec694f66b85a45c44af08a5a73659d1818ea98.jpg" /><br />
+Fig. 2. Our ground robot for data collection. (a) Side view of the robot. (b) Sensors on the top layer. (c) Sensors on the middle layer.</p>
+<p>TABLE II<br />
+SPECIFICATIONS OF SENSORS AND TRACKING DEVICES</p>
+<table><tr><td>Device</td><td>Type</td><td>Spec.</td><td>Freq.(Hz)</td></tr><tr><td>LiDAR</td><td>Velodyne VLP-32C</td><td>32 beam,360 H-FOV,40V-FOV</td><td>10</td></tr><tr><td>IMU</td><td>Handsfree A9</td><td>9-axis</td><td>150</td></tr><tr><td>GNSS Receiver</td><td>Ublox M8T</td><td>GPS/BeiDou</td><td>1</td></tr><tr><td>RGB Camera</td><td>FLIR Pointgrey CM3-U3-13Y3C</td><td>1280*1024, 190 H-FOV, 190 V-FOV</td><td>15</td></tr><tr><td>Infrared Camera</td><td>Gaode PLUG 617</td><td>640*512, 90.2 H-FOV,70.6 V-FOV</td><td>25</td></tr><tr><td>Event Camera</td><td>Inivation DVXplorer</td><td>640*480, 65.2 H-FOV,51.3 V-FOV</td><td>15</td></tr><tr><td rowspan="2">VI-sensor</td><td rowspan="2">Realsense d435i</td><td>RGB: 640*480, 69 H-FOV, 42.5V-FOV</td><td>15</td></tr><tr><td>IMU: 6-axis</td><td>200</td></tr><tr><td>Mocap System</td><td>Vicon Vero 2.2</td><td>localization accuracy 1mm</td><td>50</td></tr><tr><td>Laser Tracker</td><td>Leica Nova MS60</td><td>localization accuracy 1mm + 1.5ppm</td><td>10</td></tr><tr><td>RTK/INS</td><td>Xsens Mti 680G</td><td>RTK: localization accuracy 2cm INS: 9-axis</td><td>100 100</td></tr></table>
+
+<h2>C. Calibration and Synchronization</h2>
+<p>We use the MATLAB camera calibration toolbox to obtain the camera intrinsics of pinhole cameras. For fish-eye cameras, we use Kannala Brandt model [48], Omnidirectional model [49], and MEI model [50] for calibration. To calibrate thermal-infrared cameras, we heat a checkerboard where black blocks and white blocks were made of materials with different heat capacities. Thus, those blocks can be identified by the infrared camera easily. We use toolbox [51] to calibrate internal parameters of IMU, including the white noise and random walk of both the gyroscopic and the accelerometer measurements.</p>
+<p>We choose the LiDAR frame as the reference to calibrate the extrinsic parameters (relative poses) between sensors. We use the toolbox [52] to calibrate the extrinsic parameters between IMU and LiDAR, and Kalibr toolbox [53] to calibrate the extrinsic parameters between cameras and IMU, as well as Autoware software [54] to calibrate extrinsic parameters between LiDAR and cameras.</p>
+<p>We do not use hardware signals to trigger all the sensors to capture data at the same time but record the data from different sensors using the same system time stamps. The cameras, including the six fisheye cameras and the sky-pointing camera, are synchronized by software - triggering data capturing at the same instance by calling the API. Our tests show that such a soft synchronization approach achieves accurate time synchronization of less than 10 ms between different cameras.</p>
+<h2>D. Data Collection</h2>
+<p>We operated our robot traveling around various scenes. An overview of our dataset is given in Table III. The recording processes are described as follows:</p>
+<p>For outdoor environments, we collected sequences on the campus of Shanghai Jiao Tong University. The satellite visibility was good so that the GNSS-RTK suite outputs high-accuracy ground truth of trajectories. To better test loop closing of visual SLAM, we particularly recorded sequences Circle01 and Circle02 while the robot was circling in repeated routes. All the outdoor trajectories are visualized in Fig. 3(a).</p>
+<p>TABLE III<br />
+AN OVERVIEW OF SCENARIOS IN OUR DATASET</p>
+<table><tr><td>Scenario</td><td>Street</td><td>Circle</td><td>Gate</td><td>Walk</td><td>Hall</td><td>Door</td><td>Lift</td><td>Room</td><td>Roomdark</td><td>TOTAL</td></tr><tr><td>Number</td><td>10</td><td>2</td><td>3</td><td>1</td><td>5</td><td>2</td><td>4</td><td>3</td><td>6</td><td>36</td></tr><tr><td>Size/GB</td><td>590.7</td><td>50.6</td><td>65.9</td><td>21.5</td><td>117.4</td><td>46.0</td><td>112.1</td><td>45.3</td><td>171.1</td><td>1220.6</td></tr><tr><td>Duration/s</td><td>7958</td><td>478</td><td>782</td><td>291</td><td>1226</td><td>588</td><td>1224</td><td>275</td><td>866</td><td>13688</td></tr><tr><td>Dist/m</td><td>7727.72</td><td>618.03</td><td>248.40</td><td>263.17</td><td>845.15</td><td>200.14</td><td>266.27</td><td>144.13</td><td>395.66</td><td>10708.67</td></tr><tr><td>GT</td><td>RTk/INS</td><td>RTk/INS</td><td>RTk/INS</td><td>RTk/INS</td><td>Leica</td><td>Leica</td><td>Leica</td><td>Mocap</td><td>Mocap</td><td></td></tr></table>
+
+<p><img alt="" src="../images/2022_M2DGR/bf48b3e4733e03bb974484f37a5da7eed304249e44d5b224bad6ea51c582ff67.jpg" /><br />
+(a)</p>
+<p><img alt="" src="../images/2022_M2DGR/1bbaa381d059be5dd6fa660f349b6cce2d58e86879e92d1af5c17f3c4004f044.jpg" /><br />
+(b)</p>
+<p><img alt="" src="../images/2022_M2DGR/792146977bc4a4c761cd1c09cfde85dae285eb0e8ceb6ec59aec5a4a41285df0.jpg" /><br />
+(c)</p>
+<p><img alt="" src="../images/2022_M2DGR/a75302eba9ca26342c089a01ac8f24ca1f08540778965f38b7c093780b3550a4.jpg" /><br />
+(d)</p>
+<p>Fig. 3. (a) We visualize the trajectories of outdoor sequences in the map with different colors. (b) The ground truth of indoor sequences are acquired from a motion-capture system with twelve cameras. (c) A 3D laser tracker is used to track the robot through a door from indoors to outdoors for door sequences. (d) In lift sequences, the robot moved in a hall on the first floor and then went to the second floor by lift. A 3D laser tracker is used to track its ground-truth trajectory outside the lift.<br />
+<img alt="" src="../images/2022_M2DGR/d9a6684d511d01173e9113ef5443edf78d5745e7bd6d4422f7d5c8b4fa2bb398.jpg" /><br />
+(a) x-y graph of Street02</p>
+<p><img alt="" src="../images/2022_M2DGR/8285984ca6f6a39b019a921bf82e3c296926277adbc026e3719d655589aaee18.jpg" /><br />
+(b) x-y graph of Street06</p>
+<p><img alt="" src="../images/2022_M2DGR/5d3261584065235c684bc201e2473d71c79a8b3fd714984e85571e16a6ef2ee4.jpg" /><br />
+(c) x-y graph of Street07</p>
+<p><img alt="" src="../images/2022_M2DGR/b367138402fead3f0b480ed7b53c832ac231f725072cf33987691affca95f3d4.jpg" /><br />
+(d) x-y graph of Roomdark06</p>
+<p><img alt="" src="../images/2022_M2DGR/37773004b090632bc5216c1425f37ff36fb920036e9179dc33aac8650bf39946.jpg" /><br />
+(e) x-y graph of Hall05</p>
+<p><img alt="" src="../images/2022_M2DGR/3fc756ab6814091581a9062f4994051d735770189a87f6b5016db7ba45991cbf.jpg" /><br />
+(f) x-y graph of Door01</p>
+<p><img alt="" src="../images/2022_M2DGR/bc452f7e71e4d4b04c4731d95e002e5c931634830e4fec4bce8b737958070e5c.jpg" /><br />
+(g) x-y graph of Lift04</p>
+<p><img alt="" src="../images/2022_M2DGR/2f6945ae4cfde35eaa76eb9640094c7a501fa48030d3fe0d0ed8d0e29aa7659c.jpg" /><br />
+(h) time-height graph of Lift04</p>
+<p>Fig. 4. Estimated and ground-truth (GT) trajectories of 7 sample sequences are visualized in ENU (East-North-Up) coordinate system.<br />
+<img alt="" src="../images/2022_M2DGR/e1f40f0f54a70dc13159cc662235a6bb75898bc149b6bb7109a1500ae6e9bbc4.jpg" /></p>
+<p><img alt="" src="../images/2022_M2DGR/1b44ae74e9b4d5f4923171456b15a63c7c462f9f5ad9f7e39eaeda1727b4c279.jpg" /><br />
+Fig. 5. Color image (Left) and Infra-red image (Right) in a complete dark scene.</p>
+<p>For indoor environments, we obtained the ground truth trajectories with a motion-capture system with twelve high-speed tracking cameras (50 Hz) in a room, as illustrated in Fig. 3(b). Particularly, we recorded a few sequences in complete darkness to test SLAM systems’ robustness, as shown in Fig. 5. Outside the room with the motion-capture system, we used a laser tracker to generate the ground truth of trajectories indoors. A prism reflector was mounted on our robot so that the laser tracker could well track it. Also, to better evaluate loop closing of visual SLAM, we recorded the sequence Hall05 where the robot circled around a hall in repeated routes.</p>
+<p>We also recorded sequences in a mixture of indoor and outdoor environments. We operated the robot traveling outdoors for some time until GNSS signals were well received. Then we got the robot entering a hall through a door. After the robot moved around the hall for a period, we got it going outdoors again. Those sequences are used to evaluate the performance of SLAM and GNSS positioning methods on the critical point between indoors and outdoors.</p>
+<p>Lastly, we collected sequences to test the capability of entering and leaving the lift. More specifically, we manipulated the robot to travel around within a hall on the first floor and then enter a lift that carried the robot to the second floor, as Fig 3(d) shows.</p>
+<p>TABLE IV<br />
+SAMPLE SEQUENCES FOR EVALUATION</p>
+<table><tr><td>Sequence</td><td>Street02</td><td>Street06</td><td>Street07</td><td>Roomdark06</td><td>Hal105</td><td>Door01</td><td>Lift04</td></tr><tr><td>Duration/s</td><td>1227</td><td>494</td><td>929</td><td>172</td><td>402</td><td>461</td><td>299</td></tr><tr><td>Distance/m</td><td>1484.62</td><td>479.63</td><td>1104.07</td><td>72.53</td><td>79.28</td><td>285.51</td><td>142.78</td></tr><tr><td>Speed/(m/s)</td><td>1.21</td><td>0.97</td><td>1.19</td><td>0.42</td><td>0.71</td><td>0.31</td><td>0.27</td></tr><tr><td>Description</td><td>day,</td><td>night,</td><td>night,</td><td>room,</td><td>long-term</td><td>outdoors to</td><td>first floor to second</td></tr><tr><td>of features</td><td>long-term,</td><td>straight line</td><td>zigzag route</td><td>complete darkness</td><td>large overlap</td><td>outdoors</td><td>floor by lift</td></tr></table>
+
+<h2>E. Data Usage and Tools</h2>
+<p>All the data were captured by rosbag in Robot Operation System (ROS), and the recorded topics are listed as follows.</p>
+<p>- RGB camera:</p>
+<p>/camera/left/image _ raw/compressed</p>
+<p>/camera/right/image _ raw/compressed</p>
+<p>/camera/third/image _ raw/compressed</p>
+<p>/camera/fourth/image _ raw/compressed</p>
+<p>/camera/fifth/image _ raw/compressed</p>
+<p>/camera/sixth/image _ raw/compressed</p>
+<p>/camera/head/image _ raw/compressed</p>
+<p>- VI-sensor: /camera/color/image _ raw/compressed /camera/imu</p>
+<p>- Raw GNSS:</p>
+<p>/ublox/aidalm</p>
+<p>/ublox/rxmraw</p>
+<p>/ublox/fix</p>
+<p>/ublox/navstatus</p>
+<p>- Event camera:</p>
+<p>/dvs _ rendering/compressed</p>
+<p>/dvs/events0</p>
+<p>- LiDAR:</p>
+<p>/velodyne _ points</p>
+<p>- Infrared Camera:</p>
+<p>/thermal _ image_raw</p>
+<p>- IMU:</p>
+<p>/handsfree/imu</p>
+<p>For convenience, we provide scripts to export the data to other formats such as [32]. Ground-truth trajectories and calibration results are provided for each sequence. Furthermore, we give detailed instructions to evaluate the performance of different SLAM algorithms on our project page.</p>
+<h2>IV. EVALUATION</h2>
+<p>We evaluate the state-of-the-art SLAM systems on seven representative sequences from our dataset. Those sequences are described in Table IV. The Absolute Trajectory Error (ATE) [5] is used for the evaluation metric. All the estimated trajectories are aligned with the ground truth by the EVO tool [55] to obtain the ATE errors.</p>
+<p>For visual SLAM, we test ORB-SLAM3 [9], Cubemap-SLAM [8], Multicol-SLAM [11], and VINS-Mono [7]. The default setting of each method is used for evaluation. For ORB-SLAM3, we select the monocular camera mode (without IMU) with different types of cameras: a pinhole camera, a fish-eye camera, and a thermal camera for evaluation (denoted by ORB3- Pinhole, ORB3-Fisheye, ORB3-Thermal respectively). For Li-DAR SLAM, we evaluate A-LOAM [44], LeGO-LOAM [45], LINS [46], and LIO-SAM [15].</p>
+<p>The quantitative results are shown in Table V. The estimated trajectories are visualized within the ENU frame as shown in Fig. 4. As the robot travels on the ground, the visualization of most sequences is in 2D. The results show that LiDAR-based methods outperform vision-based methods generally, especially in large-scale outdoor scenarios, but both kinds of methods do not perform well in certain cases. We discuss the results in detail as follows.</p>
+<p>1) Low Illumination: Sequence Roomdark06 and Street07 are in environments with low illuminations. ORB-SLAM3 using both pinhole (ORB3-Pinhole) and fisheye (ORB3-Fisheye) cameras fail in those sequences. Though ORB-SLAM3 adopts the strategy of adaptive histogram equalization to address bad illuminations, it failed to extract enough feature points in those dark scenes. Moreover, most extracted feature points were from far-away bright objects like street lamps or light screens, leading to significant estimation errors. By contrast, using a thermal-infrared camera, ORB-SLAM3 achieved significantly better robustness in the same scene because thermal cameras can distinguish objects under low visibility. However, we observe that some objects that can be well recognized by an RGB camera may appear texture-less in a thermal-infrared camera, for example, a flat colorful curtain. This phenomenon indicates that thermal-infrared cameras do not necessarily perform better than ordinary RGB cameras in some scenes.</p>
+<p>2) Entering and Leaving the Lift: Sequence lift04 is a test sequence where the robot takes a lift to move across different floors as shown in Fig. 6. Within a lift, SLAM systems with pure visual or laser information will consider the robot as being static, and only those with inertial information may recognize the robot moving upwards or downwards. Unfortunately, as shown in Fig. 4(g) and Fig. 4(h), none of the tested SLAM systems succeeded in tracking the whole trajectory or reconstructing a complete map. Particularly, LIO-SAM drifts severely after the robot enters the lift due to a mismatch between IMU preintegration and LiDAR odometry. As working on different floors is quite common for robots in daily life, it is meaningful and urgent to address the localization problem when robots take a lift to switch floors.</p>
+<p>3) Outdoor-Indoor Switching: In Sequence Door01, GNSS signals degraded drastically as the robot got closer to the door.</p>
+<p>TABLE V<br />
+ATE(M) OF SLAM SYSTEMS ON SAMPLE SEQUENCES</p>
+<table><tr><td>Method / Sequence</td><td>Street02</td><td>Street06</td><td>Street07</td><td>Roomdark06</td><td>Hall05</td><td>Door01</td><td>Lift04</td></tr><tr><td>A-LOAM [44]</td><td>5.299</td><td>0.628</td><td>28.940</td><td>0.314</td><td>1.065</td><td>0.274</td><td>1.323</td></tr><tr><td>LeGO-LOAM [45]</td><td>20.021</td><td>1.246</td><td>35.437</td><td>0.373</td><td>1.030</td><td>0.253</td><td>1.370</td></tr><tr><td>LINS [46]</td><td>5.636</td><td>1.742</td><td>12.009</td><td>2.205</td><td>1.010</td><td>0.258</td><td>1.318</td></tr><tr><td>LIO-SAM [15]</td><td>4.063</td><td>0.417</td><td>28.642</td><td>0.324</td><td>1.047</td><td>0.268</td><td>1247.153</td></tr><tr><td>ORB3-Pinhole [9]</td><td>152.462</td><td>5.845</td><td>Xa</td><td>X</td><td>3.291</td><td>7.662</td><td>X</td></tr><tr><td>ORB3-Fisheye [9]</td><td>X</td><td>95.056</td><td>X</td><td>X</td><td>X</td><td>2.295</td><td>8.131</td></tr><tr><td>ORB3-Thermal [9]</td><td>154.778</td><td>30.450</td><td>8.863</td><td>0.404</td><td>5.927</td><td>1.241</td><td>2.873</td></tr><tr><td>CubemapSLAM [8]</td><td>X</td><td>98.391</td><td>X</td><td>X</td><td>5.171</td><td>9.328</td><td>X</td></tr><tr><td>VINS-Mono [7]</td><td>24.157</td><td>124.357</td><td>143.725</td><td>1.001</td><td>0.646</td><td>0.694</td><td>5.582</td></tr><tr><td>RTKLIB [47]</td><td>7.072</td><td>6.749</td><td>13.096</td><td>X</td><td>X</td><td>5.344</td><td>X</td></tr></table>
+
+<p><sup>a</sup>If a visual SLAM fails to initialize or track frames less than a half of total frames or a GNSS-based method fails to initialize, we mark it X</p>
+<p><img alt="" src="../images/2022_M2DGR/b3c53b02f21d0a0fdd8ebafba8b6219b1eac9a2efbed066b9fef37c8e72fff53.jpg" /></p>
+<p><img alt="" src="../images/2022_M2DGR/f44b03218416362a0720735cd57128d603db1fe81b57671abe2cfab3e969c94f.jpg" /><br />
+Fig. 6. The images captured by a fish-eye camera when the robot is leaving a lift.</p>
+<p>All the SLAM systems can complete this sequence, while those with pure visual inputs yield large errors. We evaluate the GNSS SPP (single point positioning) performance by using a GNNS localization software RTKLIB [47]. Though the APE [5] of RTKLIB still seems normal, actually indoor localization has failed, as Fig. 4(f) shows. GNSS positioning has a stable accuracy in environments with good satellite visibility, but they only work outdoors and usually suffer from signal loss, satellite ephemeris error, and multi-path effect. To better make use of GNSS signals, we provide a sky-pointing camera to apply the possible solutions such as [25].</p>
+<p>4) Dynamic motion: Sequence Street07 was collected in a zigzag route with abrupt motions such as quick turning, braking, as well as speeding up and down. Neither visual SLAM nor LiDAR SLAM worked well on this test, as the results in Table V show. Most Visual SLAM methods (ORB3-Pinhole, ORB3-Fisheye, CubemapSLAM) failed. LiDAR SLAM also produced large ATE errors in this case.</p>
+<p>5) Multiple cameras: Multiple-camera visual SLAM can take advantage of images in a wider field of view. We tested Multicol-SLAM [11] with three fisheye cameras (two in the front, one on the left side), but it lost its track in almost every sequence. The reason might be that it tries to extract and match features directly from highly distorted images, which may easily cause false matches [8].</p>
+<p>The results indicate that the state-of-the-art SLAM systems, both visual and LiDAR ones, may perform well on existing benchmark tests, they still require significant improvement to be applied to ground robots in daily life. The results also indicate our dataset is a valid and valuable test field for existing SLAM systems. With rich sensory information and various scenarios, we believe our benchmark will promote the progress of robot navigation solutions.</p>
+<h2>V. CONCLUSION</h2>
+<p>We release M2DGR, a large-scale multi-sensor dataset focusing on ground robots’ localization and mapping tasks. Our dataset contains a large pool ofsensory information to encourage breakthroughs in multi-sensor fusion on SLAM. Furthermore, we tested and evaluated a few state-of-the-art SLAM systems based on our dataset and analyzed the defects and limitations of existing systems in different scenarios, which may point out potential developing directions for SLAM. In the future, we plan to update and extend our project from time to time, striving to build a comprehensive SLAM benchmark similar to the KITTI dataset [26] for ground robots.</p>
+<h2>REFERENCES</h2>
+<p>[1] E. Appleton and D. J. Williams, Industrial Robot Applications. Springer Science &amp; Business Media, 2012.</p>
+<p>[2] J. Aulinas, Y. Petillot, J. Salvi, and X. Lladó, “The slam problem: A survey,” Artif. Intell. Res. Develop., vol. 184, pp. 363–371, 2008.</p>
+<p>[3] C. Cadena et al., “Past, present, and future of simultaneous localization and mapping: Toward the robust-perception age,” IEEE Trans. Robot., vol. 32, no. 6, pp. 1309–1332, Dec. 2016.</p>
+<p>[4] Y. Liu, Y. Fu, F. Chen, B. Goossens, W. Tao, and H. Zhao, “Datasets and evaluation for simultaneous localization and mapping related problems: A comprehensive survey,” 2021, arXiv:2102.</p>
+<p>[5] J. Sturm, N. Engelhard, F. Endres, W. Burgard, and D. Cremers, “A benchmark for the evaluation of RGB-D SLAM systems,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2012, pp. 573–580.</p>
+<p>[6] X. Shi et al., “Are we ready for service robots? The openloris-scene datasets for lifelong SLAM,” in Proc. IEEE Int. Conf. Robot. Automat., 2020, pp. 3139–3145.</p>
+<p>[7] T. Qin, P. Li, and S. Shen, “Vins-mono: A robust and versatile monocular visual-inertial state estimator,” IEEE Trans. Robot., vol. 34, no. 4, pp. 1004–1020, Aug. 2018.</p>
+<p>[8] Y. Wang et al., “Cubemapslam: A Piecewise-Pinhole Monocular Fisheye Slam System,” in Proc. Asian Conf. Comput. Vis., Asian Conf. Comput. Vision, Springer, 2018, pp. 34–49.</p>
+<p>[9] C. Campos, R. Elvira, J. J. G. Rodríguez, J. M. Montiel, and J. D. Tardós, “ORB-SLAM3: An accurate open-source library for visual, visual-inertial, and multimap SLAM,” IEEE Trans. Robot., vol. 37, no. 6, pp. 1874–1890, Dec. 2021.</p>
+<p>[10] T. Qin, S. Cao, J. Pan, and S. Shen, “A general optimization-based framework for global pose estimation with multiple sensors,” 2019, arXiv:1901.03642.</p>
+<p>[11] S. Urban and S. Hinz, “Multicol-SLAM-a modular real-time multi-camera SLAM system,” 2016, arXiv:1610.07336.</p>
+<p>[12] D. Z. Ang Li and W. Yu, “Robust Initialization of Multi-Camera Slam With Limited View Overlaps and Inaccurate Extrinsic Calibration,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2021, pp. 3361–3367.</p>
+<p>[13] T. Shan, B. Englot, C. Ratti, and D. Rus, “LVI-SAM: Tightlycoupled lidar-visual-inertial odometry via smoothing and mapping,” 2021, arXiv:2104.10831.</p>
+<p>[14] J. Lin, C. Zheng, W. Xu, and F. Zhang, “R2LIVE: A robust, real-time, lidar-inertial-visual tightly-coupled state estimator and mapping,” 2021, arXiv:2102.12400.</p>
+<p>[15] T. Shan, B. Englot, D. Meyers, W. Wang, C. Ratti, and D. Rus, “LIO-SAM: Tightly-coupled lidar inertial odometry via smoothing and mapping,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2020, pp. 5135–5142.</p>
+<p>[16] S. Cao, X. Lu, and S. Shen, “GVINS: Tightly coupled GNSS-visual-inertial for smooth and consistent state estimation,” 2021, arXiv:2103.</p>
+<p>[17] Z. Zhang, H. Rebecq, C. Forster, and D. Scaramuzza, “Benefit of large field-of-view cameras for visual odometry,” in Proc. IEEE Int. Conf. Robot. Automat., 2016, pp. 801–808.</p>
+<p>[18] D. Zou and P. Tan, “CoSLAM: Collaborative visual slam in dynamic environments,” IEEE Trans. Pattern Anal. Mach. Intell., vol. 35, no. 2, pp. 354–366, Feb. 2013.</p>
+<p>[19] H. Seok and J. Lim, “ROVO: Robust omnidirectional visual odometry for wide-baseline wide-FOV camera systems,” in Proc. Int. Conf. Robot. Automat., 2019, pp. 6344–6350.</p>
+<p>[20] S. Ji, Z. Qin, J. Shan, and M. Lu, “Panoramic SLAM from a multiple fisheye camera rig,” ISPRS J. Photogrammetry Remote Sens., vol. 159, pp. 169–183, 2020.</p>
+<p>[21] J. Delaune, R. Hewitt, L. Lytle, C. Sorice, R. Thakker, and L. Matthies, “Thermal-inertial odometry for autonomous flight throughout the night,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2019, pp. 1122–1128.</p>
+<p>[22] H. Rebecq, T. Horstschäfer, G. Gallego, and D. Scaramuzza, “EVO: A geometric approach to event-based 6-DOF parallel tracking and mapping in real time,” IEEE Robot. Automat. Lett., vol. 2, no. 2, pp. 593–600, Apr. 2017.</p>
+<p>[23] A. R. Vidal, H. Rebecq, T. Horstschaefer, and D. Scaramuzza, “Ultimate SLAM? combining events, images, and IMU for robust visual SLAM in HDR and high-speed scenarios,” IEEE Robot. Automat. Lett., vol. 3, no. 2, pp. 994–1001, Apr. 2018.</p>
+<p>[24] T. Li et al., “P<sup>3</sup>-LOAM: PPP/LiDAR loosely coupled SLAM with accurate covariance estimation and robust RAIM in urban canyon environment,” IEEE Sensors J., vol. 21, no. 5, pp. 6660–6671, Mar. 2021.</p>
+<p>[25] J. Marais, C. Meurie, D. Attia, Y. Ruichek, and A. Flancquart, “Toward accurate localization in guided transport: Combining gnss data and imaging information,” Transp. Res. Part C: Emerg. Technol., vol. 43, pp. 188–197, 2014.</p>
+<p>[26] A. Geiger, P. Lenz, C. Stiller, and R. Urtasun, “Vision meets robotics: The kitti dataset,” Int. J. Robot. Res., vol. 32, no. 11, pp. 1231–1237, 2013.</p>
+<p>[27] W. Wen et al., “UrbanLoco: A full sensor suite dataset for mapping and localization in urban scenes,” in Proc. IEEE Int. Conf. Robot. Automat., 2020, pp. 2310–2316.</p>
+<p>[28] A. Ligocki, A. Jelinek, and L. Zalud, “Brno urban dataset-the new data for self-driving agents and mapping tasks,” in Proc. IEEE Int. Conf. Robot. Automat., 2020, pp. 3284–3290.</p>
+<p>[29] Y. Choi et al., “KAIST multi-spectral day/night data set for autonomous and assisted driving,” IEEE Trans. Intell. Transp. Syst., vol. 19, no. 3, pp. 934–948, Mar. 2018.</p>
+<p>[30] J. Martinez et al., “Pit30M: A benchmark for global localization in the age of self-driving cars,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2020, pp. 4477–4484.</p>
+<p>[31] Y. Cheng, M. Jiang, J. Zhu, and Y. Liu, “Are we ready for unmanned surface vehicles in inland waterways? The usvinland multisensor dataset and benchmark,” IEEE Robot.Automat. Lett., vol. 6, no. 2, pp. 3964–3970, Apr. 2021.</p>
+<p>[32] M. Burri et al., “The EuRoC micro aerial vehicle datasets,” Int. J. Robot. Res., vol. 35, no. 10, pp. 1157–1163, 2016.</p>
+<p>[33] J. Delmerico, T. Cieslewski, H. Rebecq, M. Faessler, and D. Scaramuzza, “Are we ready for autonomous drone racing? The UZH-FPV drone racing dataset,” in Proc. Int. Conf. Robot. Automat., 2019, pp. 6713–6719.</p>
+<p>[34] D. Schubert, T. Goll, N. Demmel, V. Usenko, J. Stückler, and D. Cremers, “The TUM VI benchmark for evaluating visual-inertial odometry,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2018, pp. 1680–1687.</p>
+<p>[35] S. Urban and B. Jutzi, “LaFiDa—A laserscanner multi-fisheye camera dataset,” J. Imag., vol. 3, no. 1, pp. 5–16, 2017.</p>
+<p>[36] N. Carlevaris-Bianco, A. K. Ushani, and R. M. Eustice, “University of michigan north campus long-term vision and lidar dataset,” Int. J. Robot. Res., vol. 35, no. 9, pp. 1023–1035, 2016.</p>
+<p>[37] K. Y. Leung, Y. Halpern, T. D. Barfoot, and H. H. Liu, “The utias multirobot cooperative localization and mapping dataset,” Int. J. Robot. Res., vol. 30, no. 8, pp. 969–974, 2011.</p>
+<p>[38] H.-E. Benseddik, F. Morbidi, and G. Caron, “Panoramis: An ultra-wide field of view image dataset for vision-based robot-motion estimation,” Int. J. Robot. Res., vol. 39, no. 9, pp. 1037–1051, 2020.</p>
+<p>[39] H. Caesar et al., “nuScenes: A multimodal dataset for autonomous driving,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit., 2020, pp. 11 621–11631.</p>
+<p>[40] P. Sun et al., “Scalability in perception for autonomous driving: Waymo open dataset,” in Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit., 2020, pp. 2446–2454.</p>
+<p>[41] J. Geyer et al., “A2D2: Audi autonomous driving dataset,” 2020, arXiv:2004.06320.</p>
+<p>[42] E. Mueggler, H. Rebecq, G. Gallego, T. Delbruck, and D. Scaramuzza, “The event-camera dataset and simulator: Event-based data for pose estimation, visual odometry, and SLAM,” Int. J. Robot. Res., vol. 36, no. 2, pp. 142–149, 2017.</p>
+<p>[43] W. Li et al., “Interiornet: Mega-scale multi-sensor photo-realistic indoor scenes dataset,” 2018, arXiv:1809.00716.</p>
+<p>[44] J. Zhang and S. Singh, “LOAM: Lidar odometry and mapping in real-time,” in Robot.: Sci. Syst., vol. 2, no. 9, pp. 07–29, 2014.</p>
+<p>[45] T. Shan and B. Englot, “LeGO-LOAM: Lightweight and ground-optimized lidar odometry and mapping on variable terrain,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2018, pp. 4758–4765.</p>
+<p>[46] C. Qin, H. Ye, C. E. Pranata, J. Han, S. Zhang, and M. Liu, “LINS: A lidar-inertial state estimator for robust and efficient navigation,” in Proc. IEEE Int. Conf. Robot. Automat., 2020, pp. 8899–8906.</p>
+<p>[47] T. Takasu and A. Yasuda, “Development ofthe low-cost RTK-GPS receiver with an open source program package RTKLIB,” in Proc. Int. Sympos. GPS/GNSS. vol. 1, 2009, pp. 04–06.</p>
+<p>[48] J. Kannala and S. S. Brandt, “A generic camera model and calibration method for conventional, wide-angle, and fish-eye lenses,” IEEE Trans. Pattern Anal. Mach. Intell., vol. 28, no. 8, pp. 1335–1340, Aug. 2006.</p>
+<p>[49] D. Scaramuzza, A. Martinelli, and R. Siegwart, “A toolbox for easily calibrating omnidirectional cameras,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2006, pp. 5695–5701.</p>
+<p>[50] C. Mei and P. Rives, “Single view point omnidirectional camera calibration from planar grids,” in Proc. IEEE Int. Conf. Robot. Automat., 2007, pp. 3945–3950.</p>
+<p>[51] O. J. Woodman, “An introduction to inertial navigation,” Univ. Cambridge, Computer Laboratory, Tech. Rep. UCAM-CL-TR-696, Aug. 2007.</p>
+<p>[52] J. Lv, J. Xu, K. Hu, Y. Liu, and X. Zuo, “Targetless calibration of LiDAR-IMU system based on continuous-time batch estimation,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2020, pp. 9968–9975.</p>
+<p>[53] P. Furgale, J. Rehder, and R. Siegwart, “Unified temporal and spatial calibration for multi-sensor systems,” in Proc. IEEE/RSJ Int. Conf. Intell. Robots Syst., 2013, pp. 1280–1286.</p>
+<p>[54] S. Kato, E. Takeuchi, Y. Ishiguro, Y. Ninomiya, K. Takeda, and T. Hamada, “An open approach to autonomous vehicles,” IEEE Micro, vol. 35, no. 6, pp. 60–68, Nov./Dec. 2015.</p>
+<p>[55] Grupp, Micheal, evo, 2018. [Online]. Available: https://github.com/ MichaelGrupp/evo</p>
+<div class="foot">本页由 <code>md/2022_M2DGR.md</code> 预渲染生成（OCR 语料，插图取自原文）。
+公式以 MathML 呈现，浏览器原生渲染，不依赖外部脚本或字体 CDN。</div>
+</main>
+</body>
+</html>

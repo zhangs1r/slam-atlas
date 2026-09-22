@@ -83,7 +83,7 @@
       <p>关键在：<b>像素与三维点是一一对应的</b>——第 (u,v) 个像素的三维点就存在第 (u,v) 个位置。这意味着 pointmap 同时打包了三类信息：<b>①几何</b>（这些三维点连成什么形状）、<b>②像素—三维的对应关系</b>（哪个像素是哪个点，所以像素匹配可以直接用最近邻去查）、<b>③两视关系</b>（两张图在同一条坐标系里，相对位姿就藏在这两组点的对应里）。</p>
       <p>还有一个特别好记的推论：<b>深度就是 pointmap 的 z 分量</b>。因为坐标系以图像 1 的相机为原点，z 轴往前，z 值天然就是「这个像素对应的东西有多远」。同理，<b>焦距可以从 pointmap 用 Weiszfeld 迭代估出来</b>——这就是论文说的「内参也可以从结果里恢复」。</p>
       <figure class="figure">
-        <img src="../../md/images/2024_DUSt3R/f6ede59e3fe85a76d070cbca595de48ada2b4c95909b4775e8cf9c7ee22b2d85.jpg" alt="DUSt3R input and outputs">
+        <img src="../../md/images/2024_DUSt3R/f6ede59e3fe85a76d070cbca595de48ada2b4c95909b4775e8cf9c7ee22b2d85.jpg" alt="DUSt3R input and outputs" loading="eager" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 1）：</b>Top: DUSt3R takes as input an unconstrained collection of images and outputs pointmaps, from which various geometric quantities can be straightforwardly derived. Bottom: Fully-consistent 3D reconstructions without input camera poses nor intrinsics. From left to right: input image, colored point-cloud, rendered with shading. DUSt3R can also reconstruct scenes without any visual overlap (top-right).（上：DUSt3R 输入一堆无约束图像、输出 pointmap，各种几何量都能从它直接导出。下：在既没有输入位姿、也没有输入内参的情况下得到完全一致的三维重建；从左到右是输入图、着色点云、带明暗渲染的结果。右上还显示它能在两图<b>完全没有视觉重叠</b>时也重建。）</p>
           <p><b>怎么看这张图：</b>上半是「输入多样、输出统一」——不管输入是单图、双图还是更多，出口都是 pointmap。下半要盯住两件事：一是那些点云<b>没有用任何输入的位姿或内参</b>；二是右上那格特别值得看——两张照片拍的是<b>完全不同的地方、没有共同可见区域</b>，它仍然把它们放进了同一个坐标系里（相对位姿靠别的东西推出来）。</p>
@@ -91,7 +91,7 @@
         </figcaption>
       </figure>
       <figure class="figure">
-        <img src="../../md/images/2024_DUSt3R/6736afba5543242d197a04b0c111593132ce601d1a0013f0f5e7f35b2bc47667.jpg" alt="DUSt3R network architecture">
+        <img src="../../md/images/2024_DUSt3R/6736afba5543242d197a04b0c111593132ce601d1a0013f0f5e7f35b2bc47667.jpg" alt="DUSt3R network architecture" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 2）：</b>Architecture of the network. Two views of a scene $(I^1,I^2)$ are first encoded in a Siamese manner with a shared ViT encoder. The resulting token representations $F^1$ and $F^2$ are then passed to two transformer decoders that constantly exchange information via cross-attention. Finally, two regression heads output the two corresponding pointmaps and associated confidence maps. Importantly, the two pointmaps are expressed in the same coordinate frame of the first image $I^1$.（网络结构：两视 $(I^1,I^2)$ 先用<b>共享权重</b>的 ViT 编码器做孪生编码；得到的 token 表示 $F^1,F^2$ 送进两个 Transformer 解码器，两者不断通过 <b>cross-attention 交换信息</b>；最后由两个回归头吐出两张 pointmap 与对应置信度图。重点是<b>两张 pointmap 都表达在图像 1 的坐标系里</b>。）</p>
           <p><b>怎么看这张图：</b>① 左边那个编码器是<b>一个</b>（Siamese，权重共享），两张图走同一套参数；② 中间两个解码器之间的双箭头是 <b>cross-attention</b>——这是「两张图互相看」的地方，也是它能同时输出「同一坐标系下的两张点图」的关键（对照 0129 SuperGlue 的 cross-attention，同一个机制、不同用途）；③ 最右边两个头各吐一张 pointmap + 一张置信度图，图注特意强调它们<b>在同一坐标系</b>。</p>
@@ -114,7 +114,7 @@
       </div>
       <p style="margin-top:.4rem"><b>这句话在说什么：</b>$\chi_i$ 是「第 i 个三维点在整个场景里的最终位置」（所有边的预测都在争这个位置），$P_e$ 与 $\sigma_e$ 是第 $e$ 条边（一对图）自己的旋转平移与缩放。式子说：请找一套最终位置和每条边的变换，让每条边预测的点、经过自己的变换之后，都尽量贴到那个最终位置上，按置信度加权。约束 $\prod_e\sigma_e=1$ 是为了堵住「把所有 $\sigma$ 一起缩小」这个无意义的解。关键在于它<b>比的是三维坐标本身，不是重投影误差</b>——所以几十几百步梯度下降就能收敛，快得多。</p>
       <figure class="figure">
-        <img src="../../md/images/2024_DUSt3R/f91001590590af6adf7e1da56e292d1dc68497529d4b0f8e4ca5c45430ba6223.jpg" alt="DUSt3R reconstruction examples with depth and confidence">
+        <img src="../../md/images/2024_DUSt3R/f91001590590af6adf7e1da56e292d1dc68497529d4b0f8e4ca5c45430ba6223.jpg" alt="DUSt3R reconstruction examples with depth and confidence" loading="lazy" decoding="async">
         <figcaption>
           <p><b>原图注（Fig. 3）：</b>Reconstruction examples on two scenes never seen during training. From left to right: RGB, depth map, confidence map, reconstruction. The left scene shows the raw result output from $f(I^1,I^2)$. The right scene shows the outcome of global alignment (Sec. 3.4).（两个训练中没见过的场景的重建示例。从左到右：RGB、深度图、置信度图、重建结果。左边场景展示 $f(I^1,I^2)$ 的原始输出；右边场景展示全局对齐（3.4 节）之后的结果。）</p>
           <p><b>怎么看这张图：</b>四列要竖着对看。第二列是深度图——它就是从 pointmap 的 z 分量直接取出来的；第三列是置信度图，<b>发亮的地方是网络自己觉得靠得住的地方</b>，暗的地方（比如天空、玻璃、远处稀薄纹理）是它不自信的地方。第四列的重建结果里，左边那是「一对图的原始输出」，右边那才是「多对图拼完之后」的结果——差别在于后者已经是全局一致的。</p>
@@ -387,6 +387,7 @@
     </section>
 
     <footer class="section-card">
+      <div class="lesson-source" style="margin:0 0 14px;font-size:.92rem;line-height:1.7;"><span style="color:#8A8178;">📄 对照原文：</span><a href="../../md/html/2024_DUSt3R.html" style="color:#B3654B;text-decoration:none;border-bottom:1px solid #E4DCD4;">DUSt3R: Geometric 3D Vision Made Easy</a></div>
       <div class="nav-links">
         <a href="0147-DINOv2与SAM-两个通用零件.html">← 上一节：0147 DINOv2 与 SAM 两个通用零件</a>
         <a class="next" href="0149-MASt3R-SLAM2025-双视图先验做实时SLAM.html">下一节：0149 MASt3R-SLAM 双视图先验做实时 SLAM →</a>
