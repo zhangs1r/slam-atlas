@@ -1226,7 +1226,7 @@
   > (e) Orientation error V1 02 medium
   > 
   > (c) Translation error V1 03 difficult 
-  > ![](images/2018_VI-DSO/625f72f7bd78
+  > ![](images/2018_VI-DSO/625f72f7bd782f42bf606ec666e8d13468284b3599597f57753dff797047541d.jpg)
 
 ---
 

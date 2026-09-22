@@ -284,7 +284,7 @@ window.ACHIEVEMENT_CARDS = {
         "<circle cx='124' cy='150' r='3'/><circle cx='286' cy='164' r='3'/><circle cx='298' cy='124' r='2.6'/><circle cx='144' cy='82' r='2.6'/><circle cx='212' cy='196' r='2.8'/><circle cx='116' cy='116' r='2.4'/>" +
         "</g>" +
         "<text x='200' y='258' font-size='19' font-weight='700' text-anchor='middle' fill='%23f2eeff' font-family='Helvetica, Arial, sans-serif'>隐式织网者</text>" +
-        "<text x='200' y='282' font-size='12' text-anchor='middle' fill='rgba(242,238,255,0.72)' font-family='Helvetica, Arial, sans-serif'>阶段 F · 36 篇 · 隐式与 3D 高斯</text>" +
+        "<text x='200' y='282' font-size='12' text-anchor='middle' fill='rgba(242,238,255,0.72)' font-family='Helvetica, Arial, sans-serif'>阶段 F · 39 篇 · 隐式与 3D 高斯</text>" +
         "</svg>",
       card_file: "reference/成就卡-第六季.html"
     }
